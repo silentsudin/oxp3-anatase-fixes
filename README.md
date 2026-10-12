@@ -67,8 +67,9 @@ removes everything.
 
 ### gamescope (`patches/gamescope/0001-oxp3-hdr-pq.patch`)
 
-One patch on top of Anatase's gamescope `overrides.patch`, squashed from
-[silentsudin/gamescope `oxp3-hdr-min2`](https://github.com/silentsudin/gamescope). It contains:
+One self-contained patch on top of Anatase's gamescope `overrides.patch`, squashed from the
+local branch `oxp3-hdr-min2` (not published); its header lists every change and its author.
+It contains:
 
 - Upstream Legion Go 2 support by Matthew Schwartz (Valve), backported: the known-display
   script for this panel (it is the same panel as the Legion Go 2), EDID fallback for HDR
@@ -98,5 +99,6 @@ Requested upstream in Anatase as kernel-anatase issue #7.
 ## Updating the patches
 
 If a build stops with "patches don't apply" or a missing anchor line, Anatase changed the
-package or kernel series. Rebase the source branches named above, then regenerate the
-files in `patches/`.
+package or kernel series. Rebase the patches (or the source branches above) onto the new
+Anatase version and regenerate the files in `patches/`. The kernel patches stop being needed
+once Anatase ships the VS/PE-O series; the script then skips the kernel part by itself.

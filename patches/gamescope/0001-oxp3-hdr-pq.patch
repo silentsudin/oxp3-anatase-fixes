@@ -2,7 +2,7 @@ From: silentsudin <25103587+silentsudin@users.noreply.github.com>
 Subject: [PATCH] OneXPlayer 3 / Legion Go 2 OLED: PQ HDR fixes
 
 Applies on top of Anatase's gamescope overrides.patch (gamescope 3.16.23.3).
-Squashed from github.com/silentsudin/gamescope branch oxp3-hdr-min2:
+Squashed from the local gamescope branch oxp3-hdr-min2 (not published):
   - edid: strip DisplayID extensions from the EDID exposed to games (silentsudin)
   - drm: send panel HDR metadata on internal displays (silentsudin)
   - waitable: dispatch EPOLLPRI events to waitables (Matthew Schwartz)
