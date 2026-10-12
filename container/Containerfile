@@ -1,5 +1,7 @@
 # Build environment for oxp3-fixes.sh: RPM builds of Anatase's gamescope and MangoHud
 # (x86_64 + i686) and the out-of-tree xe module build.
+# The x86_64 -devel packages are installed before their i686 twins: both provide the same
+# pkgconfig() names, so dnf builddep would otherwise treat the 64-bit ones as present.
 ARG FEDORA=45
 FROM registry.fedoraproject.org/fedora:${FEDORA}
 
@@ -8,6 +10,17 @@ RUN dnf -y install --setopt=install_weak_deps=False \
         python3-rpmautospec forge-srpm-macros \
         bc bison flex elfutils-libelf-devel openssl-devel openssl dwarves perl kmod \
         rsync zstd xz cpio rust rust-src bindgen-cli clang lld llvm which wget \
+ && dnf -y install --skip-unavailable --setopt=install_weak_deps=False \
+        glibc-devel.x86_64 libstdc++-devel.x86_64 libstdc++-static.x86_64 libatomic.x86_64 \
+        libgcc.x86_64 vulkan-loader-devel.x86_64 wayland-devel.x86_64 libX11-devel.x86_64 \
+        libxcb-devel.x86_64 libxkbcommon-devel.x86_64 dbus-devel.x86_64 spdlog-devel.x86_64 \
+        fmt-devel.x86_64 glfw-devel.x86_64 mesa-libGL-devel.x86_64 mesa-dri-drivers.x86_64 \
+        mesa-libgbm-devel.x86_64 glslang-devel.x86_64 libXrandr-devel.x86_64 libXau-devel.x86_64 \
+        libXdmcp-devel.x86_64 libXext-devel.x86_64 libXrender-devel.x86_64 \
+        libXfixes-devel.x86_64 libXi-devel.x86_64 libXinerama-devel.x86_64 \
+        libXcursor-devel.x86_64 libXxf86vm-devel.x86_64 libffi-devel.x86_64 expat-devel.x86_64 \
+        libdrm-devel.x86_64 libglvnd-devel.x86_64 libxshmfence-devel.x86_64 \
+        zlib-ng-compat-devel.x86_64 systemd-devel.x86_64 libcap-devel.x86_64 \
  && dnf -y install --skip-unavailable --setopt=install_weak_deps=False \
         glibc-devel.i686 libstdc++-devel.i686 libstdc++-static.i686 libatomic.i686 libgcc.i686 \
         vulkan-loader-devel.i686 wayland-devel.i686 libX11-devel.i686 libxcb-devel.i686 \
