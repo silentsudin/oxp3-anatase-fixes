@@ -1,7 +1,8 @@
 #!/bin/bash
 # Restore OneXPlayer 3 support on Anatase after an update:
 #   - gamescope: PQ HDR on the SDC AMS881KB01 OLED (no black screens, correct peak brightness)
-#   - MangoHud:  CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs
+#   - MangoHud:  CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs,
+#                with power from the rapl-power service (counters stay root-only)
 #   - kernel:    the VBT VS/PE-O backport for the eDP link (white dots, HDR retoggle black
 #                screen), as a MOK-signed xe module for the installed Anatase kernel
 #
@@ -231,6 +232,30 @@ mok_trusted() {
     [[ -n $cn ]] && sudo keyctl list %:.machine 2>/dev/null | grep -qF "$cn"
 }
 
+# MangoHud's CPU/GPU power: a root service publishes 1 s / 0.1 W averages in /run/rapl-power;
+# the raw RAPL counters stay root-only (CVE-2020-8694).
+install_rapl_power() {
+    sudo install -D -m 0755 "$here/files/rapl-power" /usr/local/libexec/rapl-power
+    sudo install -m 0644 "$here/files/rapl-power.service" /etc/systemd/system/rapl-power.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable rapl-power.service >/dev/null
+    sudo systemctl restart rapl-power.service
+    remove_rapl_udev_rules
+}
+
+# Earlier versions opened the counters to all users with a udev rule: remove it and make
+# the counters root-only again right away (they are re-created root-only at boot anyway).
+remove_rapl_udev_rules() {
+    local r changed=0
+    for r in /etc/udev/rules.d/70-oxp3-rapl.rules /etc/udev/rules.d/70-anatase-rapl.rules; do
+        [[ -e $r ]] && { sudo rm -f "$r"; changed=1; }
+    done
+    if (( changed )); then
+        sudo udevadm control --reload
+        sudo chmod 0400 /sys/class/powercap/intel-rapl*/energy_uj 2>/dev/null || true
+    fi
+}
+
 do_install() {
     local rpms=() kmod=() old
     (( SKIP_GAMESCOPE )) || rpms+=( "$OUT"/gamescope-*.x86_64.rpm "$OUT"/gamescope-*.i686.rpm )
@@ -267,9 +292,7 @@ print(" ".join(p for p in d[0].get("requested-local-packages",[]) if p.startswit
         rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled' ||
             sudo rpm-ostree initramfs --enable   # rebuild the initramfs so it has the new xe
     fi
-    sudo install -m 0644 "$here/files/70-oxp3-rapl.rules" /etc/udev/rules.d/70-oxp3-rapl.rules
-    sudo udevadm control --reload
-    sudo udevadm trigger --subsystem-match=powercap --action=add
+    install_rapl_power
     say "done - reboot to use the new deployment"
     echo "If anything is wrong, pick the previous deployment in the boot menu or: sudo rpm-ostree rollback"
 }
@@ -284,7 +307,10 @@ do_uninstall() {
     if rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled'; then
         sudo rpm-ostree initramfs --disable
     fi
-    sudo rm -f /etc/udev/rules.d/70-oxp3-rapl.rules
+    sudo systemctl disable --now rapl-power.service 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/rapl-power.service /usr/local/libexec/rapl-power
+    sudo systemctl daemon-reload
+    remove_rapl_udev_rules
     echo "Reboot to finish."
 }
 
@@ -292,7 +318,10 @@ do_status() {
     echo "kernel (deployment): $(anatase_kver)   booted: $(uname -r)"
     rpm -q gamescope mangohud "$KMOD_NAME" 2>&1 | sed 's/^/  /'
     rpm-ostree status --booted | grep -E 'Version|ReplacedBasePackages|LocalPackages|Initramfs|Unlocked' -A2 | sed 's/^/  /' || true
-    [[ -e /etc/udev/rules.d/70-oxp3-rapl.rules ]] && echo "  RAPL udev rule: installed" || echo "  RAPL udev rule: missing"
+    echo "  rapl-power service: $(systemctl is-active rapl-power.service 2>/dev/null)"
+    local f; for f in /run/rapl-power/*; do [[ -e $f ]] && echo "    $(basename "$f"): $(cat "$f") W"; done
+    ls /etc/udev/rules.d/70-*rapl.rules >/dev/null 2>&1 && echo "  WARNING: old RAPL udev rule still present (run install)"
+    stat -c '  RAPL counters: %A %n' /sys/class/powercap/intel-rapl:0/energy_uj 2>/dev/null
     modinfo -F filename xe 2>/dev/null | sed 's/^/  xe module: /'
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }

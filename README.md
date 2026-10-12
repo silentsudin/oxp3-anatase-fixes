@@ -7,7 +7,7 @@ support on [Anatase](https://github.com/anatase-org/anatase) after an update.
 |---|---|---|
 | gamescope | PQ HDR on the internal SDC AMS881KB01 OLED: no black screen when HDR turns on with VRR off or on an HDR retoggle; games see the real peak brightness (~1100 nits instead of 1499); brightness slider works in HDR | Anatase's gamescope package rebuilt with `patches/gamescope`, `rpm-ostree override replace` |
 | MangoHud | CPU power, GPU power and VRAM in the Gamemode performance overlay on Intel iGPUs | Anatase's MangoHud package rebuilt with `patches/mangohud`, `rpm-ostree override replace` |
-| RAPL udev rule | lets the overlay read the CPU/GPU energy counters (root-only since CVE-2020-8694) | `/etc/udev/rules.d/70-oxp3-rapl.rules` |
+| `rapl-power` service | CPU/GPU power for the overlay without opening the RAPL counters to users (see below) | `/usr/local/libexec/rapl-power` + `/etc/systemd/system/rapl-power.service` |
 | kernel (xe) | VBT VS/PE-O backport for the eDP link: random white dots, and the black screen on an HDR retoggle | `xe.ko` rebuilt for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3-xe` in `updates/` |
 
 You keep booting the stock Anatase kernel; only its `xe` module is replaced. If Anatase
@@ -88,13 +88,31 @@ It contains:
 
 From [silentsudin/MangoHud `xe-igpu-metrics`](https://github.com/silentsudin/MangoHud):
 RAPL CPU power fixes (float math, wraparound, prefer `intel-rapl` over mmio), Intel iGPU
-power from the RAPL uncore domain, and xe integrated memory reported as VRAM.
+power from the RAPL uncore domain, xe integrated memory reported as VRAM, and reading power
+from the `rapl-power` service when it runs.
+
+### Power readings and CVE-2020-8694 (`files/rapl-power`)
+
+Intel has no equivalent of AMD's `gpu_metrics`: the iGPU has no hwmon (xe registers it only
+for discrete GPUs), and every source of CPU/iGPU power (powercap `energy_uj`, the perf
+`power/energy-*` events used by `intel_gpu_top`, the MSRs) is the RAPL counter, root-only
+since CVE-2020-8694 (PLATYPUS). Opening those counters to users (a udev rule, or
+`setcap cap_perfmon` on `intel_gpu_top`) brings the side channel back.
+
+Instead, `rapl-power` (root, no capabilities, sandboxed) is the only reader. Every second it
+writes the average power of the `package-0`, `core` and `uncore` domains over that second,
+rounded to 0.1 W, to `/run/rapl-power/<domain>`. MangoHud reads those files (CPU =
+package - uncore, GPU = uncore). Users only ever see coarse averages, the same kind of data
+AMD's firmware publishes to everyone in `gpu_metrics`; the counters themselves stay
+root-only. `install` also removes the udev rule earlier versions used.
 
 ### kernel (`patches/kernel`)
 
 The VBT #57 VS/PE-O override series by Michał Grzelak (Intel, in drm-intel / Linux 7.4),
-backported to Anatase 7.2, plus a fix capping the C10 PHY table to the 10 DP presets.
-Requested upstream in Anatase as kernel-anatase issue #7.
+backported to Anatase 7.2: patches 1-6 (6 adds the C10/C20 overrides Panther Lake uses,
+1-5 are its prerequisites) and 8 (drops the boot WARN), without the Combo PHY patch, which
+only applies to older Elkhart/Jasper Lake chips. Plus our patch 9, capping the C10 table to
+the 10 DP presets. Requested in Anatase as kernel-anatase issue #7.
 
 ## Updating the patches
 

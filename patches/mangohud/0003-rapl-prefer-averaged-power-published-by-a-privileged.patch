@@ -1,0 +1,91 @@
+From d807776bce55f605773754d8683baa73fdedc68f Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 23:58:37 +0100
+Subject: [PATCH 3/3] rapl: prefer averaged power published by a privileged
+ service
+
+RAPL energy_uj counters are root-only since CVE-2020-8694 (PLATYPUS), and
+opening them to all users reintroduces that side channel. Read the power of
+a powercap domain from /run/rapl-power/<domain name> (watts, about one
+second averages from the rapl-power service) when it exists, and fall back
+to the raw counter otherwise.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TN7fYJCgCJyZs2ppsdDX15
+---
+ src/rapl.h | 34 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/src/rapl.h b/src/rapl.h
+index 4c877cc3..d4e8c67c 100644
+--- a/src/rapl.h
++++ b/src/rapl.h
+@@ -13,8 +13,14 @@
+ 
+ // Reads a powercap (Intel/AMD RAPL) energy_uj counter and turns it into watts.
+ // Handles counter wraparound via max_energy_range_uj.
++// Directory where a privileged service (rapl-power) publishes per-domain averaged power in
++// watts, one file per powercap domain name ("package-0", "core", "uncore"). Preferred over the
++// raw energy_uj counters, which are root-only since CVE-2020-8694 (PLATYPUS).
++#define RAPL_PUBLISHED_DIR "/run/rapl-power/"
++
+ struct RaplCounter {
+     FILE* file = nullptr;
++    bool published = false;
+     uint64_t max_range = 0;
+     uint64_t last_value = 0;
+     Clock::time_point last_time;
+@@ -29,17 +35,30 @@ struct RaplCounter {
+         if (file)
+             fclose(file);
+         file = nullptr;
++        published = false;
+         primed = false;
+     }
+ 
+     bool open(const std::string& domain_path) {
+         close();
++        std::string name = read_line(domain_path + "/name");
++        if (!name.empty()) {
++            std::string pub = RAPL_PUBLISHED_DIR + name;
++            file = fopen(pub.c_str(), "r");
++            if (file) {
++                published = true;
++                SPDLOG_DEBUG("RAPL: using averaged power from {}", pub);
++                return true;
++            }
++        }
++
+         std::string energy = domain_path + "/energy_uj";
+         file = fopen(energy.c_str(), "r");
+         if (!file) {
+             if (errno == EACCES)
+-                SPDLOG_WARN("RAPL: {} is not readable (root-only by default). "
+-                            "Allow reading it with a udev rule to get power readings.", energy);
++                SPDLOG_WARN("RAPL: {} is root-only and {} is not available. "
++                            "Run the rapl-power service to get power readings.",
++                            energy, RAPL_PUBLISHED_DIR + name);
+             else
+                 SPDLOG_DEBUG("RAPL: cannot open {}: {}", energy, strerror(errno));
+             return false;
+@@ -61,6 +80,17 @@ struct RaplCounter {
+         rewind(file);
+         fflush(file);
+ 
++        if (published) {
++            // Already averaged over about a second by the service; may briefly read
++            // empty while it rewrites the file.
++            clearerr(file);
++            float w = 0.f;
++            if (fscanf(file, "%f", &w) != 1)
++                return false;
++            watts = w;
++            return true;
++        }
++
+         uint64_t value = 0;
+         if (fscanf(file, "%" SCNu64, &value) != 1)
+             return false;
+-- 
+2.55.0
+

@@ -1,0 +1,43 @@
+#!/bin/bash
+# rapl-power: publish coarse RAPL power for unprivileged readers (the MangoHud overlay).
+#
+# The powercap energy_uj counters are root-only since CVE-2020-8694 (PLATYPUS), a side
+# channel that needs many fine-grained energy readings. This service is the only reader:
+# every second it writes the average power of the package-0, core and uncore (Intel iGPU)
+# domains over that second, rounded to 0.1 W, to /run/rapl-power/<domain name>.
+# That is the same kind of data AMD exposes to all users in gpu_metrics.
+set -u
+
+INTERVAL=1
+OUT=/run/rapl-power            # created by systemd (RuntimeDirectory=rapl-power)
+
+declare -A file max prev
+for z in /sys/class/powercap/intel-rapl:* /sys/class/powercap/amd-rapl:*; do
+    [[ -r $z/energy_uj && -r $z/name ]] || continue
+    read -r name < "$z/name"
+    case $name in package-0|core|uncore) ;; *) continue ;; esac
+    [[ -n ${file[$name]:-} ]] && continue        # first (MSR based) zone wins
+    file[$name]=$z/energy_uj
+    read -r max[$name] < "$z/max_energy_range_uj" || max[$name]=0
+done
+(( ${#file[@]} )) || { echo "rapl-power: no RAPL package/core/uncore domains" >&2; exit 1; }
+
+for name in "${!file[@]}"; do read -r prev[$name] < "${file[$name]}"; done
+t_prev=${EPOCHREALTIME/./}
+
+while :; do
+    sleep "$INTERVAL"
+    t=${EPOCHREALTIME/./}
+    dt=$(( t - t_prev )); t_prev=$t
+    (( dt > 0 )) || continue
+    for name in "${!file[@]}"; do
+        read -r e < "${file[$name]}" || continue
+        d=$(( e - prev[$name] ))
+        (( d < 0 )) && d=$(( d + max[$name] ))   # counter wrapped
+        prev[$name]=$e
+        (( d < 0 )) && d=0
+        # uJ / us = W; keep one decimal, rounded
+        w10=$(( (d * 10 + dt / 2) / dt ))
+        printf '%d.%d\n' $(( w10 / 10 )) $(( w10 % 10 )) > "$OUT/$name"
+    done
+done

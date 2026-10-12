@@ -1,0 +1,41 @@
+[Unit]
+Description=Publish coarse RAPL power (1 s averages, 0.1 W) for unprivileged readers
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes
+ConditionPathExistsGlob=/sys/class/powercap/intel-rapl:*
+
+[Service]
+ExecStart=/usr/local/libexec/rapl-power
+Restart=on-failure
+RuntimeDirectory=rapl-power
+RuntimeDirectoryMode=0755
+UMask=0022
+# Root only to read the root-owned energy_uj files; no capabilities at all.
+User=root
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target
