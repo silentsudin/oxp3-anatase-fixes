@@ -7,7 +7,9 @@
 #                screen), as a MOK-signed xe module for the installed Anatase kernel
 #
 #   ./oxp3-fixes.sh build       build everything for the installed Anatase (as your user)
-#   ./oxp3-fixes.sh install     install the built packages (asks for sudo), then reboot
+#   ./oxp3-fixes.sh install     install (asks for sudo). Twice after a kernel change: the first
+#                               run stages the xe module (reboot), the second puts gamescope and
+#                               MangoHud into the writable /usr overlay
 #   ./oxp3-fixes.sh all         build + install
 #   ./oxp3-fixes.sh status      what is installed / layered / overridden
 #   ./oxp3-fixes.sh uninstall   back to stock Anatase (asks for sudo), then reboot
@@ -311,75 +313,78 @@ remove_rapl_udev_rules() {
     fi
 }
 
+# State of the deployments: is one staged, and which layered local packages does the booted
+# one have?
+deploy_info() {
+    rpm-ostree status --json | python3 -c 'import json,sys
+ds=json.load(sys.stdin)["deployments"]
+b=[x for x in ds if x.get("booted")][0]
+print("staged" if any(x.get("staged") for x in ds) else "none")
+print(" ".join(b.get("requested-local-packages",[])))'
+}
+
+hotfix_active() { rpm-ostree status --booted | grep -q 'Unlocked: hotfix'; }
+
 do_install() {
-    local rpms=() kmod=() old
+    local rpms=() kmod=() kver info staged locals p un=()
     (( SKIP_GAMESCOPE )) || rpms+=( "$OUT"/gamescope-*.x86_64.rpm "$OUT"/gamescope-*.i686.rpm )
     (( SKIP_MANGOHUD )) || rpms+=( "$OUT"/mangohud-*.x86_64.rpm "$OUT"/mangohud-*.i686.rpm )
     local f; for f in "${rpms[@]}"; do [[ -f $f ]] || die "missing $f - run '$0 build' first"; done
+    kver=$(anatase_kver)
+    info=$(deploy_info); staged=$(sed -n 1p <<<"$info"); locals=$(sed -n 2p <<<"$info")
 
+    say "power readings service (sudo)"
+    install_rapl_power
+
+    # 1. xe module: it loads from the initramfs, so it has to be layered with rpm-ostree and the
+    #    initramfs regenerated. That makes a new deployment, which doesn't keep the writable /usr
+    #    overlay, so this goes first; gamescope/MangoHud follow on the next run.
     if (( !SKIP_KERNEL )) && [[ ! -e $OUT/.kernel-not-needed ]]; then
         kmod=( "$OUT/$KMOD_NAME"-*.rpm )
         [[ -f ${kmod[0]} ]] || die "no $KMOD_NAME package - run '$0 build' first"
-        rpm -qp --qf '%{VERSION}\n' "${kmod[0]}" | grep -qF "$(anatase_kver | sed 's/-/_/g')" ||
-            die "$KMOD_NAME was built for another kernel than $(anatase_kver) - rebuild"
-        if ! mok_trusted; then
+        rpm -qp --qf '%{VERSION}\n' "${kmod[0]}" | grep -qF "${kver//-/_}" ||
+            die "$KMOD_NAME was built for another kernel than $kver - rebuild"
+        local want; want=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' "${kmod[0]}")
+        if grep -qwF "$want" <<<"$locals"; then
+            echo "xe module for $kver already in this deployment"
+        elif ! mok_trusted; then
             echo "WARNING: the MOK in $MOK_DIR is not in the kernel's machine keyring."
             echo "         The signed xe module would be rejected and the screen stay dark at boot."
             mok_usage_ok || echo "         The key isn't a CA with keyCertSign only: run '$0 mok-setup'."
             echo "         Skipping the kernel part (README: Secure Boot key)."
-            kmod=()
+        else
+            say "staging the xe module for $kver (sudo)"
+            for p in $locals; do [[ $p == "$KMOD_NAME"-* ]] && un+=( "--uninstall=$p" ); done
+            sudo rpm-ostree install "${kmod[0]}" "${un[@]}"
+            rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled' ||
+                sudo rpm-ostree initramfs --enable
+            say "reboot now, then run '$0 install' again for gamescope and MangoHud"
+            echo "(If the screen stays dark after the reboot, pick the previous entry in the boot menu.)"
+            return 0
         fi
     fi
 
-    say "installing (sudo)"
-    # Local "override replace" can't handle multilib packages (gamescope.x86_64 and .i686 are
-    # both in the base and rpm-ostree matches by name), so remove the base packages by arch and
-    # layer ours, together with the xe module, in one transaction.
-    local state removals locals rm=() un=() inst=( "${rpms[@]}" "${kmod[@]}" ) p
-    state=$(rpm-ostree status --json | python3 -c 'import json,sys
-d=json.load(sys.stdin)["deployments"]; d=([x for x in d if x.get("staged")] or [x for x in d if x.get("booted")])[0]
-print(" ".join(d.get("requested-base-removals",[])))
-print(" ".join(d.get("requested-local-packages",[])))')
-    removals=$(sed -n 1p <<<"$state"); locals=$(sed -n 2p <<<"$state")
-    for p in gamescope mangohud; do
-        [[ $p == gamescope ]] && (( SKIP_GAMESCOPE )) && continue
-        [[ $p == mangohud ]] && (( SKIP_MANGOHUD )) && continue
-        # one subject per name: it must match a single package (so name.arch), and the
-        # removal is then recorded by name, which covers both arches
-        grep -qw "$p" <<<"$removals" || rm+=( "$p.x86_64" )
-    done
-    for p in $locals; do
-        case $p in
-            gamescope-*) (( SKIP_GAMESCOPE )) || un+=( "$p" ) ;;
-            mangohud-*) (( SKIP_MANGOHUD )) || un+=( "$p" ) ;;
-            "$KMOD_NAME"-*) (( ${#kmod[@]} )) && un+=( "$p" ) ;;
-        esac
-    done
-    if (( ${#inst[@]} )); then
-        if (( ${#rm[@]} )); then
-            sudo rpm-ostree override remove "${rm[@]}" "${inst[@]/#/--install=}" "${un[@]/#/--uninstall=}"
-        else
-            sudo rpm-ostree install "${inst[@]}" "${un[@]/#/--uninstall=}"
+    # 2. gamescope / MangoHud into the writable /usr overlay of the booted deployment
+    if (( ${#rpms[@]} )); then
+        if [[ $staged == staged ]]; then
+            echo "A deployment is staged (an update or a pending change): reboot into it first,"
+            echo "then run '$0 install' again - changes to the current /usr would be lost."
+            return 0
         fi
+        say "gamescope / MangoHud into the writable /usr overlay (sudo)"
+        hotfix_active || sudo rpm-ostree usroverlay --hotfix
+        sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
+        rpm -q gamescope mangohud | sed 's/^/  /'
+        say "done - leave and re-enter Gamemode (no reboot needed)"
+        echo "This lasts until the next Anatase update; run '$0 all' after updating."
     fi
-    if (( ${#kmod[@]} )); then
-        rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled' ||
-            sudo rpm-ostree initramfs --enable   # rebuild the initramfs so it has the new xe
-    fi
-    install_rapl_power
-    say "done - reboot to use the new deployment"
-    echo "If anything is wrong, pick the previous deployment in the boot menu or: sudo rpm-ostree rollback"
 }
 
 do_uninstall() {
     say "back to stock Anatase (sudo)"
-    local un
-    un=$(rpm-ostree status --json | python3 -c 'import json,sys
-d=json.load(sys.stdin)["deployments"]; d=([x for x in d if x.get("staged")] or [x for x in d if x.get("booted")])[0]
-print(" ".join(p for p in d.get("requested-local-packages",[]) if p.split("-")[0] in ("gamescope","mangohud","kmod")))')
-    # shellcheck disable=SC2086
-    [[ -n $un ]] && sudo rpm-ostree uninstall $un
-    sudo rpm-ostree override reset gamescope mangohud 2>/dev/null || true
+    local p un=()
+    for p in $(sed -n 2p <<<"$(deploy_info)"); do [[ $p == "$KMOD_NAME"-* ]] && un+=( "$p" ); done
+    (( ${#un[@]} )) && sudo rpm-ostree uninstall "${un[@]}"
     if rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled'; then
         sudo rpm-ostree initramfs --disable
     fi
@@ -387,13 +392,15 @@ print(" ".join(p for p in d.get("requested-local-packages",[]) if p.split("-")[0
     sudo rm -f /etc/systemd/system/rapl-power.service /usr/local/libexec/rapl-power
     sudo systemctl daemon-reload
     remove_rapl_udev_rules
-    echo "Reboot to finish."
+    echo "Reboot to finish. The patched gamescope/MangoHud live in the writable /usr overlay of"
+    echo "the current deployment; any new deployment (the reboot above, or the next Anatase"
+    echo "update) starts from the stock packages again."
 }
 
 do_status() {
     echo "kernel (deployment): $(anatase_kver)   booted: $(uname -r)"
     rpm -q gamescope mangohud "$KMOD_NAME" 2>&1 | sed 's/^/  /'
-    rpm-ostree status --booted | grep -E 'Version|ReplacedBasePackages|LocalPackages|Initramfs|Unlocked' -A2 | sed 's/^/  /' || true
+    rpm-ostree status --booted | grep -E 'Version|LocalPackages|Initramfs|Unlocked' | sed 's/^/  /' || true
     echo "  rapl-power service: $(systemctl is-active rapl-power.service 2>/dev/null)"
     local f; for f in /run/rapl-power/*; do [[ -e $f ]] && echo "    $(basename "$f"): $(cat "$f") W"; done
     ls /etc/udev/rules.d/70-*rapl.rules >/dev/null 2>&1 && echo "  WARNING: old RAPL udev rule still present (run install)"

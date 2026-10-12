@@ -5,10 +5,10 @@ support on [Anatase](https://github.com/anatase-org/anatase) after an update.
 
 | Part | Fixes | How it is installed |
 |---|---|---|
-| gamescope | PQ HDR on the internal SDC AMS881KB01 OLED: no black screen when HDR turns on with VRR off or on an HDR retoggle; games see the real peak brightness (~1100 nits instead of 1499); brightness slider works in HDR | Anatase's gamescope package rebuilt with `patches/gamescope`; base packages removed and ours layered (`rpm-ostree override remove ... --install`) |
+| gamescope | PQ HDR on the internal SDC AMS881KB01 OLED: no black screen when HDR turns on with VRR off or on an HDR retoggle; games see the real peak brightness (~1100 nits instead of 1499); brightness slider works in HDR | Anatase's gamescope package rebuilt with `patches/gamescope`, installed into the writable `/usr` overlay (`rpm-ostree usroverlay --hotfix`) |
 | MangoHud | CPU power, GPU power and VRAM in the Gamemode performance overlay on Intel iGPUs | Anatase's MangoHud package rebuilt with `patches/mangohud`, installed the same way |
 | `rapl-power` service | CPU/GPU power for the overlay without opening the RAPL counters to users (see below) | `/usr/local/libexec/rapl-power` + `/etc/systemd/system/rapl-power.service` |
-| kernel (xe) | VBT VS/PE-O backport for the eDP link: random white dots, and the black screen on an HDR retoggle | `xe.ko` rebuilt for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3-xe` in `updates/` |
+| kernel (xe) | VBT VS/PE-O backport for the eDP link: random white dots, and the black screen on an HDR retoggle | `xe.ko` rebuilt for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3-xe` in `updates/` with a regenerated initramfs (xe loads from the initramfs) |
 
 You keep booting the stock Anatase kernel; only its `xe` module is replaced. If Anatase
 ships the VS/PE-O backport itself (kernel-anatase issue #7), the script notices and skips
@@ -17,9 +17,18 @@ the kernel part.
 ## After every Anatase update
 
 ```sh
-./oxp3-fixes.sh all     # build, then install (asks for sudo)
+./oxp3-fixes.sh build
+./oxp3-fixes.sh install   # stages the xe module for the new kernel (sudo)
 systemctl reboot
+./oxp3-fixes.sh install   # gamescope + MangoHud into the writable /usr overlay
 ```
+
+Then leave and re-enter Gamemode. Why two runs: `xe` loads from the initramfs, so its
+module is layered with rpm-ostree and the initramfs regenerated, which creates a new
+deployment. gamescope and MangoHud can't be layered that way (rpm-ostree can't replace
+packages that exist for both x86_64 and i686 with local RPMs), so they go into the writable
+`/usr` overlay of the booted deployment, which a new deployment doesn't keep. When the
+kernel hasn't changed, a single `install` is enough.
 
 The build runs in a Fedora container (podman) and takes about 30-40 minutes the first
 time, less afterwards. Check the result with `./oxp3-fixes.sh status`.
@@ -29,8 +38,8 @@ Commands:
 | Command | What it does |
 |---|---|
 | `build` | builds everything for the installed Anatase, into `~/.cache/oxp3-fixes/out` |
-| `install` | installs the built packages (sudo), then reboot |
-| `all` | `build` + `install` |
+| `install` | stages the xe module (then reboot) or installs gamescope/MangoHud (sudo) |
+| `all` | `build` + `install` (run `install` again after the reboot it asks for) |
 | `status` | shows what is installed, overridden and layered |
 | `uninstall` | back to stock Anatase (sudo), then reboot |
 | `mok-setup` | creates the module signing key and queues it for enrolment (once) |
