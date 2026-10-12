@@ -5,8 +5,8 @@ support on [Anatase](https://github.com/anatase-org/anatase) after an update.
 
 | Part | Fixes | How it is installed |
 |---|---|---|
-| gamescope | PQ HDR on the internal SDC AMS881KB01 OLED: no black screen when HDR turns on with VRR off or on an HDR retoggle; games see the real peak brightness (~1100 nits instead of 1499); brightness slider works in HDR | Anatase's gamescope package rebuilt with `patches/gamescope`, `rpm-ostree override replace` |
-| MangoHud | CPU power, GPU power and VRAM in the Gamemode performance overlay on Intel iGPUs | Anatase's MangoHud package rebuilt with `patches/mangohud`, `rpm-ostree override replace` |
+| gamescope | PQ HDR on the internal SDC AMS881KB01 OLED: no black screen when HDR turns on with VRR off or on an HDR retoggle; games see the real peak brightness (~1100 nits instead of 1499); brightness slider works in HDR | Anatase's gamescope package rebuilt with `patches/gamescope`; base packages removed and ours layered (`rpm-ostree override remove ... --install`) |
+| MangoHud | CPU power, GPU power and VRAM in the Gamemode performance overlay on Intel iGPUs | Anatase's MangoHud package rebuilt with `patches/mangohud`, installed the same way |
 | `rapl-power` service | CPU/GPU power for the overlay without opening the RAPL counters to users (see below) | `/usr/local/libexec/rapl-power` + `/etc/systemd/system/rapl-power.service` |
 | kernel (xe) | VBT VS/PE-O backport for the eDP link: random white dots, and the black screen on an HDR retoggle | `xe.ko` rebuilt for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3-xe` in `updates/` |
 
@@ -33,29 +33,29 @@ Commands:
 | `all` | `build` + `install` |
 | `status` | shows what is installed, overridden and layered |
 | `uninstall` | back to stock Anatase (sudo), then reboot |
+| `mok-setup` | creates the module signing key and queues it for enrolment (once) |
 
 Options: `--skip-kernel`, `--skip-gamescope`, `--skip-mangohud`.
 
 ## Secure Boot key (one time)
 
-The xe module must be signed with a Machine Owner Key (MOK) that is enrolled in the
-firmware; Secure Boot stays on. The script looks for `MOK.key` and `MOK.der` in
-`~/.local/share/oxp3-fixes/mok` (or `OXP3_MOK_DIR`). Create and enrol one:
+The xe module must be signed with a Machine Owner Key (MOK) that the kernel trusts for
+modules; Secure Boot stays on. Anatase's kernel only puts MOK keys into its machine keyring
+(the one that verifies modules) if they are **CA certificates with keyCertSign and without
+digitalSignature** (`CONFIG_INTEGRITY_CA_MACHINE_KEYRING_MAX`). Other keys land in the
+platform keyring, which can verify kernel images but not modules: an ordinary code signing
+MOK would boot a kernel but its modules would be rejected.
 
 ```sh
-d=~/.local/share/oxp3-fixes/mok; install -d -m 700 $d
-openssl req -new -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
-    -subj "/CN=OXP3 local modules ($(id -un))/" -addext "extendedKeyUsage=codeSigning" \
-    -keyout $d/MOK.key -out $d/MOK.crt
-openssl x509 -in $d/MOK.crt -outform DER -out $d/MOK.der
-sudo mokutil --import $d/MOK.der    # choose a one-time password
-systemctl reboot                    # MokManager: Enroll MOK -> Continue -> Yes -> password
+./oxp3-fixes.sh mok-setup   # creates ~/.local/share/oxp3-fixes/mok/MOK.{key,der} if needed
+                            # and runs mokutil --import (choose a one-time password)
+systemctl reboot            # MokManager: Enroll MOK -> Continue -> Yes -> password
 ```
 
 Keep `MOK.key` private: anything signed with it is trusted on this machine. It is never
-committed (`.gitignore`). `install` checks that the key is in the kernel's machine keyring
-and skips the kernel part if it isn't, so a wrongly signed module can't leave you without
-a display.
+committed (`.gitignore`). `install` checks that the key really is in the kernel's machine
+keyring and skips the kernel part if it isn't, so a wrongly signed module can't leave you
+without a display.
 
 ## Recovery
 

@@ -11,6 +11,7 @@
 #   ./oxp3-fixes.sh all         build + install
 #   ./oxp3-fixes.sh status      what is installed / layered / overridden
 #   ./oxp3-fixes.sh uninstall   back to stock Anatase (asks for sudo), then reboot
+#   ./oxp3-fixes.sh mok-setup   create a module signing key and queue it for enrolment (once)
 #
 # Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
@@ -27,6 +28,7 @@ FEDORA="$(rpm -E %fedora)"
 IMAGE="localhost/oxp3-fixes-build:f$FEDORA"
 CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME=kmod-oxp3-xe
+STAMP=$(date +%Y%m%d%H%M)
 
 SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0
 cmd="${1:-}"; shift || true
@@ -63,6 +65,11 @@ ensure_container() {
         say "creating build image $IMAGE (once, a few minutes)"
         podman build --build-arg FEDORA="$FEDORA" --label oxp3.containerfile="$sum" -t "$IMAGE" \
             -f "$here/container/Containerfile" "$here/container"
+    fi
+    # recreate the container if it was made with another MOK directory
+    if podman container exists "$CTR" &&
+       ! podman inspect "$CTR" --format '{{range .Mounts}}{{.Destination}} {{end}}' | grep -qF "$MOK_DIR"; then
+        podman rm -f "$CTR" >/dev/null
     fi
     if ! podman container exists "$CTR"; then
         podman run -d --name "$CTR" --userns=keep-id --security-opt label=disable \
@@ -111,10 +118,10 @@ build_card() {
     ctr spectool -g -C "$top/SOURCES" "$spec" >/dev/null
     ctr_root dnf -y -q builddep "$spec" >/dev/null 2>&1 || ctr_root dnf -y builddep --skip-unavailable "$spec" | tail -3
     say "$name $ver: x86_64"
-    ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3" -bb "$spec" > "$top/build.log" 2>&1 ||
+    ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3.$STAMP" -bb "$spec" > "$top/build.log" 2>&1 ||
         { tail -30 "$top/build.log"; die "$name x86_64 build failed (full log: $top/build.log)"; }
     say "$name $ver: i686"
-    ctr bash -c "export PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/usr/share/pkgconfig; setarch i686 rpmbuild --target i686 --nodeps --define '_topdir $top' --define 'dist .fc$FEDORA.oxp3' -bb '$spec'" \
+    ctr bash -c "export PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/usr/share/pkgconfig; setarch i686 rpmbuild --target i686 --nodeps --define '_topdir $top' --define 'dist .fc$FEDORA.oxp3.$STAMP' -bb '$spec'" \
         > "$top/build-i686.log" 2>&1 ||
         { tail -30 "$top/build-i686.log"; die "$name i686 build failed (full log: $top/build-i686.log)"; }
     rm -f "$OUT/$name"-*.rpm
@@ -226,10 +233,58 @@ do_build() {
 # ---------------------------------------------------------------------------------------------
 # install / uninstall (root)
 # ---------------------------------------------------------------------------------------------
+mok_cn() {
+    openssl x509 -in "$MOK_DIR/MOK.der" -inform der -noout -subject -nameopt multiline |
+        sed -n 's/^ *commonName *= *//p'
+}
+
+# Anatase's kernel only loads MOK keys into the machine keyring (the one that verifies
+# modules) if they are CA certs with keyCertSign and without digitalSignature
+# (CONFIG_INTEGRITY_CA_MACHINE_KEYRING_MAX); anything else lands in the platform keyring,
+# which can verify kernel images but not modules.
+mok_usage_ok() {
+    local ext
+    ext=$(openssl x509 -in "$MOK_DIR/MOK.der" -inform der -noout -ext basicConstraints,keyUsage 2>/dev/null)
+    grep -q 'CA:TRUE' <<<"$ext" && grep -q 'Certificate Sign' <<<"$ext" && ! grep -q 'Digital Signature' <<<"$ext"
+}
+
+# Is the MOK in the kernel's .machine keyring right now? keyctl can't find that keyring by
+# name from a normal process, so look its id up in /proc/keys and list it by id.
 mok_trusted() {
-    local cn; cn=$(openssl x509 -in "$MOK_DIR/MOK.der" -inform der -noout -subject -nameopt multiline |
-                   sed -n 's/^ *commonName *= *//p')
-    [[ -n $cn ]] && sudo keyctl list %:.machine 2>/dev/null | grep -qF "$cn"
+    local cn kr; cn=$(mok_cn)
+    kr=$(sudo awk '$8 == "keyring" && $9 == ".machine:" { print $1; exit }' /proc/keys)
+    [[ -n $cn && -n $kr ]] && sudo keyctl list "0x$kr" 2>/dev/null | grep -qF "$cn"
+}
+
+# Create a module signing key the machine keyring accepts and queue it for enrolment.
+do_mok_setup() {
+    if [[ -e $MOK_DIR/MOK.key ]] && mok_usage_ok; then
+        echo "$MOK_DIR already has a suitable key."
+    else
+        if [[ -e $MOK_DIR/MOK.key ]]; then
+            local old; old="$MOK_DIR.old-$(date +%Y%m%d%H%M%S)"
+            echo "The key in $MOK_DIR isn't accepted for modules (needs CA + keyCertSign only); keeping it as $old"
+            mv "$MOK_DIR" "$old"
+        fi
+        install -d -m 700 "$MOK_DIR"
+        local cfg; cfg=$(mktemp)
+        printf '%s\n' '[req]' 'distinguished_name = dn' 'x509_extensions = mok' 'prompt = no' \
+            '[dn]' "CN = OXP3 module signing CA ($(id -un))" \
+            '[mok]' 'basicConstraints = critical, CA:TRUE' 'keyUsage = critical, keyCertSign' \
+            'subjectKeyIdentifier = hash' > "$cfg"
+        (umask 077; openssl req -new -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 -config "$cfg" \
+            -keyout "$MOK_DIR/MOK.key" -out "$MOK_DIR/MOK.crt" 2>/dev/null)
+        rm -f "$cfg"
+        openssl x509 -in "$MOK_DIR/MOK.crt" -outform DER -out "$MOK_DIR/MOK.der"
+        echo "Created $MOK_DIR/MOK.key (keep it private) and MOK.der."
+    fi
+    if mokutil --test-key "$MOK_DIR/MOK.der" 2>&1 | grep -q 'already enrolled'; then
+        echo "MOK already enrolled."
+    else
+        echo "Enrolling: choose a one-time password, then reboot and in MokManager pick"
+        echo "Enroll MOK -> Continue -> Yes -> enter the password."
+        sudo mokutil --import "$MOK_DIR/MOK.der"
+    fi
 }
 
 # MangoHud's CPU/GPU power: a root service publishes 1 s / 0.1 W averages in /run/rapl-power;
@@ -270,25 +325,42 @@ do_install() {
         if ! mok_trusted; then
             echo "WARNING: the MOK in $MOK_DIR is not in the kernel's machine keyring."
             echo "         The signed xe module would be rejected and the screen stay dark at boot."
-            echo "         Enrol it first (README: Secure Boot key). Skipping the kernel part."
+            mok_usage_ok || echo "         The key isn't a CA with keyCertSign only: run '$0 mok-setup'."
+            echo "         Skipping the kernel part (README: Secure Boot key)."
             kmod=()
         fi
     fi
 
     say "installing (sudo)"
-    if (( ${#rpms[@]} )); then
-        sudo rpm-ostree override replace "${rpms[@]}"
+    # Local "override replace" can't handle multilib packages (gamescope.x86_64 and .i686 are
+    # both in the base and rpm-ostree matches by name), so remove the base packages by arch and
+    # layer ours, together with the xe module, in one transaction.
+    local state removals locals rm=() un=() inst=( "${rpms[@]}" "${kmod[@]}" ) p
+    state=$(rpm-ostree status --json | python3 -c 'import json,sys
+d=json.load(sys.stdin)["deployments"]; d=([x for x in d if x.get("staged")] or [x for x in d if x.get("booted")])[0]
+print(" ".join(d.get("requested-base-removals",[])))
+print(" ".join(d.get("requested-local-packages",[])))')
+    removals=$(sed -n 1p <<<"$state"); locals=$(sed -n 2p <<<"$state")
+    for p in gamescope mangohud; do
+        [[ $p == gamescope ]] && (( SKIP_GAMESCOPE )) && continue
+        [[ $p == mangohud ]] && (( SKIP_MANGOHUD )) && continue
+        grep -qw "$p" <<<"$removals" || rm+=( "$p.x86_64" "$p.i686" )
+    done
+    for p in $locals; do
+        case $p in
+            gamescope-*) (( SKIP_GAMESCOPE )) || un+=( "$p" ) ;;
+            mangohud-*) (( SKIP_MANGOHUD )) || un+=( "$p" ) ;;
+            "$KMOD_NAME"-*) (( ${#kmod[@]} )) && un+=( "$p" ) ;;
+        esac
+    done
+    if (( ${#inst[@]} )); then
+        if (( ${#rm[@]} )); then
+            sudo rpm-ostree override remove "${rm[@]}" "${inst[@]/#/--install=}" "${un[@]/#/--uninstall=}"
+        else
+            sudo rpm-ostree install "${inst[@]}" "${un[@]/#/--uninstall=}"
+        fi
     fi
     if (( ${#kmod[@]} )); then
-        old=$(rpm-ostree status --json | python3 -c 'import json,sys
-d=json.load(sys.stdin)["deployments"]; d=[x for x in d if x.get("staged")] or [x for x in d if x.get("booted")]
-print(" ".join(p for p in d[0].get("requested-local-packages",[]) if p.startswith("'"$KMOD_NAME"'")))')
-        if [[ -n $old ]]; then
-            # shellcheck disable=SC2086
-            sudo rpm-ostree install "${kmod[@]}" $(printf -- '--uninstall=%s ' $old)
-        else
-            sudo rpm-ostree install "${kmod[@]}"
-        fi
         rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled' ||
             sudo rpm-ostree initramfs --enable   # rebuild the initramfs so it has the new xe
     fi
@@ -299,11 +371,13 @@ print(" ".join(p for p in d[0].get("requested-local-packages",[]) if p.startswit
 
 do_uninstall() {
     say "back to stock Anatase (sudo)"
-    sudo rpm-ostree override reset gamescope gamescope.i686 mangohud mangohud.i686 2>/dev/null ||
-        sudo rpm-ostree override reset gamescope mangohud || true
-    local old
-    old=$(rpm -qa "$KMOD_NAME*" | tr '\n' ' ')
-    [[ -n $old ]] && sudo rpm-ostree uninstall $old || true
+    local un
+    un=$(rpm-ostree status --json | python3 -c 'import json,sys
+d=json.load(sys.stdin)["deployments"]; d=([x for x in d if x.get("staged")] or [x for x in d if x.get("booted")])[0]
+print(" ".join(p for p in d.get("requested-local-packages",[]) if p.split("-")[0] in ("gamescope","mangohud","kmod")))')
+    # shellcheck disable=SC2086
+    [[ -n $un ]] && sudo rpm-ostree uninstall $un
+    sudo rpm-ostree override reset gamescope mangohud 2>/dev/null || true
     if rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled'; then
         sudo rpm-ostree initramfs --disable
     fi
@@ -332,5 +406,6 @@ case $cmd in
     all) do_build; do_install ;;
     status) do_status ;;
     uninstall) do_uninstall ;;
+    mok-setup) do_mok_setup ;;
     *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
