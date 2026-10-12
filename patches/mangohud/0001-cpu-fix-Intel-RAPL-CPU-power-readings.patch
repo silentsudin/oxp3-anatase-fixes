@@ -1,0 +1,286 @@
+From a0322c2e55ab56e7edfe722ae5490edf83af2cea Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 17:03:12 +0100
+Subject: [PATCH 1/2] cpu: fix Intel RAPL CPU power readings
+
+- Add a shared RaplCounter helper (src/rapl.h) that converts energy_uj to
+  watts with floating point math, real timestamps and wraparound handling
+  through max_energy_range_uj.
+- Prefer the MSR based intel-rapl zone over intel-rapl-mmio for package-0.
+- Subtract the "uncore" domain (the iGPU on Intel client parts) from
+  package power, so the iGPU is not reported as CPU power as well.
+- Keep retrying sensor discovery every 5 seconds instead of giving up after
+  five attempts, so permissions granted after startup take effect.
+- Warn (instead of a debug message) when energy_uj is not readable.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/cpu.cpp |  64 +++++++++++------------------
+ src/cpu.h   |  15 +++----
+ src/rapl.h  | 113 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 141 insertions(+), 51 deletions(-)
+ create mode 100644 src/rapl.h
+
+diff --git a/src/cpu.cpp b/src/cpu.cpp
+index f46fabad..9e973377 100644
+--- a/src/cpu.cpp
++++ b/src/cpu.cpp
+@@ -410,27 +410,15 @@ static bool get_cpu_power_zenergy(CPUPowerData* cpuPowerData, float& power) {
+ static bool get_cpu_power_rapl(CPUPowerData* cpuPowerData, float& power) {
+     CPUPowerData_rapl* powerData_rapl = (CPUPowerData_rapl*)cpuPowerData;
+ 
+-    if (!powerData_rapl->energyCounterFile)
++    float package = 0.f;
++    if (!powerData_rapl->package.read(package))
+         return false;
+ 
+-    rewind(powerData_rapl->energyCounterFile);
+-    fflush(powerData_rapl->energyCounterFile);
+-
+-    uint64_t energyCounterValue = 0;
+-    if (fscanf(powerData_rapl->energyCounterFile, "%" SCNu64, &energyCounterValue) != 1)
+-        return false;
+-
+-    Clock::time_point now = Clock::now();
+-    Clock::duration timeDiff = now - powerData_rapl->lastCounterValueTime;
+-    int64_t timeDiffMicro = std::chrono::duration_cast<std::chrono::microseconds>(timeDiff).count();
+-    uint64_t energyCounterDiff = energyCounterValue - powerData_rapl->lastCounterValue;
+-
+-    if (powerData_rapl->lastCounterValue > 0 && energyCounterValue > powerData_rapl->lastCounterValue)
+-        power = energyCounterDiff / timeDiffMicro;
+-
+-    powerData_rapl->lastCounterValue = energyCounterValue;
+-    powerData_rapl->lastCounterValueTime = now;
++    float uncore = 0.f;
++    if (powerData_rapl->uncore.read(uncore))
++        package -= uncore;
+ 
++    power = package > 0.f ? package : 0.f;
+     return true;
+ }
+ 
+@@ -704,15 +692,12 @@ static CPUPowerData_zenergy* init_cpu_power_data_zenergy(const std::string path)
+ static CPUPowerData_rapl* init_cpu_power_data_rapl(const std::string path) {
+     auto powerData = std::make_unique<CPUPowerData_rapl>();
+ 
+-    std::string energyCounterPath = path + "/energy_uj";
+-    if (!file_exists(energyCounterPath)) return nullptr;
+-
+-    powerData->energyCounterFile = fopen(energyCounterPath.c_str(), "r");
+-    if (!powerData->energyCounterFile) {
+-        SPDLOG_DEBUG("Rapl: energy_uj is not accessible");
+-        powerData->energyCounterFile = nullptr;
++    if (!powerData->package.open(path))
+         return nullptr;
+-    }
++
++    std::string uncore = find_rapl_domain("uncore");
++    if (!uncore.empty() && powerData->uncore.open(uncore))
++        SPDLOG_DEBUG("Rapl: subtracting {} from package power", uncore);
+ 
+     return powerData.release();
+ }
+@@ -733,12 +718,16 @@ bool CPUStats::InitCpuPowerData() {
+     if(m_cpuPowerData != nullptr)
+         return true;
+ 
+-    // only try to find a valid method 5 times
++    // Try a few times quickly, then keep retrying slowly: sensors can become
++    // readable after startup (e.g. module load or a udev permission rule).
+     static int retries = 0;
+-    if (retries >= 5)
++    static Clock::time_point last_try;
++    Clock::time_point now = Clock::now();
++    if (retries >= 5 && now - last_try < std::chrono::seconds(5))
+         return true;
+ 
+     retries++;
++    last_try = now;
+     
+     std::string name, path;
+     std::string hwmon = "/sys/class/hwmon/";
+@@ -777,21 +766,14 @@ bool CPUStats::InitCpuPowerData() {
+     }
+ 
+     if (!cpuPowerData) {
+-        std::string powercap = "/sys/class/powercap/";
+-        auto powercap_dirs = ls(powercap.c_str());
+-        for (auto& dir : powercap_dirs) {
+-            path = powercap + dir;
+-            name = read_line(path + "/name");
+-            SPDLOG_DEBUG("powercap: name: {}", name);
+-            if (name == "package-0") {
+-                cpuPowerData = (CPUPowerData*)init_cpu_power_data_rapl(path);
+-                break;
+-            }
+-        }
++        std::string package = find_rapl_domain("package-0");
++        if (!package.empty())
++            cpuPowerData = (CPUPowerData*)init_cpu_power_data_rapl(package);
+     }
+-    
++
+     if(cpuPowerData == nullptr) {
+-        SPDLOG_ERROR("Failed to initialize CPU power data");
++        if (retries == 5)
++            SPDLOG_ERROR("Failed to initialize CPU power data");
+         return false;
+     }
+ 
+diff --git a/src/cpu.h b/src/cpu.h
+index d27c7887..d23f9a21 100644
+--- a/src/cpu.h
++++ b/src/cpu.h
+@@ -12,6 +12,7 @@
+ #endif
+ #include "timing.hpp"
+ #include "gpu.h"
++#include "rapl.h"
+ 
+ typedef struct CPUData_ {
+    unsigned long long int totalTime;
+@@ -128,18 +129,12 @@ struct CPUPowerData_zenergy : public CPUPowerData {
+ struct CPUPowerData_rapl : public CPUPowerData {
+    CPUPowerData_rapl() {
+       this->source = CPU_POWER_RAPL;
+-      this->lastCounterValue = 0;
+-      this->lastCounterValueTime = Clock::now();
+    };
+ 
+-   ~CPUPowerData_rapl() {
+-      if(this->energyCounterFile)
+-         fclose(this->energyCounterFile);
+-   };
+-
+-   FILE* energyCounterFile {nullptr};
+-   uint64_t lastCounterValue;
+-   Clock::time_point lastCounterValueTime;
++   RaplCounter package;
++   // Intel client parts account the iGPU in the "uncore" domain, which is also
++   // part of package-0. Subtract it so the iGPU is not counted as CPU power.
++   RaplCounter uncore;
+ };
+ 
+ struct CPUPowerData_amdgpu : public CPUPowerData {
+diff --git a/src/rapl.h b/src/rapl.h
+new file mode 100644
+index 00000000..4c877cc3
+--- /dev/null
++++ b/src/rapl.h
+@@ -0,0 +1,113 @@
++#pragma once
++#ifndef MANGOHUD_RAPL_H
++#define MANGOHUD_RAPL_H
++
++#include <cerrno>
++#include <cinttypes>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <spdlog/spdlog.h>
++#include "file_utils.h"
++#include "timing.hpp"
++
++// Reads a powercap (Intel/AMD RAPL) energy_uj counter and turns it into watts.
++// Handles counter wraparound via max_energy_range_uj.
++struct RaplCounter {
++    FILE* file = nullptr;
++    uint64_t max_range = 0;
++    uint64_t last_value = 0;
++    Clock::time_point last_time;
++    bool primed = false;
++
++    RaplCounter() = default;
++    RaplCounter(const RaplCounter&) = delete;
++    RaplCounter& operator=(const RaplCounter&) = delete;
++    ~RaplCounter() { close(); }
++
++    void close() {
++        if (file)
++            fclose(file);
++        file = nullptr;
++        primed = false;
++    }
++
++    bool open(const std::string& domain_path) {
++        close();
++        std::string energy = domain_path + "/energy_uj";
++        file = fopen(energy.c_str(), "r");
++        if (!file) {
++            if (errno == EACCES)
++                SPDLOG_WARN("RAPL: {} is not readable (root-only by default). "
++                            "Allow reading it with a udev rule to get power readings.", energy);
++            else
++                SPDLOG_DEBUG("RAPL: cannot open {}: {}", energy, strerror(errno));
++            return false;
++        }
++
++        std::string range = read_line(domain_path + "/max_energy_range_uj");
++        max_range = range.empty() ? 0 : strtoull(range.c_str(), nullptr, 10);
++        return true;
++    }
++
++    bool is_open() const { return file != nullptr; }
++
++    // Returns false when no reading is available. The first successful call only
++    // primes the counter and reports 0 W.
++    bool read(float& watts) {
++        if (!file)
++            return false;
++
++        rewind(file);
++        fflush(file);
++
++        uint64_t value = 0;
++        if (fscanf(file, "%" SCNu64, &value) != 1)
++            return false;
++
++        Clock::time_point now = Clock::now();
++        watts = 0.f;
++
++        if (primed) {
++            int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(now - last_time).count();
++            uint64_t delta;
++            if (value >= last_value)
++                delta = value - last_value;
++            else if (max_range > last_value)
++                delta = max_range - last_value + value;
++            else
++                delta = 0;
++
++            if (us > 0)
++                watts = (float)((double)delta / (double)us);
++        }
++
++        last_value = value;
++        last_time = now;
++        primed = true;
++        return true;
++    }
++};
++
++// Finds the powercap domain with the given name ("package-0", "uncore", "core"...),
++// preferring the MSR based intel-rapl/amd-rapl zones over intel-rapl-mmio.
++static inline std::string find_rapl_domain(const std::string& domain_name) {
++    const std::string powercap = "/sys/class/powercap/";
++    std::string fallback;
++
++    for (auto& dir : ls(powercap.c_str())) {
++        std::string path = powercap + dir;
++        if (read_line(path + "/name") != domain_name)
++            continue;
++
++        if (dir.find("mmio") == std::string::npos)
++            return path;
++
++        if (fallback.empty())
++            fallback = path;
++    }
++
++    return fallback;
++}
++
++#endif // MANGOHUD_RAPL_H
+-- 
+2.55.0
+

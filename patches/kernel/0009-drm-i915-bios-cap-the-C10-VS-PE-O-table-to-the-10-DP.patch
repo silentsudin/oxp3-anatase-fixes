@@ -1,0 +1,39 @@
+From dc3a3679c23bc7b383054e731cf5ad330ba2dd71 Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 09:07:56 +0100
+Subject: [PATCH 9/9] drm/i915/bios: cap the C10 VS/PE-O table to the 10 DP
+ presets
+
+On display ver 14+ VBT #57 has 16 rows, and the override reported all
+of them as entries. C10 only has the 10 DP presets, and
+intel_ddi_dp_voltage_max() WARNs when a table has more entries than
+index_to_dp_signal_levels[], so every link training on the eDP port of
+a Panther Lake OneXPlayer 3 would splat. Report at most 10 entries for
+C10.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TN7fYJCgCJyZs2ppsdDX15
+---
+ drivers/gpu/drm/i915/display/intel_bios.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/gpu/drm/i915/display/intel_bios.c b/drivers/gpu/drm/i915/display/intel_bios.c
+index 105ef5ffd54b..ac98cfb7d75a 100644
+--- a/drivers/gpu/drm/i915/display/intel_bios.c
++++ b/drivers/gpu/drm/i915/display/intel_bios.c
+@@ -3958,6 +3958,12 @@ intel_bios_get_c10_vspeo(const struct intel_bios_encoder_data *devdata,
+ 	}
+ 
+ 	vspeo->entries = entries;
++	/*
++	 * VBT #57 has 16 rows on display ver 14+, but C10 only has the 10 DP
++	 * presets (cf. mtl_c10_trans_dp14). Reporting 16 entries trips the
++	 * n_entries WARN in intel_ddi_dp_voltage_max() on every link training.
++	 */
++	vspeo->num_entries = min(num_rows, 10);
+ 
+ 	return vspeo;
+ }
+-- 
+2.55.0
+

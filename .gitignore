@@ -1,0 +1,7 @@
+# never commit signing keys or build output
+*.key
+*.der
+*.crt
+*.pem
+mok/
+out/

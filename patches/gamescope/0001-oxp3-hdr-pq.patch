@@ -1,0 +1,758 @@
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Subject: [PATCH] OneXPlayer 3 / Legion Go 2 OLED: PQ HDR fixes
+
+Applies on top of Anatase's gamescope overrides.patch (gamescope 3.16.23.3).
+Squashed from github.com/silentsudin/gamescope branch oxp3-hdr-min2:
+  - edid: strip DisplayID extensions from the EDID exposed to games (silentsudin)
+  - drm: send panel HDR metadata on internal displays (silentsudin)
+  - waitable: dispatch EPOLLPRI events to waitables (Matthew Schwartz)
+  - DRMBackend: fall back to EDID for HDR luminance metadata when scripts omit it (Matthew Schwartz)
+  - scripts: Add Lenovo Legion Go 2 as a known device (Matthew Schwartz)
+  - HACK: steamcompmgr: emulate the backlight in software while the output is in PQ (Matthew Schwartz)
+  - HACK: scripts: use the software backlight on the Legion Go 2 (Matthew Schwartz)
+  - drm: only fill in the panel primaries in internal panel HDR metadata (silentsudin)
+  - steamcompmgr: rate-limit content-driven HDR output switches on internal panels (silentsudin)
+  - steamcompmgr: optionally keep HDR output on for internal displays (silentsudin)
+  - steamcompmgr: space out HDR and VRR modesets on internal displays (silentsudin)
+  - steamcompmgr: enable HDR output with VRR off on internal displays (silentsudin)
+  - steamcompmgr: enter HDR on internal displays only from SDR with VRR on (silentsudin)
+  - drm: send no HDR metadata in SDR on internal displays (silentsudin)
+  - steamcompmgr: run VRR while in HDR on internal displays (silentsudin)
+  - steamcompmgr: make hdr_force_vrr_internal independent of hdr_enable_via_vrr_internal (silentsudin)
+  - drm: fill internal panel HDR luminance metadata from the EDID (silentsudin)
+  - steamcompmgr: limit VRR-aware HDR switching to panels that need it (silentsudin)
+---
+diff --git a/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua b/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
+new file mode 100644
+index 00000000..671664ee
+--- /dev/null
++++ b/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
+@@ -0,0 +1,75 @@
++local legiongo2_oled_refresh_rates = {
++    48, 49, 50, 51, 52, 53, 54, 55, 56, 57,
++    58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
++    68, 69, 70, 71, 72, 73, 74, 75, 76, 77,
++    78, 79, 80, 81, 82, 83, 84, 85, 86, 87,
++    88, 89, 90, 91, 92, 93, 94, 95, 96, 97,
++    98, 99, 100, 101, 102, 103, 104, 105, 106, 107,
++    108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
++    118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
++    128, 129, 130, 131, 132, 133, 134, 135, 136, 137,
++    138, 139, 140, 141, 142, 143, 144
++}
++
++gamescope.config.known_displays.lenovo_legiongo2_oled = {
++    pretty_name = "Lenovo Legion Go 2 OLED",
++    hdr = {
++        supported = true,
++        force_enabled = false,
++        eotf = gamescope.eotf.pq,
++        content_driven = true,
++        -- The panel ignores hardware backlight control while in PQ mode.
++        software_backlight = true,
++        -- The panel stays black in PQ unless HDR is entered with VRR handling:
++        -- from SDR with VRR on, modesets spaced out, VRR kept on while in HDR.
++        hdr_requires_vrr = true,
++        -- Luminance and colorimetry come from the panel's EDID.
++    },
++    dynamic_refresh_rates = legiongo2_oled_refresh_rates,
++    dynamic_modegen = function(base_mode, refresh)
++        debug("Generating mode "..refresh.."Hz for Lenovo Legion Go 2 OLED with fixed pixel clock")
++        local vfps = {
++            2696, 2615, 2538, 2463, 2391,
++            2322, 2256, 2192, 2130, 2071,
++            2013, 1958, 1904, 1852, 1802,
++            1753, 1706, 1660, 1616, 1572,
++            1531, 1491, 1451, 1413, 1376,
++            1340, 1305, 1270, 1237, 1205,
++            1173, 1142, 1112, 1083, 1054,
++            1026, 999,  972,  946,  921,
++            896,  872,  848,  825,  802,
++            780,  758,  737,  716,  696,
++            676,  656,  637,  618,  600,
++            581,  564,  546,  529,  512,
++            496,  480,  464,  448,  433,
++            418,  403,  389,  375,  361,
++            347,  333,  320,  307,  294,
++            281,  269,  257,  245,  233,
++            221,  209,  198,  187,  176,
++            165,  155,  144,  134,  123,
++            113,  103,  94,   84,   75,
++            65,   56
++        }
++        local vfp = vfps[zero_index(refresh - 48)]
++        if vfp == nil then
++            warn("Couldn't do refresh "..refresh.." on Lenovo Legion Go 2 OLED")
++            return base_mode
++        end
++
++        local mode = base_mode
++
++        gamescope.modegen.adjust_front_porch(mode, vfp)
++        mode.vrefresh = gamescope.modegen.calc_vrefresh(mode)
++
++        return mode
++    end,
++    matches = function(display)
++        if display.vendor == "SDC" and display.product == 0x4301 then
++            debug("[lenovo_legiongo2_oled] Matched vendor: "..display.vendor.." product: "..display.product)
++            return 5000
++        end
++        return -1
++    end,
++}
++debug("Registered Lenovo Legion Go 2 OLED as a known display")
++--debug(inspect(gamescope.config.known_displays.lenovo_legiongo2_oled))
+diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
+index 5479d1b3..7531eabf 100644
+--- a/src/Backends/DRMBackend.cpp
++++ b/src/Backends/DRMBackend.cpp
+@@ -63,6 +63,10 @@ static constexpr bool k_bUseCursorPlane = false;
+ extern int g_nPreferredOutputWidth;
+ extern int g_nPreferredOutputHeight;
+ 
++gamescope::ConVar<bool> cv_drm_sdr_metadata_internal( "drm_sdr_metadata_internal", false,
++	"Send the SDR static HDR metadata (EOTF traditional gamma) on internal displays while the output is SDR. "
++	"Off: no HDR metadata in SDR, as KDE and Mutter do." );
++
+ gamescope::ConVar<bool> cv_drm_single_plane_optimizations( "drm_single_plane_optimizations", true, "Whether or not to enable optimizations for single plane usage." );
+ 
+ gamescope::ConVar<bool> cv_drm_debug_disable_shaper_and_3dlut( "drm_debug_disable_shaper_and_3dlut", false, "Shaper + 3DLUT chicken bit. (Force disable/DEFAULT, no logic change)" );
+@@ -421,6 +425,9 @@ namespace gamescope
+ 			return bChanged;
+ 		}
+ 
++		void FillPanelHDRMetadata( hdr_metadata_infoframe *pInfoframe ) const;
++		gamescope::BackendBlob *GetAppHDRMetadata( const std::shared_ptr<gamescope::BackendBlob> &pAppMetadata );
++
+ 		bool SupportsHDR10() const
+ 		{
+ 			return !!GetProperties().Colorspace && !!GetProperties().HDR_OUTPUT_METADATA && GetHDRInfo().IsHDR10();
+@@ -546,6 +553,9 @@ namespace gamescope
+ 
+ 		GamescopePanelOrientation m_ChosenOrientation = GAMESCOPE_PANEL_ORIENTATION_AUTO;
+ 
++		std::weak_ptr<gamescope::BackendBlob> m_pLastAppHDRMetadata;
++		std::shared_ptr<gamescope::BackendBlob> m_pFilledAppHDRMetadata;
++
+ 		ConnectorProperties m_Props;
+ 	};
+ 
+@@ -1503,7 +1513,8 @@ void finish_drm(struct drm_t *drm)
+ 
+ 		if ( pConnector->GetProperties().HDR_OUTPUT_METADATA )
+ 		{
+-			if ( drm->sdr_static_metadata && pConnector->GetHDRInfo().IsHDR10() )
++			if ( drm->sdr_static_metadata && pConnector->GetHDRInfo().IsHDR10() &&
++			     ( !pConnector->GetHDRInfo().bHDRRequiresVRR || cv_drm_sdr_metadata_internal ) )
+ 				pConnector->GetProperties().HDR_OUTPUT_METADATA->SetPendingValue( req, drm->sdr_static_metadata->GetBlobValue(), true );
+ 			else
+ 				pConnector->GetProperties().HDR_OUTPUT_METADATA->SetPendingValue( req, 0, true );
+@@ -2376,6 +2387,7 @@ namespace gamescope
+ 
+ 		bool bHasKnownColorimetry = false;
+ 		bool bHasKnownHDRInfo = false;
++		sol::optional<float> ofScriptMaxCLL, ofScriptMaxFALL, ofScriptMinCLL;
+ 
+ 		m_Mutable.ValidDynamicRefreshRates.clear();
+ 		m_Mutable.fnDynamicModeGenerator = nullptr;
+@@ -2473,9 +2485,12 @@ namespace gamescope
+ 				{
+ 					m_Mutable.HDR.bExposeHDRSupport = otHDRInfo->get_or( "supported", false );
+ 					m_Mutable.HDR.eOutputEncodingEOTF = otHDRInfo->get_or( "eotf", EOTF_Gamma22 );
+-					m_Mutable.HDR.uMaxContentLightLevel = nits_to_u16( otHDRInfo->get_or( "max_content_light_level", 400.0f ) );
+-					m_Mutable.HDR.uMaxFrameAverageLuminance = nits_to_u16( otHDRInfo->get_or( "max_frame_average_luminance", 400.0f ) );
+-					m_Mutable.HDR.uMinContentLightLevel = nits_to_u16_dark( otHDRInfo->get_or( "min_content_light_level", 0.1f ) );
++					m_Mutable.HDR.bSoftwareBacklight = otHDRInfo->get_or( "software_backlight", false );
++					m_Mutable.HDR.bHDRRequiresVRR = otHDRInfo->get_or( "hdr_requires_vrr", false );
++
++					ofScriptMaxCLL = (*otHDRInfo)["max_content_light_level"].get<sol::optional<float>>();
++					ofScriptMaxFALL = (*otHDRInfo)["max_frame_average_luminance"].get<sol::optional<float>>();
++					ofScriptMinCLL = (*otHDRInfo)["min_content_light_level"].get<sol::optional<float>>();
+ 
+ 					bHasKnownHDRInfo = true;
+ 				}
+@@ -2543,7 +2558,7 @@ namespace gamescope
+ 		/////////////////////
+ 		// Parse HDR stuff.
+ 		/////////////////////
+-		if ( !bHasKnownHDRInfo )
++		if ( !bHasKnownHDRInfo || !ofScriptMaxCLL || !ofScriptMaxFALL || !ofScriptMinCLL )
+ 		{
+ 			const di_cta_hdr_static_metadata_block *pHDRStaticMetadata = nullptr;
+ 			const di_cta_colorimetry_block *pColorimetry = nullptr;
+@@ -2578,14 +2593,17 @@ namespace gamescope
+ 			if ( pColorimetry && pColorimetry->bt2020_rgb &&
+ 				 pHDRStaticMetadata && pHDRStaticMetadata->eotfs && pHDRStaticMetadata->eotfs->pq )
+ 			{
+-				m_Mutable.HDR.bExposeHDRSupport = true;
+-				if (disableInternalPq && GetScreenType() == GAMESCOPE_SCREEN_TYPE_INTERNAL)
+-					// Current handheld internal displays have issues
+-					// with PQ, e.g., Ayaneo 3, Steam Deck etc.
+-					// Use Gamma 2.2 as the safest option for now.
+-					m_Mutable.HDR.eOutputEncodingEOTF = EOTF_Gamma22;
+-				else
+-					m_Mutable.HDR.eOutputEncodingEOTF = EOTF_PQ;
++				if ( !bHasKnownHDRInfo )
++				{
++					m_Mutable.HDR.bExposeHDRSupport = true;
++					if (disableInternalPq && GetScreenType() == GAMESCOPE_SCREEN_TYPE_INTERNAL)
++						// Current handheld internal displays have issues
++						// with PQ, e.g., Ayaneo 3, Steam Deck etc.
++						// Use Gamma 2.2 as the safest option for now.
++						m_Mutable.HDR.eOutputEncodingEOTF = EOTF_Gamma22;
++					else
++						m_Mutable.HDR.eOutputEncodingEOTF = EOTF_PQ;
++				}
+ 				m_Mutable.HDR.uMaxContentLightLevel =
+ 					pHDRStaticMetadata->desired_content_max_luminance
+ 					? nits_to_u16( pHDRStaticMetadata->desired_content_max_luminance )
+@@ -2599,27 +2617,97 @@ namespace gamescope
+ 					? nits_to_u16_dark( pHDRStaticMetadata->desired_content_min_luminance )
+ 					: nits_to_u16_dark( 0.0f );
+ 			}
+-			else
++			else if ( !bHasKnownHDRInfo )
+ 			{
+ 				m_Mutable.HDR.bExposeHDRSupport = false;
+ 			}
+ 		}
+ 
++		// Script values win over the EDID field by field.
++		if ( ofScriptMaxCLL )
++			m_Mutable.HDR.uMaxContentLightLevel = nits_to_u16( *ofScriptMaxCLL );
++		if ( ofScriptMaxFALL )
++			m_Mutable.HDR.uMaxFrameAverageLuminance = nits_to_u16( *ofScriptMaxFALL );
++		if ( ofScriptMinCLL )
++			m_Mutable.HDR.uMinContentLightLevel = nits_to_u16_dark( *ofScriptMinCLL );
++
+ 		// Generate a default HDR10 infoframe.
+ 		if ( m_Mutable.HDR.IsHDR10() )
+ 		{
+ 			hdr_output_metadata defaultHDRMetadata{};
+ 			hdr_metadata_infoframe *pInfoframe = &defaultHDRMetadata.hdmi_metadata_type1;
+ 
+-			// The mastering display and content light levels describe the source, not
+-			// this connector. Leave them zero (unknown) until the app supplies them.
++			// Mastering display and content light levels: zero (unknown) here; internal
++			// panels get them from the EDID in FillPanelHDRMetadata.
+ 			pInfoframe->eotf = HDMI_EOTF_ST2084;
+ 			pInfoframe->metadata_type = 0;
+ 
++			// Internal panels: describe the mastering display with the panel's own
++			// primaries (see FillPanelHDRMetadata).
++			if ( GetScreenType() == GAMESCOPE_SCREEN_TYPE_INTERNAL )
++				FillPanelHDRMetadata( pInfoframe );
++
+ 			m_Mutable.HDR.pDefaultMetadataBlob = GetBackend()->CreateBackendBlob( defaultHDRMetadata );
+ 		}
+ 	}
+ 
++	void CDRMConnector::FillPanelHDRMetadata( hdr_metadata_infoframe *pInfoframe ) const
++	{
++		const displaycolorimetry_t &colorimetry = m_Mutable.DisplayColorimetry;
++
++		if ( !pInfoframe->display_primaries[0].x && !pInfoframe->display_primaries[0].y &&
++			 !pInfoframe->white_point.x && !pInfoframe->white_point.y )
++		{
++			pInfoframe->display_primaries[0].x = color_xy_to_u16( colorimetry.primaries.r.x );
++			pInfoframe->display_primaries[0].y = color_xy_to_u16( colorimetry.primaries.r.y );
++			pInfoframe->display_primaries[1].x = color_xy_to_u16( colorimetry.primaries.g.x );
++			pInfoframe->display_primaries[1].y = color_xy_to_u16( colorimetry.primaries.g.y );
++			pInfoframe->display_primaries[2].x = color_xy_to_u16( colorimetry.primaries.b.x );
++			pInfoframe->display_primaries[2].y = color_xy_to_u16( colorimetry.primaries.b.y );
++			pInfoframe->white_point.x = color_xy_to_u16( colorimetry.white.x );
++			pInfoframe->white_point.y = color_xy_to_u16( colorimetry.white.y );
++		}
++
++		// Luminance fields left zero (unknown) are filled from the panel's EDID, the way
++		// KWin does: mastering max, MaxCLL and MaxFALL from the max frame-average
++		// luminance, mastering min from the min luminance. The SDC AMS881KB01 OLED
++		// (Legion Go 2 / OneXPlayer 3) can stay black after an HDR enable when these
++		// are zero.
++		const uint16_t uFALL = m_Mutable.HDR.uMaxFrameAverageLuminance;
++		if ( uFALL )
++		{
++			if ( !pInfoframe->max_display_mastering_luminance )
++				pInfoframe->max_display_mastering_luminance = uFALL;
++			if ( !pInfoframe->min_display_mastering_luminance )
++				pInfoframe->min_display_mastering_luminance = m_Mutable.HDR.uMinContentLightLevel;
++			if ( !pInfoframe->max_cll )
++				pInfoframe->max_cll = uFALL;
++			if ( !pInfoframe->max_fall )
++				pInfoframe->max_fall = uFALL;
++		}
++		drm_log.infof( "internal panel HDR metadata: mastering max %u min %u (x0.0001 nits), MaxCLL %u, MaxFALL %u",
++			pInfoframe->max_display_mastering_luminance, pInfoframe->min_display_mastering_luminance,
++			pInfoframe->max_cll, pInfoframe->max_fall );
++	}
++
++	gamescope::BackendBlob *CDRMConnector::GetAppHDRMetadata( const std::shared_ptr<gamescope::BackendBlob> &pAppMetadata )
++	{
++		if ( GetScreenType() != GAMESCOPE_SCREEN_TYPE_INTERNAL )
++			return pAppMetadata.get();
++
++		if ( m_pLastAppHDRMetadata.lock() == pAppMetadata && m_pFilledAppHDRMetadata )
++			return m_pFilledAppHDRMetadata.get();
++
++		// Apps often leave the primaries zero (unknown). Fill them in from the
++		// panel, see FillPanelHDRMetadata.
++		hdr_output_metadata metadata = pAppMetadata->View<hdr_output_metadata>();
++		FillPanelHDRMetadata( &metadata.hdmi_metadata_type1 );
++
++		m_pLastAppHDRMetadata = pAppMetadata;
++		m_pFilledAppHDRMetadata = GetBackend()->CreateBackendBlob( metadata );
++		return m_pFilledAppHDRMetadata.get();
++	}
++
+ 	/////////////////////////
+ 	// CDRMFb
+ 	/////////////////////////
+@@ -2962,12 +3050,17 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
+ 
+ 			wlserver_vk_swapchain_feedback* pFeedback = steamcompmgr_get_base_layer_swapchain_feedback();
+ 			if ( pFeedback && pFeedback->hdr_metadata_blob != nullptr )
+-				pHDRMetadata = pFeedback->hdr_metadata_blob.get();
++				pHDRMetadata = drm->pConnector->GetAppHDRMetadata( pFeedback->hdr_metadata_blob );
+ 			uColorimetry = DRM_MODE_COLORIMETRY_BT2020_RGB;
+ 		}
+ 		else
+ 		{
+-			pHDRMetadata = drm->sdr_static_metadata.get();
++			// Internal panels: like other compositors, send no HDR metadata at all in SDR. An
++			// explicit "SDR gamma" static metadata SDP keeps the SDC AMS881KB01 OLED's HDR engine
++			// in gamma mode, so it then fails to (or only slowly) switch into PQ.
++			pHDRMetadata = drm->pConnector->GetHDRInfo().bHDRRequiresVRR && !cv_drm_sdr_metadata_internal
++				? nullptr
++				: drm->sdr_static_metadata.get();
+ 			uColorimetry = DRM_MODE_COLORIMETRY_DEFAULT;
+ 		}
+ 
+@@ -3745,6 +3838,9 @@ namespace gamescope
+ 				bNeedsFullComposite |= g_bHDRItmEnable;
+ 				if ( !SupportsSRGBtoPQ() )
+ 					bNeedsFullComposite |= ( pFrameInfo->layerCount > 1 || pFrameInfo->layers[0].colorspace != GAMESCOPE_APP_TEXTURE_COLORSPACE_HDR10_PQ );
++				// Scanout can't apply the LUT-baked backlight dim without color management.
++				if ( !SupportsColorManagement() )
++					bNeedsFullComposite |= g_ColorMgmt.current.flBacklightLutGain != 1.0f;
+ 			}
+ 			else
+ 			{
+diff --git a/src/backend.h b/src/backend.h
+index 7ffdf9b3..d9d4b19f 100644
+--- a/src/backend.h
++++ b/src/backend.h
+@@ -118,6 +118,11 @@ namespace gamescope
+         // but don't want to expose HDR there as it is not good.
+         bool bExposeHDRSupport = false;
+         bool bAlwaysPatchEdid = false;
++        // Panel ignores hardware backlight control in PQ, follow it in software.
++        bool bSoftwareBacklight = false;
++        // Panel needs VRR-aware HDR switching (HDR entered from SDR with VRR on, spaced
++        // modesets, VRR kept on in HDR, no HDR metadata in SDR). SDC AMS881KB01 OLED.
++        bool bHDRRequiresVRR = false;
+ 
+         // The output encoding to use for HDR output.
+         // For typical HDR10 displays, this will be PQ.
+diff --git a/src/edid.cpp b/src/edid.cpp
+index ae18dca5..c0ded22a 100644
+--- a/src/edid.cpp
++++ b/src/edid.cpp
+@@ -88,6 +88,51 @@ namespace gamescope
+         return ceilf((logf(nits / 50.0f) / logf(2.0f)) * 32.0f);
+     }
+ 
++    // Older libdisplay-info versions (e.g. the one bundled by DXVK) reject
++    // EDIDs with DisplayID 2.0 extension blocks entirely, and games then get
++    // made up HDR metadata (1499 nits peak, P3 primaries) instead of the
++    // panel's. Everything we hand to games is in the base and CTA blocks, so
++    // drop DisplayID extensions from the EDID that we expose.
++    static bool strip_displayid_extensions( std::vector<uint8_t> &edid )
++    {
++        static constexpr uint8_t DISPLAYID_EXT_TAG = 0x70;
++        static constexpr uint8_t BLOCK_MAP_EXT_TAG = 0xF0;
++
++        if ( edid.size() < 2 * EDID_BLOCK_SIZE || edid.size() % EDID_BLOCK_SIZE != 0 )
++            return false;
++
++        std::vector<uint8_t> stripped( edid.begin(), edid.begin() + EDID_BLOCK_SIZE );
++        uint32_t uExtCount = uint32_t( edid.size() / EDID_BLOCK_SIZE ) - 1;
++        bool bStripped = false;
++
++        for ( uint32_t i = 1; i <= uExtCount; i++ )
++        {
++            const uint8_t *ext_data = &edid[i * EDID_BLOCK_SIZE];
++
++            // Removing blocks would invalidate a block map, leave those alone.
++            if ( ext_data[0] == BLOCK_MAP_EXT_TAG )
++                return false;
++
++            if ( ext_data[0] == DISPLAYID_EXT_TAG )
++            {
++                bStripped = true;
++                continue;
++            }
++
++            stripped.insert( stripped.end(), ext_data, ext_data + EDID_BLOCK_SIZE );
++        }
++
++        if ( !bStripped )
++            return false;
++
++        stripped[0x7E] = uint8_t( stripped.size() / EDID_BLOCK_SIZE - 1 );
++        patch_edid_checksum( &stripped[0] );
++
++        edid_log.infof( "Stripped DisplayID extension blocks (%zu -> %zu bytes)", edid.size(), stripped.size() );
++        edid = std::move( stripped );
++        return true;
++    }
++
+     std::optional<std::vector<uint8_t>> PatchEdid( std::span<const uint8_t> pEdid, const BackendConnectorHDRInfo &hdrInfo, bool bRotate )
+     {
+         // A zero length indicates that the edid parsing failed.
+@@ -96,6 +141,8 @@ namespace gamescope
+ 
+         std::vector<uint8_t> edid( pEdid.begin(), pEdid.end() );
+ 
++        bool bStrippedDisplayID = strip_displayid_extensions( edid );
++
+         if ( bRotate )
+         {
+             // Patch width, height.
+@@ -124,7 +171,7 @@ namespace gamescope
+         // an external display attached.
+         // (Allows for debugging undocked fallback without undocking/redocking)
+         if ( !hdrInfo.ShouldPatchEDID() )
+-            return bRotate ? std::optional( edid ) : std::nullopt;
++            return ( bRotate || bStrippedDisplayID ) ? std::optional( edid ) : std::nullopt;
+ 
+         // TODO: Allow for override of min luminance
+ #if 0
+diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
+index e71da019..d39f478a 100644
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -535,6 +535,8 @@ struct gamescope_color_mgmt_t
+ 	float flSDROnHDRBrightness = 203.f;
+ 	float flHDRInputGain = 1.f;
+ 	float flSDRInputGain = 1.f;
++	// Software backlight dim baked into the LUTs, PQ outputs only.
++	float flBacklightLutGain = 1.f;
+ 
+ 	// HDR Display Metadata Override & Tonemapping
+ 	ETonemapOperator hdrTonemapOperator = ETonemapOperator_None;
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 9c68b83b..d2d78a22 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -384,6 +384,7 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
+ 		if (!outColorMgmtLuts[nInputEOTF].vk_lut3d)
+ 			outColorMgmtLuts[nInputEOTF].vk_lut3d = vulkan_create_3d_lut(s_nLutEdgeSize3d, s_nLutEdgeSize3d, s_nLutEdgeSize3d);
+ 
++		// FIXME: an override bypasses the backlight gain below, like night mode and looks.
+ 		if ( g_ColorMgmtLutsOverride[nInputEOTF].HasLuts() )
+ 		{
+ 			memcpy(g_ColorMgmtLuts[nInputEOTF].lut1d, g_ColorMgmtLutsOverride[nInputEOTF].lut1d, sizeof(g_ColorMgmtLutsOverride[nInputEOTF].lut1d));
+@@ -469,6 +470,9 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
+ 				buildPQColorimetry( &inputColorimetry, &colorMapping, displayColorimetry );
+ 			}
+ 
++			// Software backlight dim, only ever != 1 on PQ outputs.
++			flGain *= newColorMgmt.flBacklightLutGain;
++
+ 			calcColorTransform<s_nLutEdgeSize3d>( &g_tmpLut1d, s_nLutSize1d, &g_tmpLut3d, inputColorimetry, inputEOTF,
+ 				outputEncodingColorimetry, newColorMgmt.outputEncodingEOTF,
+ 				newColorMgmt.outputVirtualWhite, newColorMgmt.chromaticAdaptationMode,
+@@ -509,6 +513,124 @@ gamescope::ConVar<bool> cv_hdr_enabled{ "hdr_enabled", false, "Whether or not HD
+ bool g_bHDRItmEnable = false;
+ int g_nCurrentRefreshRate_CachedValue = 0;
+ 
++// Follows the panel backlight over sysfs for panels that ignore it in PQ. steamcompmgr thread only.
++class CBacklightWatcher final : public gamescope::IWaitable
++{
++public:
++	~CBacklightWatcher()
++	{
++		if ( m_nFD >= 0 )
++			close( m_nFD );
++	}
++
++	bool Init()
++	{
++		// amdgpu registers the panel as amdgpu_bl*, prefer it over firmware shims, lowest name for a stable pick.
++		std::string sDevice;
++		std::error_code ec;
++		for ( const auto &entry : std::filesystem::directory_iterator( "/sys/class/backlight", ec ) )
++		{
++			std::string sName = entry.path().filename().string();
++			bool bPreferred = sName.starts_with( "amdgpu_bl" );
++			bool bHavePreferred = sDevice.starts_with( "amdgpu_bl" );
++			if ( sDevice.empty() || ( bPreferred && !bHavePreferred ) || ( bPreferred == bHavePreferred && sName < sDevice ) )
++				sDevice = sName;
++		}
++
++		if ( sDevice.empty() )
++			return false;
++
++		std::string sBase = "/sys/class/backlight/" + sDevice;
++		int nMaxFD = open( ( sBase + "/max_brightness" ).c_str(), O_RDONLY | O_CLOEXEC );
++		m_nMaxBrightness = ReadInt( nMaxFD );
++		if ( nMaxFD >= 0 )
++			close( nMaxFD );
++		if ( m_nMaxBrightness <= 0 )
++			return false;
++
++		m_nFD = open( ( sBase + "/actual_brightness" ).c_str(), O_RDONLY | O_CLOEXEC );
++		if ( m_nFD < 0 )
++			return false;
++
++		m_flFactor = ReadFactor();
++		// The first read may have failed and closed the fd.
++		if ( m_nFD < 0 )
++			return false;
++
++		xwm_log.debugf( "Software backlight: watching %s, max brightness %d", sDevice.c_str(), m_nMaxBrightness );
++		return true;
++	}
++
++	int GetFD() final { return m_nFD; }
++	void OnPollPri() final
++	{
++		float flFactor = ReadFactor();
++		if ( flFactor == m_flFactor )
++			return;
++
++		m_flFactor = flFactor;
++
++		gamescope::IBackendConnector *pConn = GetBackend()->GetCurrentConnector();
++		if ( pConn && pConn->GetHDRInfo().bSoftwareBacklight )
++			hasRepaint = true;
++	}
++
++	// Drop the fd instead of the base class abort.
++	void OnPollHangUp() final
++	{
++		Disable();
++	}
++
++	float GetFactor() const { return m_flFactor; }
++
++private:
++	// Closing also removes the fd from the epoll set, the repaint restores unity gain.
++	void Disable()
++	{
++		if ( m_nFD < 0 )
++			return;
++
++		close( m_nFD );
++		m_nFD = -1;
++		m_flFactor = 1.0f;
++		hasRepaint = true;
++	}
++
++	static long ReadInt( int nFD )
++	{
++		if ( nFD < 0 )
++			return -1;
++
++		char szBuf[32];
++		lseek( nFD, 0, SEEK_SET );
++		ssize_t nRead = read( nFD, szBuf, sizeof( szBuf ) - 1 );
++		if ( nRead <= 0 )
++			return -1;
++		szBuf[nRead] = '\0';
++		return strtol( szBuf, nullptr, 10 );
++	}
++
++	// Reads actual_brightness, which also consumes the pending poll event.
++	float ReadFactor()
++	{
++		long nValue = ReadInt( m_nFD );
++		if ( nValue < 0 )
++		{
++			// A dead node reports EPOLLERR forever, drop it before it spins us.
++			Disable();
++			return m_flFactor;
++		}
++
++		return std::clamp( (float)nValue / (float)m_nMaxBrightness, 0.0f, 1.0f );
++	}
++
++	int m_nFD = -1;
++	int m_nMaxBrightness = -1;
++	float m_flFactor = 1.0f;
++};
++
++static CBacklightWatcher g_BacklightWatcher;
++
+ static void
+ update_color_mgmt()
+ {
+@@ -523,6 +645,11 @@ update_color_mgmt()
+ 	g_ColorMgmt.pending.flInternalDisplayBrightness =
+ 		GetBackend()->GetCurrentConnector()->GetHDRInfo().uMaxContentLightLevel;
+ 
++	// Panels that ignore the hardware backlight in PQ get it baked into the LUTs instead, never fully to black.
++	g_ColorMgmt.pending.flBacklightLutGain =
++		( GetBackend()->GetCurrentConnector()->GetHDRInfo().bSoftwareBacklight && g_ColorMgmt.pending.enabled && g_ColorMgmt.pending.outputEncodingEOTF == EOTF_PQ )
++			? std::max( g_BacklightWatcher.GetFactor(), 0.01f ) : 1.0f;
++
+ #ifdef COLOR_MGMT_MICROBENCH
+ 	struct timespec t0, t1;
+ #else
+@@ -1211,6 +1338,37 @@ static bool		debugEvents = false;
+ extern bool		steamMode;
+ 
+ gamescope::ConVar<bool> cv_composite_force{ "composite_force", false, "Force composition always, never use scanout" };
++gamescope::ConVar<int> cv_hdr_output_switch_cooldown_ms{ "hdr_output_switch_cooldown_ms", 15000,
++	"Minimum time between HDR output on/off switches on internal displays. Each switch is a full modeset that power-cycles the panel, "
++	"and some panels (SDC AMS881KB01) stay black if switched again too soon. Content is tonemapped to the current output meanwhile." };
++gamescope::ConVar<int> cv_internal_modeset_spacing_ms{ "internal_modeset_spacing_ms", 5000,
++	"Minimum time between an HDR output switch and a VRR on/off switch on internal displays. Both are full modesets, "
++	"and the SDC AMS881KB01 OLED comes up dim when they follow each other within about a second." };
++gamescope::ConVar<bool> cv_hdr_enable_via_vrr_internal{ "hdr_enable_via_vrr_internal", true,
++	"On internal displays, only enter HDR from an SDR output with VRR on, in one modeset that also turns VRR off (VRR comes back "
++	"internal_modeset_spacing_ms later if wanted), and keep VRR on while in HDR once it is on. The SDC AMS881KB01 OLED "
++	"(Legion Go 2 / OneXPlayer 3) stays black when it enters HDR from SDR with VRR off, or goes from HDR with VRR to HDR without." };
++gamescope::ConVar<bool> cv_hdr_force_vrr_internal{ "hdr_force_vrr_internal", true,
++	"On internal displays, run VRR whenever the output is in HDR, even if adaptive sync is off. The SDC AMS881KB01 OLED "
++	"(Legion Go 2 / OneXPlayer 3) only shows a picture in HDR with the VRR timing generator running; with fixed refresh it "
++	"stays black. The frame limiter still applies." };
++// Known displays that need VRR-aware HDR switching (display script hdr_requires_vrr).
++static bool PanelHDRRequiresVRR()
++{
++	gamescope::IBackendConnector *pConn = GetBackend()->GetCurrentConnector();
++	return pConn && pConn->GetScreenType() == gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL &&
++		pConn->GetHDRInfo().bHDRRequiresVRR;
++}
++
++// Briefly forcing VRR on in SDR before an HDR output enable (cv_hdr_enable_via_vrr_internal).
++static bool g_bHDREnablePrepVRR = false;
++// Last HDR output / VRR switch, for spacing out panel modesets on internal displays.
++static uint64_t g_ulLastHDROutputSwitch = 0;
++static uint64_t g_ulLastVRRSwitch = 0;
++static bool g_bAppliedAllowVRR = false;
++gamescope::ConVar<bool> cv_hdr_output_always_internal{ "hdr_output_always_internal", false,
++	"Keep HDR output enabled on internal displays whenever HDR is supported, instead of switching it on and off with content "
++	"(like Windows does with HDR on). SDR content is mapped into HDR. Avoids the panel mode switches entirely." };
+ static bool		useXRes = true;
+ 
+ namespace gamescope
+@@ -2669,7 +2827,31 @@ paint_all(global_focus_t *pFocus, bool async, bool dpms, bool frameGenerationPre
+ 	struct FrameInfo_t frameInfo = {};
+ 	frameInfo.applyOutputColorMgmt = g_ColorMgmt.pending.enabled;
+ 	frameInfo.outputEncodingEOTF = g_ColorMgmt.pending.outputEncodingEOTF;
+-	frameInfo.allowVRR = cv_adaptive_sync;
++	// VRR on/off on internal panels: held back while a recent HDR output switch is settling, forced on
++	// while an HDR output enable is being prepared, and not turned off while the output is in HDR.
++	const bool bInternalVRR = PanelHDRRequiresVRR();
++	bool bWantVRR = cv_adaptive_sync;
++	if ( bInternalVRR && cv_hdr_enable_via_vrr_internal &&
++	     ( g_bHDREnablePrepVRR || ( g_bOutputHDREnabled && g_bAppliedAllowVRR ) ) )
++		bWantVRR = true;
++	if ( bInternalVRR && cv_hdr_force_vrr_internal && g_bOutputHDREnabled )
++		bWantVRR = true;
++	if ( bWantVRR != g_bAppliedAllowVRR )
++	{
++		const uint64_t ulNow = get_time_in_nanos();
++		const uint64_t ulSpacing = uint64_t( std::max( int( cv_internal_modeset_spacing_ms ), 0 ) ) * 1'000'000ull;
++		if ( !bInternalVRR || ulNow - g_ulLastHDROutputSwitch >= ulSpacing )
++		{
++			g_bAppliedAllowVRR = bWantVRR;
++			g_ulLastVRRSwitch = ulNow;
++		}
++		else
++		{
++			// Come back for the deferred switch once the spacing has passed.
++			hasRepaint = true;
++		}
++	}
++	frameInfo.allowVRR = g_bAppliedAllowVRR;
+ 	frameInfo.bFadingOut = fadingOut;
+ 	frameInfo.dpms = dpms;
+ 
+@@ -8742,6 +8924,9 @@ steamcompmgr_main(int argc, char **argv)
+ 	g_SteamCompMgrWaiter.AddWaitable( &g_FrameGenerationOutputTimer );
+ 	GetVBlankTimer().ArmNextVBlank( true );
+ 
++	if ( g_BacklightWatcher.Init() )
++		g_SteamCompMgrWaiter.AddWaitable( &g_BacklightWatcher, EPOLLPRI );
++
+ 	{
+ 		gamescope_xwayland_server_t *pServer = NULL;
+ 		for (size_t i = 0; (pServer = wlserver_get_xwayland_server(i)); i++)
+@@ -9095,7 +9280,52 @@ steamcompmgr_main(int argc, char **argv)
+ 					hdr_requested = true;
+ 			}
+ 		}
+-		g_bOutputHDREnabled = hdr_supported && hdr_requested;
++		// Rate-limit HDR output switches that are only driven by content on internal panels.
++		// Losing HDR support (e.g. display change) still switches immediately.
++		static bool s_bStartupCounted = false;
++		if ( !s_bStartupCounted )
++		{
++			g_ulLastHDROutputSwitch = get_time_in_nanos(); // startup modeset counts
++			s_bStartupCounted = true;
++		}
++		const bool bAlwaysHDROutput = cv_hdr_output_always_internal &&
++			GetBackend()->GetScreenType() == gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL;
++		const bool bWantHDROutput = hdr_supported && ( hdr_requested || bAlwaysHDROutput );
++		const bool bInternalHDR = hdr_supported && PanelHDRRequiresVRR();
++		if ( !bWantHDROutput || g_bOutputHDREnabled )
++			g_bHDREnablePrepVRR = false;
++		if ( bWantHDROutput != g_bOutputHDREnabled )
++		{
++			const uint64_t ulNow = get_time_in_nanos();
++			const uint64_t ulCooldown = uint64_t( std::max( int( cv_hdr_output_switch_cooldown_ms ), 0 ) ) * 1'000'000ull;
++			const uint64_t ulSpacing = uint64_t( std::max( int( cv_internal_modeset_spacing_ms ), 0 ) ) * 1'000'000ull;
++			const bool bViaVRR = bInternalHDR && bWantHDROutput && cv_hdr_enable_via_vrr_internal &&
++				GetBackend()->GetCurrentConnector() && GetBackend()->GetCurrentConnector()->SupportsVRR();
++			if ( bViaVRR && !g_bAppliedAllowVRR )
++			{
++				// Turn VRR on in SDR first (paint_all applies it), the HDR enable follows below.
++				g_bHDREnablePrepVRR = true;
++				hasRepaint = true;
++			}
++			else if ( !bInternalHDR ||
++			          ( ulNow - g_ulLastHDROutputSwitch >= ulCooldown && ulNow - g_ulLastVRRSwitch >= ulSpacing ) )
++			{
++				g_bOutputHDREnabled = bWantHDROutput;
++				g_ulLastHDROutputSwitch = ulNow;
++				// Enter HDR with VRR off; paint_all brings VRR back after the spacing if wanted.
++				if ( bViaVRR && g_bAppliedAllowVRR )
++				{
++					g_bAppliedAllowVRR = false;
++					g_ulLastVRRSwitch = ulNow;
++				}
++				g_bHDREnablePrepVRR = false;
++			}
++			else
++			{
++				// Keep the loop ticking so the deferred switch happens once the cooldown ends.
++				hasRepaint = true;
++			}
++		}
+ 
+ 		// Pick our width/height for this potential frame, regardless of how it might change later
+ 		// At some point we might even add proper locking so we get real updates atomically instead
+diff --git a/src/waitable.h b/src/waitable.h
+index 36ac61ee..1a4c4dc5 100644
+--- a/src/waitable.h
++++ b/src/waitable.h
+@@ -27,6 +27,7 @@ namespace gamescope
+ 
+         virtual void OnPollIn() {}
+         virtual void OnPollOut() {}
++        virtual void OnPollPri() {}
+         virtual void OnPollHangUp()
+         {
+             g_WaitableLog.errorf( "IWaitable hung up. Aborting." );
+@@ -39,6 +40,8 @@ namespace gamescope
+                 this->OnPollIn();
+             if ( nEvents & EPOLLOUT )
+                 this->OnPollOut();
++            if ( nEvents & EPOLLPRI )
++                this->OnPollPri();
+             if ( nEvents & EPOLLHUP )
+                 this->OnPollHangUp();
+         }

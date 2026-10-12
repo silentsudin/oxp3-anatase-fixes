@@ -1,0 +1,21 @@
+# Build environment for oxp3-fixes.sh: RPM builds of Anatase's gamescope and MangoHud
+# (x86_64 + i686) and the out-of-tree xe module build.
+ARG FEDORA=45
+FROM registry.fedoraproject.org/fedora:${FEDORA}
+
+RUN dnf -y install --setopt=install_weak_deps=False \
+        dnf-plugins-core rpm-build rpmdevtools git-core redhat-rpm-config \
+        python3-rpmautospec forge-srpm-macros \
+        bc bison flex elfutils-libelf-devel openssl-devel openssl dwarves perl kmod \
+        rsync zstd xz cpio rust rust-src bindgen-cli clang lld llvm which wget \
+ && dnf -y install --skip-unavailable --setopt=install_weak_deps=False \
+        glibc-devel.i686 libstdc++-devel.i686 libstdc++-static.i686 libatomic.i686 libgcc.i686 \
+        vulkan-loader-devel.i686 wayland-devel.i686 libX11-devel.i686 libxcb-devel.i686 \
+        libxkbcommon-devel.i686 dbus-devel.i686 spdlog-devel.i686 fmt-devel.i686 glfw-devel.i686 \
+        mesa-libGL-devel.i686 mesa-dri-drivers.i686 mesa-libgbm-devel.i686 glslang-devel.i686 \
+        libXrandr-devel.i686 libXau-devel.i686 libXdmcp-devel.i686 libXext-devel.i686 \
+        libXrender-devel.i686 libXfixes-devel.i686 libXi-devel.i686 libXinerama-devel.i686 \
+        libXcursor-devel.i686 libXxf86vm-devel.i686 libffi-devel.i686 expat-devel.i686 \
+        libdrm-devel.i686 libglvnd-devel.i686 libxshmfence-devel.i686 zlib-ng-compat-devel.i686 \
+        systemd-devel.i686 libcap-devel.i686 \
+ && dnf clean all

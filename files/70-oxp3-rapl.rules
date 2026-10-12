@@ -1,0 +1,5 @@
+# Let the Gamemode performance overlay (mangoapp) read CPU and integrated GPU
+# power. The kernel restricts RAPL energy counters to root since
+# CVE-2020-8694 (PLATYPUS). Handhelds are single-user devices, so expose only
+# the package, core and uncore (Intel iGPU) counters read-only.
+ACTION=="add", SUBSYSTEM=="powercap", KERNEL=="intel-rapl:[0-9]|intel-rapl:[0-9]:[0-9]|intel-rapl-mmio:[0-9]", ATTR{name}=="package-0|core|uncore", RUN+="/usr/bin/chmod 0444 /sys%p/energy_uj"
