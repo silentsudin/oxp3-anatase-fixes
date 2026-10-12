@@ -344,7 +344,9 @@ print(" ".join(d.get("requested-local-packages",[])))')
     for p in gamescope mangohud; do
         [[ $p == gamescope ]] && (( SKIP_GAMESCOPE )) && continue
         [[ $p == mangohud ]] && (( SKIP_MANGOHUD )) && continue
-        grep -qw "$p" <<<"$removals" || rm+=( "$p.x86_64" "$p.i686" )
+        # one subject per name: it must match a single package (so name.arch), and the
+        # removal is then recorded by name, which covers both arches
+        grep -qw "$p" <<<"$removals" || rm+=( "$p.x86_64" )
     done
     for p in $locals; do
         case $p in
