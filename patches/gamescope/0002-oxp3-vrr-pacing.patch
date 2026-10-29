@@ -1,0 +1,568 @@
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Subject: [PATCH] VRR and frame pacing fixes from upstream gamescope 3.16.29/3.17.0
+
+Applies on top of 0001-oxp3-hdr-pq.patch (Anatase gamescope 3.16.23.3).
+Upstream ValveSoftware/gamescope commits, conflicts resolved against Anatase's
+VRR keepalive and frame generation changes:
+  - 3521d6bf steamcompmgr: allow uncapped frame rates with adaptive sync (Matthew Schwartz)
+    (keeps Anatase's 10 Hz VRR keepalive: paint = (repaint && flip-ready) || keepalive)
+  - c8fecc6c steamcompmgr: pace cursor repaints with content when adaptive sync is on (Matthew Schwartz)
+  - c70f95e7 color: fix the native gamut blend on HDR10 output (Matthew Schwartz) (unit test dropped)
+  - 62707e1e steamcompmgr: pace the frame limiter by display vblank (Matthew Schwartz)
+    (frame generation keeps its own slot logic)
+  - 261b9be1 steamcompmgr: keep the VRR frame limiter on its schedule (Matthew Schwartz)
+  - 055902ca vblankmanager: leave deep idle ahead of a fixed refresh wakeup (Matthew Schwartz)
+  - scripts: offer 30-47 Hz on the SDC AMS881KB01 OLED (silentsudin)
+Not taken: 905a89bb (Anatase's frame generation patch already resolves the window
+per commit), 8e0a5bee (Steam UI idle hold; deep conflicts with frame generation and
+our HDR/VRR switching), 4d5b7f3c (changes the mangoapp message layout).
+---
+diff --git a/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua b/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
+index 671664e..49dcb09 100644
+--- a/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
++++ b/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
+@@ -1,4 +1,6 @@
+ local legiongo2_oled_refresh_rates = {
++    30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
++    40, 41, 42, 43, 44, 45, 46, 47,
+     48, 49, 50, 51, 52, 53, 54, 55, 56, 57,
+     58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+     68, 69, 70, 71, 72, 73, 74, 75, 76, 77,
+@@ -28,7 +30,13 @@ gamescope.config.known_displays.lenovo_legiongo2_oled = {
+     dynamic_refresh_rates = legiongo2_oled_refresh_rates,
+     dynamic_modegen = function(base_mode, refresh)
+         debug("Generating mode "..refresh.."Hz for Lenovo Legion Go 2 OLED with fixed pixel clock")
++        -- The EDID allows 30-144 Hz. Fixed pixel clock: vtotal 1320 at 144 Hz, so
++        -- vfp = round(190080 / refresh) - 1264 below 48 Hz.
+         local vfps = {
++            5072, 4868, 4676, 4496, 4327,
++            4167, 4016, 3873, 3738, 3610,
++            3488, 3372, 3262, 3156, 3056,
++            2960, 2868, 2780,
+             2696, 2615, 2538, 2463, 2391,
+             2322, 2256, 2192, 2130, 2071,
+             2013, 1958, 1904, 1852, 1802,
+@@ -50,7 +58,7 @@ gamescope.config.known_displays.lenovo_legiongo2_oled = {
+             113,  103,  94,   84,   75,
+             65,   56
+         }
+-        local vfp = vfps[zero_index(refresh - 48)]
++        local vfp = vfps[zero_index(refresh - 30)]
+         if vfp == nil then
+             warn("Couldn't do refresh "..refresh.." on Lenovo Legion Go 2 OLED")
+             return base_mode
+diff --git a/src/color_bench.cpp b/src/color_bench.cpp
+index 1058986..b8a7d40 100644
+--- a/src/color_bench.cpp
++++ b/src/color_bench.cpp
+@@ -40,6 +40,7 @@ static void BenchmarkCalcColorTransform(EOTF inputEOTF, benchmark::State &state)
+     for (auto _ : state) {
+         calcColorTransform<nLutEdgeSize3d>( &lut1d_float, nLutSize1d, &lut3d_float, inputColorimetry, inputEOTF,
+             outputEncodingColorimetry, EOTF_Gamma22,
++            outputEncodingColorimetry,
+             destVirtualWhite, k_EChromaticAdapatationMethod_XYZ,
+             colorMapping, nightmode, tonemapping, nullptr, flGain );
+         for ( size_t i=0, end = lut1d_float.dataR.size(); i<end; ++i )
+diff --git a/src/color_helpers.cpp b/src/color_helpers.cpp
+index 64430a5..f59c219 100644
+--- a/src/color_helpers.cpp
++++ b/src/color_helpers.cpp
+@@ -691,6 +691,7 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
+ 	lut3d_t * pLut3d,
+ 	const displaycolorimetry_t & source, EOTF sourceEOTF,
+ 	const displaycolorimetry_t & dest,  EOTF destEOTF,
++    const displaycolorimetry_t & native,
+     const glm::vec2 & destVirtualWhite, EChromaticAdaptationMethod eMethod,
+     const colormapping_t & mapping, const nightmode_t & nightmode, const tonemapping_t & tonemapping,
+     const lut3d_t * pLook, float flGain )
+@@ -727,6 +728,11 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
+         glm::mat3 xyz_from_source = normalised_primary_matrix( source.primaries, source.white, 1.f );
+         glm::mat3 dest_from_source = dest_from_xyz * xyz_from_source; // XYZ scaling for white point adjustment
+ 
++        // Avoid roundoff when the output encoding is already native.
++        glm::mat3 dest_from_native( 1.f );
++        if ( native != dest )
++            dest_from_native = dest_from_xyz * normalised_primary_matrix( native.primaries, native.white, 1.f );
++
+         // Precalc night mode scalars & digital gain
+         // amount and saturation are overdetermined but we separate the two as they conceptually represent
+         // different quantities, and this preserves forwards algorithmic compatibility
+@@ -794,7 +800,10 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
+                     // float colorSaturation = rgb_to_hsv( sourceColor ).y;
+                     float colorSaturation = rgb_to_hsv( sourceColorLinear ).y;
+                     float amount = cfit( colorSaturation, mapping.blendEnableMinSat, mapping.blendEnableMaxSat, mapping.blendAmountMin, mapping.blendAmountMax );
+-                    destColorLinear = glm::mix( destColorLinear, sourceColorLinear, amount );
++                    // Treat the original linear RGB values as native display RGB,
++                    // then convert to the output color space before blending.
++                    glm::vec3 nativeColorLinear = dest_from_native * sourceColorLinear;
++                    destColorLinear = glm::mix( destColorLinear, nativeColorLinear, amount );
+ 
+                     // Apply linear Mult
+                     destColorLinear = vMultLinear * destColorLinear;
+diff --git a/src/color_helpers.h b/src/color_helpers.h
+index cefa74e..e3c421f 100644
+--- a/src/color_helpers.h
++++ b/src/color_helpers.h
+@@ -364,12 +364,15 @@ std::shared_ptr<lut3d_t> LoadCubeLut( const char *pchFileName, bool &bRaisesBlac
+ //
+ // If the white points differ, this performs an absolute colorimetric match
+ // Look luts are optional, but if specified applied in the sourceEOTF space
++// native defines the display colorimetry for the saturation blend target.
++// dest defines the output colorimetry used by both blend endpoints.
+ 
+ template <uint32_t lutEdgeSize3d>
+ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
+ 	lut3d_t * pLut3d,
+ 	const displaycolorimetry_t & source, EOTF sourceEOTF,
+ 	const displaycolorimetry_t & dest,  EOTF destEOTF,
++	const displaycolorimetry_t & native,
+ 	const glm::vec2 & destVirtualWhite, EChromaticAdaptationMethod eMethod,
+ 	const colormapping_t & mapping, const nightmode_t & nightmode, const tonemapping_t & tonemapping,
+ 	const lut3d_t * pLook, float flGain );
+@@ -378,6 +381,7 @@ void calcColorTransform( lut1d_t * pShaper, int nLutSize1d,
+ 	lut3d_t * pLut3d,                                                                                                   \
+ 	const displaycolorimetry_t & source, EOTF sourceEOTF,                                                               \
+ 	const displaycolorimetry_t & dest,  EOTF destEOTF,                                                                  \
++	const displaycolorimetry_t & native,                                                                               \
+ 	const glm::vec2 & destVirtualWhite, EChromaticAdaptationMethod eMethod,                                             \
+ 	const colormapping_t & mapping, const nightmode_t & nightmode, const tonemapping_t & tonemapping,                   \
+ 	const lut3d_t * pLook, float flGain )
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index d2d78a2..6823bf5 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -342,6 +342,8 @@ update_runtime_info();
+ gamescope::ConVar<bool> cv_adaptive_sync( "adaptive_sync", false, "Whether or not adaptive sync is enabled if available." );
+ gamescope::ConVar<bool> cv_adaptive_sync_ignore_overlay( "adaptive_sync_ignore_overlay", false, "Whether or not to ignore overlay planes for pushing commits with adaptive sync." );
+ gamescope::ConVar<int> cv_adaptive_sync_overlay_cycles( "adaptive_sync_overlay_cycles", 1, "Number of vblank cycles to ignore overlay repaints before forcing a commit with adaptive sync." );
++gamescope::ConVar<bool> cv_adaptive_sync_uncapped( "adaptive_sync_uncapped", true, "Whether or not to allow mailbox/immediate clients to run uncapped with adaptive sync by deferring paints until the display can take a new flip." );
++gamescope::ConVar<int> cv_adaptive_sync_cursor_min_fps( "adaptive_sync_cursor_min_fps", 30, "Content frame rate at or above which cursor repaints coalesce with content frames when adaptive sync is on. 0 = repaint the cursor immediately." );
+ 
+ gamescope::ConVar<bool> cv_upscale_preemptive( "upscale_preemptive", true, "Allow pre-emptive upscaling" );
+ gamescope::ConVar<bool> cv_upscale_preemptive_debug_force_sync( "upscale_preemptive_debug_force_sync", false, "Force synchronize pre-emptive upscaling" );
+@@ -475,6 +477,7 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
+ 
+ 			calcColorTransform<s_nLutEdgeSize3d>( &g_tmpLut1d, s_nLutSize1d, &g_tmpLut3d, inputColorimetry, inputEOTF,
+ 				outputEncodingColorimetry, newColorMgmt.outputEncodingEOTF,
++				displayColorimetry,
+ 				newColorMgmt.outputVirtualWhite, newColorMgmt.chromaticAdaptationMode,
+ 				colorMapping, newColorMgmt.nightmode, tonemapping, pLook, flGain );
+ 
+@@ -1085,6 +1088,7 @@ uint32_t		lastPublishedInputCounter;
+ 
+ std::atomic<bool> hasRepaint = false;
+ bool			hasRepaintNonBasePlane = false;
++std::atomic<bool> hasCursorRepaint = false;
+ 
+ bool			g_bUpdateForwardedVROverlays = false;
+ 
+@@ -1858,7 +1862,7 @@ void MouseCursor::checkSuspension()
+ 
+ 			// We're hiding the cursor, force redraw if we were showing it
+ 			if (window && !m_imageEmpty ) {
+-				hasRepaintNonBasePlane = true;
++				hasCursorRepaint = true;
+ 				nudge_steamcompmgr();
+ 			}
+ 		}
+@@ -6049,6 +6053,9 @@ init_runtime_info()
+ 	update_runtime_info();
+ }
+ 
++// How early a VRR limiter pass may release a frame callback.
++static constexpr uint64_t k_ulVRRScheduleFudge = 200'000; // 0.2ms
++
+ static void
+ steamcompmgr_flush_frame_done( steamcompmgr_win_t *w )
+ {
+@@ -6065,7 +6072,11 @@ steamcompmgr_flush_frame_done( steamcompmgr_win_t *w )
+ 		w->unlockedForFrameCallback = false;
+ 		w->receivedDoneCommit = false;
+ 
+-		w->last_commit_first_latch_time = timespec_to_nanos(now);
++		// Step from the schedule a pass met, so wakeup latency does not accumulate into the limited rate.
++		const uint64_t ulNow = timespec_to_nanos( now );
++		const uint64_t ulSchedule = w->last_commit_first_latch_time + g_SteamCompMgrLimitedAppRefreshCycle;
++		const bool bOnSchedule = ulNow + k_ulVRRScheduleFudge >= ulSchedule && ulNow < ulSchedule + g_SteamCompMgrAppRefreshCycle;
++		w->last_commit_first_latch_time = bOnSchedule ? ulSchedule : ulNow;
+ 
+ 		// Acknowledge commit once.
+ 		wlserver_lock();
+@@ -6086,6 +6097,9 @@ steamcompmgr_flush_frame_done( steamcompmgr_win_t *w )
+ 
+ static std::optional<uint64_t> s_oLowestFPSLimitScheduleVRR;
+ 
++// Display vblank index of the previous vblank pass. The limiter opens when a pass crosses a divisor boundary.
++static uint64_t s_ulPrevVBlankIdx = 0;
++
+ static bool steamcompmgr_can_latch_frame_generation_between_vblanks()
+ {
+ 	return steamcompmgr_frame_generation_enabled_for_focus();
+@@ -6159,7 +6173,6 @@ static bool steamcompmgr_should_vblank_window( bool bShouldLimitFPS, uint64_t vb
+ 		{
+ 			uint64_t schedule = w->last_commit_first_latch_time + g_SteamCompMgrLimitedAppRefreshCycle;
+ 
+-			static constexpr uint64_t k_ulVRRScheduleFudge = 200'000; // 0.2ms
+ 			if ( now + k_ulVRRScheduleFudge < schedule )
+ 			{
+ 				bSendCallback = false;
+@@ -6183,7 +6196,8 @@ static bool steamcompmgr_should_vblank_window( bool bShouldLimitFPS, uint64_t vb
+ 			else
+ 			{
+ 				int nVblankDivisor = nRefreshHz / nTargetFPS;
+-				if ( vblank_idx % nVblankDivisor != 0 )
++
++				if ( vblank_idx / nVblankDivisor == s_ulPrevVBlankIdx / nVblankDivisor )
+ 					bSendCallback = false;
+ 			}
+ 		}
+@@ -9055,10 +9069,16 @@ steamcompmgr_main(int argc, char **argv)
+ 		}
+ 
+ 		// We can always vblank if VRR.
+-		const bool bVRR = GetBackend()->GetCurrentConnector() &&
+-			GetBackend()->GetCurrentConnector()->IsVRRActive();
++		const bool bVRR = GetBackend()->GetCurrentConnector() && GetBackend()->GetCurrentConnector()->IsVRRActive();
++
++		// Timer vblanks are scheduled with the same lead as the ready check,
++		// so they always count as flip-ready.
++		bool bVRRCanFlip = bVRR;
++		if ( bVRRCanFlip && cv_adaptive_sync_uncapped && !bIsVBlankFromTimer )
++			bVRRCanFlip = GetVBlankTimer().IsVRRFlipReady();
++
+ 		if ( bVRR )
+-			vblank = true;
++			vblank = vblank || bVRRCanFlip;
+ 
+ 		bool flush_root = false;
+ 
+@@ -9375,6 +9395,14 @@ steamcompmgr_main(int argc, char **argv)
+ 		static uint64_t vblank_idx = 0;
+ 		if ( vblank )
+ 		{
++			// Count display vblanks, so a skipped or repeated pass cannot shift the limiter's phase.
++			static uint64_t s_ulLastPassVBlank = 0;
++			const uint64_t ulPassVBlank = g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank;
++			s_ulPrevVBlankIdx = vblank_idx;
++			if ( ulPassVBlank > s_ulLastPassVBlank )
++				vblank_idx += ( ulPassVBlank - s_ulLastPassVBlank + g_SteamCompMgrAppRefreshCycle / 2 ) / g_SteamCompMgrAppRefreshCycle;
++			s_ulLastPassVBlank = ulPassVBlank;
++
+ 			{
+ 				uint64_t now = get_time_in_nanos();
+ 
+@@ -9421,8 +9449,6 @@ steamcompmgr_main(int argc, char **argv)
+ 
+ 		if ( vblank )
+ 		{
+-			vblank_idx++;
+-
+ 			int nRealRefreshmHz = g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh;
+ 			g_SteamCompMgrAppRefreshCycle = gamescope::mHzToRefreshCycle( nRealRefreshmHz );
+ 			g_SteamCompMgrLimitedAppRefreshCycle = g_SteamCompMgrAppRefreshCycle;
+@@ -9573,6 +9599,7 @@ steamcompmgr_main(int argc, char **argv)
+ 		bool bPainted = false;
+ 
+ 		static int nIgnoredOverlayRepaints = 0;
++		static uint64_t s_ulLastContentPaintTime = 0;
+ 
+ 		if ( !hasRepaintNonBasePlane )
+ 			nIgnoredOverlayRepaints = 0;
+@@ -9717,13 +9744,13 @@ steamcompmgr_main(int argc, char **argv)
+ 				{
+ 					case FlipType::Normal:
+ 					{
+-						bShouldPaint = vblank && ( hasRepaint || hasRepaintNonBasePlane || bForceSyncFlip );
++						bShouldPaint = vblank && ( hasRepaint || hasRepaintNonBasePlane || hasCursorRepaint || bForceSyncFlip );
+ 						break;
+ 					}
+ 
+ 					case FlipType::Async:
+ 					{
+-						bShouldPaint = hasRepaint;
++						bShouldPaint = hasRepaint || hasCursorRepaint;
+ 
+ 						if ( vblank && !bShouldPaint && hasRepaintNonBasePlane )
+ 							nIgnoredOverlayRepaints++;
+@@ -9742,7 +9769,18 @@ steamcompmgr_main(int argc, char **argv)
+ 						const bool bKeepaliveDue = bIsVBlankFromTimer &&
+ 							uNow >= uLastVBlank + k_uVRRKeepaliveInterval;
+ 
+-						bShouldPaint = hasRepaint || bKeepaliveDue;
++						bShouldPaint = ( hasRepaint && bVRRCanFlip ) || bKeepaliveDue;
++
++						// Content at or above adaptive_sync_cursor_min_fps carries the cursor with its own frames.
++						if ( !bShouldPaint && hasCursorRepaint && bVRRCanFlip )
++						{
++							const int nCursorMinFPS = cv_adaptive_sync_cursor_min_fps;
++							if ( nCursorMinFPS <= 0 ||
++							     get_time_in_nanos() - s_ulLastContentPaintTime >= 1'000'000'000ul / uint64_t( nCursorMinFPS ) )
++							{
++								bShouldPaint = true;
++							}
++						}
+ 
+ 						if ( bIsVBlankFromTimer )
+ 						{
+@@ -9840,8 +9878,12 @@ steamcompmgr_main(int argc, char **argv)
+ 		{
+ 			GetBackend()->OnEndFrame();
+ 
++			if ( hasRepaint )
++				s_ulLastContentPaintTime = get_time_in_nanos();
++
+ 			hasRepaint = false;
+ 			hasRepaintNonBasePlane = false;
++			hasCursorRepaint = false;
+ 			nIgnoredOverlayRepaints = 0;
+ 
+ 			{
+diff --git a/src/vblankmanager.cpp b/src/vblankmanager.cpp
+index e388374..1ebc85b 100644
+--- a/src/vblankmanager.cpp
++++ b/src/vblankmanager.cpp
+@@ -7,6 +7,8 @@
+ #include <chrono>
+ #include <atomic>
+ #include <condition_variable>
++#include <filesystem>
++#include <fstream>
+ 
+ #include <assert.h>
+ #include <fcntl.h>
+@@ -21,10 +23,33 @@
+ 
+ LogScope g_VBlankLog("vblank");
+ 
++extern gamescope::ConVar<bool> cv_adaptive_sync_uncapped;
++
+ namespace gamescope
+ {
+ 	ConVar<bool> vblank_debug( "vblank_debug", false, "Enable vblank debug spew to stderr." );
+ 
++	// Target residency of the deepest idle state a CPU may enter, zero without cpuidle.
++	static uint64_t GetDeepestIdleResidency()
++	{
++		uint64_t ulResidency = 0;
++		std::error_code ec;
++		for ( const auto &cpu : std::filesystem::directory_iterator( "/sys/devices/system/cpu", ec ) )
++		{
++			std::error_code ecStates;
++			for ( const auto &state : std::filesystem::directory_iterator( cpu.path() / "cpuidle", ecStates ) )
++			{
++				int nDisabled = 1;
++				uint64_t ulStateResidency = 0;
++				std::ifstream( state.path() / "disable" ) >> nDisabled;
++				std::ifstream( state.path() / "residency" ) >> ulStateResidency;
++				if ( !nDisabled )
++					ulResidency = std::max( ulResidency, ulStateResidency * 1'000 );
++			}
++		}
++		return ulResidency;
++	}
++
+ 	CVBlankTimer::CVBlankTimer()
+ 	{
+ 		m_ulTargetVBlank = get_time_in_nanos();
+@@ -35,6 +60,8 @@ namespace gamescope
+ 			// Majority of backends fall down this optimal
+ 			// timerfd path, vs nudge thread.
+ 			g_VBlankLog.infof( "Using timerfd." );
++
++			m_ulPreWakeLead = GetDeepestIdleResidency();
+ 		}
+ 		else
+ 		{
+@@ -93,6 +120,29 @@ namespace gamescope
+ 		return ulTargetPoint;
+ 	}
+ 
++	uint64_t CVBlankTimer::VRRWakeupOffset( uint64_t *pulDrawTime, uint64_t *pulRedZone ) const
++	{
++		uint64_t ulDrawTime = cv_adaptive_sync_uncapped ? m_ulVRRRollingMaxSubmitTime.load() : 0;
++		/// See comment of m_ulVBlankDrawTimeMinCompositing.
++		if ( m_bCurrentlyCompositing )
++			ulDrawTime = std::max<uint64_t>( ulDrawTime, m_ulVBlankDrawTimeMinCompositing );
++
++		// Queueing a flip early is free, the kernel holds it to the panel cycle.
++		uint64_t ulRedZone = cv_adaptive_sync_uncapped ? m_ulVBlankDrawBufferRedZone : kVRRFlushingTime;
++
++		if ( pulDrawTime )
++			*pulDrawTime = ulDrawTime;
++		if ( pulRedZone )
++			*pulRedZone = ulRedZone;
++		return ulDrawTime + ulRedZone;
++	}
++
++	bool CVBlankTimer::IsVRRFlipReady() const
++	{
++		const uint64_t ulIntervalNSecs = mHzToRefreshCycle( GetRefresh() );
++		return get_time_in_nanos() + VRRWakeupOffset() >= GetLastVBlank() + ulIntervalNSecs;
++	}
++
+ 	VBlankScheduleTime CVBlankTimer::CalcNextWakeupTime( bool bPreemptive )
+ 	{
+ 		const int nRefreshRate = GetRefresh();
+@@ -159,14 +209,8 @@ namespace gamescope
+ 				m_ulRollingMaxDrawTime = kStartingVBlankDrawTime;
+ 			}
+ 
+-			uint64_t ulRedZone = kVRRFlushingTime;
+-
+-			uint64_t ulDrawTime = 0;
+-			/// See comment of m_ulVBlankDrawTimeMinCompositing.
+-			if ( m_bCurrentlyCompositing )
+-				ulDrawTime = std::max( ulDrawTime, m_ulVBlankDrawTimeMinCompositing );
+-
+-			ulOffset = ulDrawTime + ulRedZone;
++			uint64_t ulDrawTime, ulRedZone;
++			ulOffset = VRRWakeupOffset( &ulDrawTime, &ulRedZone );
+ 
+ 			if ( vblank_debug && !bPreemptive )
+ 				VBlankDebugSpew( ulOffset, ulDrawTime, ulRedZone );
+@@ -185,7 +229,13 @@ namespace gamescope
+ 
+ 	std::optional<VBlankTime> CVBlankTimer::ProcessVBlank()
+ 	{
+-		return std::exchange( m_PendingVBlank, std::nullopt );
++		// Anchor vblank iterations at their scheduled wakeup point, so
++		// scheduler + dispatch latency counts against the VRR submit time.
++		std::optional<VBlankTime> oVBlank = std::exchange( m_PendingVBlank, std::nullopt );
++		m_ulLastWakeupTime = oVBlank
++			? oVBlank->schedule.ulScheduledWakeupPoint
++			: get_time_in_nanos();
++		return oVBlank;
+ 	}
+ 
+ 	void CVBlankTimer::MarkVBlank( uint64_t ulNanos, bool bReArmTimer )
+@@ -211,6 +261,16 @@ namespace gamescope
+ 	void CVBlankTimer::UpdateLastDrawTime( uint64_t ulNanos )
+ 	{
+ 		m_ulLastDrawTime = ulNanos;
++
++		uint64_t ulSubmitTime = get_time_in_nanos() - m_ulLastWakeupTime;
++		ulSubmitTime = std::min<uint64_t>( ulSubmitTime, mHzToRefreshCycle( GetRefresh() ) / 2 );
++
++		uint64_t ulRollingMax = m_ulVRRRollingMaxSubmitTime;
++		if ( ulSubmitTime > ulRollingMax )
++			ulRollingMax = ulSubmitTime;
++		else
++			ulRollingMax = ( ( m_ulVBlankRateOfDecayPercentage * ulRollingMax ) + ( kVBlankRateOfDecayMax - m_ulVBlankRateOfDecayPercentage ) * ulSubmitTime ) / kVBlankRateOfDecayMax;
++		m_ulVRRRollingMaxSubmitTime = ulRollingMax;
+ 	}
+ 
+ 	void CVBlankTimer::WaitToBeArmed()
+@@ -235,7 +295,15 @@ namespace gamescope
+ 		{
+ 			m_TimerFDSchedule = CalcNextWakeupTime( bPreemptive );
+ 
+-			ITimerWaitable::ArmTimer( m_TimerFDSchedule.ulScheduledWakeupPoint );
++			// VRR only delays a late flip, a fixed refresh misses the vblank.
++			const uint64_t ulWakeup = m_TimerFDSchedule.ulScheduledWakeupPoint;
++			const bool bVRR = GetBackend()->GetCurrentConnector() && GetBackend()->GetCurrentConnector()->IsVRRActive();
++			// Within the lead already reserved before vblank, so deep idle stays available for most of a frame.
++			m_bPreWake = !bVRR && m_ulPreWakeLead && m_ulPreWakeLead <= m_TimerFDSchedule.ulTargetVBlank - ulWakeup &&
++				ulWakeup > get_time_in_nanos() + m_ulPreWakeLead;
++
++			m_ulTimerFDArmedPoint = m_bPreWake ? ulWakeup - m_ulPreWakeLead : ulWakeup;
++			ITimerWaitable::ArmTimer( m_ulTimerFDArmedPoint );
+ 		}
+ 	}
+ 
+@@ -255,9 +323,20 @@ namespace gamescope
+ 		{
+ 			std::unique_lock lock( m_ScheduleMutex );
+ 
+-			// Disarm the timer if it was armed.
+-			if ( !m_bArmed.exchange( false ) )
++			// Readiness from before another thread rearmed the timer is stale.
++			if ( !m_bArmed || get_time_in_nanos() < m_ulTimerFDArmedPoint )
++				return;
++
++			// A late pre-wake counts as the real wakeup.
++			if ( std::exchange( m_bPreWake, false ) && get_time_in_nanos() < m_TimerFDSchedule.ulScheduledWakeupPoint )
++			{
++				m_ulTimerFDArmedPoint = m_TimerFDSchedule.ulScheduledWakeupPoint;
++				ITimerWaitable::ArmTimer( m_ulTimerFDArmedPoint );
+ 				return;
++			}
++
++			// Disarm the timer if it was armed.
++			m_bArmed = false;
+ 
+ 
+ 			m_PendingVBlank = VBlankTime
+diff --git a/src/vblankmanager.hpp b/src/vblankmanager.hpp
+index 582f0e2..f6f65c1 100644
+--- a/src/vblankmanager.hpp
++++ b/src/vblankmanager.hpp
+@@ -45,6 +45,7 @@ namespace gamescope
+         int GetRefresh() const;
+         uint64_t GetLastVBlank() const;
+         uint64_t GetNextVBlank( uint64_t ulOffset ) const;
++        bool IsVRRFlipReady() const;
+ 
+         VBlankScheduleTime CalcNextWakeupTime( bool bPreemptive );
+         void Reschedule();
+@@ -64,6 +65,7 @@ namespace gamescope
+         void OnPollIn() final;
+     private:
+         void VBlankDebugSpew( uint64_t ulOffset, uint64_t ulDrawTime, uint64_t ulRedZone );
++        uint64_t VRRWakeupOffset( uint64_t *pulDrawTime = nullptr, uint64_t *pulRedZone = nullptr ) const;
+ 
+         uint64_t m_ulTargetVBlank = 0;
+         std::atomic<uint64_t> m_ulLastVBlank = { 0 };
+@@ -80,6 +82,12 @@ namespace gamescope
+         // Does not cover m_ulLastVBlank, this is just atomic.
+         std::mutex m_ScheduleMutex;
+         VBlankScheduleTime m_TimerFDSchedule{};
++        // The timerfd is armed for the pre-wake ahead of m_TimerFDSchedule.
++        bool m_bPreWake = false;
++        // When the timerfd is armed to fire.
++        uint64_t m_ulTimerFDArmedPoint = 0;
++        // How far ahead of a fixed refresh wakeup to leave deep idle.
++        uint64_t m_ulPreWakeLead = 0;
+ 
+         std::thread m_NudgeThread;
+         int m_nNudgePipe[2] = { -1, -1 };
+@@ -96,6 +104,10 @@ namespace gamescope
+         // 3ms by default to get the ball rolling.
+         // This is calculated by steamcompmgr/drm and fed-back to the vblank timer.
+         std::atomic<uint64_t> m_ulLastDrawTime = { kStartingVBlankDrawTime };
++        // When the steamcompmgr loop last woke up.
++        uint64_t m_ulLastWakeupTime = 0;
++        // Rolling max of wakeup -> flip queued, feeding the VRR wakeup offset.
++        std::atomic<uint64_t> m_ulVRRRollingMaxSubmitTime = { kStartingVBlankDrawTime };
+ 
+         //////////////////////////////////
+         // VBlank timing tuneables below!
+diff --git a/src/wlserver.cpp b/src/wlserver.cpp
+index d64bd60..7c8405b 100644
+--- a/src/wlserver.cpp
++++ b/src/wlserver.cpp
+@@ -118,6 +118,7 @@ struct wlr_surface *wlserver_surface_to_main_surface( struct wlr_surface *pSurfa
+ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press );
+ 
+ extern std::atomic<bool> hasRepaint;
++extern std::atomic<bool> hasCursorRepaint;
+ 
+ std::vector<ResListEntry_t>& gamescope_xwayland_server_t::retrieve_commits()
+ {
+@@ -2570,7 +2571,7 @@ void wlserver_oncursorevent()
+ 
+ 	if ( !wlserver.bCursorHidden && wlserver.bCursorHasImage )
+ 	{
+-		hasRepaint = true;
++		hasCursorRepaint = true;
+ 	}
+ }
+ 
+@@ -2643,7 +2644,7 @@ void wlserver_mousehide()
+ 	if ( wlserver.bCursorHidden != true )
+ 	{
+ 		wlserver.bCursorHidden = true;
+-		hasRepaint = true;
++		hasCursorRepaint = true;
+ 	}
+ }
+ 
