@@ -1,0 +1,35 @@
+#!/bin/bash
+# oxp3-xpad-sleep unbind|bind: take xpad off the OneXPlayer 3's internal pad around sleep.
+#
+# On every suspend xpad waits for an output URB (rumble/LED) that the internal pad's MCU never
+# completes: "xpad 3-7:1.0: timed out waiting for output URB to complete, killing" and
+# "suspend devices took 5.x seconds". The pad disconnects and comes back on resume anyway, so
+# unbinding it right before sleep costs nothing and saves the 5 s timeout. Only the built-in
+# pad (045e:028e on a fixed, non-removable port) is touched; external controllers are not.
+set -u
+STATE=/run/oxp3-xpad-unbound
+DRV=/sys/bus/usb/drivers/xpad
+
+case ${1:-} in
+unbind)
+    : > "$STATE"
+    for i in "$DRV"/*:*; do
+        [[ -e $i ]] || continue
+        d=$(readlink -f "$i/..")
+        [[ $(< "$d/idVendor") == 045e && $(< "$d/idProduct") == 028e && $(< "$d/removable") == fixed ]] 2>/dev/null || continue
+        iface=${i##*/}
+        echo "$iface" > "$DRV/unbind" && echo "$iface" >> "$STATE" && echo "unbound xpad from $iface"
+    done
+    ;;
+bind)
+    [[ -r $STATE ]] || exit 0
+    while read -r iface; do
+        # already back (the pad re-enumerated on resume) or gone: nothing to do
+        [[ -e /sys/bus/usb/devices/$iface && ! -e /sys/bus/usb/devices/$iface/driver ]] || continue
+        echo "$iface" > "$DRV/bind" 2>/dev/null && echo "bound xpad to $iface again"
+    done < "$STATE"
+    rm -f "$STATE"
+    ;;
+*) echo "usage: $0 unbind|bind" >&2; exit 2 ;;
+esac
+exit 0

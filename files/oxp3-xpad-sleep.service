@@ -1,0 +1,14 @@
+[Unit]
+Description=Take xpad off the OneXPlayer 3's internal pad around sleep (5 s suspend delay)
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/oxp3-xpad-sleep unbind
+ExecStop=/usr/local/libexec/oxp3-xpad-sleep bind
+
+[Install]
+WantedBy=sleep.target

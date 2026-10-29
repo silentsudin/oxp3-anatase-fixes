@@ -1,0 +1,6 @@
+# ONEXPLAYER 3: the EC sometimes drops the volume rocker's release scancode, so the key stays
+# held. Release it right after the press (atkbd force-release). Needs hhd with
+# patches/hhd/0001-oxp-volume-rocker-taps.patch, otherwise hhd loses the presses (hhd #342).
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svnONE-NETBOOK:pnONEXPLAYER3:*
+ KEYBOARD_KEY_ae=!volumedown
+ KEYBOARD_KEY_b0=!volumeup

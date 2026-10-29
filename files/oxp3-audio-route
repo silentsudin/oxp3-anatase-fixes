@@ -1,0 +1,78 @@
+#!/bin/bash
+# oxp3-audio-route: put the OneXPlayer 3 back on its speakers after a boot or resume.
+#
+# While the Realtek ALC245 powers up, its jack detection reports headphones for a moment.
+# WirePlumber picks the Headphones profile from that and can miss the later "unplugged" event,
+# so the speakers stay silent. Rarely WirePlumber also starts before the codec is ready, logs
+# "Failed to enable UCM device", and the speaker volume sequence never runs (almost silent).
+# (Reported by the onexplayer3-steamos-setup fix pack, step 12.)
+#
+# Runs a few times after the session starts and after every resume, and only acts on a mismatch:
+#   - the ALSA "Headphone Jack" control is off but a Headphones profile is active -> the Speaker
+#     profile is selected (WirePlumber is restarted if that doesn't take);
+#   - WirePlumber logged a UCM enable failure since the last check -> the active profile is
+#     selected again (off, then back), which runs the UCM sequence again.
+# A plugged-in headset is never touched.
+set -u
+CARD_MATCH="ONE_NETBOOK-ONEXPLAYER3"
+log() { echo "oxp3-audio-route: $*"; }
+
+last=$(( $(date +%s) - 30 ))
+ucm_failed() {
+    local pid
+    pid=$(systemctl --user show -p MainPID --value wireplumber.service 2>/dev/null)
+    [[ -n $pid && $pid != 0 ]] || return 1
+    journalctl --user -q -o cat _PID="$pid" --since "@$last" 2>/dev/null | grep -q 'Failed to enable UCM device'
+}
+
+# card name, ALSA card number, active profile, best Speaker profile of our card
+card_state() {
+    pactl list cards 2>/dev/null | awk -v want="$CARD_MATCH" '
+        function out() { if (name != "" && index(long, want)) print name "\t" alsa "\t" active "\t" spk }
+        /^Card #/ { out(); name = alsa = long = active = spk = ""; inprof = 0 }
+        /^\tName: / { name = $2 }
+        /alsa\.long_card_name = / { long = $0 }
+        /api\.alsa\.card = / { v = $3; gsub(/"/, "", v); alsa = v }
+        /^\tProfiles:/ { inprof = 1; next }
+        /^\tActive Profile: / { inprof = 0; sub(/^\tActive Profile: /, ""); active = $0 }
+        inprof && /^\t\t/ { p = $0; sub(/^\t\t/, "", p); sub(/: .*/, "", p)
+                            if (p ~ /Speaker/ && p !~ /Headphones/) spk = p }
+        /^\t[A-Z]/ && !/^\tProfiles:/ { inprof = 0 }
+        END { out() }'
+}
+
+check() {
+    local ucm=0 card alsa active spk
+    ucm_failed && ucm=1
+    last=$(date +%s)
+    IFS=$'\t' read -r card alsa active spk < <(card_state) || return 0
+    [[ -n $card ]] || return 0
+    case $active in
+        *Headphones*) ;;
+        off|"") return 0 ;;
+        *)
+            if (( ucm )); then
+                log "WirePlumber could not enable the UCM device: selecting \"$active\" again"
+                pactl set-card-profile "$card" off; sleep 1
+                pactl set-card-profile "$card" "$active"
+            fi
+            return 0 ;;
+    esac
+    [[ -n $spk && -n $alsa ]] || return 0
+    amixer -c "$alsa" cget iface=CARD,name='Headphone Jack' 2>/dev/null | grep -q ': values=off' || return 0
+    log "headphone jack empty but \"$active\" is active: switching to \"$spk\""
+    pactl set-card-profile "$card" "$spk"
+    sleep 2
+    if [[ $(card_state | cut -f3) == "$spk" ]]; then
+        log "speaker profile active"
+    else
+        log "the profile did not change, restarting WirePlumber"
+        systemctl --user restart wireplumber.service
+    fi
+}
+
+# the jack settles within a few seconds; check a few times to catch a late wrong selection
+for d in 3 7 20; do
+    sleep "$d"
+    check
+done

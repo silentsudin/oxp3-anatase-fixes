@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Miri Korenblit <miriam.rachel.korenblit@intel.com>
+Date: Tue, 22 Sep 2026 14:49:59 +0300
+Subject: [PATCH 160/161] wifi: iwlwifi: mld: avoid leaking error recovery
+ buffer
+
+If we allocated a recovery buffer, but didn't eventually send the
+recovery command (for example because we failed to load the FW),
+We won't free the buffer until the module is unloaded.
+If in between another FW error occured, we will override the pointer
+with a new allocated buffer without freeing the previous one.
+
+Fix this by freeing a previous buffer before allocating a new one.
+
+Reviewed-by: Johannes Berg <johannes.berg@intel.com>
+Link: https://patch.msgid.link/20260922144819.36e637b8162a.Ida6e834d7f5d1e69d46c47e2e46db1e87a57ac71@changeid
+Signed-off-by: Miri Korenblit <miriam.rachel.korenblit@intel.com>
+---
+ drivers/net/wireless/intel/iwlwifi/mld/mld.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/net/wireless/intel/iwlwifi/mld/mld.c b/drivers/net/wireless/intel/iwlwifi/mld/mld.c
+index 35d199c3a0..64f5dbcd2e 100644
+--- a/drivers/net/wireless/intel/iwlwifi/mld/mld.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/mld.c
+@@ -622,6 +622,13 @@ static void iwl_mld_read_error_recovery_buffer(struct iwl_mld *mld)
+ 	if (!src_size)
+ 		return;
+ 
++	/*
++	 * If we have a the recovery buffer from a previous (failing) recovery -
++	 * free it here
++	 */
++	kfree(mld->error_recovery_buf);
++	mld->error_recovery_buf = NULL;
++
+ 	recovery_buf = kzalloc(src_size, GFP_ATOMIC);
+ 	if (!recovery_buf)
+ 		return;

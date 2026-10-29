@@ -1,0 +1,89 @@
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Subject: [PATCH] oxp: turn ONEXPLAYER 3 volume rocker presses into taps
+
+The OXP3 EC sometimes drops the volume key release, so the key stays held
+and auto-repeats. With atkbd force-release (hwdb) press and release arrive
+in one batch and UInputDevice keeps only the release. Emit every press as a
+tap instead: down now, up 60 ms later in a later batch, raw releases
+dropped, a press while the key is still down queued (one per key).
+Only for the "oxp3" quirk. hhd-dev/hhd#342.
+---
+diff --git a/hhd/device/oxp/base.py b/hhd/device/oxp/base.py
+index 0471fa3..b42227f 100644
+--- a/hhd/device/oxp/base.py
++++ b/hhd/device/oxp/base.py
+@@ -52,6 +52,9 @@ XFLY_PAGE = 0xFF01
+ XFLY_USAGE = 0x0001
+ 
+ BUTTON_MIN_DELAY = 0.13
++# Volume rocker taps (OXP3): how long a synthesized press is held
++VOLUME_TAP = 0.06
++VOLUME_KEYS = ("key_volumeup", "key_volumedown")
+ 
+ RGB_MODES_FULL = {
+     "disabled": [],
+@@ -220,18 +223,55 @@ def plugin_run(
+ 
+ 
+ class OxpAtKbd(GenericGamepadEvdev):
+-    def __init__(self, *args, **kwargs):
++    def __init__(self, *args, volume_taps: bool = False, **kwargs):
+         super().__init__(
+             *args,
+             **kwargs,
+         )
+         self.state = {}
+         self.queued = []
++        # The ONEXPLAYER 3 EC drops volume key releases, which leaves the key held (hhd #342).
++        # With atkbd force-release (hwdb) press and release arrive in one batch and the press is
++        # lost. So every raw press becomes a tap: down now, up VOLUME_TAP later, in a later
++        # batch; raw releases are dropped; a press while the key is still down waits (at most
++        # one per key) and goes out in the batch after the up.
++        self.volume_taps = volume_taps
++        self.vol_release = {}
++        self.vol_queued = set()
++        self.vol_deferred = set()
++
++    def _volume_taps(self, evs, curr):
++        out = []
++        for code in self.vol_deferred:
++            out.append({"type": "button", "code": code, "value": True})
++            self.vol_release[code] = curr + VOLUME_TAP
++        self.vol_deferred = set()
++        for ev in evs:
++            if ev["type"] == "button" and ev["code"] in VOLUME_KEYS:
++                code = ev["code"]
++                if ev["value"]:
++                    if code in self.vol_release:
++                        self.vol_queued.add(code)
++                    else:
++                        out.append(ev)
++                        self.vol_release[code] = curr + VOLUME_TAP
++                continue
++            out.append(ev)
++        for code, t in list(self.vol_release.items()):
++            if t <= curr and not any(e["code"] == code and e["value"] for e in out):
++                out.append({"type": "button", "code": code, "value": False})
++                del self.vol_release[code]
++                if code in self.vol_queued:
++                    self.vol_queued.discard(code)
++                    self.vol_deferred.add(code)
++        return out
+ 
+     def produce(self, fds):
+         evs = list(super().produce(fds))
+         curr = time.perf_counter()
+         skip = []
++        if self.volume_taps:
++            evs = self._volume_taps(evs, curr)
+ 
+         for i, ev in enumerate(evs):
+             if ev["type"] == "button" and ev["code"] in (
+@@ -431,6 +471,7 @@ def turbo_loop(
+             btn_map=(
+                 BTN_MAPPINGS_OXP3 if dconf.get("quirk") == "oxp3" else BTN_MAPPINGS
+             ),
++            volume_taps=dconf.get("quirk") == "oxp3",
+         )
+     ]
+     if dconf.get("protocol", None) == "hid_v2_x2" or dconf.get("quirk") == "apex":

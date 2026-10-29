@@ -1,0 +1,14 @@
+[Unit]
+Description=Reload intel_rapl_msr once if it skipped the GPU (uncore) power zone at boot
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes
+# Sometimes intel_rapl_msr probes before the GPU power counter (PP1) runs and registers no uncore
+# zone, so MangoHud shows no GPU power for that boot (onexplayer3-steamos-setup, step 10b).
+ConditionPathExists=/sys/class/powercap/intel-rapl:0
+Before=rapl-power.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'for z in /sys/class/powercap/intel-rapl:0:*; do [[ $(< $z/name) == uncore ]] && exit 0; done; echo "no uncore RAPL zone, reloading intel_rapl_msr"; modprobe -r intel_rapl_msr && sleep 2 && modprobe intel_rapl_msr'
+
+[Install]
+WantedBy=multi-user.target

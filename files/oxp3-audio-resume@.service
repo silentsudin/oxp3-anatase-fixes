@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-check the OneXPlayer 3 speaker route of %i after resume
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/bin/systemctl --user -M %i@ start --no-block oxp3-audio-route.service
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

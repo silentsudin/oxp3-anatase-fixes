@@ -3,19 +3,26 @@
 #   - gamescope: PQ HDR on the SDC AMS881KB01 OLED (no black screens, correct peak brightness)
 #   - MangoHud:  CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs,
 #                with power from the rapl-power service (counters stay root-only)
-#   - kernel:    the VBT VS/PE-O backport for the eDP link (white dots, HDR retoggle black
-#                screen), as a MOK-signed xe module for the installed Anatase kernel
+#   - kernel:    MOK-signed xe, iwlwifi and btintel modules for the installed Anatase kernel:
+#                VBT VS/PE-O backport (white dots, HDR retoggle black screen), VRR/DSB timing,
+#                resume out-of-memory fix, 7.2.13 stable and 7.3/7.4 Wi-Fi/Bluetooth fixes
+#   - firmware:  display DMC v2.20 (VRR cap with v2.36), Bluetooth 24.80, CPU microcode 0x11c
+#   - extras:    MSR PL1 kept at hhd's TDP, speaker route check after boot/resume and speaker
+#                name, volume rocker taps (hhd patch + atkbd force-release), no 5 s xpad wait on
+#                suspend, GPU power zone check at boot, thermald off (no tables in this BIOS)
 #
 #   ./oxp3-fixes.sh build       build everything for the installed Anatase (as your user)
 #   ./oxp3-fixes.sh install     install (asks for sudo). Twice after a kernel change: the first
-#                               run stages the xe module (reboot), the second puts gamescope and
-#                               MangoHud into the writable /usr overlay
+#                               run stages the kernel modules + firmware (reboot), the second puts
+#                               gamescope and MangoHud into the writable /usr overlay
 #   ./oxp3-fixes.sh all         build + install
 #   ./oxp3-fixes.sh status      what is installed / layered / overridden
 #   ./oxp3-fixes.sh uninstall   back to stock Anatase (asks for sudo), then reboot
 #   ./oxp3-fixes.sh mok-setup   create a module signing key and queue it for enrolment (once)
 #
-# Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud
+# Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware
+#                              --skip-extras (TDP sync, speakers, volume rocker, suspend services)
+#                              --stock-dmc (keep Anatase's display DMC firmware)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
 #              OXP3_CACHE   (default ~/.cache/oxp3-fixes)
 set -euo pipefail
@@ -29,16 +36,19 @@ PATCHWORK_REPO=https://github.com/anatase-org/patchwork.git
 FEDORA="$(rpm -E %fedora)"
 IMAGE="localhost/oxp3-fixes-build:f$FEDORA"
 CTR="oxp3-fixes-build-f$FEDORA"
-KMOD_NAME=kmod-oxp3-xe
+KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0
 cmd="${1:-}"; shift || true
 for a in "$@"; do
     case $a in
         --skip-kernel) SKIP_KERNEL=1 ;;
         --skip-gamescope) SKIP_GAMESCOPE=1 ;;
         --skip-mangohud) SKIP_MANGOHUD=1 ;;
+        --skip-firmware) SKIP_FIRMWARE=1 ;;
+        --stock-dmc) SKIP_DMC=1 ;;
+        --skip-extras) SKIP_EXTRAS=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -132,9 +142,43 @@ build_card() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# kernel: xe module with the VS/PE-O backport for the installed Anatase kernel
+# kernel: xe, iwlwifi and btintel modules with our patches, for the installed Anatase kernel
 # ---------------------------------------------------------------------------------------------
-build_xe() {
+# <directory in the kernel tree>|<modules built there that we ship>. iwlwifi ships with all its
+# op modes, since the patches touch its shared core; btintel's patches only change function
+# bodies, so the stock btusb/hci_uart keep working with ours.
+KMODS=(
+    "drivers/gpu/drm/xe|xe"
+    "drivers/net/wireless/intel/iwlwifi|iwlwifi dvm/iwldvm mvm/iwlmvm mld/iwlmld"
+    "drivers/bluetooth|btintel btintel_pcie"
+)
+
+# Apply patches/kernel/*.patch in order. A patch Anatase already carries is skipped, one that
+# neither applies nor is already there stops the build. Prints the number applied.
+apply_kernel_patches() {
+    local src=$1 p n=0 skipped=()
+    for p in "$here"/patches/kernel/*.patch; do
+        if git -C "$src" -c user.name=oxp3-fixes -c user.email=oxp3-fixes@localhost am -q -3 "$p" >/dev/null 2>&1; then
+            # git am succeeds without a commit when the change is already there
+            if [[ $(git -C "$src" log -1 --format=%s) == "$(sed -n 's/^Subject: \(\[PATCH[^]]*\] \)\{0,1\}//p' "$p" | head -1)"* ]]; then
+                n=$((n + 1))
+            else
+                skipped+=( "$(basename "$p")" )
+            fi
+        else
+            git -C "$src" am --abort >/dev/null 2>&1 || true
+            if git -C "$src" apply --check -R "$p" >/dev/null 2>&1; then
+                skipped+=( "$(basename "$p")" )
+            else
+                die "kernel patch $(basename "$p") doesn't apply to this kernel - it needs updating"
+            fi
+        fi
+    done
+    (( ${#skipped[@]} )) && printf '  already in Anatase, skipped: %s\n' "${skipped[@]}" >&2
+    echo "$n"
+}
+
+build_kmods() {
     local kver tag src kb cfg hash
     kver=$(anatase_kver)
     tag=${kver%%.fc*}                              # 7.2.7-an19.fc45.x86_64 -> 7.2.7-an19
@@ -146,79 +190,200 @@ build_xe() {
 
     say "kernel $kver: source (anatase-org/patchwork tag $tag)"
     if [[ ! -d $src/.git ]]; then
-        git clone -q --depth 1 --branch "$tag" "$PATCHWORK_REPO" "$src" ||
-            die "no tag $tag in anatase-org/patchwork"
+        git ls-remote --exit-code --tags "$PATCHWORK_REPO" "refs/tags/$tag" >/dev/null ||
+            die "no tag $tag in anatase-org/patchwork (or GitHub unreachable)"
+        local try
+        for try in 1 2 3; do
+            git clone -q --depth 1 --branch "$tag" "$PATCHWORK_REPO" "$src" && break
+            rm -rf "$src"
+            (( try < 3 )) || die "cloning anatase-org/patchwork $tag failed 3 times (network?)"
+            echo "clone failed, retrying ($try/3)"; sleep 10
+        done
     fi
     git -C "$src" reset -q --hard "$tag" 2>/dev/null || git -C "$src" reset -q --hard HEAD
     git -C "$src" clean -qfdx
-    # Already in Anatase? Then there is nothing to build.
-    local first; first=$(ls "$here"/patches/kernel/*.patch | head -1)
-    if ! git -C "$src" apply --check "$first" 2>/dev/null; then
-        if git -C "$src" apply --check -R "$first" 2>/dev/null; then
-            echo "kernel $tag already contains the VS/PE-O backport - no xe module needed"
-            rm -f "$OUT/$KMOD_NAME"-*.rpm; touch "$OUT/.kernel-not-needed"; return 0
-        fi
-        die "kernel patches don't apply to $tag - they need updating"
+    local applied; applied=$(apply_kernel_patches "$src")
+    if (( applied == 0 )); then
+        echo "kernel $tag already contains every patch - no modules needed"
+        rm -f "$OUT/$KMOD_NAME"-*.rpm; touch "$OUT/.kernel-not-needed"; return 0
     fi
+    echo "  $applied kernel patches applied"
     rm -f "$OUT/.kernel-not-needed"
-    git -C "$src" -c user.name=oxp3-fixes -c user.email=oxp3-fixes@localhost am -q "$here"/patches/kernel/*.patch
-    # out-of-tree drivers Anatase adds as submodules: stub their Kconfig, xe doesn't use them
+    # out-of-tree drivers Anatase adds as submodules: stub their Kconfig, our modules don't use them
     local k
     for k in $(sed -n 's/^source "\(drivers\/custom\/[^"]*\)"/\1/p' "$src/drivers/custom/Kconfig" 2>/dev/null); do
         [[ -e $src/$k ]] || { mkdir -p "$(dirname "$src/$k")"; : > "$src/$k"; }
     done
 
-    say "kernel $kver: building xe.ko (10-20 min)"
+    say "kernel $kver: building modules (15-30 min)"
     rm -rf "$kb"; mkdir -p "$kb"; cp "$cfg" "$kb/.config"
+    local entry dir mods m make_m=""
+    for entry in "${KMODS[@]}"; do
+        make_m+=" && make -s O='$kb' KERNELRELEASE='$kver' KBUILD_MODPOST_WARN=1 -j\$(nproc) M=${entry%%|*} modules"
+    done
+    # Anatase's symvers lets modpost resolve the kernel's exports, so a symbol our modules need
+    # but the running kernel lacks shows up here instead of as a module that won't load.
+    [[ -r /usr/lib/modules/$kver/symvers.xz ]] || die "no /usr/lib/modules/$kver/symvers.xz"
+    xz -dc "/usr/lib/modules/$kver/symvers.xz" > "$kb/Module.symvers"
     ctr bash -c "cd '$src' && make -s O='$kb' KERNELRELEASE='$kver' olddefconfig &&
-        make -s O='$kb' KERNELRELEASE='$kver' -j\$(nproc) modules_prepare &&
-        make -s O='$kb' KERNELRELEASE='$kver' KBUILD_MODPOST_WARN=1 -j\$(nproc) M=drivers/gpu/drm/xe modules" \
-        > "$kb/build.log" 2>&1 || { tail -30 "$kb/build.log"; die "xe build failed (full log: $kb/build.log)"; }
-    local ko="$src/drivers/gpu/drm/xe/xe.ko"
-    [[ -f $ko ]] || die "xe.ko not produced"
-    [[ $(ctr modinfo -F vermagic "$ko") == "$kver "* ]] || die "xe.ko vermagic doesn't match $kver"
+        make -s O='$kb' KERNELRELEASE='$kver' -j\$(nproc) modules_prepare $make_m" \
+        > "$kb/build.log" 2>&1 || { tail -30 "$kb/build.log"; die "module build failed (full log: $kb/build.log)"; }
+    local undef; undef=$(grep -E 'modpost: ".*" \[.*\] undefined!' "$kb/build.log" || true)
+    [[ -z $undef ]] || { echo "$undef" | head -20; die "modules need kernel symbols $kver doesn't export"; }
 
     say "kernel $kver: signing with $MOK_DIR/MOK.der"
     hash=$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$cfg"); hash=${hash:-sha512}
-    local stage="$CACHE/kernel/stage-$tag"
+    local stage="$CACHE/kernel/stage-$tag" ko rel_path files=()
     rm -rf "$stage"; mkdir -p "$stage"
-    ctr strip --strip-debug -o "$stage/xe.ko" "$ko"
-    ctr "$kb/scripts/sign-file" "$hash" "$MOK_DIR/MOK.key" "$MOK_DIR/MOK.der" "$stage/xe.ko"
-    ctr modinfo -F signer "$stage/xe.ko"
-    ctr xz -f --check=crc32 --lzma2=dict=1MiB "$stage/xe.ko"
+    for entry in "${KMODS[@]}"; do
+        dir=${entry%%|*}; mods=${entry#*|}
+        for m in $mods; do
+            ko="$src/$dir/$m.ko"
+            [[ -f $ko ]] || die "$dir/$m.ko not produced"
+            [[ $(ctr modinfo -F vermagic "$ko") == "$kver "* ]] || die "$m.ko vermagic doesn't match $kver"
+            rel_path="$dir/$m.ko"
+            mkdir -p "$stage/$(dirname "$rel_path")"
+            ctr strip --strip-debug -o "$stage/$rel_path" "$ko"
+            ctr "$kb/scripts/sign-file" "$hash" "$MOK_DIR/MOK.key" "$MOK_DIR/MOK.der" "$stage/$rel_path"
+            ctr xz -f --check=crc32 --lzma2=dict=1MiB "$stage/$rel_path"
+            files+=( "$rel_path.xz" )
+        done
+    done
+    echo "  signed by: $(ctr modinfo -F signer "$stage/drivers/gpu/drm/xe/xe.ko.xz")"
 
     say "kernel $kver: packaging $KMOD_NAME"
-    local top="$CACHE/rpmbuild/$KMOD_NAME" rel; rel=$(date +%Y%m%d%H%M)
+    local top="$CACHE/rpmbuild/$KMOD_NAME" rel f; rel=$(date +%Y%m%d%H%M)
     rm -rf "$top"; mkdir -p "$top/SOURCES" "$top/SPECS"
-    cp "$stage/xe.ko.xz" "$top/SOURCES/"
-    cat > "$top/SPECS/$KMOD_NAME.spec" <<EOF
+    tar -C "$stage" -cf "$top/SOURCES/modules.tar" "${files[@]}"
+    {
+        cat <<EOF
 Name:           $KMOD_NAME
 Version:        ${kver//-/_}
 Release:        $rel
-Summary:        xe with the VBT VS/PE-O backport for the OneXPlayer 3 eDP panel
+Summary:        xe, iwlwifi and btintel with the OneXPlayer 3 fixes
 License:        GPL-2.0-only
-Source0:        xe.ko.xz
+Source0:        modules.tar
 Requires:       kernel-core = ${kver%.*}
+Obsoletes:      kmod-oxp3-xe < 999
 %global debug_package %{nil}
 %global __os_install_post %{nil}
 %description
-xe display driver for kernel $kver with the VBT #57 VS/PE-O override backport
-(white dots, HDR retoggle black screen on the OneXPlayer 3). Signed with a local MOK.
-Installed in updates/, so it takes priority over the stock xe module.
+xe (VBT VS/PE-O backport, VRR/DSB timing, resume ENOMEM fix, 7.2.13 stable fixes, eDP HDR
+switches), iwlwifi/iwlmld and btintel/btintel_pcie (7.2.13 stable and 7.3/7.4 fixes) for
+kernel $kver. Signed with a local MOK. Installed in updates/, so they take priority over the
+stock modules.
+%prep
+%setup -c -T
+tar -xf %{SOURCE0}
 %install
-install -D -m 0644 %{SOURCE0} %{buildroot}/usr/lib/modules/$kver/updates/xe.ko.xz
+mkdir -p %{buildroot}/usr/lib/modules/$kver/updates
+cp -a drivers %{buildroot}/usr/lib/modules/$kver/updates/
 %files
-/usr/lib/modules/$kver/updates/xe.ko.xz
+EOF
+        for f in "${files[@]}"; do echo "/usr/lib/modules/$kver/updates/$f"; done
+        cat <<EOF
 %post
 /usr/sbin/depmod -a $kver || :
 %postun
 /usr/sbin/depmod -a $kver || :
 EOF
+    } > "$top/SPECS/$KMOD_NAME.spec"
     ctr rpmbuild --define "_topdir $top" -bb "$top/SPECS/$KMOD_NAME.spec" > "$top/build.log" 2>&1 ||
         { tail -20 "$top/build.log"; die "kmod packaging failed"; }
-    rm -f "$OUT/$KMOD_NAME"-*.rpm
+    rm -f "$OUT"/kmod-oxp3-*.rpm
     find "$top/RPMS" -name "$KMOD_NAME-*.rpm" -exec cp {} "$OUT/" \;
     ls "$OUT/$KMOD_NAME"-*.rpm
+}
+
+# ---------------------------------------------------------------------------------------------
+# firmware: pinned files from upstream, packaged under /usr/lib/firmware/updates (searched first
+# by the kernel and by dracut, so the initramfs gets them too)
+# ---------------------------------------------------------------------------------------------
+LF=https://gitlab.com/kernel-firmware/linux-firmware/-/raw
+# <installed path under /usr/lib/firmware/updates>|<url>|<sha256>|<what>
+FIRMWARE=(
+    # Display DMC v2.20: v2.36 (Anatase) ends a late VRR frame only at the 30 Hz maximum, which
+    # caps VRR at about 74 fps (onexplayer3-steamos-setup issue #1). --stock-dmc keeps v2.36.
+    "i915/xe3lpd_dmc.bin|$LF/d2e1085e36fb/i915/xe3lpd_dmc.bin|fc585fc5758fd68e1d4ba8397bfb5311ae9fa1f287b6a23b96369e5bad06584f|dmc"
+    # Bluetooth BE201 24.80.0.2 (Anatase: 24.70)
+    "intel/ibt-00a0-0291-pci.sfi|$LF/8a2941fae0d02364d8ae6542ba890fd496681b55/intel/ibt-00a0-0291-pci.sfi|6ea03de60bdd6231387f561fbae53b1aaedfd906437b3c2216b45df1d4f01e45|bt"
+    "intel/ibt-00a0-0291-iml.sfi|$LF/8a2941fae0d02364d8ae6542ba890fd496681b55/intel/ibt-00a0-0291-iml.sfi|69beb77387a79a75ee741ff6f88f782a0fc44c8b2efcc7bcb41c413122928026|bt"
+    # CPU microcode 06-cc-02 0x11c (Intel microcode-20260811; Anatase: 0x11b)
+    "intel-ucode/06-cc-02|https://raw.githubusercontent.com/intel/Intel-Linux-Processor-Microcode-Data-Files/microcode-20260811/intel-ucode/06-cc-02|4e43bb4d23c3638f8c16967d61e8f6456ae0da2ddd1da82ab579a50715147bb1|ucode"
+)
+FW_NAME=oxp3-firmware
+
+# revision of the first microcode header in a file
+ucode_rev() { od -An -t x4 -j 4 -N 4 "$1" 2>/dev/null | tr -d ' '; }
+
+# installed (Anatase) copy of a firmware file, compressed or not
+sys_fw() { local f; for f in /usr/lib/firmware/$1{,.xz,.zst}; do [[ -e $f ]] && { echo "$f"; return; }; done; }
+sys_fw_sha() {
+    local f; f=$(sys_fw "$1"); [[ -n $f ]] || return 0
+    case $f in *.xz) xz -dc "$f" ;; *.zst) zstd -dcq "$f" ;; *) cat "$f" ;; esac | sha256sum | cut -d' ' -f1
+}
+
+build_firmware() {
+    local stage="$CACHE/firmware/stage" entry path url sha kind f files=()
+    rm -rf "$stage"; mkdir -p "$stage" "$CACHE/firmware/dl"
+    say "firmware: pinned files"
+    for entry in "${FIRMWARE[@]}"; do
+        IFS='|' read -r path url sha kind <<<"$entry"
+        (( SKIP_DMC )) && [[ $kind == dmc ]] && { echo "  $path: --stock-dmc, keeping Anatase's"; continue; }
+        f="$CACHE/firmware/dl/$sha"
+        if [[ $(sha256sum "$f" 2>/dev/null | cut -d' ' -f1) != "$sha" ]]; then
+            curl -sfL --retry 3 -o "$f.part" "$url" || die "download failed: $url"
+            [[ $(sha256sum "$f.part" | cut -d' ' -f1) == "$sha" ]] || die "checksum mismatch: $url"
+            mv "$f.part" "$f"
+        fi
+        # skip what Anatase already ships in the same or a newer version
+        if [[ $(sys_fw_sha "$path") == "$sha" ]]; then
+            echo "  $path: Anatase ships the same file"; continue
+        fi
+        if [[ $kind == ucode ]]; then
+            local have want
+            have=$(ucode_rev "$(sys_fw "$path")"); want=$(ucode_rev "$f")
+            if [[ -n $have ]] && (( 16#$have >= 16#$want )); then
+                echo "  $path: Anatase ships revision 0x$have (>= 0x$want)"; continue
+            fi
+        fi
+        install -D -m 0644 "$f" "$stage/$path"
+        files+=( "$path" ); echo "  $path"
+    done
+    rm -f "$OUT/$FW_NAME"-*.rpm
+    if (( ${#files[@]} == 0 )); then echo "  nothing newer than Anatase's firmware"; return 0; fi
+
+    local top="$CACHE/rpmbuild/$FW_NAME" rel; rel=$(date +%Y%m%d%H%M)
+    rm -rf "$top"; mkdir -p "$top/SOURCES" "$top/SPECS"
+    tar -C "$stage" -cf "$top/SOURCES/firmware.tar" "${files[@]}"
+    {
+        cat <<EOF
+Name:           $FW_NAME
+Version:        1
+Release:        $rel
+Summary:        Pinned firmware for the OneXPlayer 3 (display DMC, Bluetooth, CPU microcode)
+License:        Redistributable, no modification permitted
+BuildArch:      noarch
+Source0:        firmware.tar
+%global debug_package %{nil}
+%description
+Firmware files that take priority over linux-firmware / microcode_ctl through
+/usr/lib/firmware/updates: display DMC v2.20 (VRR cap with v2.36), Bluetooth 24.80,
+CPU microcode 06-cc-02 0x11c.
+%prep
+%setup -c -T
+tar -xf %{SOURCE0}
+%install
+mkdir -p %{buildroot}/usr/lib/firmware/updates
+cp -a * %{buildroot}/usr/lib/firmware/updates/
+%files
+EOF
+        for f in "${files[@]}"; do echo "/usr/lib/firmware/updates/$f"; done
+    } > "$top/SPECS/$FW_NAME.spec"
+    ctr rpmbuild --define "_topdir $top" -bb "$top/SPECS/$FW_NAME.spec" > "$top/build.log" 2>&1 ||
+        { tail -20 "$top/build.log"; die "firmware packaging failed"; }
+    find "$top/RPMS" -name "$FW_NAME-*.rpm" -exec cp {} "$OUT/" \;
+    ls "$OUT/$FW_NAME"-*.rpm
 }
 
 do_build() {
@@ -227,7 +392,8 @@ do_build() {
     if (( !SKIP_GAMESCOPE || !SKIP_MANGOHUD )); then fetch_anatase; fi
     (( SKIP_GAMESCOPE )) || build_card gamescope '^Patch:[[:space:]]+overrides\.patch' "$here"/patches/gamescope/*.patch
     (( SKIP_MANGOHUD )) || build_card mangohud '^Patch1000:[[:space:]]+overrides\.patch' "$here"/patches/mangohud/*.patch
-    (( SKIP_KERNEL )) || build_xe
+    (( SKIP_KERNEL )) || build_kmods
+    (( SKIP_FIRMWARE )) || build_firmware
     say "build done: $OUT"
     ls "$OUT"
 }
@@ -313,6 +479,85 @@ remove_rapl_udev_rules() {
     fi
 }
 
+# ---------------------------------------------------------------------------------------------
+# OneXPlayer 3 extras: services and settings in /etc and /usr/local (they survive updates)
+# ---------------------------------------------------------------------------------------------
+EXTRA_UNITS=(oxp3-tdp-sync.service oxp3-xpad-sleep.service oxp3-rapl-pp1.service)
+EXTRA_STATE=/etc/oxp3-fixes
+
+install_extras() {
+    local s u me; me=$(id -un)
+    for s in oxp3-tdp-sync oxp3-xpad-sleep oxp3-audio-route; do
+        sudo install -D -m 0755 "$here/files/$s" "/usr/local/libexec/$s"
+    done
+    for u in "${EXTRA_UNITS[@]}" oxp3-audio-resume@.service; do
+        sudo install -m 0644 "$here/files/$u" "/etc/systemd/system/$u"
+    done
+    sudo install -D -m 0644 "$here/files/oxp3-audio-route.service" /etc/systemd/user/oxp3-audio-route.service
+    sudo install -D -m 0644 "$here/files/52-oxp3-speakers.conf" \
+        /etc/wireplumber/wireplumber.conf.d/52-oxp3-speakers.conf
+    # the BMI260 IMU also matches bmi160's ACPI id; bmi160 loads but never binds
+    echo 'blacklist bmi160_i2c' | sudo tee /etc/modprobe.d/oxp3-bmi160.conf >/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl enable oxp3-xpad-sleep.service oxp3-rapl-pp1.service "oxp3-audio-resume@$me.service" >/dev/null 2>&1
+    sudo systemctl enable oxp3-tdp-sync.service >/dev/null 2>&1
+    sudo systemctl restart oxp3-tdp-sync.service
+    sudo systemctl --global enable oxp3-audio-route.service >/dev/null 2>&1
+    systemctl --user daemon-reload
+    # thermald exits at boot here: the BIOS has no PSVT tables for it ("THD engine init failed")
+    if systemctl is-enabled -q thermald.service 2>/dev/null; then
+        sudo systemctl disable --now thermald.service >/dev/null 2>&1
+        sudo install -d "$EXTRA_STATE"; sudo touch "$EXTRA_STATE/thermald-disabled"
+    fi
+    echo "  TDP sync, speaker route check (+ resume), speaker name, xpad sleep, GPU power zone check"
+    echo "  (the speaker name shows after WirePlumber restarts: next login, or systemctl --user restart wireplumber)"
+}
+
+uninstall_extras() {
+    local u me; me=$(id -un)
+    sudo systemctl disable --now "${EXTRA_UNITS[@]}" "oxp3-audio-resume@$me.service" >/dev/null 2>&1 || true
+    sudo systemctl --global disable oxp3-audio-route.service >/dev/null 2>&1 || true
+    for u in "${EXTRA_UNITS[@]}" oxp3-audio-resume@.service; do sudo rm -f "/etc/systemd/system/$u"; done
+    sudo rm -f /etc/systemd/user/oxp3-audio-route.service \
+        /etc/wireplumber/wireplumber.conf.d/52-oxp3-speakers.conf /etc/modprobe.d/oxp3-bmi160.conf \
+        /usr/local/libexec/oxp3-tdp-sync /usr/local/libexec/oxp3-xpad-sleep /usr/local/libexec/oxp3-audio-route
+    if [[ -e $EXTRA_STATE/thermald-disabled ]]; then
+        sudo systemctl enable thermald.service >/dev/null 2>&1 || true
+        sudo rm -f "$EXTRA_STATE/thermald-disabled"
+    fi
+    sudo rmdir "$EXTRA_STATE" 2>/dev/null || true
+    sudo systemctl daemon-reload
+}
+
+# Volume rocker (needs the /usr overlay): hhd patch and atkbd force-release go in together, since
+# force-release without the patch makes hhd lose every press. Both live in /usr, so an Anatase
+# update drops both and the rocker keeps working (just unfixed) until the next install.
+HHD_PATCH=patches/hhd/0001-oxp-volume-rocker-taps.patch
+VOLUME_HWDB=/usr/lib/udev/hwdb.d/84-oxp3-volume-keys.hwdb
+hhd_site() { python3 -c 'import hhd, os; print(os.path.dirname(os.path.dirname(hhd.__file__)))' 2>/dev/null; }
+
+install_volume_fix() {
+    local site; site=$(hhd_site)
+    [[ -n $site ]] || { echo "  hhd not found, volume rocker fix skipped"; return 0; }
+    if git -C "$site" apply --check -R -p1 "$here/$HHD_PATCH" >/dev/null 2>&1; then
+        echo "  hhd already has the volume rocker patch"
+    elif git -C "$site" apply --check -p1 "$here/$HHD_PATCH" >/dev/null 2>&1; then
+        sudo git -C "$site" apply -p1 "$here/$HHD_PATCH"
+        sudo find "$site/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} +
+        echo "  hhd: volume rocker presses become taps"
+    else
+        echo "  WARNING: the hhd volume rocker patch doesn't apply to this hhd - rocker left as is"
+        [[ -e $VOLUME_HWDB ]] && { sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update; }
+        return 0
+    fi
+    if ! cmp -s "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"; then
+        sudo install -m 0644 "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"
+        sudo systemd-hwdb update
+        sudo udevadm trigger --subsystem-match=input --action=change
+    fi
+    sudo systemctl restart hhd.service
+}
+
 # State of the deployments: is one staged, and which layered local packages does the booted
 # one have?
 deploy_info() {
@@ -335,46 +580,79 @@ do_install() {
 
     say "power readings service (sudo)"
     install_rapl_power
+    if (( !SKIP_EXTRAS )); then
+        say "OneXPlayer 3 services (sudo)"
+        install_extras
+    fi
 
-    # 1. xe module: it loads from the initramfs, so it has to be layered with rpm-ostree and the
-    #    initramfs regenerated. That makes a new deployment, which doesn't keep the writable /usr
-    #    overlay, so this goes first; gamescope/MangoHud follow on the next run.
+    # 1. kernel modules + firmware: xe loads from the initramfs, so both are layered with
+    #    rpm-ostree and the initramfs regenerated. That makes a new deployment, which doesn't keep
+    #    the writable /usr overlay, so this goes first; gamescope/MangoHud follow on the next run.
+    local layer=() want=() pkg
     if (( !SKIP_KERNEL )) && [[ ! -e $OUT/.kernel-not-needed ]]; then
         kmod=( "$OUT/$KMOD_NAME"-*.rpm )
         [[ -f ${kmod[0]} ]] || die "no $KMOD_NAME package - run '$0 build' first"
         rpm -qp --qf '%{VERSION}\n' "${kmod[0]}" | grep -qF "${kver//-/_}" ||
             die "$KMOD_NAME was built for another kernel than $kver - rebuild"
-        local want; want=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' "${kmod[0]}")
-        if grep -qwF "$want" <<<"$locals"; then
-            echo "xe module for $kver already in this deployment"
-        elif ! mok_trusted; then
+        if ! mok_trusted; then
             echo "WARNING: the MOK in $MOK_DIR is not in the kernel's machine keyring."
-            echo "         The signed xe module would be rejected and the screen stay dark at boot."
+            echo "         The signed modules would be rejected and the screen stay dark at boot."
             mok_usage_ok || echo "         The key isn't a CA with keyCertSign only: run '$0 mok-setup'."
             echo "         Skipping the kernel part (README: Secure Boot key)."
         else
-            say "staging the xe module for $kver (sudo)"
-            for p in $locals; do [[ $p == "$KMOD_NAME"-* ]] && un+=( "--uninstall=$p" ); done
-            sudo rpm-ostree install "${kmod[0]}" "${un[@]}"
-            rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled' ||
-                sudo rpm-ostree initramfs --enable
-            say "reboot now, then run '$0 install' again for gamescope and MangoHud"
-            echo "(If the screen stays dark after the reboot, pick the previous entry in the boot menu.)"
-            return 0
+            layer+=( "${kmod[0]}" )
         fi
     fi
+    if (( !SKIP_FIRMWARE )); then
+        local fw=( "$OUT/$FW_NAME"-*.rpm )
+        [[ -f ${fw[0]} ]] && layer+=( "${fw[0]}" )
+    fi
+    for pkg in "${layer[@]}"; do want+=( "$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' "$pkg")" ); done
+    # our layered packages that are not wanted any more (older builds, kmod-oxp3-xe, or firmware
+    # Anatase now ships itself)
+    for p in $locals; do
+        [[ $p == kmod-oxp3-* || $p == "$FW_NAME"-* ]] || continue
+        (( SKIP_KERNEL )) && [[ $p == kmod-oxp3-* ]] && continue
+        (( SKIP_FIRMWARE )) && [[ $p == "$FW_NAME"-* ]] && continue
+        [[ " ${want[*]} " == *" $p "* ]] || un+=( "$p" )
+    done
+    local missing=() i
+    for i in "${!layer[@]}"; do grep -qwF "${want[$i]}" <<<"$locals" || missing+=( "${layer[$i]}" ); done
+    if (( ${#missing[@]} || ${#un[@]} )); then
+        say "staging kernel modules / firmware for $kver (sudo)"
+        printf '  layer:  %s\n' "${missing[@]##*/}"
+        printf '  remove: %s\n' "${un[@]}"
+        if (( ${#missing[@]} )); then
+            sudo rpm-ostree install "${missing[@]}" "${un[@]/#/--uninstall=}"
+        else
+            sudo rpm-ostree uninstall "${un[@]}"
+        fi
+        rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled' ||
+            sudo rpm-ostree initramfs --enable
+        say "reboot now, then run '$0 install' again for gamescope and MangoHud"
+        echo "(If the screen stays dark after the reboot, pick the previous entry in the boot menu.)"
+        return 0
+    elif (( ${#layer[@]} )); then
+        echo "kernel modules / firmware for $kver already in this deployment"
+    fi
 
-    # 2. gamescope / MangoHud into the writable /usr overlay of the booted deployment
-    if (( ${#rpms[@]} )); then
+    # 2. gamescope / MangoHud / hhd volume fix into the writable /usr overlay of the booted deployment
+    if (( ${#rpms[@]} || !SKIP_EXTRAS )); then
         if [[ $staged == staged ]]; then
             echo "A deployment is staged (an update or a pending change): reboot into it first,"
             echo "then run '$0 install' again - changes to the current /usr would be lost."
             return 0
         fi
-        say "gamescope / MangoHud into the writable /usr overlay (sudo)"
         hotfix_active || sudo rpm-ostree usroverlay --hotfix
-        sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
-        rpm -q gamescope mangohud | sed 's/^/  /'
+        if (( ${#rpms[@]} )); then
+            say "gamescope / MangoHud into the writable /usr overlay (sudo)"
+            sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
+            rpm -q gamescope mangohud | sed 's/^/  /'
+        fi
+        if (( !SKIP_EXTRAS )); then
+            say "volume rocker (sudo)"
+            install_volume_fix
+        fi
         say "done - leave and re-enter Gamemode (no reboot needed)"
         echo "This lasts until the next Anatase update; run '$0 all' after updating."
     fi
@@ -383,7 +661,7 @@ do_install() {
 do_uninstall() {
     say "back to stock Anatase (sudo)"
     local p un=()
-    for p in $(sed -n 2p <<<"$(deploy_info)"); do [[ $p == "$KMOD_NAME"-* ]] && un+=( "$p" ); done
+    for p in $(sed -n 2p <<<"$(deploy_info)"); do [[ $p == kmod-oxp3-* || $p == "$FW_NAME"-* ]] && un+=( "$p" ); done
     (( ${#un[@]} )) && sudo rpm-ostree uninstall "${un[@]}"
     if rpm-ostree initramfs 2>/dev/null | grep -q 'Initramfs regeneration: enabled'; then
         sudo rpm-ostree initramfs --disable
@@ -392,6 +670,14 @@ do_uninstall() {
     sudo rm -f /etc/systemd/system/rapl-power.service /usr/local/libexec/rapl-power
     sudo systemctl daemon-reload
     remove_rapl_udev_rules
+    uninstall_extras
+    if [[ -e $VOLUME_HWDB ]]; then
+        sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update
+    fi
+    local site; site=$(hhd_site)
+    if [[ -n $site ]] && git -C "$site" apply --check -R -p1 "$here/$HHD_PATCH" >/dev/null 2>&1; then
+        sudo git -C "$site" apply -R -p1 "$here/$HHD_PATCH" && sudo systemctl restart hhd.service
+    fi
     echo "Reboot to finish. The patched gamescope/MangoHud live in the writable /usr overlay of"
     echo "the current deployment; any new deployment (the reboot above, or the next Anatase"
     echo "update) starts from the stock packages again."
@@ -399,13 +685,32 @@ do_uninstall() {
 
 do_status() {
     echo "kernel (deployment): $(anatase_kver)   booted: $(uname -r)"
-    rpm -q gamescope mangohud "$KMOD_NAME" 2>&1 | sed 's/^/  /'
+    rpm -q gamescope mangohud kmod-oxp3-xe "$KMOD_NAME" "$FW_NAME" 2>&1 | grep -v 'is not installed' | sed 's/^/  /' || true
     rpm-ostree status --booted | grep -E 'Version|LocalPackages|Initramfs|Unlocked' | sed 's/^/  /' || true
     echo "  rapl-power service: $(systemctl is-active rapl-power.service 2>/dev/null)"
     local f; for f in /run/rapl-power/*; do [[ -e $f ]] && echo "    $(basename "$f"): $(cat "$f") W"; done
     ls /etc/udev/rules.d/70-*rapl.rules >/dev/null 2>&1 && echo "  WARNING: old RAPL udev rule still present (run install)"
     stat -c '  RAPL counters: %A %n' /sys/class/powercap/intel-rapl:0/energy_uj 2>/dev/null
-    modinfo -F filename xe 2>/dev/null | sed 's/^/  xe module: /'
+    local m; for m in xe iwlwifi iwlmld btintel btintel_pcie; do
+        printf '  %-13s %s\n' "$m:" "$(modinfo -F filename "$m" 2>/dev/null)"
+    done
+    journalctl -k -b 0 --no-pager 2>/dev/null | sed -n \
+        -e 's/.*\(Finished loading DMC firmware .*\)/  \1/p' \
+        -e 's/.*microcode: \(Current revision: .*\)/  microcode \1/p' \
+        -e 's/.*Bluetooth: hci0: \(Firmware timestamp .*\)/  Bluetooth \1/p' | sort -u
+    local u st; for u in "${EXTRA_UNITS[@]}" "oxp3-audio-resume@$(id -un).service" user:oxp3-audio-route.service; do
+        if [[ $u == user:* ]]; then st=$(systemctl --user is-enabled "${u#user:}" 2>/dev/null || true)
+        else st=$(systemctl is-enabled "$u" 2>/dev/null || true); fi
+        printf '  %-34s %s\n' "${u#user:}:" "${st:-missing}"
+    done
+    echo "  package PL1: MSR $(( $(cat /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 )) W," \
+         "MMIO $(( $(cat /sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 )) W"
+    local site; site=$(hhd_site)
+    if [[ -n $site ]] && git -C "$site" apply --check -R -p1 "$here/$HHD_PATCH" >/dev/null 2>&1; then
+        echo "  volume rocker: hhd patched$( [[ -e $VOLUME_HWDB ]] && echo ', force-release on')"
+    else
+        echo "  volume rocker: stock hhd"
+    fi
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }
 
@@ -416,5 +721,5 @@ case $cmd in
     status) do_status ;;
     uninstall) do_uninstall ;;
     mok-setup) do_mok_setup ;;
-    *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '2,/^set -euo pipefail/{/^#/p}' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

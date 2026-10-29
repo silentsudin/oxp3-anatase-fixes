@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Shahar Tzarfati <shahar.tzarfati@intel.com>
+Date: Sat, 26 Sep 2026 20:17:34 +0300
+Subject: [PATCH 159/161] wifi: iwlwifi: disable HE ER mode
+
+HE ER mode (~3 Mbps) provides marginal range benefit over legacy rates,
+while effective coverage remains constrained by beacon reception. In
+addition, ~3 Mbps is insufficient for laptop connectivity.
+
+Furthermore, any range benefit in 5 and 6 GHz is more easily achieved
+by roaming to 2.4 GHz, while avoiding degrading 5 and 6 GHz aggregate
+network capacity with low-rate links. Therefore, disable HE ER mode.
+
+Signed-off-by: Shahar Tzarfati <shahar.tzarfati@intel.com>
+Link: https://patch.msgid.link/20260926201527.aac48f46b60e.I5dcf9ed88b2b73bc09c81c0d9c841dc624447faf@changeid
+Signed-off-by: Miri Korenblit <miriam.rachel.korenblit@intel.com>
+---
+ drivers/net/wireless/intel/iwlwifi/iwl-nvm-parse.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/drivers/net/wireless/intel/iwlwifi/iwl-nvm-parse.c b/drivers/net/wireless/intel/iwlwifi/iwl-nvm-parse.c
+index bd5353fdde..599d06a905 100644
+--- a/drivers/net/wireless/intel/iwlwifi/iwl-nvm-parse.c
++++ b/drivers/net/wireless/intel/iwlwifi/iwl-nvm-parse.c
+@@ -595,7 +595,6 @@ static const struct ieee80211_sband_iftype_data iwl_iftype_cap[] = {
+ 					IEEE80211_HE_PHY_CAP7_POWER_BOOST_FACTOR_SUPP |
+ 					IEEE80211_HE_PHY_CAP7_HE_SU_MU_PPDU_4XLTF_AND_08_US_GI,
+ 				.phy_cap_info[8] =
+-					IEEE80211_HE_PHY_CAP8_HE_ER_SU_PPDU_4XLTF_AND_08_US_GI |
+ 					IEEE80211_HE_PHY_CAP8_20MHZ_IN_40MHZ_HE_PPDU_IN_2G |
+ 					IEEE80211_HE_PHY_CAP8_20MHZ_IN_160MHZ_HE_PPDU |
+ 					IEEE80211_HE_PHY_CAP8_80MHZ_IN_160MHZ_HE_PPDU |
+@@ -728,7 +727,6 @@ static const struct ieee80211_sband_iftype_data iwl_iftype_cap[] = {
+ 				.phy_cap_info[7] =
+ 					IEEE80211_HE_PHY_CAP7_HE_SU_MU_PPDU_4XLTF_AND_08_US_GI,
+ 				.phy_cap_info[8] =
+-					IEEE80211_HE_PHY_CAP8_HE_ER_SU_PPDU_4XLTF_AND_08_US_GI |
+ 					IEEE80211_HE_PHY_CAP8_DCM_MAX_RU_242,
+ 				.phy_cap_info[9] =
+ 					IEEE80211_HE_PHY_CAP9_TX_1024_QAM_LESS_THAN_242_TONE_RU |

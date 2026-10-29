@@ -1,0 +1,42 @@
+#!/bin/bash
+# oxp3-tdp-sync: keep the MSR package power limit 1 (PL1) equal to the MMIO one.
+#
+# Panther Lake has two package-0 power limit interfaces: the MSR (intel-rapl:0) and the MMIO
+# copy (intel-rapl-mmio:0). hhd writes its TDP to both, but on the OneXPlayer 3 the MSR PL1
+# ends up back at the 25 W firmware value while the MMIO one keeps hhd's setting, and the lower
+# of the two wins (onexplayer3-steamos-setup issue #10). Every INTERVAL seconds this copies the
+# MMIO PL1 (hhd's choice) to the MSR PL1 when they differ, and logs when it had to.
+set -u
+
+INTERVAL=2
+MSR=/sys/class/powercap/intel-rapl:0
+MMIO=/sys/class/powercap/intel-rapl-mmio:0
+
+pl1() { # <zone> -> path of its long_term power limit
+    local c
+    for c in "$1"/constraint_*_name; do
+        [[ $(< "$c") == long_term ]] && { echo "${c%name}power_limit_uw"; return; }
+    done
+}
+for z in "$MSR" "$MMIO"; do
+    [[ $(< "$z/name") == package-0 ]] 2>/dev/null || { echo "oxp3-tdp-sync: no package-0 zone at $z" >&2; exit 1; }
+done
+msr=$(pl1 "$MSR"); mmio=$(pl1 "$MMIO")
+[[ -n $msr && -n $mmio ]] || { echo "oxp3-tdp-sync: no long_term limit" >&2; exit 1; }
+
+fixes=0
+while :; do
+    read -r want < "$mmio" && read -r have < "$msr" || { sleep "$INTERVAL"; continue; }
+    if (( want > 0 && have != want )); then
+        if echo "$want" > "$msr" 2>/dev/null && read -r now < "$msr" && (( now == want )); then
+            fixes=$((fixes + 1))
+            # first few corrections, then every 100th, so a firmware reset loop stays visible
+            (( fixes <= 5 || fixes % 100 == 0 )) &&
+                echo "MSR PL1 was $((have / 1000000)) W, set to $((want / 1000000)) W (correction $fixes)"
+        else
+            echo "MSR PL1 write of $((want / 1000000)) W did not stick (reads ${now:-?} uW)" >&2
+            sleep 60
+        fi
+    fi
+    sleep "$INTERVAL"
+done

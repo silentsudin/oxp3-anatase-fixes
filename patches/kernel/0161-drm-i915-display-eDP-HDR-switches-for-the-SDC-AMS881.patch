@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 23:07:35 +0000
+Subject: [PATCH 161/161] drm/i915/display: eDP HDR switches for the SDC
+ AMS881KB01 OLED
+
+Two boot-time switches, both off by default (stock behaviour), to test
+the HDR findings of the OneXPlayer 3 community fix pack (xehdrfix) as
+source changes instead of kprobes:
+
+- edp_vsc_header_rewrite: write the VSC SDP header dword again once the
+  DIP is enabled, so the hardware recomputes its ECC. The panel drops a
+  VSC SDP with a stale header ECC and stays black after an HDR modeset.
+- edp_msa_vsc_colorimetry=0: leave MSA MISC1 bit 6 (colorimetry in the
+  VSC SDP) clear on eDP. With it set the panel can keep showing its
+  stored frame under Panel Replay; it reads the colorimetry from the VSC
+  SDP either way.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/i915/display/intel_ddi.c            |  4 +++-
+ drivers/gpu/drm/i915/display/intel_display_params.c |  8 ++++++++
+ drivers/gpu/drm/i915/display/intel_display_params.h |  2 ++
+ drivers/gpu/drm/i915/display/intel_hdmi.c           | 13 +++++++++++++
+ 4 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/i915/display/intel_ddi.c b/drivers/gpu/drm/i915/display/intel_ddi.c
+index 95008e0c0e..8c3b505eff 100644
+--- a/drivers/gpu/drm/i915/display/intel_ddi.c
++++ b/drivers/gpu/drm/i915/display/intel_ddi.c
+@@ -470,7 +470,9 @@ void intel_ddi_set_dp_msa(const struct intel_crtc_state *crtc_state,
+ 	 * YCBCR 420, HDR BT.2020 signals we should program MSA MISC1 fields
+ 	 * which indicate VSC SDP for the Pixel Encoding/Colorimetry Format.
+ 	 */
+-	if (intel_dp_needs_vsc_sdp(crtc_state, conn_state))
++	if (intel_dp_needs_vsc_sdp(crtc_state, conn_state) &&
++	    (display->params.edp_msa_vsc_colorimetry ||
++	     !intel_crtc_has_type(crtc_state, INTEL_OUTPUT_EDP)))
+ 		temp |= DP_MSA_MISC_COLOR_VSC_SDP;
+ 
+ 	intel_de_write(display, TRANS_MSA_MISC(display, cpu_transcoder),
+diff --git a/drivers/gpu/drm/i915/display/intel_display_params.c b/drivers/gpu/drm/i915/display/intel_display_params.c
+index ca0ef466bb..dfdf3c5747 100644
+--- a/drivers/gpu/drm/i915/display/intel_display_params.c
++++ b/drivers/gpu/drm/i915/display/intel_display_params.c
+@@ -127,6 +127,14 @@ intel_display_param_named_unsafe(enable_dc_balance, bool, 0400,
+ intel_display_param_named_unsafe(enable_panel_replay, int, 0400,
+ 	"Enable Panel Replay (0=disabled, 1=enabled). Default: -1 (use per-chip default)");
+ 
++intel_display_param_named_unsafe(edp_vsc_header_rewrite, bool, 0400,
++	"Write the eDP VSC SDP header again once the DIP is enabled, so the "
++	"hardware recomputes its ECC (0=disabled, 1=enabled). Default: 0");
++
++intel_display_param_named_unsafe(edp_msa_vsc_colorimetry, bool, 0400,
++	"Indicate VSC SDP colorimetry in the eDP MSA MISC1 field for BT.2020/YCbCr 4:2:0 "
++	"(0=leave the bit clear, 1=set it as the DP spec asks). Default: 1");
++
+ intel_display_param_named(psr_safest_params, bool, 0400,
+ 	"Replace PSR VBT parameters by the safest and not optimal ones. This "
+ 	"is helpful to detect if PSR issues are related to bad values set in "
+diff --git a/drivers/gpu/drm/i915/display/intel_display_params.h b/drivers/gpu/drm/i915/display/intel_display_params.h
+index 16759e94c0..40ce4dc0cd 100644
+--- a/drivers/gpu/drm/i915/display/intel_display_params.h
++++ b/drivers/gpu/drm/i915/display/intel_display_params.h
+@@ -48,6 +48,8 @@ struct drm_printer;
+ 	param(int, enable_psr, -1, 0600) \
+ 	param(bool, enable_dc_balance, false, 0600) \
+ 	param(int, enable_panel_replay, -1, 0600) \
++	param(bool, edp_vsc_header_rewrite, false, 0400) \
++	param(bool, edp_msa_vsc_colorimetry, true, 0400) \
+ 	param(bool, psr_safest_params, false, 0400) \
+ 	param(bool, enable_psr2_sel_fetch, true, 0400) \
+ 	param(int, enable_dmc_wl, -1, 0400) \
+diff --git a/drivers/gpu/drm/i915/display/intel_hdmi.c b/drivers/gpu/drm/i915/display/intel_hdmi.c
+index b9d11fb855..cb3d9db5e6 100644
+--- a/drivers/gpu/drm/i915/display/intel_hdmi.c
++++ b/drivers/gpu/drm/i915/display/intel_hdmi.c
+@@ -557,6 +557,19 @@ void hsw_write_infoframe(struct intel_encoder *encoder,
+ 
+ 	intel_de_write(display, ctl_reg, val);
+ 	intel_de_posting_read(display, ctl_reg);
++
++	/*
++	 * The header dword written while the DIP was disabled can keep a stale
++	 * ECC, and some eDP panels (SDC AMS881KB01) then drop the VSC SDP and
++	 * show black after an HDR modeset. Writing it again with the DIP enabled
++	 * makes the hardware recompute the ECC.
++	 */
++	if (type == DP_SDP_VSC && len >= 4 && display->params.edp_vsc_header_rewrite &&
++	    encoder->type == INTEL_OUTPUT_EDP && (val & hsw_infoframe_enable(type))) {
++		intel_de_write(display, hsw_dip_data_reg(display, cpu_transcoder, type, 0),
++			       *(const u32 *)frame);
++		intel_de_posting_read(display, ctl_reg);
++	}
+ }
+ 
+ void hsw_read_infoframe(struct intel_encoder *encoder,

@@ -1,0 +1,11 @@
+[Unit]
+Description=Put the OneXPlayer 3 back on its speakers when the headphone jack is empty
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes
+After=wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/oxp3-audio-route
+
+[Install]
+WantedBy=graphical-session.target

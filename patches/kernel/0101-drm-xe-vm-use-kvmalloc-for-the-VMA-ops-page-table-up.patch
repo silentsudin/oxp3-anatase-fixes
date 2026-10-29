@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 23:04:27 +0000
+Subject: [PATCH 101/161] drm/xe/vm: use kvmalloc for the VMA ops page-table
+ update array
+
+On resume the rebind worker queues one page-table update op per VMA.
+A big game has tens of thousands of VMAs, so the array outgrows what
+kmalloc can hand out (4 MiB with 384-byte ops at about 10,900 VMAs),
+the allocation fails and the next execbuf returns -ENOMEM: games like
+Final Fantasy VII Rebirth report "out of memory" right after a resume.
+
+The array is only touched by the CPU, so fall back to vmalloc when
+kmalloc can't satisfy it. Same change as drm-xe-next "drm/xe: Use
+kvmalloc for the VMA ops page-table update array" (SteamOS #2962).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/xe/xe_vm.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/xe/xe_vm.c b/drivers/gpu/drm/xe/xe_vm.c
+index 67819deb45..f646a4aa07 100644
+--- a/drivers/gpu/drm/xe/xe_vm.c
++++ b/drivers/gpu/drm/xe/xe_vm.c
+@@ -662,9 +662,9 @@ static int xe_vma_ops_alloc(struct xe_vma_ops *vops, bool array_of_binds)
+ 			continue;
+ 
+ 		vops->pt_update_ops[i].ops =
+-			kmalloc_objs(*vops->pt_update_ops[i].ops,
+-				     vops->pt_update_ops[i].num_ops,
+-				     GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
++			kvmalloc_objs(*vops->pt_update_ops[i].ops,
++				      vops->pt_update_ops[i].num_ops,
++				      GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
+ 		if (!vops->pt_update_ops[i].ops)
+ 			return array_of_binds ? -ENOBUFS : -ENOMEM;
+ 	}
+@@ -701,7 +701,7 @@ static void xe_vma_ops_fini(struct xe_vma_ops *vops)
+ 	xe_vma_svm_prefetch_ops_fini(vops);
+ 
+ 	for (i = 0; i < XE_MAX_TILES_PER_DEVICE; ++i)
+-		kfree(vops->pt_update_ops[i].ops);
++		kvfree(vops->pt_update_ops[i].ops);
+ }
+ 
+ static void xe_vma_ops_incr_pt_update_ops(struct xe_vma_ops *vops, u8 tile_mask, int inc_val)
