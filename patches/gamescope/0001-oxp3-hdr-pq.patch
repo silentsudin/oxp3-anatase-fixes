@@ -1,7 +1,7 @@
 From: silentsudin <25103587+silentsudin@users.noreply.github.com>
 Subject: [PATCH] OneXPlayer 3 / Legion Go 2 OLED: PQ HDR fixes
 
-Applies on top of Anatase's gamescope overrides.patch (gamescope 3.16.23.3).
+Applies on top of Anatase's gamescope overrides.patch (gamescope 3.16.23.3, libdisplay-info 0.4.0 packaging).
 Squashed from the local gamescope branch oxp3-hdr-min2 (not published):
   - edid: strip DisplayID extensions from the EDID exposed to games (silentsudin)
   - drm: send panel HDR metadata on internal displays (silentsudin)
@@ -24,7 +24,7 @@ Squashed from the local gamescope branch oxp3-hdr-min2 (not published):
 ---
 diff --git a/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua b/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
 new file mode 100644
-index 00000000..671664ee
+index 0000000..671664e
 --- /dev/null
 +++ b/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
 @@ -0,0 +1,75 @@
@@ -104,10 +104,10 @@ index 00000000..671664ee
 +debug("Registered Lenovo Legion Go 2 OLED as a known display")
 +--debug(inspect(gamescope.config.known_displays.lenovo_legiongo2_oled))
 diff --git a/src/Backends/DRMBackend.cpp b/src/Backends/DRMBackend.cpp
-index 5479d1b3..7531eabf 100644
+index ba30f24..a2a88ed 100644
 --- a/src/Backends/DRMBackend.cpp
 +++ b/src/Backends/DRMBackend.cpp
-@@ -63,6 +63,10 @@ static constexpr bool k_bUseCursorPlane = false;
+@@ -62,6 +62,10 @@ static constexpr bool k_bUseCursorPlane = false;
  extern int g_nPreferredOutputWidth;
  extern int g_nPreferredOutputHeight;
  
@@ -118,7 +118,7 @@ index 5479d1b3..7531eabf 100644
  gamescope::ConVar<bool> cv_drm_single_plane_optimizations( "drm_single_plane_optimizations", true, "Whether or not to enable optimizations for single plane usage." );
  
  gamescope::ConVar<bool> cv_drm_debug_disable_shaper_and_3dlut( "drm_debug_disable_shaper_and_3dlut", false, "Shaper + 3DLUT chicken bit. (Force disable/DEFAULT, no logic change)" );
-@@ -421,6 +425,9 @@ namespace gamescope
+@@ -420,6 +424,9 @@ namespace gamescope
  			return bChanged;
  		}
  
@@ -128,7 +128,7 @@ index 5479d1b3..7531eabf 100644
  		bool SupportsHDR10() const
  		{
  			return !!GetProperties().Colorspace && !!GetProperties().HDR_OUTPUT_METADATA && GetHDRInfo().IsHDR10();
-@@ -546,6 +553,9 @@ namespace gamescope
+@@ -545,6 +552,9 @@ namespace gamescope
  
  		GamescopePanelOrientation m_ChosenOrientation = GAMESCOPE_PANEL_ORIENTATION_AUTO;
  
@@ -138,7 +138,7 @@ index 5479d1b3..7531eabf 100644
  		ConnectorProperties m_Props;
  	};
  
-@@ -1503,7 +1513,8 @@ void finish_drm(struct drm_t *drm)
+@@ -1502,7 +1512,8 @@ void finish_drm(struct drm_t *drm)
  
  		if ( pConnector->GetProperties().HDR_OUTPUT_METADATA )
  		{
@@ -148,7 +148,7 @@ index 5479d1b3..7531eabf 100644
  				pConnector->GetProperties().HDR_OUTPUT_METADATA->SetPendingValue( req, drm->sdr_static_metadata->GetBlobValue(), true );
  			else
  				pConnector->GetProperties().HDR_OUTPUT_METADATA->SetPendingValue( req, 0, true );
-@@ -2376,6 +2387,7 @@ namespace gamescope
+@@ -2375,6 +2386,7 @@ namespace gamescope
  
  		bool bHasKnownColorimetry = false;
  		bool bHasKnownHDRInfo = false;
@@ -156,7 +156,7 @@ index 5479d1b3..7531eabf 100644
  
  		m_Mutable.ValidDynamicRefreshRates.clear();
  		m_Mutable.fnDynamicModeGenerator = nullptr;
-@@ -2473,9 +2485,12 @@ namespace gamescope
+@@ -2472,9 +2484,12 @@ namespace gamescope
  				{
  					m_Mutable.HDR.bExposeHDRSupport = otHDRInfo->get_or( "supported", false );
  					m_Mutable.HDR.eOutputEncodingEOTF = otHDRInfo->get_or( "eotf", EOTF_Gamma22 );
@@ -172,18 +172,18 @@ index 5479d1b3..7531eabf 100644
  
  					bHasKnownHDRInfo = true;
  				}
-@@ -2543,7 +2558,7 @@ namespace gamescope
+@@ -2542,7 +2557,7 @@ namespace gamescope
  		/////////////////////
  		// Parse HDR stuff.
  		/////////////////////
 -		if ( !bHasKnownHDRInfo )
 +		if ( !bHasKnownHDRInfo || !ofScriptMaxCLL || !ofScriptMaxFALL || !ofScriptMinCLL )
  		{
- 			const di_cta_hdr_static_metadata_block *pHDRStaticMetadata = nullptr;
- 			const di_cta_colorimetry_block *pColorimetry = nullptr;
-@@ -2578,14 +2593,17 @@ namespace gamescope
- 			if ( pColorimetry && pColorimetry->bt2020_rgb &&
- 				 pHDRStaticMetadata && pHDRStaticMetadata->eotfs && pHDRStaticMetadata->eotfs->pq )
+ 			// libdisplay-info 0.4.0 also finds CTA-861 blocks in DisplayID 2 extensions.
+ 			const di_hdr_static_metadata *pHDRStaticMetadata = di_info_get_hdr_static_metadata( pInfo );
+@@ -2550,14 +2565,17 @@ namespace gamescope
+ 
+ 			if ( pColorimetry->bt2020_rgb && pHDRStaticMetadata->pq )
  			{
 -				m_Mutable.HDR.bExposeHDRSupport = true;
 -				if (disableInternalPq && GetScreenType() == GAMESCOPE_SCREEN_TYPE_INTERNAL)
@@ -207,7 +207,7 @@ index 5479d1b3..7531eabf 100644
  				m_Mutable.HDR.uMaxContentLightLevel =
  					pHDRStaticMetadata->desired_content_max_luminance
  					? nits_to_u16( pHDRStaticMetadata->desired_content_max_luminance )
-@@ -2599,27 +2617,97 @@ namespace gamescope
+@@ -2571,27 +2589,97 @@ namespace gamescope
  					? nits_to_u16_dark( pHDRStaticMetadata->desired_content_min_luminance )
  					: nits_to_u16_dark( 0.0f );
  			}
@@ -308,7 +308,7 @@ index 5479d1b3..7531eabf 100644
  	/////////////////////////
  	// CDRMFb
  	/////////////////////////
-@@ -2962,12 +3050,17 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
+@@ -2934,12 +3022,17 @@ int drm_prepare( struct drm_t *drm, bool async, const struct FrameInfo_t *frameI
  
  			wlserver_vk_swapchain_feedback* pFeedback = steamcompmgr_get_base_layer_swapchain_feedback();
  			if ( pFeedback && pFeedback->hdr_metadata_blob != nullptr )
@@ -328,7 +328,7 @@ index 5479d1b3..7531eabf 100644
  			uColorimetry = DRM_MODE_COLORIMETRY_DEFAULT;
  		}
  
-@@ -3745,6 +3838,9 @@ namespace gamescope
+@@ -3717,6 +3810,9 @@ namespace gamescope
  				bNeedsFullComposite |= g_bHDRItmEnable;
  				if ( !SupportsSRGBtoPQ() )
  					bNeedsFullComposite |= ( pFrameInfo->layerCount > 1 || pFrameInfo->layers[0].colorspace != GAMESCOPE_APP_TEXTURE_COLORSPACE_HDR10_PQ );
@@ -339,7 +339,7 @@ index 5479d1b3..7531eabf 100644
  			else
  			{
 diff --git a/src/backend.h b/src/backend.h
-index 7ffdf9b3..d9d4b19f 100644
+index 7ffdf9b..d9d4b19 100644
 --- a/src/backend.h
 +++ b/src/backend.h
 @@ -118,6 +118,11 @@ namespace gamescope
@@ -355,7 +355,7 @@ index 7ffdf9b3..d9d4b19f 100644
          // The output encoding to use for HDR output.
          // For typical HDR10 displays, this will be PQ.
 diff --git a/src/edid.cpp b/src/edid.cpp
-index ae18dca5..c0ded22a 100644
+index ae18dca..c0ded22 100644
 --- a/src/edid.cpp
 +++ b/src/edid.cpp
 @@ -88,6 +88,51 @@ namespace gamescope
@@ -429,10 +429,10 @@ index ae18dca5..c0ded22a 100644
          // TODO: Allow for override of min luminance
  #if 0
 diff --git a/src/rendervulkan.hpp b/src/rendervulkan.hpp
-index e71da019..d39f478a 100644
+index 1deeeb3..6fc2aad 100644
 --- a/src/rendervulkan.hpp
 +++ b/src/rendervulkan.hpp
-@@ -535,6 +535,8 @@ struct gamescope_color_mgmt_t
+@@ -542,6 +542,8 @@ struct gamescope_color_mgmt_t
  	float flSDROnHDRBrightness = 203.f;
  	float flHDRInputGain = 1.f;
  	float flSDRInputGain = 1.f;
@@ -442,7 +442,7 @@ index e71da019..d39f478a 100644
  	// HDR Display Metadata Override & Tonemapping
  	ETonemapOperator hdrTonemapOperator = ETonemapOperator_None;
 diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
-index 9c68b83b..d2d78a22 100644
+index 9c68b83..d2d78a2 100644
 --- a/src/steamcompmgr.cpp
 +++ b/src/steamcompmgr.cpp
 @@ -384,6 +384,7 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
@@ -736,7 +736,7 @@ index 9c68b83b..d2d78a22 100644
  		// Pick our width/height for this potential frame, regardless of how it might change later
  		// At some point we might even add proper locking so we get real updates atomically instead
 diff --git a/src/waitable.h b/src/waitable.h
-index 36ac61ee..1a4c4dc5 100644
+index 36ac61e..1a4c4dc 100644
 --- a/src/waitable.h
 +++ b/src/waitable.h
 @@ -27,6 +27,7 @@ namespace gamescope
