@@ -1,6 +1,7 @@
 #!/bin/bash
 # Restore OneXPlayer 3 support on Anatase after an update:
 #   - gamescope: PQ HDR on the SDC AMS881KB01 OLED (no black screens, correct peak brightness)
+#   - Mesa:      26.3 branch (Jay shader compiler on Xe3, ANV fixes) from Anatase's packaging
 #   - MangoHud:  CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs,
 #                with power from the rapl-power service (counters stay root-only)
 #   - kernel:    MOK-signed xe, iwlwifi and btintel modules for the installed Anatase kernel:
@@ -21,7 +22,7 @@
 #   ./oxp3-fixes.sh mok-setup   create a module signing key and queue it for enrolment (once)
 #
 # Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware
-#                              --skip-extras (TDP sync, speakers, volume rocker, suspend services)
+#                              --skip-mesa --skip-extras (TDP sync, speakers, volume rocker, suspend)
 #                              --stock-dmc (keep Anatase's display DMC firmware)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
 #              OXP3_CACHE   (default ~/.cache/oxp3-fixes)
@@ -39,7 +40,7 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0
 cmd="${1:-}"; shift || true
 for a in "$@"; do
     case $a in
@@ -49,6 +50,7 @@ for a in "$@"; do
         --skip-firmware) SKIP_FIRMWARE=1 ;;
         --stock-dmc) SKIP_DMC=1 ;;
         --skip-extras) SKIP_EXTRAS=1 ;;
+        --skip-mesa) SKIP_MESA=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -139,6 +141,103 @@ build_card() {
     rm -f "$OUT/$name"-*.rpm
     find "$top/RPMS" -name "$name-$ver-*.rpm" ! -name '*debug*' -exec cp {} "$OUT/" \;
     ls "$OUT/$name"-*.rpm
+}
+
+# ---------------------------------------------------------------------------------------------
+# Mesa 26.3 (Jay shader compiler on Xe2/Xe3, compression/tiling work) from Anatase's packaging:
+# the 26.3 branch at MESA_COMMIT plus patches/mesa, x86_64 + i686, all installed subpackages
+# ---------------------------------------------------------------------------------------------
+MESA_COMMIT=07f74f00104644c7e3cb27b3af50e3cc96be81bd     # 26.3 branch, 2026-10-27 (after rc2)
+MESA_VERSION="26.3.0~rc2.20261027git${MESA_COMMIT:0:8}"   # no "^": Cargo.toml needs semver
+MESA_URL=https://gitlab.freedesktop.org/mesa/mesa/-/archive/$MESA_COMMIT/mesa-$MESA_COMMIT.tar.gz
+# i686 -devel packages the 32-bit build needs beyond the container's (dnf builddep is x86_64 only)
+MESA_I686_DEVEL="llvm-devel.i686 clang-devel.i686 spirv-llvm-translator-devel.i686 spirv-tools-devel.i686
+    libdisplay-info-devel.i686 elfutils-libelf-devel.i686 libva-devel.i686 lm_sensors-devel.i686
+    libzstd-devel.i686 libXdamage-devel.i686 libunwind-devel.i686 valgrind-devel.i686
+    libselinux-devel.i686 zlib-ng-compat-devel.i686 expat-devel.i686 libglvnd-devel.i686
+    DirectX-Headers-devel.i686 libedit-devel.i686 libpciaccess-devel.i686 libxml2-devel.i686
+    xz-devel.i686 ncurses-devel.i686 libuuid-devel.i686 libclc22-devel.i686"
+
+build_mesa() {
+    local top="$CACHE/rpmbuild/mesa" spec tarball="$CACHE/mesa/mesa-$MESA_COMMIT.tar.gz"
+    rm -rf "$top"; mkdir -p "$top/SOURCES" "$CACHE/mesa"
+    cp -r "$CACHE/anatase/cards/drivers/mesa/." "$top/SOURCES/"
+    spec="$top/SOURCES/mesa.spec"
+    say "mesa $MESA_VERSION: sources"
+    [[ -s $tarball ]] || curl -sfL --retry 3 -o "$tarball" "$MESA_URL" || die "download failed: $MESA_URL"
+    cp "$tarball" "$top/SOURCES/"
+    # Anatase's overrides.patch: its RADV Forza Horizon 5 hunk no longer applies to 26.3 and only
+    # concerns AMD GPUs, so it is dropped; every other hunk is kept.
+    python3 - "$top/SOURCES/overrides.patch" <<'EOF'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+parts = re.split(r'(?m)^(?=diff --git )', s)
+keep = [x for x in parts if not x.startswith('diff --git a/src/amd/vulkan/00-radv-defaults.conf')]
+if len(keep) != len(parts):
+    print("  overrides.patch: dropped the RADV FH5 hunk (AMD only, doesn't apply to 26.3)")
+open(p, 'w').write(''.join(keep))
+EOF
+    python3 - "$spec" "$MESA_VERSION" "$MESA_COMMIT" <<'EOF'
+import sys
+p, version, commit = sys.argv[1:]
+s = open(p).read()
+def rep(old, new):
+    global s
+    if s.count(old) != 1:
+        sys.exit(f"mesa.spec: expected one '{old.strip()}' - Anatase packaging changed")
+    s = s.replace(old, new)
+import re
+s, n = re.subn(r'(?m)^Version:\s+\S+$', f'Version:        {version}', s); assert n == 1
+s, n = re.subn(r'(?m)^Source0:\s+\S+$', f'Source0:        mesa-{commit}.tar.gz', s); assert n == 1
+rep('%autosetup -n %{name}-%{ver} -p1', f'%autosetup -n mesa-{commit} -p1')
+# 26.3 removed the anti-lag layer; its virtio (venus) Vulkan driver needs venus-protocol from the net
+rep('%global with_vulkan_layers_anti_lag 1\n', '')
+rep('%global with_virtio    1\n', '')
+# new in 26.3, next to the RADV defaults
+if '01-radv-performance.conf' not in s:
+    rep('%{_datadir}/drirc.d/00-radv-defaults.conf\n', '%{_datadir}/drirc.d/00-radv-defaults.conf\n%{_datadir}/drirc.d/01-radv-performance.conf\n')
+# i686: no rusticl/NVK (no i686 Rust std), and meson must use the 32-bit llvm-config
+# (Fedora installs it as /usr/lib/llvmNN/bin/llvm-config)
+rep('%global vulkan_drivers ', '%ifarch %{ix86}\n%undefine with_opencl\n%undefine with_nvk\n%endif\n\n%global vulkan_drivers ')
+rep('%meson \\\n', "%ifarch %{ix86}\nprintf \"[binaries]\\nllvm-config = '%%s'\\n\" \"$(ls /usr/lib/llvm[0-9]*/bin/llvm-config | sort -V | tail -1)\" > oxp3-llvm32.ini\n%global oxp3_native --native-file oxp3-llvm32.ini\n%endif\n%meson %{?oxp3_native} \\\n")
+open(p, 'w').write(s)
+EOF
+    # our patches after Anatase's overrides.patch
+    local n=2000 lines="" f
+    for f in "$here"/patches/mesa/*.patch; do
+        cp "$f" "$top/SOURCES/"; lines+="Patch$n: $(basename "$f")\n"; n=$((n + 1))
+    done
+    sed -i -E "0,/^Patch99:[[:space:]]+overrides\.patch/s//&\n${lines%\\n}/" "$spec"
+    ctr spectool -g -C "$top/SOURCES" "$spec" >/dev/null
+    ctr_root dnf -y -q builddep "$spec" >/dev/null 2>&1 || ctr_root dnf -y builddep --skip-unavailable "$spec" | tail -3
+    # the Rust crates are dynamic build requirements (%generate_buildrequires)
+    rm -rf "$top/SRPMS"
+    ctr rpmbuild --define "_topdir $top" -br "$spec" >/dev/null 2>&1 || true
+    local br; br=$(find "$top/SRPMS" -name '*.buildreqs.nosrc.rpm' 2>/dev/null | head -1)
+    if [[ -n $br ]]; then ctr_root dnf -y -q builddep "$br" >/dev/null; fi
+    # shellcheck disable=SC2086
+    ctr_root dnf -y -q install --skip-unavailable $MESA_I686_DEVEL >/dev/null 2>&1 || true
+
+    say "mesa $MESA_VERSION: x86_64 (20-30 min)"
+    ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3.$STAMP" -bb "$spec" > "$top/build.log" 2>&1 ||
+        { tail -30 "$top/build.log"; die "mesa x86_64 build failed (full log: $top/build.log)"; }
+    say "mesa $MESA_VERSION: i686 (20-30 min)"
+    ctr bash -c "export PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/usr/share/pkgconfig; setarch i686 rpmbuild --target i686 --nodeps --define '_topdir $top' --define 'dist .fc$FEDORA.oxp3.$STAMP' -bb '$spec'" \
+        > "$top/build-i686.log" 2>&1 ||
+        { tail -30 "$top/build-i686.log"; die "mesa i686 build failed (full log: $top/build-i686.log)"; }
+    rm -f "$OUT"/mesa-*.rpm
+    find "$top/RPMS" -name 'mesa-*.rpm' ! -name '*debug*' ! -name '*-devel-*' -exec cp {} "$OUT/" \;
+    ls "$OUT"/mesa-*.rpm
+}
+
+# the built mesa RPMs for the mesa packages installed on this system (they must all change together)
+mesa_rpms() {
+    local pkg arch f
+    while read -r pkg arch; do
+        f=$(ls "$OUT/$pkg-$MESA_VERSION-"*".$arch.rpm" 2>/dev/null | head -1)
+        [[ -n $f ]] || die "no built $pkg.$arch - run '$0 build' first"
+        echo "$f"
+    done < <(rpm -qa 'mesa-*' --qf '%{NAME} %{ARCH}\n' | grep -vE -- '-devel |-debug' | sort -u)
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -389,9 +488,10 @@ EOF
 do_build() {
     command -v podman >/dev/null || die "podman is required"
     ensure_container
-    if (( !SKIP_GAMESCOPE || !SKIP_MANGOHUD )); then fetch_anatase; fi
+    if (( !SKIP_GAMESCOPE || !SKIP_MANGOHUD || !SKIP_MESA )); then fetch_anatase; fi
     (( SKIP_GAMESCOPE )) || build_card gamescope '^Patch:[[:space:]]+overrides\.patch' "$here"/patches/gamescope/*.patch
     (( SKIP_MANGOHUD )) || build_card mangohud '^Patch1000:[[:space:]]+overrides\.patch' "$here"/patches/mangohud/*.patch
+    (( SKIP_MESA )) || build_mesa
     (( SKIP_KERNEL )) || build_kmods
     (( SKIP_FIRMWARE )) || build_firmware
     say "build done: $OUT"
@@ -574,6 +674,7 @@ do_install() {
     local rpms=() kmod=() kver info staged locals p un=()
     (( SKIP_GAMESCOPE )) || rpms+=( "$OUT"/gamescope-*.x86_64.rpm "$OUT"/gamescope-*.i686.rpm )
     (( SKIP_MANGOHUD )) || rpms+=( "$OUT"/mangohud-*.x86_64.rpm "$OUT"/mangohud-*.i686.rpm )
+    if (( !SKIP_MESA )); then local mr; mr=$(mesa_rpms); mapfile -t -O "${#rpms[@]}" rpms <<<"$mr"; fi
     local f; for f in "${rpms[@]}"; do [[ -f $f ]] || die "missing $f - run '$0 build' first"; done
     kver=$(anatase_kver)
     info=$(deploy_info); staged=$(sed -n 1p <<<"$info"); locals=$(sed -n 2p <<<"$info")
@@ -645,9 +746,9 @@ do_install() {
         fi
         hotfix_active || sudo rpm-ostree usroverlay --hotfix
         if (( ${#rpms[@]} )); then
-            say "gamescope / MangoHud into the writable /usr overlay (sudo)"
+            say "gamescope / MangoHud / Mesa into the writable /usr overlay (sudo)"
             sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
-            rpm -q gamescope mangohud | sed 's/^/  /'
+            rpm -q gamescope mangohud mesa-vulkan-drivers | sed 's/^/  /'
         fi
         if (( !SKIP_EXTRAS )); then
             say "volume rocker (sudo)"
@@ -685,7 +786,7 @@ do_uninstall() {
 
 do_status() {
     echo "kernel (deployment): $(anatase_kver)   booted: $(uname -r)"
-    rpm -q gamescope mangohud kmod-oxp3-xe "$KMOD_NAME" "$FW_NAME" 2>&1 | grep -v 'is not installed' | sed 's/^/  /' || true
+    rpm -q gamescope mangohud mesa-vulkan-drivers kmod-oxp3-xe "$KMOD_NAME" "$FW_NAME" 2>&1 | grep -v 'is not installed' | sed 's/^/  /' || true
     rpm-ostree status --booted | grep -E 'Version|LocalPackages|Initramfs|Unlocked' | sed 's/^/  /' || true
     echo "  rapl-power service: $(systemctl is-active rapl-power.service 2>/dev/null)"
     local f; for f in /run/rapl-power/*; do [[ -e $f ]] && echo "    $(basename "$f"): $(cat "$f") W"; done

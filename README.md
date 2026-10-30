@@ -1,59 +1,62 @@
 # OneXPlayer 3 fixes for Anatase
 
-Personal patches and a rebuild script that restore OneXPlayer 3 (Intel Panther Lake, xe)
-support on [Anatase](https://github.com/anatase-org/anatase) after an update.
+Personal patches and a rebuild script that restore and improve OneXPlayer 3 (Intel Panther
+Lake, Arc B390, xe) support on [Anatase](https://github.com/anatase-org/anatase) after an
+update. Everything is rebuilt from Anatase's own packaging and kernel tree plus the patches
+here, so `build` + `install` reapplies it to whatever Anatase ships next.
 
 | Part | Fixes | How it is installed |
 |---|---|---|
-| gamescope | PQ HDR on the internal SDC AMS881KB01 OLED: no black screen when HDR turns on with VRR off or on an HDR retoggle; games see the real peak brightness (~1100 nits instead of 1499); brightness slider works in HDR | Anatase's gamescope package rebuilt with `patches/gamescope`, installed into the writable `/usr` overlay (`rpm-ostree usroverlay --hotfix`) |
-| MangoHud | CPU power, GPU power and VRAM in the Gamemode performance overlay on Intel iGPUs | Anatase's MangoHud package rebuilt with `patches/mangohud`, installed the same way |
-| `rapl-power` service | CPU/GPU power for the overlay without opening the RAPL counters to users (see below) | `/usr/local/libexec/rapl-power` + `/etc/systemd/system/rapl-power.service` |
-| kernel (xe) | VBT VS/PE-O backport for the eDP link: random white dots, and the black screen on an HDR retoggle | `xe.ko` rebuilt for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3-xe` in `updates/` with a regenerated initramfs (xe loads from the initramfs) |
+| gamescope | PQ HDR on the internal SDC AMS881KB01 OLED (no black screens, real peak brightness, brightness slider in HDR); VRR frame pacing fixes from gamescope 3.16.29/3.17.0; 30-144 Hz modes | Anatase's gamescope rebuilt with `patches/gamescope`, installed into the writable `/usr` overlay (`rpm-ostree usroverlay --hotfix`) |
+| Mesa | 26.3 branch: Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling work, Panther Lake hang fix, Jay fixes, faster flushes/copies on Xe2+ | Anatase's Mesa package rebuilt at the pinned 26.3 commit with `patches/mesa` (x86_64 + i686), same overlay |
+| MangoHud | CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs | Anatase's MangoHud rebuilt with `patches/mangohud`, same overlay |
+| kernel modules | xe: VBT VS/PE-O backport (white dots, HDR retoggle black screen), 7.3 VRR/DSB flip timing, resume out-of-memory fix, 7.2.8-7.2.13 stable fixes, IBC v3 on PTL, eDP HDR switches. iwlwifi/iwlmld and btintel/btintel_pcie: 7.2.13 stable and 7.3/7.4 fixes | built for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3` in `updates/` with a regenerated initramfs |
+| firmware | display DMC v2.20 (v2.36 caps VRR at about 74 fps), Bluetooth 24.80, CPU microcode 0x11c | `oxp3-firmware`, layered with the modules, in `/usr/lib/firmware/updates` (searched first, also by dracut) |
+| `rapl-power` | CPU/GPU power for the overlay without opening the RAPL counters to users | `/usr/local/libexec` + `/etc/systemd/system` |
+| extras | TDP above 25 W actually applied, speakers after boot/resume, volume rocker no longer sticks, no 5 s wait on suspend, GPU power reading on every boot | services and configs in `/etc`; the hhd volume patch in the `/usr` overlay |
 
-You keep booting the stock Anatase kernel; only its `xe` module is replaced. If Anatase
-ships the VS/PE-O backport itself (kernel-anatase issue #7), the script notices and skips
-the kernel part.
+You keep booting the stock Anatase kernel; only the modules above are replaced. Kernel
+patches Anatase already carries are skipped one by one; firmware that Anatase ships in the
+same or a newer version is skipped too.
 
 ## After every Anatase update
 
 ```sh
 ./oxp3-fixes.sh build
-./oxp3-fixes.sh install   # stages the xe module for the new kernel (sudo)
+./oxp3-fixes.sh install   # stages the kernel modules + firmware for the new kernel (sudo)
 systemctl reboot
-./oxp3-fixes.sh install   # gamescope + MangoHud into the writable /usr overlay
+./oxp3-fixes.sh install   # gamescope, Mesa, MangoHud and the hhd patch into the /usr overlay
 ```
 
-Then leave and re-enter Gamemode. Why two runs: `xe` loads from the initramfs, so its
-module is layered with rpm-ostree and the initramfs regenerated, which creates a new
-deployment. gamescope and MangoHud can't be layered that way (rpm-ostree can't replace
+Then leave and re-enter Gamemode. Why two runs: xe loads from the initramfs, so the modules
+and firmware are layered with rpm-ostree and the initramfs regenerated, which creates a new
+deployment. gamescope, Mesa and MangoHud can't be layered that way (rpm-ostree can't replace
 packages that exist for both x86_64 and i686 with local RPMs), so they go into the writable
-`/usr` overlay of the booted deployment, which a new deployment doesn't keep. When the
-kernel hasn't changed, a single `install` is enough.
+`/usr` overlay of the booted deployment, which a new deployment doesn't keep. When neither
+the kernel nor the firmware changed, a single `install` is enough.
 
-The build runs in a Fedora container (podman) and takes about 30-40 minutes the first
-time, less afterwards. Check the result with `./oxp3-fixes.sh status`.
-
-Commands:
+The build runs in a Fedora container (podman). The first one takes about 1.5-2 hours (Mesa
+x86_64 + i686 is most of it), later ones less. Check the result with `./oxp3-fixes.sh status`.
 
 | Command | What it does |
 |---|---|
 | `build` | builds everything for the installed Anatase, into `~/.cache/oxp3-fixes/out` |
-| `install` | stages the xe module (then reboot) or installs gamescope/MangoHud (sudo) |
+| `install` | stages modules + firmware (then reboot) or installs the overlay parts and services (sudo) |
 | `all` | `build` + `install` (run `install` again after the reboot it asks for) |
-| `status` | shows what is installed, overridden and layered |
+| `status` | modules, firmware, packages, services, power limits, volume rocker state |
 | `uninstall` | back to stock Anatase (sudo), then reboot |
 | `mok-setup` | creates the module signing key and queues it for enrolment (once) |
 
-Options: `--skip-kernel`, `--skip-gamescope`, `--skip-mangohud`.
+Options: `--skip-kernel`, `--skip-firmware`, `--skip-gamescope`, `--skip-mesa`,
+`--skip-mangohud`, `--skip-extras`, `--stock-dmc` (keep Anatase's display DMC).
 
 ## Secure Boot key (one time)
 
-The xe module must be signed with a Machine Owner Key (MOK) that the kernel trusts for
+The modules must be signed with a Machine Owner Key (MOK) that the kernel trusts for
 modules; Secure Boot stays on. Anatase's kernel only puts MOK keys into its machine keyring
 (the one that verifies modules) if they are **CA certificates with keyCertSign and without
 digitalSignature** (`CONFIG_INTEGRITY_CA_MACHINE_KEYRING_MAX`). Other keys land in the
-platform keyring, which can verify kernel images but not modules: an ordinary code signing
-MOK would boot a kernel but its modules would be rejected.
+platform keyring, which can verify kernel images but not modules.
 
 ```sh
 ./oxp3-fixes.sh mok-setup   # creates ~/.local/share/oxp3-fixes/mok/MOK.{key,der} if needed
@@ -62,70 +65,122 @@ systemctl reboot            # MokManager: Enroll MOK -> Continue -> Yes -> passw
 ```
 
 Keep `MOK.key` private: anything signed with it is trusted on this machine. It is never
-committed (`.gitignore`). `install` checks that the key really is in the kernel's machine
-keyring and skips the kernel part if it isn't, so a wrongly signed module can't leave you
-without a display.
+committed. `install` checks that the key really is in the kernel's machine keyring and skips
+the kernel part if it isn't, so a wrongly signed module can't leave you without a display.
 
 ## Recovery
 
-Every install creates a new rpm-ostree deployment; the previous one stays in the boot
-menu. Pick it there, or run `sudo rpm-ostree rollback`. `./oxp3-fixes.sh uninstall`
+Every module/firmware install creates a new rpm-ostree deployment; the previous one stays
+in the boot menu. Pick it there, or run `sudo rpm-ostree rollback`. The `/usr` overlay
+(gamescope, Mesa, MangoHud, hhd patch) only exists in the booted deployment, so the previous
+boot entry also gets you back to stock Mesa and gamescope. `./oxp3-fixes.sh uninstall`
 removes everything.
 
 ## What is in the patches
 
-### gamescope (`patches/gamescope/0001-oxp3-hdr-pq.patch`)
+### gamescope (`patches/gamescope`)
 
-One self-contained patch on top of Anatase's gamescope `overrides.patch`, squashed from the
-local branch `oxp3-hdr-min2` (not published); its header lists every change and its author.
-It contains:
+`0001-oxp3-hdr-pq.patch`, one self-contained patch on top of Anatase's `overrides.patch`
+(its header lists every change and its author):
 
 - Upstream Legion Go 2 support by Matthew Schwartz (Valve), backported: the known-display
-  script for this panel (it is the same panel as the Legion Go 2), EDID fallback for HDR
-  luminance metadata, and emulating the brightness slider in software while in PQ.
+  script for this panel (same panel as the Legion Go 2), EDID fallback for HDR luminance
+  metadata, and the brightness slider emulated in software while in PQ.
 - DisplayID extension blocks stripped from the EDID that games see. DXVK's bundled
   libdisplay-info rejects the panel's DisplayID 2.0 block and falls back to 1499 nits.
-- Internal panel HDR metadata from the panel's EDID (mastering max / MaxCLL / MaxFALL
-  476 nits, min 0.0007) instead of an empty block. Zero luminance metadata leaves the panel
-  black after an HDR retoggle.
-- VRR-aware HDR switching, only for displays whose script sets `hdr_requires_vrr` (this
-  panel): HDR is entered from SDR with VRR on, HDR and VRR modesets are spaced out, VRR
-  stays on while in HDR (the frame limiter still applies), and no HDR metadata is sent in
-  SDR. Without VRR running this panel stays black in PQ.
+- Internal panel HDR metadata from the panel's EDID (476 nits, min 0.0007) instead of an
+  empty block, which leaves the panel black after an HDR retoggle.
+- VRR-aware HDR switching for displays whose script sets `hdr_requires_vrr` (this panel).
 
-### MangoHud (`patches/mangohud`)
+`0002-oxp3-vrr-pacing.patch`: upstream 3.16.29/3.17.0 VRR and pacing fixes by Matthew
+Schwartz, several measured on the Legion Go 2 (uncapped VRR, frame limiter drift and vblank
+pacing, cursor repaints under VRR, deep-idle wakeup, native gamut blend on HDR10), with the
+conflicts against Anatase's VRR keepalive and frame generation resolved; and 30-47 Hz modes
+(the EDID allows 30-144 Hz). The header lists what was not taken and why.
 
-From [silentsudin/MangoHud `xe-igpu-metrics`](https://github.com/silentsudin/MangoHud):
-RAPL CPU power fixes (float math, wraparound, prefer `intel-rapl` over mmio), Intel iGPU
-power from the RAPL uncore domain, xe integrated memory reported as VRAM, and reading power
-from the `rapl-power` service when it runs.
+### Mesa (`patches/mesa`)
 
-### Power readings and CVE-2020-8694 (`files/rapl-power`)
+The 26.3 branch at `MESA_COMMIT` (after rc2) with Anatase's `overrides.patch` (minus its RADV
+Forza Horizon 5 hunk, which doesn't apply to 26.3 and only concerns AMD) and:
 
-Intel has no equivalent of AMD's `gpu_metrics`: the iGPU has no hwmon (xe registers it only
-for discrete GPUs), and every source of CPU/iGPU power (powercap `energy_uj`, the perf
-`power/energy-*` events used by `intel_gpu_top`, the MSRs) is the RAPL counter, root-only
-since CVE-2020-8694 (PLATYPUS). Opening those counters to users (a udev rule, or
-`setcap cap_perfmon` on `intel_gpu_top`) brings the side channel back.
+- `0001`/`0002` (mesa!45498): stop using STC_CCS for CPB on Xe2+, fixes a Panther Lake GPU
+  hang (Crimson Desert, mesa#16357).
+- `0003` (mesa!45634): Jay, uniform derivatives without varying temporaries.
+- `0004`/`0005` (mesa!45719, open MR, measured +2% in Cyberpunk 2077 on a OneXPlayer 3):
+  cheaper write flushes and compute buffer copies on Xe2+.
 
-Instead, `rapl-power` (root, no capabilities, sandboxed) is the only reader. Every second it
-writes the average power of the `package-0`, `core` and `uncore` domains over that second,
-rounded to 0.1 W, to `/run/rapl-power/<domain>`. MangoHud reads those files (CPU =
-package - uncore, GPU = uncore). Users only ever see coarse averages, the same kind of data
-AMD's firmware publishes to everyone in `gpu_metrics`; the counters themselves stay
-root-only. `install` also removes the udev rule earlier versions used.
+Spec changes for 26.3: no anti-lag layer (removed upstream), no virtio Vulkan driver (needs
+venus-protocol from the network), no rusticl/NVK on i686. `INTEL_DEBUG=no-jay %command%` in
+a game's launch options switches that game back to the old compiler (Jay is reportedly still
+slower for XeSS's own shaders). Bump `MESA_COMMIT`/`MESA_VERSION` to `mesa-26.3.0` once it is
+released.
 
 ### kernel (`patches/kernel`)
 
-The VBT #57 VS/PE-O override series by Michał Grzelak (Intel, in drm-intel / Linux 7.4),
-backported to Anatase 7.2: patches 1-6 (6 adds the C10/C20 overrides Panther Lake uses,
-1-5 are its prerequisites) and 8 (drops the boot WARN), without the Combo PHY patch, which
-only applies to older Elkhart/Jasper Lake chips. Plus our patch 9, capping the C10 table to
-the 10 DP presets. Requested in Anatase as kernel-anatase issue #7.
+- `0001`-`0009`: the VBT #57 VS/PE-O override series by Michał Grzelak (Intel, Linux 7.4),
+  backported (kernel-anatase issue #7), plus our cap of the C10 table to the 10 DP presets.
+- `0101`: xe resume out-of-memory fix (`kvmalloc` for the VMA ops array; large games fail
+  with "out of memory" right after sleep, SteamOS #2962).
+- `0102`-`0109`: from 7.3/7.4: DSB flip timing with the VRR timing generator
+  (`f7140c7cef30`, `4a68c7516c57`, `b201029ca695`), ALPM check moved to compute_config_late,
+  PIPEDMC_ERROR on display 30+, DPRx wake on eDP, engine cycle query without global
+  forcewake, IBC v3 on PTL.
+- `0110`-`0152`: the 7.2.8-7.2.13 stable fixes for xe, i915 display (selective fetch),
+  btintel and btintel_pcie (shared HW reset, bounds checks).
+- `0153`-`0160`: iwlmld fixes from 7.3/7.4 (firmware recovery, D3 resume, low-latency
+  detection, HE ER off, leaks).
+- `0161`: two boot-time eDP HDR switches, both off by default:
+  `xe.edp_vsc_header_rewrite=1` (rewrite the VSC SDP header so its ECC is recomputed) and
+  `xe.edp_msa_vsc_colorimetry=0` (no MSA colorimetry bit on eDP), from the OneXPlayer 3
+  community fix pack's findings. Try with `sudo rpm-ostree kargs --append=xe.<switch>`.
+
+The build feeds Anatase's `symvers` to modpost and fails if a module needs a symbol the
+running kernel doesn't export.
+
+### Firmware (`FIRMWARE` in the script)
+
+Fetched from upstream linux-firmware / Intel's microcode repository with pinned checksums:
+display DMC v2.20 (linux-firmware `d2e1085e36fb`; with v2.36 a late VRR frame only ends at
+the 30 Hz maximum, which caps VRR at about 74 fps, onexplayer3-steamos-setup issue #1),
+Bluetooth BE201 24.80.0.2 (`8a2941fa`), microcode 06-cc-02 revision 0x11c (Intel
+microcode-20260811).
+
+### hhd (`patches/hhd`) and the volume rocker
+
+The EC sometimes drops the volume key release, so the key stays held (hhd #342). atkbd
+force-release (`files/84-oxp3-volume-keys.hwdb`) fixes that in the kernel, but then press and
+release reach hhd in one batch and it keeps only the release. The hhd patch turns every
+press into a tap (down, up 60 ms later in a later batch, one queued press per key). Both go
+into `/usr` together, so an Anatase update removes both and the rocker keeps working
+(unfixed) until the next install.
+
+### Power readings and CVE-2020-8694 (`files/rapl-power`)
+
+Intel has no equivalent of AMD's `gpu_metrics`: every source of CPU/iGPU power is the RAPL
+counter, root-only since CVE-2020-8694 (PLATYPUS). `rapl-power` (root, no capabilities,
+sandboxed) is the only reader and publishes 1 s averages rounded to 0.1 W in
+`/run/rapl-power/<domain>`; MangoHud reads those (CPU = package - uncore, GPU = uncore).
+`oxp3-rapl-pp1` reloads `intel_rapl_msr` once at boot if it registered no uncore (GPU) zone.
+
+### Extras (`files/`)
+
+- `oxp3-tdp-sync`: hhd writes its TDP to both package power limit interfaces, but the MSR
+  PL1 ends up at the 25 W firmware value and the lower one wins. Copies the MMIO PL1 (hhd's
+  value) to the MSR every 2 s and logs each correction (`journalctl -u oxp3-tdp-sync`).
+- `oxp3-audio-route` (+ resume unit): selects the Speaker profile again when the headphone
+  jack is empty but a Headphones profile is active, or re-runs it after WirePlumber failed to
+  enable the UCM speaker device (ALC245 jack misdetection at boot/resume).
+  `52-oxp3-speakers.conf` names the sink "OneXPlayer 3 Speakers".
+- `oxp3-xpad-sleep`: unbinds xpad from the built-in pad before sleep (it otherwise waits 5 s
+  for an output URB the pad never completes) and binds it again after.
+- `bmi160_i2c` blacklisted (the BMI260 IMU also matches its ACPI id; `bmi260` drives it),
+  `thermald` disabled (this BIOS has no tables for it; `uninstall` enables it again).
+- Not included: a battery percentage clamp. The gauge only over-reports right after a full
+  charge, which hhd's 80 % charge limit never reaches.
 
 ## Updating the patches
 
-If a build stops with "patches don't apply" or a missing anchor line, Anatase changed the
-package or kernel series. Rebase the patches (or the source branches above) onto the new
-Anatase version and regenerate the files in `patches/`. The kernel patches stop being needed
-once Anatase ships the VS/PE-O series; the script then skips the kernel part by itself.
+If a build stops with "doesn't apply" or a missing anchor line, Anatase changed the package
+or kernel. Rebase the patch in question onto the new Anatase version and regenerate it in
+`patches/`. Kernel patches Anatase picks up are skipped automatically; the kernel part is
+skipped entirely once Anatase carries all of them.

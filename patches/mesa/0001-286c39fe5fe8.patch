@@ -1,0 +1,33 @@
+From 286c39fe5fe8c02aa2b035b59764539b33472cdf Mon Sep 17 00:00:00 2001
+From: Omar Rashwan <omar.rashwan@intel.com>
+Date: Wed, 21 Oct 2026 18:10:27 +0000
+Subject: [PATCH] anv: stop using STC_CCS for CPB on Xe2+
+
+Signed-off-by: Omar Rashwan <omar.rashwan@intel.com>
+Reviewed-by: Lionel Landwerlin <lionel.g.landwerlin@intel.com>
+Reviewed-by: Nanley Chery <nanley.g.chery@intel.com>
+Closes: https://gitlab.freedesktop.org/mesa/mesa/-/work_items/16357
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45498>
+---
+ src/intel/vulkan/anv_image.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/intel/vulkan/anv_image.c b/src/intel/vulkan/anv_image.c
+index f4dd13c77185..5333b22334de 100644
+--- a/src/intel/vulkan/anv_image.c
++++ b/src/intel/vulkan/anv_image.c
+@@ -820,7 +820,10 @@ add_aux_surface_if_supported(struct anv_device *device,
+          return add_aux_state_tracking_buffer(device, image, aux_state_offset,
+                                               plane);
+       }
+-   } else if (main_surf->usage & (ISL_SURF_USAGE_STENCIL_BIT | ISL_SURF_USAGE_CPB_BIT)) {
++   } else if ((main_surf->usage & ISL_SURF_USAGE_STENCIL_BIT) ||
++              ((main_surf->usage & ISL_SURF_USAGE_CPB_BIT) &&
++               device->info->ver < 20)) {
++      /* <= GFX12.5 are handled in anv_blorp_execute_on_companion() */
+       if (!isl_surf_supports_ccs(&device->isl_dev, main_surf)) {
+          if (device->info->ver >= 12) {
+             anv_perf_warn(VK_LOG_OBJS(&device->vk.base),
+-- 
+GitLab
+

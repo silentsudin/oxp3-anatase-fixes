@@ -1,0 +1,56 @@
+From 84ae673405bbeb1411633f9538d36bba6cfc0455 Mon Sep 17 00:00:00 2001
+From: Caio Oliveira <caio.oliveira@intel.com>
+Date: Mon, 26 Oct 2026 11:35:13 -0700
+Subject: [PATCH] jay: Handle uniform derivatives without varying temporaries
+
+If a derivative source was identified as uniform, emit `x - x`
+directly (which preserves NaN and infinity behavior).  This
+fixes jay validation failure in Oblivion fossil:
+
+The failing sequence was:
+
+```text
+   u2009 = mov.u32 u53
+   r3291 = quad_swizzle.u32 u2009, xxxx
+   r3292 = quad_swizzle.u32 u2009, yyyy
+   u2010 = add.f32 r3292, -r3291
+```
+
+Original error:
+
+```text
+  jay shader validation failed (after NIR->Jay translation):
+     invalid instruction in block 45: u2010 = add.f32 r3292, -r3291
+     assertion failed at ../src/intel/compiler/jay/jay_validate.c:212
+     def.file != GPR || jay_is_null(def) || jay_simd_width_logical(validate->func->shader, I) > 1 || I->op ==
+JAY_OPCODE_SHUFFLE || I->op == JAY_OPCODE_MOV_INDIRECT || I->op == JAY_OPCODE_BROADCAST_IMM
+```
+
+Assisted-by: LLM
+Fixes: b768fe8188bb ("jay: set nir_divergence_single_prim_per_subgroup")
+Reviewed-by: Kenneth Graunke <kenneth@whitecape.org>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45634>
+---
+ src/intel/compiler/jay/jay_from_nir.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/intel/compiler/jay/jay_from_nir.c b/src/intel/compiler/jay/jay_from_nir.c
+index 204f1472e228..d8e0ee2116ba 100644
+--- a/src/intel/compiler/jay/jay_from_nir.c
++++ b/src/intel/compiler/jay/jay_from_nir.c
+@@ -1036,6 +1036,12 @@ jay_emit_derivative(jay_builder *b,
+    assert(intr->def.bit_size == 32 && "todo");
+    jay_def val = nj_src(intr->src[0]);
+ 
++   /* Keep x - x for NaNs and Infs. */
++   if (jay_is_uniform(val)) {
++      jay_ADD(b, JAY_TYPE_F32, dst, val, jay_negate(val));
++      return;
++   }
++
+    /* dFdyfine gets split down to SIMD4 which requires UGPR vector temporaries
+     * for correctness (to get NoMask in non-uniform control flow).
+     */
+-- 
+GitLab
+

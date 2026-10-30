@@ -1,0 +1,36 @@
+From 3304a7c6d6920c4048ff28b151783a7ca6a15b60 Mon Sep 17 00:00:00 2001
+From: kas5852 <22402329+kas5852@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 15:19:49 -0500
+Subject: [PATCH] anv: use L1/L2 flushes for generic write destinations on Xe2+
+
+On Xe2+ the MEMORY_WRITE source case already limits itself to L1/L2
+flushes since the fixed functions are L3 coherent there. The
+destination case still asked for the full barrier flush, i.e. data and
+tile cache flushes on top of that. Use the same split for the
+destination.
+
+Host reads aren't affected by this. HOST_READ as a destination has its
+own case and still gets the full flush.
+---
+ src/intel/vulkan/genX_cmd_buffer.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/intel/vulkan/genX_cmd_buffer.c b/src/intel/vulkan/genX_cmd_buffer.c
+index 122f91332a52..58c2d95d15e5 100644
+--- a/src/intel/vulkan/genX_cmd_buffer.c
++++ b/src/intel/vulkan/genX_cmd_buffer.c
+@@ -4960,7 +4960,10 @@ anv_pipe_invalidate_bits_for_access_flags(struct anv_cmd_buffer *cmd_buffer,
+          /* Generic write, make sure all previously written things land in
+           * memory.
+           */
+-         pipe_bits |= ANV_PIPE_BARRIER_FLUSH_BITS;
++         if (device->info->ver < 20)
++            pipe_bits |= ANV_PIPE_BARRIER_FLUSH_BITS;
++         else
++            pipe_bits |= ANV_PIPE_L1_L2_BARRIER_FLUSH_BITS;
+          break;
+       case VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT:
+       case VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT:
+-- 
+GitLab
+
