@@ -2,6 +2,7 @@
 # Restore OneXPlayer 3 support on Anatase after an update:
 #   - gamescope: PQ HDR on the SDC AMS881KB01 OLED (no black screens, correct peak brightness)
 #   - Mesa:      26.3 branch (Jay shader compiler on Xe3, ANV fixes) from Anatase's packaging
+#   - XeSS XMX:  xess-xmx-linux (our fork): XeSS SR/FG on the XMX units in DX12 games under Proton
 #   - MangoHud:  CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs,
 #                with power from the rapl-power service (counters stay root-only)
 #   - kernel:    MOK-signed xe, iwlwifi and btintel modules for the installed Anatase kernel:
@@ -22,7 +23,8 @@
 #   ./oxp3-fixes.sh mok-setup   create a module signing key and queue it for enrolment (once)
 #
 # Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware
-#                              --skip-mesa --skip-extras (TDP sync, speakers, volume rocker, suspend)
+#                              --skip-mesa --skip-xess --skip-extras (TDP sync, speakers, volume rocker,
+#                              suspend)
 #                              --stock-dmc (keep Anatase's display DMC firmware)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
 #              OXP3_CACHE   (default ~/.cache/oxp3-fixes)
@@ -40,7 +42,7 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0
 cmd="${1:-}"; shift || true
 for a in "$@"; do
     case $a in
@@ -51,6 +53,7 @@ for a in "$@"; do
         --stock-dmc) SKIP_DMC=1 ;;
         --skip-extras) SKIP_EXTRAS=1 ;;
         --skip-mesa) SKIP_MESA=1 ;;
+        --skip-xess) SKIP_XESS=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
 done
@@ -239,6 +242,88 @@ mesa_rpms() {
         echo "$f"
     done < <(rpm -qa 'mesa-*' --qf '%{NAME} %{ARCH}\n' | grep -vE -- '-devel |-debug' | sort -u)
 }
+
+# ---------------------------------------------------------------------------------------------
+# XeSS on XMX (xess-xmx-linux, our fork with Anatase support): the Mesa patches are in
+# patches/mesa (0101-0105); here the shim, ControlLib, scripts and compiler for the games
+# ---------------------------------------------------------------------------------------------
+XESS_COMMIT=9532c79cebd55b8e3bac6f6498a49575a63d249b      # silentsudin/xess-xmx-linux, branch anatase
+XESS_SRC_URL=https://codeload.github.com/silentsudin/xess-xmx-linux/tar.gz/$XESS_COMMIT
+# the Windows DLLs from upstream's release (built there with MSVC)
+XESS_ZIP_URL=https://github.com/HHHHanasak1/xess-xmx-linux/releases/download/20261029/xess-xmx-linux-20261029.zip
+XESS_ZIP_SHA=b195b7a9247e429ae2583528110b033de26f97e99d561b6a8b586b50497843d2
+XESS_DLLS="igdext64.dll|580ddcce0929fb8942062cd2a7413d9c6ec44ebfb2eacd40ff2f2a3ab16b39ec ControlLib.dll|b57c70cf7cbfc38d2f929a552dab69195c9ca04d249f1201960a752c5c53598c"
+# under home: the Steam Flatpak and the game's container both see it
+XESS_PKG=${OXP3_XESS_DIR:-$HOME/.local/share/xess-xmx}
+
+build_xess() {
+    local dl="$CACHE/xess" stage="$OUT/xess-xmx" zip src entry name sha
+    mkdir -p "$dl"
+    say "XeSS XMX: fork ${XESS_COMMIT:0:8} + release DLLs"
+    zip="$dl/${XESS_ZIP_URL##*/}"
+    if [[ $(sha256sum "$zip" 2>/dev/null | cut -d' ' -f1) != "$XESS_ZIP_SHA" ]]; then
+        curl -sfL --retry 3 -o "$zip.part" "$XESS_ZIP_URL" || die "download failed: $XESS_ZIP_URL"
+        [[ $(sha256sum "$zip.part" | cut -d' ' -f1) == "$XESS_ZIP_SHA" ]] || die "checksum mismatch: $XESS_ZIP_URL"
+        mv "$zip.part" "$zip"
+    fi
+    src="$dl/xess-xmx-linux-$XESS_COMMIT.tar.gz"
+    [[ -s $src ]] || curl -sfL --retry 3 -o "$src" "$XESS_SRC_URL" || die "download failed: $XESS_SRC_URL"
+    rm -rf "$stage"; mkdir -p "$stage"
+    tar -xzf "$src" --strip-components=1 -C "$stage"
+    for entry in $XESS_DLLS; do
+        name=${entry%%|*}; sha=${entry#*|}
+        unzip -p "$zip" "*/$name" > "$stage/$name"
+        [[ $(sha256sum "$stage/$name" | cut -d' ' -f1) == "$sha" ]] || die "$name in the release zip has an unexpected checksum"
+    done
+    echo "  $stage"
+}
+
+# Intel's compiler as get-igc.sh would fetch it (IGC 2.10.10, ocloc 25.18.1), from an earlier package
+# download, instead of 230 MB again
+seed_xess_compiler() {
+    [[ -x $(ls "$XESS_PKG"/igc/neo/bin/ocloc* 2>/dev/null | head -1) ]] && return 0
+    local d
+    for d in "$HOME"/Downloads/xess-xmx-linux-*/igc; do
+        [[ -x $d/neo/bin/ocloc-25.18.1 ]] && ls "$d"/igc/local/lib/libigc.so.2.10.10* >/dev/null 2>&1 || continue
+        mkdir -p "$XESS_PKG/igc"; cp -a "$d"/. "$XESS_PKG/igc/"
+        echo "  compiler bundle copied from $d"
+        return 0
+    done
+}
+
+install_xess() {
+    [[ -d $OUT/xess-xmx ]] || die "missing $OUT/xess-xmx - run '$0 build' first"
+    if ! grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so; then
+        echo "  the installed Mesa has no CM kernel injection (built before patches/mesa 0101?) - XeSS XMX skipped"
+        return 0
+    fi
+    mkdir -p "$XESS_PKG"
+    # the package's own state (compiler, XeSS SDK, kernels, ICD file) stays
+    rsync -a --delete --exclude /igc/ --exclude /xess/ --exclude /kernels/ --exclude /run/ --exclude /lib/ \
+        "$OUT/xess-xmx/" "$XESS_PKG/"
+    seed_xess_compiler
+    bash "$XESS_PKG/install.sh" | sed 's/^/  /' || echo "  WARNING: xess-xmx-linux's install.sh failed"
+    echo "  Restart Steam (leave and re-enter Gamemode) so games get the new environment."
+}
+
+uninstall_xess() {
+    [[ -x $XESS_PKG/uninstall.sh ]] || return 0
+    bash "$XESS_PKG/uninstall.sh" | sed 's/^/  /' || true
+    echo "  $XESS_PKG (compiler, kernel cache) left in place; delete it to free about 300 MB"
+}
+
+status_xess() {
+    local f; f=$(xmx_override_file)
+    echo "  XeSS XMX: $(head -c 200 "${XDG_CACHE_HOME:-$HOME/.cache}/xess-xmx/driver-status" 2>/dev/null || echo 'no driver check yet')"
+    grep -q '^ANV_CM_HELPER=' "$f" 2>/dev/null && echo "    Steam Flatpak override: $(grep -E '^(ANV_CM_HELPER|VKD3D_DISABLE_EXTENSIONS|force_vk_vendor)=' "$f" | tr '\n' ' ')"
+    local p n=0 no=""
+    for p in "$HOME/.local/share/Steam/steamapps/common/Proton"* "$HOME/.local/share/Steam/compatibilitytools.d/"*; do
+        [[ -f $p/proton ]] || continue
+        if grep -aq IGDEXT_ "$p/files/lib/wine/igdext/x86_64-windows/igdext64.dll" 2>/dev/null; then n=$((n + 1)); else no+=" ${p##*/};"; fi
+    done
+    echo "    Protons with the shim: $n${no:+; without:${no%;}}"
+}
+xmx_override_file() { echo "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak/overrides/org.anatase.Steam"; }
 
 # ---------------------------------------------------------------------------------------------
 # kernel: xe, iwlwifi and btintel modules with our patches, for the installed Anatase kernel
@@ -492,6 +577,7 @@ do_build() {
     (( SKIP_GAMESCOPE )) || build_card gamescope '^Patch:[[:space:]]+overrides\.patch' "$here"/patches/gamescope/*.patch
     (( SKIP_MANGOHUD )) || build_card mangohud '^Patch1000:[[:space:]]+overrides\.patch' "$here"/patches/mangohud/*.patch
     (( SKIP_MESA )) || build_mesa
+    (( SKIP_XESS )) || build_xess
     (( SKIP_KERNEL )) || build_kmods
     (( SKIP_FIRMWARE )) || build_firmware
     say "build done: $OUT"
@@ -658,6 +744,59 @@ install_volume_fix() {
     sudo systemctl restart hhd.service
 }
 
+# Mesa for the Steam Flatpak. Anatase builds the org.anatase.Platform runtime from the composefs /usr
+# (anatase-flatpak-extensions skips the /usr overlay on purpose) plus its overrides directory, so
+# games under the Flatpak Steam would keep Anatase's Mesa. Our Mesa files go into those overrides,
+# inside the /usr overlay, so an Anatase update drops them together with the overlay Mesa. The
+# overrides are copied to /run at boot: other vendors' Vulkan drivers and OpenCL stay stock to keep
+# that small (each Vulkan driver is self-contained).
+FLATPAK_RT=/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable
+FLATPAK_MESA_LIST=$FLATPAK_RT/oxp3-mesa.list
+FLATPAK_RT_FILES=/run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files
+FLATPAK_MESA_SKIP='libvulkan_(radeon|panfrost|nouveau|freedreno|asahi|powervr_mesa|broadcom|dzn|virtio|intel_hasvk|lvp)\.so|/icd\.d/(radeon|panfrost|nouveau|freedreno|asahi|powervr_mesa|broadcom|dzn|virtio|intel_hasvk|lvp)_icd|RusticlOpenCL|/OpenCL/|^/usr/share/(doc|licenses|man)/'
+
+# Mesa version of the host (from its libgallium-<version>.so) and whether the Steam Flatpak runtime
+# runs the same Intel Vulkan driver
+host_mesa() { local g; g=$(ls /usr/lib64/libgallium-*.so 2>/dev/null | head -1); g=${g##*/libgallium-}; echo "${g%.so}"; }
+flatpak_mesa() {
+    if cmp -s /usr/lib64/libvulkan_intel.so "$FLATPAK_RT_FILES/lib64/libvulkan_intel.so"; then
+        echo "same as the host"
+    else
+        echo "Anatase's (not ours)"
+    fi
+}
+
+refresh_flatpak_runtime() {
+    if [[ -n $(flatpak ps --columns=application 2>/dev/null) ]]; then
+        echo "  Flatpak apps are running (Steam?): the Steam runtime picks this up after a reboot,"
+        echo "  or close them and run: sudo systemctl restart anatase-flatpak-extensions.service"
+        return 0
+    fi
+    sudo systemctl restart anatase-flatpak-extensions.service
+    echo "  Steam Flatpak runtime Mesa: $(flatpak_mesa)"
+}
+
+remove_flatpak_mesa() {
+    [[ -r $FLATPAK_MESA_LIST ]] || return 0
+    (cd "$FLATPAK_RT/overrides" && grep -v '/$' "$FLATPAK_MESA_LIST" | sudo xargs -r -d '\n' rm -f --)
+    sudo rm -f "$FLATPAK_MESA_LIST"
+}
+
+install_flatpak_mesa() {
+    [[ -d $FLATPAK_RT/overrides ]] || { echo "  no Anatase Flatpak runtime overrides - Steam keeps Anatase's Mesa"; return 0; }
+    local pkgs list
+    pkgs=$(rpm -qa 'mesa-*' | grep -v -- '-devel-')
+    # shellcheck disable=SC2086
+    list=$(rpm -ql $pkgs | grep '^/usr/' | grep -vE "$FLATPAK_MESA_SKIP" | sort -u)
+    remove_flatpak_mesa
+    # /usr/<path> -> overrides/<path> (the runtime is mounted at /usr in the sandbox)
+    sed 's,^/,,' <<<"$list" | sudo tar -C / --no-recursion -cf - -T - |
+        sudo tar -C "$FLATPAK_RT/overrides" -xf - --transform 's,^usr/,,'
+    sed 's,^/usr/,,' <<<"$list" | sudo tee "$FLATPAK_MESA_LIST" >/dev/null
+    echo "  $(wc -l <<<"$list") Mesa files in the Steam Flatpak runtime overrides"
+    refresh_flatpak_runtime
+}
+
 # State of the deployments: is one staged, and which layered local packages does the booted
 # one have?
 deploy_info() {
@@ -738,7 +877,7 @@ do_install() {
     fi
 
     # 2. gamescope / MangoHud / hhd volume fix into the writable /usr overlay of the booted deployment
-    if (( ${#rpms[@]} || !SKIP_EXTRAS )); then
+    if (( ${#rpms[@]} || !SKIP_EXTRAS || !SKIP_XESS )); then
         if [[ $staged == staged ]]; then
             echo "A deployment is staged (an update or a pending change): reboot into it first,"
             echo "then run '$0 install' again - changes to the current /usr would be lost."
@@ -749,10 +888,18 @@ do_install() {
             say "gamescope / MangoHud / Mesa into the writable /usr overlay (sudo)"
             sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
             rpm -q gamescope mangohud mesa-vulkan-drivers | sed 's/^/  /'
+            if (( !SKIP_MESA )); then
+                say "Mesa for the Steam Flatpak (sudo)"
+                install_flatpak_mesa
+            fi
         fi
         if (( !SKIP_EXTRAS )); then
             say "volume rocker (sudo)"
             install_volume_fix
+        fi
+        if (( !SKIP_XESS )); then
+            say "XeSS on XMX (xess-xmx-linux)"
+            install_xess
         fi
         say "done - leave and re-enter Gamemode (no reboot needed)"
         echo "This lasts until the next Anatase update; run '$0 all' after updating."
@@ -772,6 +919,8 @@ do_uninstall() {
     sudo systemctl daemon-reload
     remove_rapl_udev_rules
     uninstall_extras
+    uninstall_xess
+    if [[ -r $FLATPAK_MESA_LIST ]]; then remove_flatpak_mesa; refresh_flatpak_runtime; fi
     if [[ -e $VOLUME_HWDB ]]; then
         sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update
     fi
@@ -792,6 +941,7 @@ do_status() {
     local f; for f in /run/rapl-power/*; do [[ -e $f ]] && echo "    $(basename "$f"): $(cat "$f") W"; done
     ls /etc/udev/rules.d/70-*rapl.rules >/dev/null 2>&1 && echo "  WARNING: old RAPL udev rule still present (run install)"
     stat -c '  RAPL counters: %A %n' /sys/class/powercap/intel-rapl:0/energy_uj 2>/dev/null
+    echo "  Mesa: host $(host_mesa)$(grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so && echo ' with the XeSS XMX patches'), Steam Flatpak: $(flatpak_mesa)"
     local m; for m in xe iwlwifi iwlmld btintel btintel_pcie; do
         printf '  %-13s %s\n' "$m:" "$(modinfo -F filename "$m" 2>/dev/null)"
     done
@@ -812,6 +962,7 @@ do_status() {
     else
         echo "  volume rocker: stock hhd"
     fi
+    status_xess
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }
 

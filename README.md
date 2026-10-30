@@ -9,6 +9,7 @@ here, so `build` + `install` reapplies it to whatever Anatase ships next.
 |---|---|---|
 | gamescope | PQ HDR on the internal SDC AMS881KB01 OLED (no black screens, real peak brightness, brightness slider in HDR); VRR frame pacing fixes from gamescope 3.16.29/3.17.0; 30-144 Hz modes | Anatase's gamescope rebuilt with `patches/gamescope`, installed into the writable `/usr` overlay (`rpm-ostree usroverlay --hotfix`) |
 | Mesa | 26.3 branch: Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling work, Panther Lake hang fix, Jay fixes, faster flushes/copies on Xe2+ | Anatase's Mesa package rebuilt at the pinned 26.3 commit with `patches/mesa` (x86_64 + i686), same overlay |
+| XeSS XMX | XeSS SR/FG on the Arc's XMX units in DX12 games under Proton, instead of DP4a ([xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux), our fork's `anatase` branch) | driver patches in our Mesa; shim, ControlLib, scripts and Intel's compiler in `~/.local/share/xess-xmx`; variables in a Flatpak override for `org.anatase.Steam` |
 | MangoHud | CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs | Anatase's MangoHud rebuilt with `patches/mangohud`, same overlay |
 | kernel modules | xe: VBT VS/PE-O backport (white dots, HDR retoggle black screen), 7.3 VRR/DSB flip timing, resume out-of-memory fix, 7.2.8-7.2.13 stable fixes, IBC v3 on PTL, eDP HDR switches. iwlwifi/iwlmld and btintel/btintel_pcie: 7.2.13 stable and 7.3/7.4 fixes | built for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3` in `updates/` with a regenerated initramfs |
 | firmware | display DMC v2.20 (v2.36 caps VRR at about 74 fps), Bluetooth 24.80, CPU microcode 0x11c | `oxp3-firmware`, layered with the modules, in `/usr/lib/firmware/updates` (searched first, also by dracut) |
@@ -47,7 +48,7 @@ x86_64 + i686 is most of it), later ones less. Check the result with `./oxp3-fix
 | `uninstall` | back to stock Anatase (sudo), then reboot |
 | `mok-setup` | creates the module signing key and queues it for enrolment (once) |
 
-Options: `--skip-kernel`, `--skip-firmware`, `--skip-gamescope`, `--skip-mesa`,
+Options: `--skip-kernel`, `--skip-firmware`, `--skip-gamescope`, `--skip-mesa`, `--skip-xess`,
 `--skip-mangohud`, `--skip-extras`, `--stock-dmc` (keep Anatase's display DMC).
 
 ## Secure Boot key (one time)
@@ -114,6 +115,44 @@ venus-protocol from the network), no rusticl/NVK on i686. `INTEL_DEBUG=no-jay %c
 a game's launch options switches that game back to the old compiler (Jay is reportedly still
 slower for XeSS's own shaders). Bump `MESA_COMMIT`/`MESA_VERSION` to `mesa-26.3.0` once it is
 released.
+
+Games run under the Steam Flatpak, and Anatase builds its runtime (`org.anatase.Platform`) from the
+composefs `/usr` plus `/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides`,
+skipping the `/usr` overlay on purpose. So `install` also copies our Mesa into those overrides (GL/EGL/GBM,
+the Intel Vulkan driver and its data; other vendors' Vulkan drivers and OpenCL stay stock to keep the
+`/run` copy small) and restarts `anatase-flatpak-extensions.service` when no Flatpak app is running.
+`status` shows whether the Steam runtime runs the same Intel driver as the host.
+
+`0101`-`0104` are xess-xmx-linux's `patches/mesa-26.3` (C-for-Metal kernel injection, its debug tools,
+Large GRF on Xe2, the Jay divergent-barrier fix) and `0105` our fork's addition: no CM retry check in
+programs outside Wine, so the compositor and desktop don't log about it. Without the shim (games on a
+Proton without igdext, everything else) the patched driver behaves like the stock one.
+
+### XeSS on XMX (xess-xmx-linux)
+
+[xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux) was developed on a OneXPlayer 3. A shim
+`igdext64.dll` answers XeSS's Intel D3D12 extension queries and hands its C-for-Metal kernels over as
+placeholders; the patched ANV compiles them with Intel's IGC at run time (`tools/cm-compile.sh`) and runs
+them in place of the placeholders. Upstream supports only a native Steam. Our fork
+([silentsudin/xess-xmx-linux](https://github.com/silentsudin/xess-xmx-linux), branch `anatase`, pinned
+as `XESS_COMMIT`) adds a system mode: with the patched system Mesa no package drivers or
+`VK_DRIVER_FILES` (which Flatpak drops), only `ANV_CM_HELPER`, `VKD3D_DISABLE_EXTENSIONS` and
+`force_vk_vendor=0` in a user Flatpak override for `org.anatase.Steam`. The Windows DLLs come from
+upstream's release 20261029 (MSVC builds), checked by sha256.
+
+- Only DX12 XeSS, on a Proton that bundles igdext (Proton Experimental/Hotfix, GE-Proton 11,
+  proton-cachyos from 2026-10-14). `status` lists the Protons with and without the shim; the package's
+  watcher puts the shim back after a Proton update.
+- Launch options: `XESS=latest %command%` (Intel's newer XeSS for games older than 2.0.2.68, e.g.
+  Hogwarts Legacy), `XESS=dp4a %command%` (A/B against the old path), `XESS_FG=3 %command%`,
+  `XESS_LOG=1 %command%` (logs). Variables only work in front of `%command%`.
+- Proof it runs on XMX: with `XESS_LOG=1` the prefix's `drive_c/igdext_trace.log` names
+  `8086:b080 -> Xe3-LPG`, the passed self-test and `XMXEnabled=1` and has no `fallback:` line;
+  `~/.cache/xess-xmx/compile.log` has `cm-compile ok` lines.
+- DX11 games: a game's own DX11 XeSS cannot use XMX (its DLL calls private Intel driver functions).
+  OptiScaler with `Dx11Upscaler=xess_12` runs XeSS's D3D12 path instead, which goes through the shim
+  (super resolution only); set `[Spoofing] Dxgi=false`, or XeSS sees an NVIDIA GPU and uses DP4a.
+- Vulkan games: XeSS on Vulkan has no XMX kernels at all, so there is no XMX path yet.
 
 ### kernel (`patches/kernel`)
 
