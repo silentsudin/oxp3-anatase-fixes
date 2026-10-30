@@ -1,0 +1,19 @@
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Subject: [PATCH] oxp: volume rocker taps in controller mode too
+
+0001 enabled the taps only for the AT keyboard of the turbo-only loop;
+in controller mode (normal use) the keyboard was stock, and with atkbd
+force-release hhd kept only the releases, so the rocker did nothing.
+---
+diff --git a/hhd/device/oxp/base.py b/hhd/device/oxp/base.py
+index b42227f..ebf1399 100644
+--- a/hhd/device/oxp/base.py
++++ b/hhd/device/oxp/base.py
+@@ -711,6 +711,7 @@ def controller_loop(
+             required=False,
+             grab=True,
+             btn_map=mappings,
++            volume_taps=dconf.get("quirk") == "oxp3",
+         )
+     ]
+     if dconf.get("protocol", None) == "hid_v2_x2" or dconf.get("quirk") == "apex":

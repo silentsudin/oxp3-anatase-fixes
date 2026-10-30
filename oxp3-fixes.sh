@@ -718,30 +718,45 @@ uninstall_extras() {
 # Volume rocker (needs the /usr overlay): hhd patch and atkbd force-release go in together, since
 # force-release without the patch makes hhd lose every press. Both live in /usr, so an Anatase
 # update drops both and the rocker keeps working (just unfixed) until the next install.
-HHD_PATCH=patches/hhd/0001-oxp-volume-rocker-taps.patch
+HHD_PATCHES=("$here"/patches/hhd/*.patch)
 VOLUME_HWDB=/usr/lib/udev/hwdb.d/84-oxp3-volume-keys.hwdb
 hhd_site() { python3 -c 'import hhd, os; print(os.path.dirname(os.path.dirname(hhd.__file__)))' 2>/dev/null; }
 
 install_volume_fix() {
-    local site; site=$(hhd_site)
+    local site p changed=0; site=$(hhd_site)
     [[ -n $site ]] || { echo "  hhd not found, volume rocker fix skipped"; return 0; }
-    if git -C "$site" apply --check -R -p1 "$here/$HHD_PATCH" >/dev/null 2>&1; then
-        echo "  hhd already has the volume rocker patch"
-    elif git -C "$site" apply --check -p1 "$here/$HHD_PATCH" >/dev/null 2>&1; then
-        sudo git -C "$site" apply -p1 "$here/$HHD_PATCH"
-        sudo find "$site/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} +
-        echo "  hhd: volume rocker presses become taps"
-    else
-        echo "  WARNING: the hhd volume rocker patch doesn't apply to this hhd - rocker left as is"
-        [[ -e $VOLUME_HWDB ]] && { sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update; }
-        return 0
-    fi
+    # each patch: already there, or applied now; one that does neither leaves the rocker stock
+    for p in "${HHD_PATCHES[@]}"; do
+        if git -C "$site" apply --check -R -p1 "$p" >/dev/null 2>&1; then
+            continue
+        elif git -C "$site" apply --check -p1 "$p" >/dev/null 2>&1; then
+            sudo git -C "$site" apply -p1 "$p"; changed=1
+        else
+            echo "  WARNING: ${p##*/} doesn't apply to this hhd - volume rocker left stock"
+            hhd_volume_unpatch "$site"
+            [[ -e $VOLUME_HWDB ]] && { sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update; }
+            sudo systemctl restart hhd.service
+            return 0
+        fi
+    done
+    sudo find "$site/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} +
+    echo "  hhd: volume rocker presses become taps$( ((changed)) || echo ' (already patched)')"
     if ! cmp -s "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"; then
         sudo install -m 0644 "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"
         sudo systemd-hwdb update
         sudo udevadm trigger --subsystem-match=input --action=change
     fi
     sudo systemctl restart hhd.service
+}
+
+# take our hhd patches out again, newest first (only those that are fully applied)
+hhd_volume_unpatch() { # <site>
+    local i p
+    for (( i=${#HHD_PATCHES[@]} - 1; i >= 0; i-- )); do
+        p=${HHD_PATCHES[$i]}
+        git -C "$1" apply --check -R -p1 "$p" >/dev/null 2>&1 && sudo git -C "$1" apply -R -p1 "$p"
+    done
+    sudo find "$1/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 }
 
 # Mesa for the Steam Flatpak. Anatase builds the org.anatase.Platform runtime from the composefs /usr
@@ -925,9 +940,7 @@ do_uninstall() {
         sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update
     fi
     local site; site=$(hhd_site)
-    if [[ -n $site ]] && git -C "$site" apply --check -R -p1 "$here/$HHD_PATCH" >/dev/null 2>&1; then
-        sudo git -C "$site" apply -R -p1 "$here/$HHD_PATCH" && sudo systemctl restart hhd.service
-    fi
+    if [[ -n $site ]]; then hhd_volume_unpatch "$site"; sudo systemctl restart hhd.service; fi
     echo "Reboot to finish. The patched gamescope/MangoHud live in the writable /usr overlay of"
     echo "the current deployment; any new deployment (the reboot above, or the next Anatase"
     echo "update) starts from the stock packages again."
@@ -957,11 +970,10 @@ do_status() {
     echo "  package PL1: MSR $(( $(cat /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 )) W," \
          "MMIO $(( $(cat /sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 )) W"
     local site; site=$(hhd_site)
-    if [[ -n $site ]] && git -C "$site" apply --check -R -p1 "$here/$HHD_PATCH" >/dev/null 2>&1; then
-        echo "  volume rocker: hhd patched$( [[ -e $VOLUME_HWDB ]] && echo ', force-release on')"
-    else
-        echo "  volume rocker: stock hhd"
-    fi
+    local hp n=0; for hp in "${HHD_PATCHES[@]}"; do
+        [[ -n $site ]] && git -C "$site" apply --check -R -p1 "$hp" >/dev/null 2>&1 && n=$((n + 1))
+    done
+    echo "  volume rocker: $n/${#HHD_PATCHES[@]} hhd patches applied$( [[ -e $VOLUME_HWDB ]] && echo ', force-release on')"
     status_xess
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }
