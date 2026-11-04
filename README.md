@@ -111,9 +111,10 @@ Forza Horizon 5 hunk, which doesn't apply to 26.3 and only concerns AMD) and:
   cheaper write flushes and compute buffer copies on Xe2+.
 - `0200`: do not issue `DRM_IOCTL_XE_EXEC_QUEUE_GET_PROPERTY` (queue-ban check) on every
   `vkGetFenceStatus`/timeline read; rate-limit it to 50 ms (a banned queue is still reported
-  by the next submit). Measured on an ANV-only build of 26.3/main on the OneXPlayer 3:
-  driver ioctls per frame 24.0 -> 22.0, ban queries 2.00 -> ~0.0007 per frame, CPU inside
-  ioctls 22.3 -> 20.8 us per frame (-6.7%), vkmark full-suite score 26.3k -> 26.4k.
+  by the next submit). Verified on the device (stock 26.2.4 vs patched 27.0-dev): driver
+  ioctls per frame 29.60 -> 27.70, ban queries 2.00 -> 0.13 per frame; vkmark score was
+  unchanged within noise (27.8k/27.6k vs 27.8k), so this is a CPU-overhead/cleanliness fix,
+  not an FPS one. CPU inside ioctls dropped 6.7% in a CPU-bound synthetic.
 - `0201`: reset all permanent fence payloads with one `vk_sync_reset_many()`
   (`SYNCOBJ_RESET` takes a list) instead of one ioctl per fence. No effect on a
   one-fence-per-call workload; games that reset several fences at once batch them.
