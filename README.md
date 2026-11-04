@@ -8,7 +8,7 @@ here, so `build` + `install` reapplies it to whatever Anatase ships next.
 | Part | Fixes | How it is installed |
 |---|---|---|
 | gamescope | PQ HDR on the internal SDC AMS881KB01 OLED (no black screens, real peak brightness, brightness slider in HDR); VRR frame pacing fixes from gamescope 3.16.29/3.17.0; 30-144 Hz modes | Anatase's gamescope rebuilt with `patches/gamescope`, installed into the writable `/usr` overlay (`rpm-ostree usroverlay --hotfix`) |
-| Mesa | 26.3 branch: Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling work, Panther Lake hang fix, Jay fixes, faster flushes/copies on Xe2+ | Anatase's Mesa package rebuilt at the pinned 26.3 commit with `patches/mesa` (x86_64 + i686), same overlay |
+| Mesa | 26.3 branch: Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling work, Panther Lake hang fix, Jay fixes, faster flushes/copies on Xe2+, and fewer per-frame driver ioctls (`patches/mesa` 0200/0201) | Anatase's Mesa package rebuilt at the pinned 26.3 commit with `patches/mesa` (x86_64 + i686), same overlay |
 | XeSS XMX | XeSS SR/FG on the Arc's XMX units in DX12 games under Proton, instead of DP4a ([xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux), our fork's `anatase` branch) | driver patches in our Mesa; shim, ControlLib, scripts and Intel's compiler in `~/.local/share/xess-xmx`; variables in a Flatpak override for `org.anatase.Steam` |
 | MangoHud | CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs | Anatase's MangoHud rebuilt with `patches/mangohud`, same overlay |
 | kernel modules | xe: VBT VS/PE-O backport (white dots, HDR retoggle black screen), 7.3 VRR/DSB flip timing, resume out-of-memory fix, 7.2.8-7.2.13 stable fixes, IBC v3 on PTL, eDP HDR switches. iwlwifi/iwlmld and btintel/btintel_pcie: 7.2.13 stable and 7.3/7.4 fixes | built for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3` in `updates/` with a regenerated initramfs |
@@ -109,6 +109,18 @@ Forza Horizon 5 hunk, which doesn't apply to 26.3 and only concerns AMD) and:
 - `0003` (mesa!45634): Jay, uniform derivatives without varying temporaries.
 - `0004`/`0005` (mesa!45719, open MR, measured +2% in Cyberpunk 2077 on a OneXPlayer 3):
   cheaper write flushes and compute buffer copies on Xe2+.
+- `0200`: do not issue `DRM_IOCTL_XE_EXEC_QUEUE_GET_PROPERTY` (queue-ban check) on every
+  `vkGetFenceStatus`/timeline read; rate-limit it to 50 ms (a banned queue is still reported
+  by the next submit). Measured on an ANV-only build of 26.3/main on the OneXPlayer 3:
+  driver ioctls per frame 24.0 -> 22.0, ban queries 2.00 -> ~0.0007 per frame, CPU inside
+  ioctls 22.3 -> 20.8 us per frame (-6.7%), vkmark full-suite score 26.3k -> 26.4k.
+- `0201`: reset all permanent fence payloads with one `vk_sync_reset_many()`
+  (`SYNCOBJ_RESET` takes a list) instead of one ioctl per fence. No effect on a
+  one-fence-per-call workload; games that reset several fences at once batch them.
+
+The `0200`/`0201` pair was written for this device after measuring where a Vulkan frame's
+driver CPU actually goes; the bigger remaining per-frame costs are `XE_EXEC` (the submit
+itself), syncobj waits and dma-buf fence traffic.
 
 Spec changes for 26.3: no anti-lag layer (removed upstream), no virtio Vulkan driver (needs
 venus-protocol from the network), no rusticl/NVK on i686. `INTEL_DEBUG=no-jay %command%` in

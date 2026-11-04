@@ -1,0 +1,36 @@
+--- a/src/vulkan/runtime/vk_fence.c
++++ b/src/vulkan/runtime/vk_fence.c
+@@ -206,6 +206,9 @@
+ {
+    VK_FROM_HANDLE(vk_device, device, _device);
+ 
++   if (fenceCount == 0)
++      return VK_SUCCESS;
++
+    for (uint32_t i = 0; i < fenceCount; i++) {
+       VK_FROM_HANDLE(vk_fence, fence, pFences[i]);
+ 
+@@ -217,13 +220,18 @@
+        *    operate on the restored payload."
+        */
+       vk_fence_reset_temporary(device, fence);
+-
+-      VkResult result = vk_sync_reset(device, &fence->permanent);
+-      if (result != VK_SUCCESS)
+-         return result;
+    }
+ 
+-   return VK_SUCCESS;
++   /* Reset the permanent payloads with one call so the backend can batch them
++    * (DRM syncobj resets many in a single ioctl) instead of one ioctl each.
++    */
++   STACK_ARRAY(struct vk_sync *, syncs, fenceCount);
++   for (uint32_t i = 0; i < fenceCount; i++)
++      syncs[i] = &vk_fence_from_handle(pFences[i])->permanent;
++   VkResult result = vk_sync_reset_many(device, fenceCount, syncs);
++   STACK_ARRAY_FINISH(syncs);
++
++   return result;
+ }
+ 
+ VKAPI_ATTR VkResult VKAPI_CALL

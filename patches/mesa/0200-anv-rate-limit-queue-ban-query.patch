@@ -1,0 +1,48 @@
+--- a/src/intel/vulkan/anv_private.h
++++ b/src/intel/vulkan/anv_private.h
+@@ -2755,6 +2755,14 @@
+ 
+     uint32_t                                    queue_count;
+     struct anv_queue  *                         queues;
++
++    /** Xe: timestamp (ns) of the last queue-ban query.
++     *
++     * vk_device_check_status() runs on every vkGetFenceStatus() and every
++     * vkGetSemaphoreCounterValue(); without this the driver issues a
++     * DRM_IOCTL_XE_EXEC_QUEUE_GET_PROPERTY for each call.
++     */
++    uint64_t                                    xe_ban_check_ns;
+     /* Bitfield of queues active that can use buffer/image views */
+     VkQueueFlagBits                             view_queues;
+ 
+--- a/src/intel/vulkan/xe/anv_device.c
++++ b/src/intel/vulkan/xe/anv_device.c
+@@ -30,6 +30,9 @@
+ #include "common/xe/intel_device_query.h"
+ #include "common/xe/intel_gem.h"
+ 
++#include "util/os_time.h"
++#include "util/u_atomic.h"
++
+ bool anv_xe_device_destroy_vm(struct anv_device *device)
+ {
+    struct drm_xe_vm_destroy destroy = {
+@@ -181,6 +184,18 @@
+                          struct anv_queue *queue,
+                          uint32_t exec_queue_id)
+ {
++   /* The runtime calls vk_device_check_status() on every fence status query
++    * and every timeline-semaphore read. Each one would otherwise cost a DRM
++    * round trip. A banned queue is also reported by the next submit, so
++    * re-checking at most every 50 ms loses nothing in practice.
++    */
++   const uint64_t now = os_time_get_nano();
++   uint64_t last = p_atomic_read(&device->xe_ban_check_ns);
++   if (last != 0 && now - last < 50ull * 1000 * 1000)
++      return VK_SUCCESS;
++   if (p_atomic_cmpxchg(&device->xe_ban_check_ns, last, now) != last)
++      return VK_SUCCESS; /* another thread is already querying */
++
+    struct drm_xe_exec_queue_get_property exec_queue_get_property = {
+       .exec_queue_id = exec_queue_id,
+       .property = DRM_XE_EXEC_QUEUE_GET_PROPERTY_BAN,
