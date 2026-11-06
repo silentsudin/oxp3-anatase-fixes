@@ -1,0 +1,150 @@
+From ce9236c41db4b145eb7528fd05e00d6e12e5e5e2 Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 23:45:47 +0000
+Subject: [PATCH] Implement SPIRVTypeRuntimeArray and lower it to [0 x T]
+
+OpTypeRuntimeArray has been a SPIRVEntryUnimplemented placeholder in the
+Khronos SPIRV-LLVM-Translator, so any SPIR-V module using an unsized array
+(SSBO tail arrays are the common case for compute shaders) fails with
+'Unimplemented opcode 29'. Add a real type class modelled on
+SPIRVTypeArray, register its decoder/encoder, accept it in
+SPIRVType::getArrayElementType(), expose isTypeRuntimeArray(), and lower
+it the way OpenCL C represents 'T arr[]': a zero-length LLVM array.
+---
+ lib/SPIRV/SPIRVReader.cpp        |  6 ++++++
+ lib/SPIRV/libSPIRV/SPIRVEntry.h  |  1 -
+ lib/SPIRV/libSPIRV/SPIRVType.cpp | 25 ++++++++++++++++++++++++-
+ lib/SPIRV/libSPIRV/SPIRVType.h   | 24 ++++++++++++++++++++++++
+ 4 files changed, 54 insertions(+), 2 deletions(-)
+
+diff --git a/lib/SPIRV/SPIRVReader.cpp b/lib/SPIRV/SPIRVReader.cpp
+index 1ffb825..edd7de0 100644
+--- a/lib/SPIRV/SPIRVReader.cpp
++++ b/lib/SPIRV/SPIRVReader.cpp
+@@ -359,6 +359,10 @@ Type *SPIRVToLLVM::transType(SPIRVType *T, bool UseTPT) {
+     return mapType(T, ArrayType::get(transType(T->getArrayElementType()),
+                                      LenValue->getZExtValue()));
+   }
++  case OpTypeRuntimeArray:
++    // An unsized array has no length at translation time; represent it the way
++    // OpenCL C does for `T arr[]`, i.e. as a zero-length LLVM array.
++    return mapType(T, ArrayType::get(transType(T->getArrayElementType()), 0));
+   case internal::OpTypeTokenINTEL:
+     return mapType(T, Type::getTokenTy(*Context));
+   case OpTypePointer: {
+@@ -567,6 +571,8 @@ std::string SPIRVToLLVM::transTypeToOCLTypeName(SPIRVType *T, bool IsSigned) {
+     break;
+   case OpTypeArray:
+     return "array";
++  case OpTypeRuntimeArray:
++    return "runtime_array";
+   case OpTypePointer: {
+     SPIRVType *ET = T->getPointerElementType();
+     if (isa<OpTypeFunction>(ET)) {
+diff --git a/lib/SPIRV/libSPIRV/SPIRVEntry.h b/lib/SPIRV/libSPIRV/SPIRVEntry.h
+index d6daf9d..3e288de 100644
+--- a/lib/SPIRV/libSPIRV/SPIRVEntry.h
++++ b/lib/SPIRV/libSPIRV/SPIRVEntry.h
+@@ -1091,7 +1091,6 @@ private:
+ #define _SPIRV_OP(x) typedef SPIRVEntryUnimplemented<Op##x> SPIRV##x;
+ _SPIRV_OP(Nop)
+ _SPIRV_OP(SourceContinued)
+-_SPIRV_OP(TypeRuntimeArray)
+ _SPIRV_OP(ImageTexelPointer)
+ _SPIRV_OP(ImageSampleDrefImplicitLod)
+ _SPIRV_OP(ImageSampleDrefExplicitLod)
+diff --git a/lib/SPIRV/libSPIRV/SPIRVType.cpp b/lib/SPIRV/libSPIRV/SPIRVType.cpp
+index ee9707e..566c7c0 100644
+--- a/lib/SPIRV/libSPIRV/SPIRVType.cpp
++++ b/lib/SPIRV/libSPIRV/SPIRVType.cpp
+@@ -47,7 +47,10 @@
+ namespace SPIRV {
+ 
+ SPIRVType *SPIRVType::getArrayElementType() const {
+-  assert(OpCode == OpTypeArray && "Not array type");
++  assert((OpCode == OpTypeArray || OpCode == OpTypeRuntimeArray) &&
++         "Not array type");
++  if (OpCode == OpTypeRuntimeArray)
++    return static_cast<const SPIRVTypeRuntimeArray *>(this)->getElementType();
+   return static_cast<const SPIRVTypeArray *>(this)->getElementType();
+ }
+ 
+@@ -161,6 +164,10 @@ SPIRVType *SPIRVType::getScalarType() const {
+ bool SPIRVType::isTypeVoid() const { return OpCode == OpTypeVoid; }
+ bool SPIRVType::isTypeArray() const { return OpCode == OpTypeArray; }
+ 
++bool SPIRVType::isTypeRuntimeArray() const {
++  return OpCode == OpTypeRuntimeArray;
++}
++
+ bool SPIRVType::isTypeBool() const { return OpCode == OpTypeBool; }
+ 
+ bool SPIRVType::isTypeComposite() const {
+@@ -317,6 +324,22 @@ SPIRVValue *SPIRVTypeArray::getLength() const { return getValue(Length); }
+ 
+ _SPIRV_IMP_ENCDEC3(SPIRVTypeArray, Id, ElemType, Length)
+ 
++SPIRVTypeRuntimeArray::SPIRVTypeRuntimeArray(SPIRVModule *M, SPIRVId TheId,
++                                             SPIRVType *TheElemType)
++    : SPIRVType(M, 3, OpTypeRuntimeArray, TheId), ElemType(TheElemType) {
++  validate();
++}
++
++void SPIRVTypeRuntimeArray::validate() const {
++  SPIRVEntry::validate();
++  ElemType->validate();
++  SPIRVErrorLog &SPVErrLog = getModule()->getErrorLog();
++  SPVErrLog.checkError(!ElemType->isTypeVoid(), SPIRVEC_InvalidInstruction,
++                       "OpTypeRuntimeArray: element type must not be void\n");
++}
++
++_SPIRV_IMP_ENCDEC2(SPIRVTypeRuntimeArray, Id, ElemType)
++
+ void SPIRVTypeVectorIdEXT::validate() const {
+   SPIRVEntry::validate();
+   CompType->validate();
+diff --git a/lib/SPIRV/libSPIRV/SPIRVType.h b/lib/SPIRV/libSPIRV/SPIRVType.h
+index 4c2573a..53372e8 100644
+--- a/lib/SPIRV/libSPIRV/SPIRVType.h
++++ b/lib/SPIRV/libSPIRV/SPIRVType.h
+@@ -79,6 +79,7 @@ public:
+ 
+   bool isTypeVoid() const;
+   bool isTypeArray() const;
++  bool isTypeRuntimeArray() const;
+   bool isTypeBool() const;
+   bool isTypeComposite() const;
+   bool isTypeEvent() const;
+@@ -545,6 +546,29 @@ private:
+   SPIRVId Length;      // Array Length
+ };
+ 
++class SPIRVTypeRuntimeArray : public SPIRVType {
++public:
++  // Complete constructor
++  SPIRVTypeRuntimeArray(SPIRVModule *M, SPIRVId TheId, SPIRVType *TheElemType);
++  // Incomplete constructor
++  SPIRVTypeRuntimeArray() : SPIRVType(OpTypeRuntimeArray), ElemType(nullptr) {}
++
++  SPIRVType *getElementType() const { return ElemType; }
++  SPIRVCapVec getRequiredCapability() const override {
++    return getElementType()->getRequiredCapability();
++  }
++  std::vector<SPIRVEntry *> getNonLiteralOperands() const override {
++    return std::vector<SPIRVEntry *>(1, ElemType);
++  }
++
++protected:
++  _SPIRV_DCL_ENCDEC
++  void validate() const override;
++
++private:
++  SPIRVType *ElemType; // Element Type
++};
++
+ class SPIRVTypeVectorIdEXT : public SPIRVType {
+ public:
+   // Complete constructor
+-- 
+2.55.0
+
