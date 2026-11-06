@@ -1,0 +1,29 @@
+--- a/src/intel/compiler/brw/brw_compiler.c	2026-11-06 08:51:01.646598973 +0000
++++ b/src/intel/compiler/brw/brw_compiler.c	2026-11-06 08:51:01.648389142 +0000
+@@ -73,7 +73,13 @@
+    .support_indirect_inputs = BITFIELD_BIT(MESA_SHADER_TESS_CTRL) |
+                               BITFIELD_BIT(MESA_SHADER_TESS_EVAL) |
+                               BITFIELD_BIT(MESA_SHADER_FRAGMENT),
+-   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_STAGES),
++   /* MESA_SHADER_STAGES stops at COMPUTE, so this used to clear the TASK and MESH
++    * bits.  Without them the compact-array guard in
++    * nir_lower_indirect_derefs_to_if_else_trees does not fire for mesh outputs and
++    * gl_ClipDistance[64][4] is expanded into a 256-store if-else ladder: on
++    * GravityMark (Arc B390) that cost 17% of frame rate.
++    */
++   .support_indirect_outputs = (uint8_t)BITFIELD_MASK(MESA_SHADER_MESH_STAGES),
+    .per_view_unique_driver_locations = true,
+    .compact_view_index = true,
+    .io_options = nir_io_use_frag_result_dual_src_blend,
+@@ -223,6 +229,11 @@
+       stage_options->force_indirect_unrolling |= brw_nir_no_indirect_mask(i);
+    }
+ 
++   /* Escape hatch: restore the old behaviour for A/B testing. */
++   if (getenv("ANV_MESH_COMPACT_FLATTEN") != NULL)
++      compiler->nir_options[MESA_SHADER_MESH].support_indirect_outputs &=
++         ~BITFIELD_BIT(MESA_SHADER_MESH);
++
+    compiler->nir_options_fs_single_prim =
+       compiler->nir_options[MESA_SHADER_FRAGMENT];
+    compiler->nir_options_fs_single_prim.divergence_analysis_options |=
