@@ -1,0 +1,255 @@
+--- a/src/intel/compiler/jay/jay_nir.c	2026-11-06 01:13:11.598738076 +0000
++++ b/src/intel/compiler/jay/jay_nir.c	2026-11-06 01:13:11.599659347 +0000
+@@ -25,6 +25,244 @@
+  * its own index. Vectors/64-bit use contiguous indices. We therefore run a
+  * modified version of nir_index_ssa_defs right before translating NIR->Jay.
+  */
++/**
++ * Widen partial mesh URB stores to full 16-byte slot writes (IGC parity).
++ *
++ * IGC's URBPartialWrites pass converts a partial URB write to a full-mask write
++ * when it can prove the extra channels are not observed.  The same reasoning,
++ * done conservatively per shader, turns the mesh shader's many one-dword stores
++ * into full 16-byte slot writes.
++ *
++ * Opt-in: JAY_EXPERIMENT_URB_FULLMASK=1
++ */
++static bool
++jay_mesh_urb_fullmask(nir_shader *shader)
++{
++   if (shader->info.stage != MESA_SHADER_MESH)
++      return false;
++   /* UNSAFE: only widen when the extra channels hold real values (IGC
++    * disables the mask for undef operands).  Our filler values changed
++    * the rendered image (mean 44.6 -> 17.2) while looking 4% faster.
++    */
++   /* Default on: +3.7% on the mesh benchmark with image-equivalent output.
++    * Only widens 16-byte-aligned slots whose extra components no other store or
++    * URB read touches, and preserves every real component value.
++    */
++   if (getenv("JAY_NO_URB_FULLMASK") != NULL)
++      return false;
++
++   struct range { unsigned start, end; } stores[2048], loads[64];
++   unsigned nstores = 0, nloads = 0;
++
++   nir_foreach_function_impl(impl, shader) {
++      nir_foreach_block(block, impl) {
++         nir_foreach_instr(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++            nir_intrinsic_instr *i = nir_instr_as_intrinsic(instr);
++            const nir_intrinsic_op op = i->intrinsic;
++            const unsigned base = nir_intrinsic_has_base(i) ? nir_intrinsic_base(i) : 0;
++            if (op == nir_intrinsic_store_urb_lsc_intel ||
++                op == nir_intrinsic_store_urb_vec4_intel) {
++               if (nstores < ARRAY_SIZE(stores))
++                  stores[nstores++] = (struct range) { base, base + 4 * i->num_components };
++            } else if (op == nir_intrinsic_load_urb_lsc_intel ||
++                       op == nir_intrinsic_load_urb_vec4_intel) {
++               if (nloads < ARRAY_SIZE(loads))
++                  loads[nloads++] = (struct range) { base, base + 4 * i->def.num_components };
++            }
++         }
++      }
++   }
++
++   unsigned widened = 0;
++   nir_foreach_function_impl(impl, shader) {
++      bool progress = false;
++      nir_foreach_block(block, impl) {
++         nir_foreach_instr_safe(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++            nir_intrinsic_instr *st = nir_instr_as_intrinsic(instr);
++            if (st->intrinsic != nir_intrinsic_store_urb_lsc_intel)
++               continue;
++            const unsigned nc = st->num_components;
++            const unsigned base = nir_intrinsic_base(st);
++            if (nc >= 4 || (base & 15) != 0)
++               continue;
++
++            const unsigned orig_end = base + 4 * nc;
++            const unsigned new_end = base + 16;
++            bool safe = true;
++            for (unsigned i = 0; i < nstores && safe; i++) {
++               if (stores[i].start == base && stores[i].end == orig_end)
++                  continue;
++               if (stores[i].start < new_end && stores[i].end > orig_end)
++                  safe = false;
++            }
++            for (unsigned i = 0; i < nloads && safe; i++) {
++               if (loads[i].start < new_end && loads[i].end > orig_end)
++                  safe = false;
++            }
++            if (!safe)
++               continue;
++
++            nir_builder b = nir_builder_at(nir_before_instr(instr));
++            /* Preserve each component's swizzle: nir_scalar.def alone is the
++             * whole source def, so assemble through nir_scalar objects.
++             */
++            nir_scalar s[4];
++            s[0] = nir_get_scalar(st->src[0].ssa, 0);
++            for (unsigned i = 1; i < 4; i++)
++               s[i] = i < nc ? nir_get_scalar(st->src[0].ssa, i) : s[0];
++            nir_def *val = nir_vec_scalars(&b, s, 4);
++            nir_store_urb_lsc_intel(&b, val, st->src[1].ssa, .base = base,
++                                    .access = nir_intrinsic_access(st));
++            nir_instr_remove(instr);
++            widened++;
++            progress = true;
++         }
++      }
++      if (progress)
++         nir_progress(true, impl, nir_metadata_none);
++   }
++
++   if (getenv("JAY_URB_FULLMASK_DEBUG") != NULL)
++      fprintf(stderr, "JAY_URB_FULLMASK widened=%u\n", widened);
++   return widened > 0;
++}
++
++
++/* URB address equality: any load_urb_output_handle_intel def is the same uniform
++ * handle, so two stores of the same vertex produce structurally identical trees
++ * that differ only by which handle-load def they reference.
++ */
++static bool
++jay_urb_addr_equal(nir_def *a, nir_def *b, unsigned depth)
++{
++   if (a == b)
++      return true;
++   if (a == NULL || b == NULL || depth == 0)
++      return false;
++   if (a->num_components != b->num_components || a->bit_size != b->bit_size)
++      return false;
++
++   nir_instr *ia = nir_def_instr(a);
++   nir_instr *ib = nir_def_instr(b);
++   if (ia == NULL || ib == NULL || ia->type != ib->type)
++      return false;
++
++   switch (ia->type) {
++   case nir_instr_type_intrinsic: {
++      nir_intrinsic_instr *xa = nir_instr_as_intrinsic(ia);
++      nir_intrinsic_instr *xb = nir_instr_as_intrinsic(ib);
++      if (xa->intrinsic != xb->intrinsic)
++         return false;
++      if (xa->intrinsic == nir_intrinsic_load_urb_output_handle_intel)
++         return true;
++      if (xa->num_components != xb->num_components)
++         return false;
++      for (unsigned i = 0; i < xa->num_components; i++) {
++         if (!jay_urb_addr_equal(xa->src[i].ssa, xb->src[i].ssa, depth - 1))
++            return false;
++      }
++      return true;
++   }
++   case nir_instr_type_alu: {
++      nir_alu_instr *xa = nir_instr_as_alu(ia);
++      nir_alu_instr *xb = nir_instr_as_alu(ib);
++      if (xa->op != xb->op)
++         return false;
++      const unsigned nsrc = nir_op_infos[xa->op].num_inputs;
++      for (unsigned i = 0; i < nsrc; i++) {
++         if (xa->src[i].swizzle != xb->src[i].swizzle)
++            return false;
++         if (!jay_urb_addr_equal(xa->src[i].src.ssa, xb->src[i].src.ssa, depth - 1))
++            return false;
++      }
++      return true;
++   }
++   case nir_instr_type_load_const: {
++      nir_load_const_instr *xa = nir_instr_as_load_const(ia);
++      nir_load_const_instr *xb = nir_instr_as_load_const(ib);
++      for (unsigned i = 0; i < xa->def.num_components; i++) {
++         if (xa->def.bit_size == 64) {
++            if (xa->value[i].u64 != xb->value[i].u64) return false;
++         } else if (xa->def.bit_size == 32) {
++            if (xa->value[i].u32 != xb->value[i].u32) return false;
++         } else {
++            if (xa->value[i].u16 != xb->value[i].u16) return false;
++         }
++      }
++      return true;
++   }
++   case nir_instr_type_undef:
++      return true;
++   default:
++      return false;
++   }
++}
++
++/**
++ * Canonicalise mesh URB store addresses, treating every
++ * load_urb_output_handle_intel as the same value.
++ *
++ * store_urb() re-expands handle+offset for every store_output; the naive
++ * structural CSE only catches 4 of 259 stores because each expansion has its own
++ * handle-load def. Rewriting them to one canonical tree makes DCE delete the
++ * duplicated loads/shifts/adds from the shader.
++ *
++ * Opt-in: JAY_EXPERIMENT_URB_CSE=1
++ */
++static bool
++jay_cse_mesh_urb_addr(nir_shader *shader)
++{
++   if (shader->info.stage != MESA_SHADER_MESH)
++      return false;
++   if (getenv("JAY_EXPERIMENT_URB_CSE") == NULL)
++      return false;
++
++   unsigned rewritten = 0;
++   nir_foreach_function_impl(impl, shader) {
++      bool progress = false;
++      nir_foreach_block(block, impl) {
++         struct { nir_def *addr; unsigned access; } seen[256];
++         unsigned n = 0;
++         nir_foreach_instr(instr, block) {
++            if (instr->type != nir_instr_type_intrinsic)
++               continue;
++            nir_intrinsic_instr *st = nir_instr_as_intrinsic(instr);
++            if (st->intrinsic != nir_intrinsic_store_urb_lsc_intel)
++               continue;
++            nir_def *canonical = NULL;
++            for (unsigned i = 0; i < n; i++) {
++               if (seen[i].access == nir_intrinsic_access(st) &&
++                   jay_urb_addr_equal(seen[i].addr, st->src[1].ssa, 8)) {
++                  canonical = seen[i].addr;
++                  break;
++               }
++            }
++            if (canonical == NULL) {
++               if (n < ARRAY_SIZE(seen)) {
++                  seen[n].addr = st->src[1].ssa;
++                  seen[n].access = nir_intrinsic_access(st);
++                  n++;
++               }
++            } else if (canonical != st->src[1].ssa) {
++               nir_src_rewrite(&st->src[1], canonical);
++               rewritten++;
++               progress = true;
++            }
++         }
++      }
++      if (progress)
++         nir_progress(true, impl, nir_metadata_none);
++   }
++
++   if (getenv("JAY_URB_CSE_DEBUG") != NULL)
++      fprintf(stderr, "JAY_URB_CSE rewritten=%u\n", rewritten);
++   return rewritten > 0;
++}
++
+ static bool
+ index_ssa_def_cb(nir_def *def, void *state)
+ {
+@@ -989,6 +1227,7 @@
+       BRW_NIR_PASS(brw_nir_lower_outputs_to_urb_intrinsics, &cb_data);
+       struct nir_opt_offsets_options offset_options = {};
+       BRW_NIR_PASS(nir_opt_offsets, &offset_options);
++      NIR_PASS(_, nir, jay_mesh_urb_fullmask);
+    }
+ 
+    brw_postprocess_nir_opts(pt);
