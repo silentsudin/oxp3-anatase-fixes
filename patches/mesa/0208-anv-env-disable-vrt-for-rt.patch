@@ -1,0 +1,56 @@
+diff --git a/src/intel/common/intel_common.c b/src/intel/common/intel_common.c
+index e1705ef..e4b0a47 100644
+--- a/src/intel/common/intel_common.c
++++ b/src/intel/common/intel_common.c
+@@ -285,7 +285,12 @@ static unsigned
+ intel_register_blocks_bits(const struct intel_device_info *devinfo)
+ {
+ #define BIT_FOR_NUM_GRF(GRFS) (1u << (((GRFS) / 32) - 1))
+-   if (INTEL_DEBUG(DEBUG_NO_VRT) || devinfo->ver < 30)
++   /* ANV_GRF128 mirrors INTEL_DEBUG=no-vrt without the debug bits: cap the
++    * supported register blocks at 128 so RA must fit 128 GRFs.  Used to test
++    * the latency-bound ray-tracing path (RT: 45-49% RCS busy).
++    */
++   if (INTEL_DEBUG(DEBUG_NO_VRT) || devinfo->ver < 30 ||
++       getenv("ANV_DISABLE_VRT") != NULL)
+       return BIT_FOR_NUM_GRF(128); /* No VRT, so only 128 grfs */
+ 
+    const unsigned xe3_bits =
+diff --git a/src/intel/dev/intel_device_info.h b/src/intel/dev/intel_device_info.h
+index 0215609..2e21d94 100644
+--- a/src/intel/dev/intel_device_info.h
++++ b/src/intel/dev/intel_device_info.h
+@@ -286,7 +286,8 @@ intel_device_info_update_from_masks(struct intel_device_info *devinfo,
+ static inline bool
+ intel_has_vrt(const struct intel_device_info *devinfo)
+ {
+-   return devinfo->ver >= 30 && !unlikely(INTEL_DEBUG(DEBUG_NO_VRT));
++   return devinfo->ver >= 30 && !unlikely(INTEL_DEBUG(DEBUG_NO_VRT)) &&
++          getenv("ANV_DISABLE_VRT") == NULL;
+ }
+ 
+ #ifdef __cplusplus
+diff --git a/src/intel/vulkan/genX_init_state.c b/src/intel/vulkan/genX_init_state.c
+index 6b2578f..0cc46dc 100644
+--- a/src/intel/vulkan/genX_init_state.c
++++ b/src/intel/vulkan/genX_init_state.c
+@@ -737,7 +737,8 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
+ #if GFX_VERx10 >= 125
+    anv_batch_emit(batch, GENX(STATE_COMPUTE_MODE), cm) {
+ #if GFX_VER >= 30
+-      cm.EnableVariableRegisterSizeAllocation = !INTEL_DEBUG(DEBUG_NO_VRT);
++      cm.EnableVariableRegisterSizeAllocation = !INTEL_DEBUG(DEBUG_NO_VRT) &&
++                                                  getenv("ANV_DISABLE_VRT") == NULL;
+ #endif
+       cm.Mask1 = 0xffff;
+ #if GFX_VERx10 >= 200
+@@ -916,7 +917,8 @@ init_compute_queue_state(struct anv_queue *queue)
+    anv_batch_emit(batch, GENX(STATE_COMPUTE_MODE), cm) {
+ #if GFX_VER >= 30
+       cm.EnableVariableRegisterSizeAllocationMask = 1;
+-      cm.EnableVariableRegisterSizeAllocation = !INTEL_DEBUG(DEBUG_NO_VRT);
++      cm.EnableVariableRegisterSizeAllocation = !INTEL_DEBUG(DEBUG_NO_VRT) &&
++                                                  getenv("ANV_DISABLE_VRT") == NULL;
+ #endif
+ #if GFX_VER >= 20
+       cm.AsyncComputeThreadLimit = ACTL_Disabled;
