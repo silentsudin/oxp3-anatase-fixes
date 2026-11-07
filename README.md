@@ -119,11 +119,15 @@ Forza Horizon 5 hunk, which doesn't apply to 26.3 and only concerns AMD) and:
   LBVH; the traversal win outweighs the more expensive build).
 - `0211`: tune the TLAS build path on Xe2+: encode subgroup 32 (the source TODO's intent, guarded
   off again whenever VRT is disabled, because the 128-GRF budget then makes the host dispatch
-  geometry mismatch the shader and the encoded TLAS is wrong) and `morton_sort_workgroup_size`
-  1024 on Xe2+. Bracketed A/B/A/B on GravityMark RT 50k: 170.8 -> 173.4 FPS (+1.55%), build time
-  1553 -> 1470 us as attributed by the in-driver ANV_BVH_TS harness, image equivalent (A/B 37.2%
-  differing / mean 3.8 against a 39.9-42.3% / 5.0-5.7 A/A floor). Only the acceleration-structure
-  build path is touched, so raster and compute are unaffected.
+  geometry mismatch the shader and the encoded TLAS is wrong). The headline +1.55% (GravityMark RT
+  50k, 170.8 -> 173.4 FPS, build time 1553 -> 1470 us attributed by the in-driver ANV_BVH_TS
+  harness, image equivalent: A/B 37.2% differing / mean 3.8 against a 39.9-42.3% / 5.0-5.7 A/A
+  floor) was bracketed A/B/A/B on **VRT-enabled** runs; under the recommended VRT-off profile the
+  subgroup half is inert because the guard forces 16. The first version of this patch also raised
+  `morton_sort_workgroup_size` to 1024 on Xe2+; that hunk has been **dropped**, because the later
+  matrix measured upstream's 512 marginally ahead of 1024 (+0.3-0.4%, below the 1.5% bar) on the
+  VRT-off profile, so the upstream default is kept. Only the acceleration-structure build path is
+  touched, so raster and compute are unaffected.
 - `0201`: reset all permanent fence payloads with one `vk_sync_reset_many()`
   (`SYNCOBJ_RESET` takes a list) instead of one ioctl per fence. No effect on a
   one-fence-per-call workload; games that reset several fences at once batch them.
