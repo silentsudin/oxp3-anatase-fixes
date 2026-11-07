@@ -115,6 +115,15 @@ Forza Horizon 5 hunk, which doesn't apply to 26.3 and only concerns AMD) and:
   ioctls per frame 29.60 -> 27.70, ban queries 2.00 -> 0.13 per frame; vkmark score was
   unchanged within noise (27.8k/27.6k vs 27.8k), so this is a CPU-overhead/cleanliness fix,
   not an FPS one. CPU inside ioctls dropped 6.7% in a CPU-bound synthetic.
+- `0205`: use the hierarchical PLOC builder for TLAS builds (GravityMark RT 50k: +6-13% versus
+  LBVH; the traversal win outweighs the more expensive build).
+- `0211`: tune the TLAS build path on Xe2+: encode subgroup 32 (the source TODO's intent, guarded
+  off again whenever VRT is disabled, because the 128-GRF budget then makes the host dispatch
+  geometry mismatch the shader and the encoded TLAS is wrong) and `morton_sort_workgroup_size`
+  1024 on Xe2+. Bracketed A/B/A/B on GravityMark RT 50k: 170.8 -> 173.4 FPS (+1.55%), build time
+  1553 -> 1470 us as attributed by the in-driver ANV_BVH_TS harness, image equivalent (A/B 37.2%
+  differing / mean 3.8 against a 39.9-42.3% / 5.0-5.7 A/A floor). Only the acceleration-structure
+  build path is touched, so raster and compute are unaffected.
 - `0201`: reset all permanent fence payloads with one `vk_sync_reset_many()`
   (`SYNCOBJ_RESET` takes a list) instead of one ioctl per fence. No effect on a
   one-fence-per-call workload; games that reset several fences at once batch them.

@@ -1,0 +1,34 @@
+diff --git a/src/intel/vulkan/genX_acceleration_structure.c b/src/intel/vulkan/genX_acceleration_structure.c
+index 9aa8661..d1bcb45 100644
+--- a/src/intel/vulkan/genX_acceleration_structure.c
++++ b/src/intel/vulkan/genX_acceleration_structure.c
+@@ -598,8 +598,19 @@ anv_encode_as(VkCommandBuffer commandBuffer, struct vk_device *vk_device, struct
+     * let's set the subgroup size to 32 on Xe2+.
+     */
+    struct anv_device *device = cmd_buffer->device;
++
++   /* Encode used to spill badly at subgroup 32, which is why it was pinned to
++    * 16 on Xe2+.  With the Jay compiler that no longer holds, and 32 is
++    * measurably faster together with the sort workgroup below (+1.55 % bracketed
++    * on GravityMark RT 50k, 170.8 -> 173.4 FPS).  It must stay at 16 whenever
++    * VRT is disabled: under the 128-GRF budget the shader's effective SIMD no
++    * longer matches the host-side dispatch geometry and the encoded TLAS is
++    * wrong (measured: asteroid field disappears).
++    */
++   const bool vrt_disabled = getenv("ANV_DISABLE_VRT") != NULL ||
++                             INTEL_DEBUG(DEBUG_NO_VRT);
+    device->accel_struct_build.build_args.subgroup_size =
+-      device->info->ver >= 20 ? 16 : 8;
++      device->info->ver >= 20 ? (vrt_disabled ? 16 : 32) : 8;
+ 
+    struct encode_batch *batch = anv_encode_init_batch(cmd_buffer, states, build_count, build_flags);
+    if (batch == NULL) {
+@@ -950,7 +961,7 @@ anv_device_init_accel_struct_build_state(struct anv_device *device)
+          .has_update = true,
+          .propagate_cull_flags = true,
+          .subgroup_size = device->info->ver >= 20 ? 32 : 16,
+-         .morton_sort_workgroup_size = 512,
++         .morton_sort_workgroup_size = device->info->ver >= 20 ? 1024 : 512,
+          .morton_sort_kvs_per_thread = 2,
+          /* See struct anv_accel_struct_header from anv_bvh_defines.h
+           */
