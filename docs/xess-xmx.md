@@ -116,3 +116,15 @@ it is likely temporal (motion/upscaler history) rather than a persistently wrong
 Next step is ground truth from the running screen: a screenshot taken by the user at the moment the dots are visible
 (PrintScreen/Spectacle while the benchmark shows them), plus one run with XeSS quality set to Performance to see
 whether it depends on the upscale ratio.
+
+### Last-five-seconds capture (XMX, desktop, 2026-11-08 21:1x)
+
+A continuous capture of the final ~5 s of the run (frames 44-59, ~0.33 s apart) was analysed frame by frame:
+isolated-white-speckle counts were 0-2 per frame; no bright clusters on foliage or building edges. Static and burst
+captures on the desktop therefore do not reproduce the artifact.
+
+The artifact is reported by the user as obvious while *running* the game, and the Gamemode path is how it is normally
+played. `tools/cp2077-direct.sh` now sources `~/.config/xess-xmx/oxp3-env.sh` when `OXP3_XMX=1`, and the
+`heroic-launch.sh` Cyberpunk shortcut sets that, so Gamemode launches use the CM driver + shim as well. Next
+discriminator: a screenshot taken on the Gamemode screen at the moment the dots appear (composited desktop captures
+stay clean), which distinguishes a gamescope/WSI presentation artifact from an upscaler-data artifact.
