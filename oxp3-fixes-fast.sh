@@ -27,7 +27,7 @@
 #   ./oxp3-fixes.sh mok-setup   create a module signing key and queue it for enrolment (once)
 #
 # Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware
-#                              --skip-mesa --skip-xess --skip-extras (TDP sync, speakers, volume rocker,
+#                              --skip-mesa --skip-xess --skip-extras --skip-sched (gaming CPU scheduler),
 #                              suspend)
 #                              --stock-dmc (keep Anatase's display DMC firmware)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
@@ -58,7 +58,6 @@ for a in "$@"; do
         --skip-extras) SKIP_EXTRAS=1 ;;
         --skip-mesa) SKIP_MESA=1 ;;
         --skip-flatpak) SKIP_FLATPAK=1 ;;
-        --skip-sched    leave the gaming CPU scheduler (scx_cosmos) alone
         --skip-sched) SKIP_SCHED=1 ;;
         --skip-xess) SKIP_XESS=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
