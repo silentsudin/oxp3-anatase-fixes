@@ -1,0 +1,57 @@
+== time: 2026-11-08T19:59:15+00:00
+kernel: 7.2.7-an28.fc45.x86_64
+/lib/modules/7.2.7-an28.fc45.x86_64/updates/drivers/gpu/drm/xe/xe.ko.xz
+profile: balanced  temp: 76C
+PL1: 35W
+gpu freq: cur=600 max=2300
+== host driver:
+ec418f04e589965adeb26da96fb282915e3dfd7ab98b0d6eab69f9878f3578e9  /usr/lib64/libvulkan_intel.so
+Mesa 27.0.0-deve
+== flatpak runtime driver:
+4d043cc2851a11fd6637feaf2748e99211dc132b46710f72a1e49fa5bea30106  /run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files/lib64/libvulkan_intel.so
+== listed drivers:
+f8976e90dd923add7457349368f8d4e03ccb6f71eaf02202cea7d9da72a4b707  /var/home/holzr/git/linux_scratch/mesa-build/install-0210/usr/local/lib64/libvulkan_intel.so
+079d39ac270a9380c4cf361d2079c85ec87453406d67fe4757b6ee919c0c34d5  /var/home/holzr/git/linux_scratch/mesa-build/install-263/usr/local/lib64/libvulkan_intel.so
+fb219db3ac4caa0d611f043524edb5f8d73a7fc4b1be1bba8ad6c90e47a30a22  /var/home/holzr/git/linux_scratch/mesa-build/install-blorp/usr/local/lib64/libvulkan_intel.so
+42333afb3cd185601c30bcf33a4330c9fd5d5cb571bb3a7c1e589ec6c6d009a1  /var/home/holzr/git/linux_scratch/mesa-build/install-bvhts2/usr/local/lib64/libvulkan_intel.so
+6e2611e537d2522405d1106de9cf0717d9a2dcae9f3ce62fec77e0b26814a102  /var/home/holzr/git/linux_scratch/mesa-build/install-bvhts/usr/local/lib64/libvulkan_intel.so
+a1e542a678247fe56e6a4b41561b05a29a152c0c0bbeb2fc5c28d80885493d1b  /var/home/holzr/git/linux_scratch/mesa-build/install-dd2/usr/local/lib64/libvulkan_intel.so
+80c402ba2ca02be0c3fca08d4afa3f72e58ea9184b6324d26e687416ecec35a0  /var/home/holzr/git/linux_scratch/mesa-build/install-dd3/usr/local/lib64/libvulkan_intel.so
+e51a32f475a8dde33147e00187ce4397461ae857fa8c883e406a94f716de6fea  /var/home/holzr/git/linux_scratch/mesa-build/install-dd4/usr/local/lib64/libvulkan_intel.so
+9927ef45eb4ef792b1bb7135a56b7ca8c34cb3108829f629b2dc8536bb362295  /var/home/holzr/git/linux_scratch/mesa-build/install-dd5/usr/local/lib64/libvulkan_intel.so
+7ced54015d275cb1095884a6a9f35bb3d05c98437298fb3d50c87d8936708a02  /var/home/holzr/git/linux_scratch/mesa-build/install-dd/usr/local/lib64/libvulkan_intel.so
+0b0c29c18cbc55b9c94d86c82b7bcd8325dbed07d3779d63ad74856adbbbfbe6  /var/home/holzr/git/linux_scratch/mesa-build/install-draw/usr/local/lib64/libvulkan_intel.so
+185c57f520857c9764b8be5b5eee36c5c8d6c52affdbd5465d169b7259120e32  /var/home/holzr/git/linux_scratch/mesa-build/install-enc/usr/local/lib64/libvulkan_intel.so
+897286f652dbce26d1d0faca612bbf3ce2604eb06a1dd49a765845afa7d24f2a  /var/home/holzr/git/linux_scratch/mesa-build/install-git/usr/local/lib64/libvulkan_intel.so
+41951a8d76767fbd0d5774400551e47803654b4494b75e1f1a649dfe1aa01e62  /var/home/holzr/git/linux_scratch/mesa-build/install-morton/usr/local/lib64/libvulkan_intel.so
+93fd4317001306d643639e85db614f0bdb7aa5bddd8e80b93636d998988e9646  /var/home/holzr/git/linux_scratch/mesa-build/install-pd2/usr/local/lib64/libvulkan_intel.so
+cffa1a608a788fc6006a191d315b706e3cfe98c1d906f32f5547dd173dabfb64  /var/home/holzr/git/linux_scratch/mesa-build/install-pd/usr/local/lib64/libvulkan_intel.so
+09620a931213ed73e9698ee1aef97dfc6f2afc7a2b0219f6634ba6d26fc23dec  /var/home/holzr/git/linux_scratch/mesa-build/install-rtref/usr/local/lib64/libvulkan_intel.so
+2517930b40d9093486705d84880ebe9b50f4e18f86a5d524dfe3830f25516e5c  /var/home/holzr/git/linux_scratch/mesa-build/install-shiprt/usr/local/lib64/libvulkan_intel.so
+678e247dea4c06ef1a0f5f886d367256728f5c8478f154e81468fe7c8c7a8234  /var/home/holzr/git/linux_scratch/mesa-build/install-sub/usr/local/lib64/libvulkan_intel.so
+3fe2ac6bfe608e15ea7f11715604f5f3c4a106182d7261399e24f862bccac8c2  /var/home/holzr/git/linux_scratch/mesa-build/install-tbimr2/usr/local/lib64/libvulkan_intel.so
+3aea0e945b0a364e08bfc07ca8d0e7c1f65cd60762e609a3c28424fb527080aa  /var/home/holzr/git/linux_scratch/mesa-build/install-tbimr3/usr/local/lib64/libvulkan_intel.so
+c72caa58e85745db3da9f1d534f46861fa21989a70c7d482443665607f3cda6b  /var/home/holzr/git/linux_scratch/mesa-build/install-tbimr4/usr/local/lib64/libvulkan_intel.so
+bab552f0864d42bbd062dfe27c252dc42859f3bf2e128710e1a7ee5d2a5c0a0a  /var/home/holzr/git/linux_scratch/mesa-build/install-tbimr5/usr/local/lib64/libvulkan_intel.so
+609830d771e4a2d26ecf0f035eef2949d3cc453d85849e98472ef7f8b40b6f90  /var/home/holzr/git/linux_scratch/mesa-build/install-tbimr6/usr/local/lib64/libvulkan_intel.so
+6f68b4af39cedc3a17bfc300a467ba670d987a4fcde168662b0042d677544aa1  /var/home/holzr/git/linux_scratch/mesa-build/install-tbimr/usr/local/lib64/libvulkan_intel.so
+f7717b9325ed0d4cb4a7f7d5dfa9b5c677b8a3dbf00a592da33575dbd631d974  /var/home/holzr/git/linux_scratch/mesa-build/install-urb/usr/local/lib64/libvulkan_intel.so
+24b15fdfdea373ced1267840897c4572ffd371f23a9fd60e725c67ca2f895951  /var/home/holzr/git/linux_scratch/mesa-build/install-vrt/usr/local/lib64/libvulkan_intel.so
+6fb49389dddc5d90fd52dbae2b4310b05fd42a67a44a4c87d3511ae29d6f91c3  /var/home/holzr/.cache/oxp3-fixes/mesa-263rpm/usr/local/lib64/libvulkan_intel.so
+faffddc5c370677ca48c52ba59f334c33ef6b92ef37bfd569934cbd80257c9fc  /var/home/holzr/.cache/oxp3-fixes/mesa-263/usr/local/lib64/libvulkan_intel.so
+4d043cc2851a11fd6637feaf2748e99211dc132b46710f72a1e49fa5bea30106  /var/home/holzr/.cache/oxp3-fixes/mesa-fast-prev/usr/local/lib64/libvulkan_intel.so
+ec418f04e589965adeb26da96fb282915e3dfd7ab98b0d6eab69f9878f3578e9  /var/home/holzr/.cache/oxp3-fixes/mesa-fast/usr/local/lib64/libvulkan_intel.so
+2d2b1c0970193df22b819884d5dcf52b4a580599a7d9d88442d75d783a17cf0b  /var/home/holzr/.cache/oxp3-fixes/mesa-fast-x11only/usr/local/lib64/libvulkan_intel.so
+817403c89c9985558601060b1ef0ba1d32a3196848a95edda02752783639ce4c  /var/home/holzr/.cache/oxp3-fixes/mesa-nofence/usr/local/lib64/libvulkan_intel.so
+306b5ef6041e2220712c7315f538841db9bda5bf70588e246f37dbf7051b6aa4  /var/home/holzr/.cache/oxp3-fixes/mesa-vanilla/usr/local/lib64/libvulkan_intel.so
+== sched_ext: state=disabled running=
+== packages:
+gamescope-3.16.23.3-1.fc45.oxp3.202610292302.x86_64
+gamescope-3.16.23.3-1.fc45.oxp3.202610292302.i686
+mangohud-0.8.4-1.fc45.oxp3.202610292153.x86_64
+mangohud-0.8.4-1.fc45.oxp3.202610292153.i686
+== steam flatpak overrides:
+[Environment]
+force_vk_vendor=0
+ANV_CM_HELPER=/var/home/holzr/.local/share/xess-xmx/tools/cm-compile.sh
+VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer,VK_EXT_descriptor_heap

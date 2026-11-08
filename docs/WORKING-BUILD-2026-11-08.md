@@ -67,3 +67,42 @@ module, and Heroic GameMode being off.
 - Stock Steam runtime driver: remove `libvulkan_intel.so` from the Flatpak override dir and restart
   `anatase-flatpak-extensions.service`.
 - Git: tag `working-2026-11-08` marks this record.
+
+## CPU scheduler addition (validated 2026-11-08 19:18-19:55)
+
+Best CPU scheduling configuration for this hybrid CPU (2 P + 8 E + 4 LP-E, no SMT), validated with the harness in
+`tools/cpu-sched-test.sh` (Cyberpunk 2077 direct-Proton benchmark + GravityMark, package power sampled for the whole
+window):
+
+    scheduler: scx_cosmos -c 0 -p 0        # official scx_loader "gaming" profile
+    EPP:       balance_power (firmware default, unchanged)
+    governor:  powersave (intel_pstate default)
+    affinity: no restriction (the scheduler decides placement)
+
+Measured (warm caches, same working driver/kernel state as above):
+
+| config | Cyberpunk avg / min | GravityMark | avg package W | FPS/W |
+|---|---|---|---|---|
+| EEVDF (baseline) | 49.8 / 43.3 | 182.8 | 25.6 | 1.945 |
+| scx_cake | 50.8 / 44.7 | 182.8 | 25.5 | 1.992 |
+| scx_cosmos lowlatency | 51.5 / 44.8 | 182.5 | 25.4 | 2.028 |
+| **scx_cosmos gaming** | **52.2 / 45.4**, repeat **54.0 / 46.6** | 182.6-189.6 | 25.0-25.4 | **2.055-2.160** |
+| scx_p2dq | 51.9 / 45.1, repeat 53.1 / 46.2 | 182.8-187.5 | 25.3-25.4 | 2.043-2.099 |
+| scx_cosmos gaming + per-cluster EPP | 50.9 / 44.4 | 187.5 | 26.3 | 1.935 |
+
+Decisions:
+- Ship `scx_cosmos -c 0 -p 0`; it is +4.8 % Cyberpunk average and +5.7 % FPS/W over EEVDF, GravityMark unchanged.
+- Do NOT pair it with per-cluster EPP: `P=performance / E=balance_performance / LP-E=power` cost ~3 FPS and ~1 W.
+- Exclude LAVD: `scx_lavd --balanced` aborts (`runnable task stall (rapl-power ...)`), `--no-core-compaction`
+  black-screens Cyberpunk.
+- GravityMark is scheduler-insensitive (geometry/GPU-bound); use it only as a regression guard.
+
+Activation: shipped as `oxp3-gaming-sched.service` (`files/oxp3-gaming-sched.service`, installed by
+`./oxp3-fixes-fast.sh install`, opt-out `--skip-sched`). As of this record the unit is **not yet active on the
+machine** (state=disabled), so the live system is still on EEVDF; activate with:
+
+    ./oxp3-fixes-fast.sh install --skip-mesa --skip-kernel --skip-firmware --skip-gamescope --skip-mangohud --skip-xess
+
+and verify with `./state-snapshot.sh | grep sched_ext` (expect `state=enabled`) and
+`systemctl status oxp3-gaming-sched`. Opt out at any time with `systemctl stop oxp3-gaming-sched` (the kernel returns
+to EEVDF immediately; no reboot).
