@@ -165,7 +165,11 @@ MESA_I686_DEVEL="llvm-devel.i686 clang-devel.i686 spirv-llvm-translator-devel.i6
     DirectX-Headers-devel.i686 libedit-devel.i686 libpciaccess-devel.i686 libxml2-devel.i686
     xz-devel.i686 ncurses-devel.i686 libuuid-devel.i686 libclc22-devel.i686"
 
-MESA_BUILD_DIR="${OXP3_MESA_BUILD:-$HOME/git/linux_scratch/mesa-build/install-shiprt/usr/local}"
+_built="$HOME/.cache/oxp3-fixes/mesa-fast/usr/local"
+_legacy="$HOME/git/linux_scratch/mesa-build/install-shiprt/usr/local"
+if [[ -n ${OXP3_MESA_BUILD:-} ]]; then MESA_BUILD_DIR=$OXP3_MESA_BUILD
+elif [[ -x $_built/lib64/libvulkan_intel.so ]]; then MESA_BUILD_DIR=$_built
+else MESA_BUILD_DIR=$_legacy; fi
 MESA_BACKUP=/usr/local/share/oxp3-fixes-fast
 
 build_mesa() {
