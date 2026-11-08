@@ -1,17 +1,31 @@
 #!/bin/bash
 # build-xmx-driver.sh - build the CM-enabled (XeSS XMX) Mesa driver used by the xess-xmx path.
-# Mesa 26.3 + the upstream C-for-Metal patch series (patches/mesa-26.3/0001-0005), Wayland WSI, static expat.
+# Mesa main (ea40598) + our perf patches + the C-for-Metal series ported to main
+# (patches/xess-main/0101-anv-cm-kernel-injection-for-main-27.patch), Wayland WSI, static expat.
 # Output: ~/.cache/oxp3-fixes/mesa-xmx/usr/local/lib64/libvulkan_intel.so
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 pkg=${XMX_PKG:-$HOME/.local/share/xess-xmx}
 cache=${OXP3_CACHE:-$HOME/.cache/oxp3-fixes}
-tarball=${MESA263_TARBALL:-$HOME/git/linux_scratch/mesa263/mesa263.tar.gz}
+tarball=${OXP3_MESA_TARBALL:-$cache/mesa/mesa-ea40598a68bab5690e0d08f845e2776ef9be2db9.tar.gz}
+overrides=${OXP3_OVERRIDES:-$cache/anatase/cards/drivers/mesa/overrides.patch}
 out=$cache/mesa-xmx; src=$(mktemp -d)
 trap 'rm -rf "$src"' EXIT
-[ -e "$tarball" ] || { echo "error: Mesa 26.3 tarball not found at $tarball" >&2; exit 1; }
+[ -e "$tarball" ] || { echo "error: Mesa tarball not found at $tarball" >&2; exit 1; }
 tar xzf "$tarball" -C "$src" --strip-components=1
-for p in "$pkg"/patches/mesa-26.3/000*.patch; do
+# Anatase's overrides, minus the radv-defaults file (we do not build radv)
+python3 - "$overrides" /tmp/oxp3-ov.patch <<'PY2'
+import re, sys
+s = open(sys.argv[1]).read()
+parts = re.split(r'(?m)^(?=diff --git )', s)
+keep = [x for x in parts if not x.startswith('diff --git a/src/amd/vulkan/00-radv-defaults.conf')]
+open(sys.argv[2], 'w').write(''.join(keep))
+PY2
+git -C "$src" apply -p1 /tmp/oxp3-ov.patch
+for p in "$here"/patches/mesa/0*.patch; do
+    git -C "$src" apply -p1 "$p" || { echo "error: $(basename "$p") does not apply" >&2; exit 1; }
+done
+for p in "$here"/patches/xess-main/*.patch; do
     git -C "$src" apply -p1 "$p" || { echo "error: $(basename "$p") does not apply" >&2; exit 1; }
 done
 mkdir -p "$out"

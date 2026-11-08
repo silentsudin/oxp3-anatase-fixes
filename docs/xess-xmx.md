@@ -76,3 +76,43 @@ runs XMX like our test runs. If artifacts reappear there, compare against a laun
 - Frame generation (`XESS_FG=n`) needs `ControlLib.dll`; not tested yet.
 - Flatpak Steam is not supported by the project; Steam games would need the env in the Flatpak override and the shim
   reachable from the sandbox.
+
+## Update: CM series ported to our Mesa main build
+
+The CM patch series no longer lives only in the 26.3 build. `patches/xess-main/0101-anv-cm-kernel-injection-for-main-27.patch`
+is the upstream 26.3 series rebased onto main `ea40598`: the upstream patches apply with exactly one context-drift
+reject (`anv_shader_compile.c`, where main refactored the branch into `use_jay`), fixed by placing the CM result check
+before it:
+
+    const enum anv_cm_result cm_result =
+       shader_data->info->stage == MESA_SHADER_COMPUTE ?
+       anv_cm_kernel_replace(device, mem_ctx, shader_data, nir) : ANV_CM_NOT_PLACEHOLDER;
+    ...
+    if (cm_result == ANV_CM_INJECTED) { params.error_str = NULL; }
+    else if (use_jay) { ... }
+
+`tools/build-xmx-driver.sh` now builds: Mesa main + Anatase overrides + our patches (0200 0201 0206 0207 0212) +
+the ported CM patch, in podman with `-Dprefer_static=true` and `-Dplatforms=x11,wayland`. Result:
+sha256 `8bcd5bfcae9eab22…` (`CM` hooks present, no libexpat dependency). The previous 26.3-based CM driver is kept at
+`~/.cache/oxp3-fixes/mesa-xmx-263`.
+
+Measured with the main-based CM driver (same prefix/proton/env as before):
+
+| path | avg FPS | min FPS | shim |
+|---|---|---|---|
+| XMX | 65.8 | 54.1 | 562 trace lines |
+| DP4a | 67.5 | 55.9 | none |
+
+So XMX is engaged on main as well; on this driver the advantage over DP4a is within run-to-run noise (earlier 26.3
+build: 65.9 vs 63.7).
+
+## Open: white-dot artifacts with XeSS at the end of the benchmark
+
+Still unresolved and reported by the user as obvious on trees and building edges at the end of the run, with **both**
+XMX and DP4a, but **not** with upscaling off. Static screenshot captures of that scene (several hundred frames,
+including 1-3 fps bursts of the final seconds) have not reproduced it, and `compile.log` shows no failed kernels, so
+it is likely temporal (motion/upscaler history) rather than a persistently wrong frame.
+
+Next step is ground truth from the running screen: a screenshot taken by the user at the moment the dots are visible
+(PrintScreen/Spectacle while the benchmark shows them), plus one run with XeSS quality set to Performance to see
+whether it depends on the upscale ratio.
