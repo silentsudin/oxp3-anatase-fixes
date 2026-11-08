@@ -130,3 +130,19 @@ patched xe module loaded, `platform_profile=balanced`.
 Benchmark protocol: single runs of the Cyberpunk benchmark vary by ~10 % (47.9-53.2 today on identical builds), so
 quote the summary.json average together with `./state-snapshot.sh`, and compare medians of two runs before
 concluding that a build regressed.
+
+## Single-digit FPS on the first run after a driver change is a shader-cache rebuild, not a regression
+
+Every driver build has its own Mesa disk-cache key (and DXVK has its own pipeline state cache). After installing a
+different libvulkan_intel.so, the first launch of a title recompiles its shaders; during that window the game shows
+single-digit FPS and the CPU sits at 10-20 W while the GPU is mostly idle. Once the caches are warm the same game
+runs at full speed with no changes.
+
+Evidence (2026-11-08, Wukong benchmark tool, DX11/DXVK path):
+- After each install (ec418f04, 4d043cc2): first Gamemode run single-digit FPS.
+- A desktop run right after hit full speed (GPU 2300 MHz, core 3.8 W, pkg 25.6 W, GameThread ~300 %).
+- The next Gamemode run was fast again.
+- ~30,000 files under ~/.cache/mesa_shader_cache were rewritten within the preceding two hours.
+
+So: after any driver install, launch each title once and let it warm, then benchmark. Judge performance only on a
+warm run, and quote state-snapshot.sh with the number. Do not re-bisect patches for a cold first run.
