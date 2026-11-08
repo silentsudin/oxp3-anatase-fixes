@@ -1,0 +1,40 @@
+[Unit]
+Description=OneXPLAYER 3 volume rocker tap normaliser (oxp3-voltap)
+Documentation=file:/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/hw/volume-buttons.md
+# hhd owns the AT keyboard and publishes the volume keys on its own uinput
+# device; we sit on top of that device, so start after hhd when both run.
+After=hhd.service
+ConditionPathExists=/dev/uinput
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/oxp3-voltap.conf
+ExecStart=/usr/local/libexec/oxp3-voltap run
+Restart=always
+RestartSec=2
+User=root
+# The daemon only needs /dev/input/event* and /dev/uinput.  Root uid opens
+# them through DAC, so all capabilities can go.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=oxp3-voltap
+
+[Install]
+WantedBy=multi-user.target

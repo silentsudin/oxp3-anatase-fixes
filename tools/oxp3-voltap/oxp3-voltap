@@ -1,0 +1,655 @@
+#!/usr/bin/python3
+"""oxp3-voltap - turn the ONEXPLAYER 3 volume rocker into discrete taps.
+
+Why this exists
+---------------
+The OXP3 EC does not reliably deliver a key *release* for the volume rocker.
+The Linux input core then keeps KEY_VOLUMEUP/DOWN logically down and the owner
+of the key repeats it - kernel EV_REP soft repeat on the AT keyboard, or the
+client's own "key is still down" ramp - so one press runs the mixer to 100 %
+or 0 %.  Windows shows the same physical presses as single steps because its
+keyboard class driver never sees a stuck make code.
+
+This daemon takes the device that carries the rocker, grabs it (EVIOCGRAB),
+drops every repeat, duplicate and stuck state, and re-emits exactly one
+down/up pair per physical press through its own uinput device.  It does not
+depend on hhd internals, on the scancode the EC chose, or on any /usr
+patching: it normalises whatever the layer below produces.
+
+Modes
+-----
+  probe     read-only evidence: timestamped EV_KEY table + a verdict
+  run       daemon: grab, normalise, re-emit (default)
+  check     print candidate devices and what would be grabbed, then exit
+  selftest  create the uinput device and emit two taps (needs root)
+
+Needs python3-evdev (already installed on Anatase, hhd depends on it) and root:
+/dev/input/event* is root:input 0660 and /dev/uinput is root:root 0600.
+
+Author: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Licence: GPL-2.0-or-later - our own code, no vendor code involved.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import select
+import signal
+import sys
+import time
+
+try:
+    from evdev import InputDevice, UInput, ecodes, list_devices
+except ImportError:  # pragma: no cover - dependency is present on Anatase
+    sys.exit("oxp3-voltap: python3-evdev is missing (rpm: python3-evdev)")
+
+SHIM_NAME = "OXP3 volume tap shim"
+SHIM_PHYS = "phys-oxp3-voltap"
+SHIM_VID = 0x0001
+SHIM_PID = 0x0003
+
+VOLUME_CODES = (ecodes.KEY_VOLUMEUP, ecodes.KEY_VOLUMEDOWN)
+CODE_NAME = {
+    ecodes.KEY_VOLUMEUP: "KEY_VOLUMEUP",
+    ecodes.KEY_VOLUMEDOWN: "KEY_VOLUMEDOWN",
+    ecodes.KEY_MUTE: "KEY_MUTE",
+}
+
+# Devices that never carry the rocker and must never be grabbed.
+NEVER_GRAB = re.compile(r"^(OXP3 volume tap shim|Handheld Daemon Controller)")
+
+
+def log(msg: str) -> None:
+    print(f"oxp3-voltap: {msg}", file=sys.stderr, flush=True)
+
+
+def have_root() -> bool:
+    return os.geteuid() == 0
+
+
+# --------------------------------------------------------------------------
+# device inventory
+# --------------------------------------------------------------------------
+class Candidate:
+    __slots__ = ("path", "name", "phys", "vid", "pid", "keys", "caps",
+                 "has_volume", "has_rep", "has_rel_abs")
+
+    def __init__(self, dev: InputDevice):
+        self.caps = dev.capabilities(absinfo=False)
+        keys = set(self.caps.get(ecodes.EV_KEY, ()))
+        self.path = dev.path
+        self.name = dev.name or ""
+        self.phys = dev.phys or ""
+        self.vid = dev.info.vendor
+        self.pid = dev.info.product
+        self.keys = keys
+        self.has_volume = any(k in keys for k in VOLUME_CODES)
+        self.has_rep = ecodes.EV_REP in self.caps
+        self.has_rel_abs = bool(self.caps.get(ecodes.EV_REL) or self.caps.get(ecodes.EV_ABS))
+
+    def __str__(self) -> str:
+        return (f"{self.path} name={self.name!r} phys={self.phys!r} "
+                f"id={self.vid:04x}:{self.pid:04x} volume={int(self.has_volume)} "
+                f"rep={int(self.has_rep)} rel/abs={int(self.has_rel_abs)} "
+                f"keys={len(self.keys)}")
+
+
+def _numeric(path: str) -> int:
+    m = re.search(r"(\d+)$", path)
+    return int(m.group(1)) if m else 0
+
+
+def inventory():
+    """Return (candidates, unreadable_count)."""
+    cands, unreadable = [], 0
+    for path in sorted(list_devices(), key=_numeric):
+        try:
+            dev = InputDevice(path)
+        except (PermissionError, OSError):
+            unreadable += 1
+            continue
+        try:
+            cands.append(Candidate(dev))
+        finally:
+            dev.close()
+    return cands, unreadable
+
+
+def resolve(cfg, verbose=True):
+    """Pick the devices to normalise: explicit paths first, then name/phys match."""
+    cands, _ = inventory()
+    chosen = []
+    explicit = [p for p in cfg.devices if p and p != "auto"]
+
+    for path in explicit:
+        for c in cands:
+            if c.path == path or os.path.realpath(c.path) == os.path.realpath(path):
+                chosen.append(c)
+                break
+        else:
+            if verbose:
+                log(f"configured device {path} is not present (yet)")
+
+    if not explicit:
+        for c in cands:
+            if NEVER_GRAB.search(c.name) or not c.has_volume:
+                continue
+            if (cfg.name and re.search(cfg.name, c.name, re.I)) or \
+               (cfg.phys and re.search(cfg.phys, c.phys, re.I)):
+                chosen.append(c)
+
+    seen, uniq = set(), []
+    for c in chosen:
+        if c.path not in seen:
+            seen.add(c.path)
+            uniq.append(c)
+    return uniq
+
+
+# --------------------------------------------------------------------------
+# the tap state machine (pure, unit-testable)
+# --------------------------------------------------------------------------
+class Tapper:
+    """One clean down/up pair per physical press, never a held key.
+
+    value semantics of the Linux input layer:
+      1 = press, 0 = release, 2 = autorepeat generated by somebody downstream
+    Rules:
+      * value 2 is never forwarded - that is the thing that runs the mixer away.
+      * a second press for a key that is still down is dropped (EC duplicate).
+      * a press within `gap` of the previous tap is dropped (contact bounce).
+      * every press gets its release scheduled after `hold`, so a lost release
+        from the EC cannot leave the key down.
+      * a release with no matching press still proves that one press happened
+        (hhd drops the press when the kernel already force-released it), so it
+        becomes one clean tap - see --no-orphan-tap to disable that.
+    """
+
+    def __init__(self, hold=0.030, gap=0.060, max_hold=0.500, orphan_tap=True):
+        self.hold = hold
+        self.gap = gap
+        self.max_hold = max_hold
+        self.orphan_tap = orphan_tap
+        self.down = {}          # code -> time the synthetic press went out
+        self.last_tap = {}      # code -> time the synthetic release went out
+        self.origin = {}        # code -> "press" | "orphan", how the tap started
+        self.stats = {"press": 0, "repeat": 0, "duplicate": 0, "bounce": 0,
+                      "orphan_release": 0, "orphan_tap": 0, "late_release": 0,
+                      "watchdog": 0, "forwarded": 0}
+
+    def handle(self, now, code, value, volume):
+        if not volume:
+            self.stats["forwarded"] += 1
+            return [(code, value)] if value in (0, 1) else []
+
+        if value == 2:
+            self.stats["repeat"] += 1
+            return []
+
+        if value == 1:
+            if code in self.down:
+                self.stats["duplicate"] += 1
+                return []
+            last = self.last_tap.get(code)
+            if last is not None and now - last < self.gap:
+                self.stats["bounce"] += 1
+                return []
+            self.down[code] = now
+            self.origin[code] = "press"
+            self.stats["press"] += 1
+            return [(code, 1)]
+
+        # value == 0: the real release.  Pass it through if the key is down so
+        # the client does not have to wait for the synthetic release.
+        if code in self.down:
+            del self.down[code]
+            self.last_tap[code] = now
+            return [(code, 0)]
+        self.stats["orphan_release"] += 1
+        # A release without a press is what hhd's uinput device emits when the
+        # kernel already force-released the scancode: the press was collapsed
+        # away one layer below us.  It still proves that one physical press
+        # happened, so turn it into one clean tap instead of dropping it.
+        if self.orphan_tap and self.origin.get(code) != "press":
+            last = self.last_tap.get(code)
+            if last is not None and now - last < self.gap:
+                self.stats["bounce"] += 1
+                return []
+            self.stats["orphan_tap"] += 1
+            self.down[code] = now
+            self.origin[code] = "orphan"
+            return [(code, 1)]
+        if self.origin.get(code) == "press":
+            # the tail of a press we already discharged as a tap
+            self.stats["late_release"] += 1
+        return []
+
+    def poll(self, now):
+        out = []
+        for code, t0 in list(self.down.items()):
+            if now - t0 >= self.hold:
+                del self.down[code]
+                self.last_tap[code] = now
+                out.append((code, 0))
+                self.origin.setdefault(code, "press")
+        return out
+
+    def release_all(self, now=0.0):
+        out = []
+        for code in list(self.down):
+            del self.down[code]
+            self.last_tap[code] = now
+            out.append((code, 0))
+        return out
+
+    def next_deadline(self):
+        if not self.down:
+            return None
+        return min(t + self.hold for t in self.down.values())
+
+
+# --------------------------------------------------------------------------
+# probe mode: the evidence collector
+# --------------------------------------------------------------------------
+def cmd_probe(cfg) -> int:
+    if not have_root():
+        log("probe needs root: /dev/input/event* is root:input 0660")
+        return 1
+    cands, unreadable = inventory()
+    if cfg.devices and cfg.devices != ["auto"]:
+        wanted = [os.path.realpath(p) for p in cfg.devices]
+        sel = [c for c in cands if os.path.realpath(c.path) in wanted]
+    else:
+        sel = [c for c in cands
+               if c.has_volume and not NEVER_GRAB.search(c.name) and (
+                   (cfg.name and re.search(cfg.name, c.name, re.I)) or
+                   (cfg.phys and re.search(cfg.phys, c.phys, re.I)))]
+    if not sel:
+        log(f"no device matched ({unreadable} unreadable); "
+            f"see --print-devices / --device /dev/input/eventN")
+        return 1
+
+    devs, meta = [], {}
+    for c in sel:
+        try:
+            d = InputDevice(c.path)
+        except OSError as e:
+            log(f"{c.path} ({c.name}) unreadable: {e}")
+            continue
+        if cfg.grab:
+            try:
+                d.grab()
+                log(f"grabbed {c.path} for probing (input goes only to us meanwhile)")
+            except OSError as e:
+                log(f"cannot grab {c.path}: {e}; reading it ungrabbed")
+        else:
+            log(f"reading {c.path} ({c.name}) read-only, no grab")
+        devs.append(d)
+        meta[d.fd] = c
+    if not devs:
+        return 1
+
+    t0 = time.perf_counter()
+    last_all = 0.0
+    counts = {"press": 0, "repeat": 0, "release": 0}
+    open_since = {}
+    stuck, max_hold = 0, 0.0
+    print("# dev\trel_s\tdt_us\thold_ms\tevent\tcode\tvalue")
+    try:
+        while True:
+            r, _, _ = select.select([d.fd for d in devs], [], [], 0.2)
+            if cfg.duration and time.perf_counter() - t0 > cfg.duration:
+                break
+            for fd in r:
+                d = next(x for x in devs if x.fd == fd)
+                c = meta[fd]
+                for ev in d.read():
+                    now = time.perf_counter()
+                    dt = (now - last_all) * 1e6
+                    last_all = now
+                    if ev.type != ecodes.EV_KEY:
+                        continue
+                    nm = CODE_NAME.get(ev.code) or ecodes.KEY.get(ev.code, str(ev.code))
+                    hold = ""
+                    if ev.code in VOLUME_CODES:
+                        k = (c.path, ev.code)
+                        if ev.value == 1:
+                            counts["press"] += 1
+                            open_since[k] = now
+                        elif ev.value == 2:
+                            counts["repeat"] += 1
+                            if k in open_since:
+                                hold = f"{(now - open_since[k]) * 1e3:.1f}"
+                        else:
+                            counts["release"] += 1
+                            t = open_since.pop(k, None)
+                            if t is not None:
+                                h = (now - t) * 1e3
+                                max_hold = max(max_hold, h)
+                                hold = f"{h:.1f}"
+                                if h > cfg.stuck_ms:
+                                    stuck += 1
+                    print(f"{os.path.basename(c.path)}\t{now - t0:.6f}\t{dt:.0f}\t"
+                          f"{hold}\tEV_KEY\t{nm}\t{ev.value}", flush=True)
+                    if cfg.limit and counts["press"] >= cfg.limit:
+                        raise KeyboardInterrupt
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for d in devs:
+            try:
+                d.ungrab()
+            except OSError:
+                pass
+            d.close()
+
+    print("\n# --- probe summary ---")
+    for c in sel:
+        print(f"# device {c.path} name={c.name!r} phys={c.phys!r} "
+              f"id={c.vid:04x}:{c.pid:04x} rep={int(c.has_rep)}")
+    print(f"# presses={counts['press']} repeats={counts['repeat']} "
+          f"releases={counts['release']}")
+    print(f"# longest press {max_hold:.1f} ms, stuck (>{cfg.stuck_ms:.0f} ms)={stuck}")
+    if counts["press"] == 0:
+        print("# no volume presses seen: wrong device, or the rocker is elsewhere")
+    elif counts["release"] < counts["press"]:
+        print("# VERDICT missing release events -> a held key is the mechanism")
+    elif counts["repeat"]:
+        print("# VERDICT value=2 repeats present -> kernel/client repeat is the mechanism")
+    else:
+        print("# VERDICT complete press/release, no repeats: clean at this layer; "
+              "look one layer up (hhd -> uinput -> client)")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# run mode
+# --------------------------------------------------------------------------
+class Runner:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.tapper = Tapper(cfg.hold, cfg.gap, cfg.max_hold, cfg.orphan_tap)
+        self.ui = None
+        self.ui_caps = frozenset()
+        self.sources = {}
+        self.last_scan = 0.0
+        self.last_stats = time.monotonic()
+        self.running = True
+        self.missing = set()
+
+    def ensure_uinput(self, keys):
+        caps = set(keys) | set(VOLUME_CODES)
+        if self.ui is not None and caps <= self.ui_caps:
+            return
+        if self.ui is not None:
+            log("re-creating the shim uinput device (capability set grew)")
+            try:
+                self.ui.close()
+            except OSError:
+                pass
+        self.ui = UInput(
+            {ecodes.EV_KEY: sorted(caps)},
+            name=SHIM_NAME, phys=SHIM_PHYS, version=0x0001,
+            vendor=SHIM_VID, product=SHIM_PID, bustype=ecodes.BUS_USB,
+        )
+        self.ui_caps = frozenset(caps)
+        node = getattr(self.ui.device, "path", "?")
+        log(f"created '{SHIM_NAME}' at {node} with {len(caps)} key codes")
+
+    def emit(self, pairs):
+        if not pairs or self.ui is None:
+            return
+        for code, value in pairs:
+            self.ui.write(ecodes.EV_KEY, code, value)
+        self.ui.syn()
+
+    def scan(self):
+        cands = resolve(self.cfg, verbose=False)
+        present = {c.path for c in cands}
+        for path in list(self.sources):
+            if path not in present:
+                log(f"{path} disappeared; releasing its keys and dropping it")
+                self.emit(self.tapper.release_all(time.perf_counter()))
+                try:
+                    self.sources[path].close()
+                except OSError:
+                    pass
+                del self.sources[path]
+
+        for c in cands:
+            if c.path in self.sources:
+                continue
+            if c.has_rel_abs and not self.cfg.force:
+                self._report_once(c.path, f"{c.path} ({c.name}) has REL/ABS axes; "
+                                          f"skipping (use --force to grab it anyway)")
+                continue
+            if c.has_rep and not self.cfg.force:
+                self._report_once(c.path, f"{c.path} ({c.name}) is a repeating keyboard; "
+                                          f"grab the hhd volume keyboard instead "
+                                          f"(see docs/hw/volume-buttons.md)")
+                continue
+            try:
+                dev = InputDevice(c.path)
+                dev.grab()
+            except OSError as e:
+                self._report_once(c.path, f"grab {c.path} ({c.name}) failed: {e}")
+                continue
+            self.missing.discard(c.path)
+            log(f"grabbed {c.path} ({c.name!r} phys={c.phys!r} "
+                f"id={c.vid:04x}:{c.pid:04x})")
+            self.sources[c.path] = dev
+            self.ensure_uinput(c.keys)
+        self.last_scan = time.monotonic()
+
+    def _report_once(self, key, msg):
+        if key not in self.missing:
+            self.missing.add(key)
+            log(msg)
+
+    def loop(self):
+        self.scan()
+        if not self.sources:
+            log("nothing grabbed yet; waiting for the configured volume device")
+        while self.running:
+            now = time.perf_counter()
+            timeout = 0.20
+            dl = self.tapper.next_deadline()
+            if dl is not None:
+                timeout = max(0.0, min(timeout, dl - now))
+            fds = [d.fd for d in self.sources.values()]
+            r = []
+            if fds:
+                try:
+                    r, _, _ = select.select(fds, [], [], timeout)
+                except InterruptedError:
+                    continue
+            else:
+                time.sleep(min(timeout, 0.1))
+            now = time.perf_counter()
+            for fd in r:
+                path = next((p for p, d in self.sources.items() if d.fd == fd), None)
+                if path is None:
+                    continue
+                dev = self.sources[path]
+                try:
+                    events = list(dev.read())
+                except OSError as e:
+                    log(f"read {path} failed: {e}; rescanning")
+                    try:
+                        dev.close()
+                    except OSError:
+                        pass
+                    self.sources.pop(path, None)
+                    self.emit(self.tapper.release_all(now))
+                    continue
+                out = []
+                for ev in events:
+                    if ev.type != ecodes.EV_KEY:
+                        continue
+                    out += self.tapper.handle(now, ev.code, ev.value,
+                                              ev.code in VOLUME_CODES)
+                self.emit(out)
+            self.emit(self.tapper.poll(now))
+
+            if time.monotonic() - self.last_scan > self.cfg.rescan:
+                self.scan()
+            if self.cfg.stats and time.monotonic() - self.last_stats > self.cfg.stats:
+                self.last_stats = time.monotonic()
+                s = self.tapper.stats
+                log("stats " + " ".join(f"{k}={v}" for k, v in s.items()))
+
+    def close(self):
+        try:
+            self.emit(self.tapper.release_all(time.perf_counter()))
+        except Exception:
+            pass
+        for dev in self.sources.values():
+            try:
+                dev.ungrab()
+            except OSError:
+                pass
+            dev.close()
+        if self.ui is not None:
+            try:
+                self.ui.close()
+            except OSError:
+                pass
+
+
+def cmd_run(cfg) -> int:
+    if not have_root():
+        log("run needs root: /dev/input/event* and /dev/uinput are root-only")
+        return 1
+    r = Runner(cfg)
+
+    def stop(signum, frame):
+        log(f"signal {signum}: releasing keys and exiting")
+        r.running = False
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        r.loop()
+    finally:
+        r.close()
+    s = r.tapper.stats
+    log("exit stats " + " ".join(f"{k}={v}" for k, v in s.items()))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# check / selftest
+# --------------------------------------------------------------------------
+def cmd_check(cfg) -> int:
+    cands, unreadable = inventory()
+    if not cands:
+        print(f"no readable input devices for uid {os.geteuid()}: "
+              f"/dev/input/event* is root:input 0660, so run this as root "
+              f"({unreadable} nodes were skipped)")
+        return 1
+    print(f"{'path':20s} {'name':34s} {'phys':20s} id       vol rep rel/abs keys")
+    for c in cands:
+        print(f"{c.path:20s} {c.name[:34]:34s} {c.phys[:20]:20s} "
+              f"{c.vid:04x}:{c.pid:04x}  {int(c.has_volume)}   {int(c.has_rep)}   "
+              f"{int(c.has_rel_abs)}      {len(c.keys)}")
+    if unreadable:
+        print(f"({unreadable} further /dev/input/event* nodes are not readable as "
+              f"uid {os.geteuid()}; run as root to see them)")
+    print()
+    sel = resolve(cfg)
+    if not sel:
+        print("resolve: nothing matches the configured name/phys pattern")
+        return 0
+    for c in sel:
+        why = []
+        if c.has_rel_abs:
+            why.append("REL/ABS present (needs --force)")
+        if c.has_rep:
+            why.append("EV_REP present (needs --force)")
+        print(f"would grab {c.path} ({c.name!r}): " +
+              ("; ".join(why) if why else "ok"))
+    return 0
+
+
+def cmd_selftest(cfg) -> int:
+    if not have_root():
+        log("selftest needs root (/dev/uinput)")
+        return 1
+    ui = UInput({ecodes.EV_KEY: list(VOLUME_CODES)}, name=SHIM_NAME, phys=SHIM_PHYS,
+                version=1, vendor=SHIM_VID, product=SHIM_PID, bustype=ecodes.BUS_USB)
+    time.sleep(0.4)
+    node = getattr(ui.device, "path", "?")
+    log(f"created {node}; emitting 2 taps, 300 ms apart")
+    for _ in range(2):
+        ui.write(ecodes.EV_KEY, ecodes.KEY_VOLUMEUP, 1)
+        ui.syn()
+        time.sleep(cfg.hold)
+        ui.write(ecodes.EV_KEY, ecodes.KEY_VOLUMEUP, 0)
+        ui.syn()
+        time.sleep(0.3)
+    ui.close()
+    log("selftest done")
+    return 0
+
+
+# --------------------------------------------------------------------------
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(
+        prog="oxp3-voltap",
+        description="normalise the ONEXPLAYER 3 volume rocker into discrete taps")
+    p.add_argument("mode", nargs="?", default="run",
+                   choices=("run", "probe", "check", "selftest"))
+    p.add_argument("--device", action="append", default=[],
+                   metavar="PATH", help="explicit /dev/input/eventN (repeatable)")
+    p.add_argument("--name", default=os.environ.get(
+        "VOLTAP_NAME", "Handheld Daemon Volume Keyboard"),
+        help="regex on the device name to auto-select (default: %(default)s)")
+    p.add_argument("--phys", default=os.environ.get("VOLTAP_PHYS", "phys-hhd-vbtn"),
+                   help="regex on the device phys to auto-select")
+    p.add_argument("--hold", type=float,
+                   default=float(os.environ.get("VOLTAP_HOLD_MS", 30)) / 1000,
+                   help="ms the synthetic press is held (default 30)")
+    p.add_argument("--gap", type=float,
+                   default=float(os.environ.get("VOLTAP_GAP_MS", 60)) / 1000,
+                   help="ms after a tap in which a press counts as bounce (default 60)")
+    p.add_argument("--max-hold", type=float,
+                   default=float(os.environ.get("VOLTAP_MAX_HOLD_MS", 500)) / 1000,
+                   help="ms watchdog for a press that never ended")
+    p.add_argument("--rescan", type=float, default=1.0,
+                   help="seconds between device rescans (default 1)")
+    p.add_argument("--stats", type=float, default=float(os.environ.get("VOLTAP_STATS", 0)),
+                   help="print counters every N seconds (0 = off)")
+    p.add_argument("--duration", type=float,
+                   default=float(os.environ.get("VOLTAP_DURATION", 0)),
+                   help="probe: stop after N seconds (0 = until Ctrl-C)")
+    p.add_argument("--limit", type=int, default=0,
+                   help="probe: stop after N presses (0 = no limit)")
+    p.add_argument("--orphan-tap", dest="orphan_tap", action="store_true",
+                   default=os.environ.get("VOLTAP_ORPHAN_TAP", "1") not in ("0", "no", "off"),
+                   help="treat a release without a press as one physical press "
+                        "(default on; --no-orphan-tap disables)")
+    p.add_argument("--no-orphan-tap", dest="orphan_tap", action="store_false",
+                   help="drop releases that have no matching press")
+    p.add_argument("--stuck-ms", type=float, default=400.0,
+                   help="probe: a hold longer than this counts as stuck (default 400)")
+    p.add_argument("--grab", action="store_true",
+                   help="probe: grab the device (input goes only to the probe)")
+    p.add_argument("--force", action="store_true",
+                   help="grab devices with EV_REP or REL/ABS too (those events are dropped)")
+    p.add_argument("--print-devices", action="store_true", help="same as 'check'")
+    p.add_argument("--version", action="version", version="oxp3-voltap 1.0")
+    cfg = p.parse_args(argv)
+    env_dev = os.environ.get("VOLTAP_DEVICES", "auto").split()
+    if env_dev and env_dev != ["auto"] and not cfg.device:
+        cfg.device = env_dev
+    cfg.devices = cfg.device
+    if cfg.print_devices:
+        return cmd_check(cfg)
+    return {"run": cmd_run, "probe": cmd_probe, "check": cmd_check,
+            "selftest": cmd_selftest}[cfg.mode](cfg)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

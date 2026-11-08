@@ -1,0 +1,27 @@
+# ONEXPLAYER 3: the EC does not always send the volume rocker's break code, so
+# the key stays down and the input core repeats it (EV_REP), which runs the
+# mixer to 100 %/0 %.  The kernel can release the scancode itself right after
+# the press; that is what the "!" prefix below asks for.
+#
+# Two scancode pairs are listed because the EC's choice is not documented:
+#   0xae/0xb0  the pair the Linux atkbd DMI table uses for Dell/HP/Samsung
+#              "no release on volume keys" laptops (what 84-oxp3-volume-keys.hwdb
+#              already installs)
+#   0xa1/0xb2  the pair atkbd maps to KEY_VOLUMEDOWN/KEY_VOLUMEUP by default,
+#              i.e. what the rocker sends if it uses the standard media codes
+# Listing both is harmless: each line only adds "release this key at once" to a
+# scancode that already produces that key.
+#
+# Verify which pair your unit sends before relying on this file:
+#   sudo evtest --grab /dev/input/event4        (press the rocker, read "code")
+# or
+#   sudo oxp3-voltap probe --device /dev/input/event4 --limit 4
+#
+# Install (root):
+#   install -m 0644 84-oxp3-volume-keys-taps.hwdb /etc/udev/hwdb.d/
+#   systemd-hwdb update && udevadm trigger --subsystem-match=input --action=change
+evdev:atkbd:dmi:bvn*:bvr*:bd*:svnONE-NETBOOK:pnONEXPLAYER3:*
+ KEYBOARD_KEY_ae=!volumedown
+ KEYBOARD_KEY_b0=!volumeup
+ KEYBOARD_KEY_a1=!volumedown
+ KEYBOARD_KEY_b2=!volumeup
