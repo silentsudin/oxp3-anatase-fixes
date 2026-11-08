@@ -825,7 +825,11 @@ install_flatpak_mesa() {
     # host can run a dynamic-expat build (faster patches) while the sandbox gets a static one.
     local root="$MESA_BUILD_DIR" src list
     if [[ -n ${OXP3_FLATPAK_BUILD:-} ]]; then
-        root="${OXP3_FLATPAK_BUILD%/}/usr/local"
+        # same convention as OXP3_MESA_BUILD: the value is the prefix that contains lib64/
+        # (accept a tree root too, for convenience)
+        root="${OXP3_FLATPAK_BUILD%/}"
+        [[ -e $root/lib64/libvulkan_intel.so ]] || root="$root/usr/local"
+        [[ -e $root/lib64/libvulkan_intel.so ]] || die "OXP3_FLATPAK_BUILD=$OXP3_FLATPAK_BUILD has no lib64/libvulkan_intel.so"
         say "Flatpak runtime driver from OXP3_FLATPAK_BUILD: $root"
     fi
     src="$root/lib64"
