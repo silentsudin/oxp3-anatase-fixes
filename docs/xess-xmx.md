@@ -201,3 +201,29 @@ Everything else stays on our patched driver (system default); only XeSS titles u
 Our own builds (`mesa-xmx`, `mesa-merged`, main port) are NOT used for XMX: they still fail XeSS initialisation. The
 release binary is built from the project branch, which carries CM changes beyond the patched tarball's patch set;
 reproducing it needs that branch, not our patch port.
+
+## Proof that the shipped release binary cannot be rebuilt from published sources
+
+Bisect and rebuild results (all measured on Cyberpunk, XeSS on, IGC 2.10.10):
+
+| build | source | patches | flags | sha256 | result |
+|---|---|---|---|---|---|
+| release binary | — | — | their CI | (shipped) | clean, 74.2 FPS |
+| `mesa-rc3` | rc3 git archive | CM6 + 5 backports + overrides | /usr/local, prefer_static | `3f5216e7` | artifacts, 74.5 |
+| `mesa-no0004` | rc3 git archive | CM6 + 4 backports | /usr/local | `14dfaf3a` | artifacts, 68.0 |
+| `mesa-only0001` | rc3 git archive | CM6 + 0001 | /usr/local | `dcc0f2c4` | artifacts, 67.6 |
+| `mesa-drc` | rc3 git archive | CM6 + 5 backports + overrides | release-exact (prefix=/usr, no GL, intel-rt) | `4b1d55ea` | artifacts, 67.7 |
+| `mesa-ctl` | rc3 git archive | CM6 + overrides, no backports | release-exact | `b775803a` | artifacts, 67.9 |
+| `mesa-pure` | rc3 git archive | CM6 only | release-exact | `b775803a` | artifacts (identical binary to control) |
+| `mesa-rel` | **rc3 release tarball** | CM6 + 5 backports + overrides | release-exact | `4b1d55ea` | (identical binary to `mesa-drc`) |
+
+Conclusions:
+- The source tarball is irrelevant: the git archive and the official release tarball produce the **same binary hash** (`4b1d55ea`).
+- The backports and the Anatase overrides are irrelevant: removing them changes nothing (`b775803a` control == pure build);
+  the overrides only touch DRI3/radv files and a Containerfile.
+- Mesa's drirc path was a real but secondary defect (fixed: `DRIRC_OK`), it did not cure the artifact.
+- Therefore the release binary contains CM code that is **not** in `patches/` in the release archive: rebuilding from
+  the published patch series cannot reproduce it. This is the definitive reason our own builds cannot be used for XMX.
+
+Shipping state: the release binary is the XMX driver, wired through `~/.config/xess-xmx/oxp3-env.sh`, the ICD json and
+Heroic envVars (IGC 2.10.10 required). Our patched driver remains the system default for all non-XeSS titles.
