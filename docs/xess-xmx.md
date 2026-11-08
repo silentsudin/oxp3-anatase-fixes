@@ -227,3 +227,26 @@ Conclusions:
 
 Shipping state: the release binary is the XMX driver, wired through `~/.config/xess-xmx/oxp3-env.sh`, the ICD json and
 Heroic envVars (IGC 2.10.10 required). Our patched driver remains the system default for all non-XeSS titles.
+
+## Source/toolchain reproduction attempts (all artifact)
+
+Release `20261107` maps to commit `96958b8` on `main`; its `patches/mesa-26.3/` are byte-identical to the release
+archive's. The release driver is built in `archlinux:latest` pinned to the Arch Linux Archive snapshot `2026/10/14`.
+
+| build | toolchain | `CMK2H` marker | size | result |
+|---|---|---|---|---|
+| shipped release binary | arch snapshot | present | 29,934,512 | clean, 74.2 |
+| our Fedora 45 build (`4b1d55ea`/`b775803a`) | gcc 16.2.1, Fedora 45 | **absent** | 29,714,032-29,714,040 | artifacts |
+| our Arch-snapshot build (`b354bd5a`) | same Arch snapshot + package list + meson flags as CI | **present** | 29,925,304 | **artifacts** |
+
+Conclusions:
+- The Fedora-vs-Arch toolchain difference is real (it changes the binary and introduces the `CMK2H` string), so the
+  toolchain does matter, but matching it does **not** cure the artifact.
+- With identical source commit, identical patch bytes, identical meson flags and the same pinned Arch toolchain, our
+  binary still differs from the shipped one (29,925,304 vs 29,934,512 bytes) and still artifacts.
+- Therefore the shipped binary was produced from a revision that is **not** the tagged source (an unreleased/CI-only
+  branch state); no public recipe reproduces it.
+
+Consequence: the only remaining route to "our driver with working XMX" is binary-level reverse engineering of the
+release driver's CM functions (goal #2), or upstream providing the exact build revision. Working configuration is the
+release binary (restored), our patched driver remains default elsewhere.
