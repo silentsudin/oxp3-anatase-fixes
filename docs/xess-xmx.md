@@ -169,3 +169,35 @@ the artifact; update the local checkout to the release's patch revision before u
 - The release binary works; both are patch-compatible on paper, so the difference is inside the release's patch
   revision/compiler interface, not our build flags. Until that is understood, the release driver is the XMX driver and
   our patched driver remains the system default for every non-XeSS game.
+
+## FINAL WORKING CONFIGURATION (verified clean + fast)
+
+Cyberpunk 2077, XeSS on (Auto), 1920x1200: **no artifacts, performance restored** after switching the kernel compiler
+to IGC 2.10.10.
+
+Three distinct faults were found and fixed, in this order:
+
+1. **Missing CM patches.** Our local checkout predated the release: it had five patches, the release has six. The
+   missing ones are `0005-anv-cm-sampler-descriptor-table` (white speckles on foliage/edges) and
+   `0006-anv-cmat-vars-before-jay`.
+2. **Wrong kernel compiler.** Our checkout's IGC was `ocloc 25.18.1` with a newer `libigc`; the release pins IGC
+   **2.10.10** ("newer IGC releases fail on some XeSS kernels"). Kernels compiled with the newer compiler both
+   artifacted and ran slower - that was the apparent "performance regression".
+3. **No compiler at all in the release archive.** `XMX_IGC_DIR` (or `<package>/igc`) must contain
+   `igc/igc` (2.10.10) and `neo/bin/ocloc`; `tools/get-igc.sh` fetches them (~95 MB). Without it every CM compile
+   fails, XeSS aborts and the game silently resets upscaling to Off.
+
+Shipping configuration:
+
+    driver:   ~/.local/share/xess-xmx-release/xess-xmx-linux-20261107/lib/mesa-26.3.0-rc3/libvulkan_intel.so
+              (Mesa 26.3.0-rc3 + the release's six CM patches)
+    compiler: ~/.local/share/xess-xmx-release/xess-xmx-linux-20261107/igc  (IGC 2.10.10 + ocloc 25.18.1)
+    shim:     the release directory via INTC_ALT_DRIVER_EXTENSIONS_PATH
+    env:      ~/.config/xess-xmx/oxp3-env.sh, Heroic per-game envVars, cp2077-direct.sh (OXP3_XMX=1)
+    game:     Cyberpunk's bin/x64 carries Intel SDK 3.0.2 XeSS libs (originals in bin/x64/.xmx-orig)
+
+Everything else stays on our patched driver (system default); only XeSS titles use the release driver.
+
+Our own builds (`mesa-xmx`, `mesa-merged`, main port) are NOT used for XMX: they still fail XeSS initialisation. The
+release binary is built from the project branch, which carries CM changes beyond the patched tarball's patch set;
+reproducing it needs that branch, not our patch port.
