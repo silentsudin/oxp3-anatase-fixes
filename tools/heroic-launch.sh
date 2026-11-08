@@ -27,6 +27,7 @@ case "$url" in
             --env=SteamGameId="${SteamGameId:-}" \
             --env=STEAM_COMPAT_APP_ID="${SteamAppId:-}" \
             --env=STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.local/share/Steam" \
+            --env=OXP3_XMX=1 \
             "$HOME/git/linux_scratch/oxp3-anatase-fixes/tools/cp2077-direct.sh" "$@"
         ;;
 esac

@@ -7,6 +7,10 @@
 # to get an unattended benchmark run whose summary lands in
 #   .../drive_c/users/steamuser/Documents/CD Projekt Red/Cyberpunk 2077/benchmarkResults/
 set -eu
+# OXP3_XMX=1 enables the XeSS XMX environment for this launch (see docs/xess-xmx.md)
+if [ "${OXP3_XMX:-0}" = 1 ] && [ -f "$HOME/.config/xess-xmx/oxp3-env.sh" ]; then
+    . "$HOME/.config/xess-xmx/oxp3-env.sh"
+fi
 PROTON="${PROTON:-$HOME/.local/share/Steam/compatibilitytools.d/Proton-CachyOS Latest/proton}"
 GAME="${GAME:-$HOME/Games/Heroic/Cyberpunk 2077/bin/x64/Cyberpunk2077.exe}"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.local/share/Steam"
