@@ -78,3 +78,20 @@ For Steam: Steam launches are not wrapped in gamemoderun (no such entry in any `
 options), so the same CPU-governor penalty does not apply there. The Mesa patches reach Steam games through the
 `org.anatase.Platform` Flatpak runtime override, which currently carries `install-shiprt` + the bundled
 `libexpat.so.1` (the combination that ran Cyberpunk through Steam at 04:11).
+
+## Gamemode and non-Steam games (2026-11-08 17:1x)
+
+Steam games in Gamemode were fixed by building Mesa with `-Dplatforms=x11,wayland`: gamescope presents through a
+Wayland surface, so a driver built with `-Dplatforms=x11` only crashed in `wsi_GetPhysicalDeviceSurfaceSupportKHR`
+(DX12 titles crashed, DXVK titles went black) while the desktop XWayland path worked. Runtime override with the
+wayland build runs Steam games in Gamemode with good performance.
+
+Non-Steam titles launched from Heroic are a different problem in Gamemode: a non-Steam shortcut brings up the
+Heroic flatpak inside Steam's sandbox, stacking Heroic + umu + Steam containers. CPU sits ~15 W and the desktop
+numbers (51-53 FPS) are not reached. Launch Proton directly instead:
+
+    tools/cp2077-direct.sh            # add as a Steam non-Steam shortcut
+    tools/cp2077-direct.sh -benchmark # unattended benchmark
+
+This keeps the Steam environment (and the runtime driver) but removes the Heroic/umu layer between Steam and
+Proton. Undisturbed direct-Proton runs measured 47.9-53.2 FPS at 1920x1200, upscaling off, texture Medium.
