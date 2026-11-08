@@ -55,3 +55,26 @@ Findings:
 - `./state-snapshot.sh` - driver hashes, PL1, profile, kernel module path, temps, flatpak overrides.
 - `/tmp/prof2.sh` - instantaneous per-process CPU (delta of /proc stat) + RAPL core/uncore/package + GPU/CPU MHz.
 - `/tmp/bench-watch.sh` - waits for a game process then logs the same for 90 s.
+
+## Root cause of the 41 FPS regression (confirmed 2026-11-08 16:43)
+
+Heroic launches Proton wrapped in the Flatpak's `gamemoderun`
+(`--wrapper "/app/bin/gamemoderun <proton> waitforexitandrun"`, per-game `useGameMode: true`), which forces the
+CPU governor to *performance*. On this 35 W package the CPU then takes ~12-15 W and starves the GPU.
+
+Measured, same settings (1920x1200, windowed, vsync off, upscaling off, texture Medium):
+
+| run | avg FPS |
+|---|---|
+| Heroic with GameMode ON | 41.2 |
+| direct Proton from a terminal | 51.5 |
+| Heroic with GameMode OFF | **53.2** |
+
+So the best configuration is: host driver = `install-shiprt` (+ bundled expat), patched kernel modules, PL1 35 W,
+and **GameMode disabled in Heroic**. 53.2 beats the stock baseline (28.9) by 84 % and last night's upscaled
+49.4 without any upscaling.
+
+For Steam: Steam launches are not wrapped in gamemoderun (no such entry in any `localconfig.vdf` launch
+options), so the same CPU-governor penalty does not apply there. The Mesa patches reach Steam games through the
+`org.anatase.Platform` Flatpak runtime override, which currently carries `install-shiprt` + the bundled
+`libexpat.so.1` (the combination that ran Cyberpunk through Steam at 04:11).
