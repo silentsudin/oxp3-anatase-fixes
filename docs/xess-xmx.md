@@ -299,3 +299,22 @@ Shipping configuration (all wired):
 - compiler: `tools/xmx-cm-compile-nodgrf.sh` (128-GRF)
 - IGC: `~/.local/share/xess-xmx-release/.../igc` (2.10.10), shim via `INTC_ALT`
 - env: `~/.config/xess-xmx/oxp3-env.sh`, Heroic envVars, `cp2077-direct.sh` (OXP3_XMX=1)
+
+## FINAL SHIPPING CONFIGURATION (clean + fast, our driver)
+
+Driver: our own podman build `~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so` =
+Mesa 26.3.0-rc3 + the release's six CM patches + **our five performance backports** + Anatase overrides.
+Compiler helper: `tools/xmx-cm-compile-nodgrf.sh` (filters `-doubleGRF` -> 128-GRF kernels).
+IGC 2.10.10 (`~/.local/share/xess-xmx-release/.../igc`), shim via `INTC_ALT_DRIVER_EXTENSIONS_PATH`.
+
+Measured (Cyberpunk, XeSS Auto, IGC 2.10.10, fresh kernel cache):
+
+| driver | kernels | artifacts | avg | min |
+|---|---|---|---|---|
+| release binary | `-doubleGRF` | faint | 74.2 | 58.1 |
+| release binary | 128-GRF | none | 76.5 | 62.1 |
+| our build (release commit) | 128-GRF | none | 74.7 | 60.8 |
+| **our build + backports + overrides** | **128-GRF** | **none** | **see run summary** | |
+
+Root cause of the entire artifact saga: CM kernels compiled with `-doubleGRF` (256-register codegen) on Xe3. The 128-GRF
+codegen is both correct and faster. Fixed in the compiler helper, not in Mesa.
