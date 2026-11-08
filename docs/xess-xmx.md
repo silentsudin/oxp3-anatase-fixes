@@ -250,3 +250,27 @@ Conclusions:
 Consequence: the only remaining route to "our driver with working XMX" is binary-level reverse engineering of the
 release driver's CM functions (goal #2), or upstream providing the exact build revision. Working configuration is the
 release binary (restored), our patched driver remains default elsewhere.
+
+## Binary diff result: release and our builds are the same program
+
+- Symbol sets: 20,737 defined symbols each, identical apart from one local jump-table constant.
+- All 75 CM-related functions (`anv_cm_*`, `cmk*`) have **identical instruction counts** in the release binary and in our
+  Arch-toolchain build; the instruction differences are constants derived from the build's source path strings, plus the
+  `CMK2H` data marker.
+- Linkage differs only by `libdisplay-info.so.3` (monitor metadata for WSI) - unrelated to XeSS compute.
+
+Therefore no CM code delta exists between the shipped driver and ours: the earlier "artifacts only with our builds"
+pattern was not a code difference.
+
+## Control experiment that closes the loop
+
+Release driver, kernel cache deleted, same environment: the run shows a **slight** residual shimmer on foliage
+("barely noticeable but there"), while the same binary with the earlier warm cache was categorically clean.
+
+Conclusion: output quality varies with the freshly compiled CM kernels (IGC 2.10.10 -> .cmk), not with the Mesa driver
+binary. The earlier severe speckles cost us the old warm cache; on a fresh compile both drivers show the same faint
+residual. Chasing a driver-code fix was therefore the wrong axis.
+
+Practical consequence: the release driver remains the XMX driver (best performance, 74.2 avg / 58.1 min at XeSS Auto,
+86 avg at Performance), our patched driver remains default for all non-XeSS games, and no further gain is available
+from owning the driver build - the code is equivalent.
