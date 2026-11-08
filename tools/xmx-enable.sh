@@ -23,6 +23,9 @@ case "$action" in
 enable)
     [ -n "$game" ] && [ -n "$prefix" ] || { echo "usage: $0 enable --game <bin dir> --prefix <drive_c>" >&2; exit 2; }
     [ -e "$driver" ] || { echo "error: build the driver first: tools/build-xmx-driver.sh" >&2; exit 1; }
+    igc=${XMX_IGC_DIR:-${pkg_release:-$pkg}/igc}
+    [ -x "$igc"/neo/bin/ocloc* ] 2>/dev/null || ls "$igc"/neo/bin/ocloc* >/dev/null 2>&1 \
+        || { echo "error: no IGC ocloc under $igc; set XMX_IGC_DIR to the igc directory (the release archive ships none)" >&2; exit 1; }
     backup=$game/.xmx-orig; mkdir -p "$backup"
     for f in $libs; do
         [ -f "$game/$f" ] && [ ! -L "$game/$f" ] && { [ -e "$backup/$f" ] || cp -a "$game/$f" "$backup/"; cp -a "$pkg/xess/$f" "$game/$f"; }

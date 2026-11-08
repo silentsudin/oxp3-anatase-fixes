@@ -149,3 +149,23 @@ Configuration now live (known-good):
 
 `tools/build-xmx-driver.sh` remains for reproducing our own build, but it is not the shipping driver while it shows
 the artifact; update the local checkout to the release's patch revision before using it again.
+
+## Known-good configuration (working, verified)
+
+- Driver: the project's prebuilt release `20261107`, Mesa **26.3.0-rc3** + its six CM patches
+  (`~/.local/share/xess-xmx-release/xess-xmx-linux-20261107/lib/mesa-26.3.0-rc3/libvulkan_intel.so`).
+- `VK_DRIVER_FILES` -> an ICD json pointing at that binary; `ANV_CM_KERNEL_DIR`/`ANV_CM_HELPER` -> the release's
+  `kernels/` and `tools/cm-compile.sh`; shim via `INTC_ALT_DRIVER_EXTENSIONS_PATH` -> the release directory.
+- **`XMX_IGC_DIR` is required** (`~/.local/share/xess-xmx/igc`): the release archive contains no `neo/bin/ocloc`
+  compiler runtime. Without it every CM compile fails (`cm-compile: ocloc not found`), XeSS aborts at init and the
+  game silently flips upscaling back to Off - this exact failure cost an hour; `tools/xmx-enable.sh` now refuses to
+  run without a working ocloc.
+- Game needs Intel SDK XeSS libraries in `bin/x64` (Cyberpunk ships 2.0.1.41; keep `bin/x64/.xmx-orig` backup).
+
+### Our own builds - still not usable for XMX
+
+- main + ported six-patch CM: game aborts XeSS init (no shim trace, no summary), independent of IGC.
+- rc2 + the six-patch CM + our 26.3 backports + overrides (`mesa-merged`, sha `6536a067`): same failure.
+- The release binary works; both are patch-compatible on paper, so the difference is inside the release's patch
+  revision/compiler interface, not our build flags. Until that is understood, the release driver is the XMX driver and
+  our patched driver remains the system default for every non-XeSS game.
