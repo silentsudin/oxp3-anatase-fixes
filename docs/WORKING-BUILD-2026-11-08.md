@@ -106,3 +106,36 @@ machine** (state=disabled), so the live system is still on EEVDF; activate with:
 and verify with `./state-snapshot.sh | grep sched_ext` (expect `state=enabled`) and
 `systemctl status oxp3-gaming-sched`. Opt out at any time with `systemctl stop oxp3-gaming-sched` (the kernel returns
 to EEVDF immediately; no reboot).
+
+## XeSS XMX addition (validated clean + fast, 2026-11-08 23:2x)
+
+Goal was XeSS XMX (DPAS) upscaling active on Cyberpunk **without** the white speckles, at our best performance.
+
+Final stack (all wired; details and the full elimination table in `docs/xess-xmx.md`):
+
+    driver   ~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so   sha256 4b1d55ea9483417f7b21db4d71ec41488ed46122b13f5bccfd7f1ec989088408
+             = our podman build: Mesa 26.3.0-rc3 + six CM patches + our five backports + Anatase overrides
+    helper   tools/xmx-cm-compile-nodgrf.sh                     sha256 a6d9170d58757a07de012c96413aafe231fc8c081690f0c053d5f2076859303f
+             (release cm-compile.sh with -doubleGRF filtered out -> 128-GRF kernels)
+    IGC      ~/.local/share/xess-xmx-release/.../igc            IGC 2.10.10 + ocloc 25.18.1 (tools/get-igc.sh)
+    shim     ~/.local/share/xess-xmx-release/.../igdext64.dll    via INTC_ALT_DRIVER_EXTENSIONS_PATH
+    env      ~/.config/xess-xmx/oxp3-env.sh, Heroic envVars, cp2077-direct.sh (OXP3_XMX=1)
+
+Measured (Cyberpunk 1920x1200, XeSS Auto, upscalingType 5):
+
+    release driver + -doubleGRF ........ 74.2 avg / 58.1 min, faint speckles
+    release driver + 128-GRF ........... 76.5 / 62.1, clean
+    our build + 128-GRF ................ 74.7 / 60.8, clean
+    our build + backports + 128-GRF .... 76.6 / 62.3, clean   <- shipped
+
+Root cause recovered: the speckles were the **256-register (-doubleGRF) CM kernel codegen on Xe3**. The release binary
+and our build are the same program (identical symbols and identical CM-function instruction counts); the artifact was
+never our Mesa code. 128-GRF is both correct and faster.
+
+Failure modes / rollback:
+- Artifact returns  -> `rm -rf ~/.cache/xess-xmx/kernels` (stale 256-GRF kernels) and rerun.
+- No upscaling at all/benchmark aborts -> check `ANV_CM_HELPER`, `XMX_IGC_DIR` (`ocloc` present) and the ICD json path.
+- Fallback to the purely known-good release binary: point icd-xmx.json at
+  `~/.local/share/xess-xmx-release/xess-xmx-linux-20261107/lib/mesa-26.3.0-rc3/libvulkan_intel.so`.
+- Full opt-out for one game: remove `OXP3_XMX=1` (Gamemode) or the Heroic envVars entries; everything else keeps
+  our system driver.

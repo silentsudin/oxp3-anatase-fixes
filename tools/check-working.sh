@@ -28,3 +28,15 @@ PY
 [ "$n" = 0 ] && ok "Heroic GameMode off for all games" || bad "Heroic GameMode enabled for $n game(s)"
 [ $fail = 0 ] && echo "state matches the recorded working build" || echo "state differs from the recorded working build"
 exit $fail
+
+# XeSS XMX stack (optional feature: report, do not fail the build check)
+drv=$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so
+helper=$repo/tools/xmx-cm-compile-nodgrf.sh
+if [ -e "$drv" ]; then
+  printf 'xmx driver       %s\n' "$(sha256sum "$drv" | cut -d" " -f1 | cut -c1-16)"
+fi
+if grep -q "xmx-cm-compile-nodgrf" "$HOME/.config/xess-xmx/oxp3-env.sh" 2>/dev/null; then
+  printf 'xmx kernels     128-GRF helper wired\n'
+else
+  printf 'xmx kernels     NOT wired (helper override missing in oxp3-env.sh)\n'
+fi
