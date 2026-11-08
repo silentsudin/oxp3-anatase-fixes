@@ -46,6 +46,11 @@ What moved, and with which patch:
 * **hardware raster**: unchanged. Every driver-side and compiler-side lever tested was neutral or
   worse; this is documented in `docs/BEYOND-PARITY.md` sections 137-153 and is the remaining 7.7 %.
 
+Measurement provenance: the "after" figures were taken on a Mesa **main-27** tree at commit
+`ea40598`, which is the tree the patches were developed against. This repository builds Anatase's
+**26.3** branch plus the same patches (26.3 was measured ~1.5 % behind main-27 on the primary
+benchmark), so expect the same relative improvements rather than identical absolute FPS.
+
 Rejected patches are kept in `patches/rejected/` but are **not** applied: `0210` (wide ray-query
 shadow copies) measured -1.87 % under HPLOC, and `0209` (VKD3D vrt-off default) measured worse under
 Proton.
