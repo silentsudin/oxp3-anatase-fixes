@@ -128,3 +128,24 @@ played. `tools/cp2077-direct.sh` now sources `~/.config/xess-xmx/oxp3-env.sh` wh
 `heroic-launch.sh` Cyberpunk shortcut sets that, so Gamemode launches use the CM driver + shim as well. Next
 discriminator: a screenshot taken on the Gamemode screen at the moment the dots appear (composited desktop captures
 stay clean), which distinguishes a gamescope/WSI presentation artifact from an upscaler-data artifact.
+
+## RESOLVED: artifacts were our own driver build
+
+A/B with the project's prebuilt release driver (`xess-xmx-linux-20261107`, Mesa 26.3.0-rc3 + its CM series) shows
+**no artifacts**, while every driver we built ourselves from the same series (Mesa main + our patches, main + CM only,
+26.3 + CM from our local checkout) shows the white dots on trees/building edges with both XMX and DP4a. The upscaler,
+the SDK 3.0.2 libraries, vkd3d flags, sharpness and quality preset were all eliminated as causes by lever tests
+(descriptor-heap disable, `no_upload_hvv`, `single_queue`, sharpness 0/0.5, XeSS Performance/Auto - artifacts in all).
+
+Conclusion: **ship the prebuilt release driver for XMX** rather than our podman build. Our local checkout of the
+project predates the release (20261107), so the release contains newer CM fixes than the patch set we built from.
+
+Configuration now live (known-good):
+- `~/.config/xess-xmx/icd-xmx.json` -> `~/.local/share/xess-xmx-release/xess-xmx-linux-20261107/lib/mesa-26.3.0-rc3/libvulkan_intel.so`
+- `~/.config/xess-xmx/oxp3-env.sh` and Heroic envVars -> the release's `kernels/`, `tools/cm-compile.sh`, `igdext64.dll`
+  (`INTC_ALT_DRIVER_EXTENSIONS_PATH`), plus `VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer` and `force_vk_vendor=0`.
+- Measured on the release driver: 86.0 avg / 70.7 min with the XeSS Performance preset; 49.5/42.4 in the other
+  (XeSS quality Auto, heavier) run.
+
+`tools/build-xmx-driver.sh` remains for reproducing our own build, but it is not the shipping driver while it shows
+the artifact; update the local checkout to the release's patch revision before using it again.
