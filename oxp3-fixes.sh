@@ -706,14 +706,20 @@ remove_rapl_udev_rules() {
 # ---------------------------------------------------------------------------------------------
 # OneXPlayer 3 extras: services and settings in /etc and /usr/local (they survive updates)
 # ---------------------------------------------------------------------------------------------
-EXTRA_UNITS=(oxp3-tdp-sync.service oxp3-xpad-sleep.service oxp3-rapl-pp1.service)
+EXTRA_UNITS=(oxp3-tdp-sync.service oxp3-xpad-sleep.service oxp3-rapl-pp1.service oxp3-sleep-wakeup.service
+             oxp3-sleep-pre.service oxp3-sleep-log.service)
 EXTRA_STATE=/etc/oxp3-fixes
 
 install_extras() {
     local s u me; me=$(id -un)
-    for s in oxp3-tdp-sync oxp3-xpad-sleep oxp3-audio-route; do
+    for s in oxp3-tdp-sync oxp3-xpad-sleep oxp3-audio-route oxp3-sleep-wakeup oxp3-sleep-log; do
         sudo install -D -m 0755 "$here/files/$s" "/usr/local/libexec/$s"
     done
+    # suspend: bag-safe wake sources, and the pre/post pair that logs what woke the machine.
+    # The pair lives in /etc/systemd/system (not /usr/lib/systemd/system-sleep) so it survives
+    # an ostree update; both call the same multi-call script.
+    sudo install -D -m 0644 "$here/files/99-oxp3-sleep-wakeup.rules" \
+        /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules
     for u in "${EXTRA_UNITS[@]}" oxp3-audio-resume@.service; do
         sudo install -m 0644 "$here/files/$u" "/etc/systemd/system/$u"
     done
@@ -723,9 +729,12 @@ install_extras() {
     # the BMI260 IMU also matches bmi160's ACPI id; bmi160 loads but never binds
     echo 'blacklist bmi160_i2c' | sudo tee /etc/modprobe.d/oxp3-bmi160.conf >/dev/null
     sudo systemctl daemon-reload
-    sudo systemctl enable oxp3-xpad-sleep.service oxp3-rapl-pp1.service "oxp3-audio-resume@$me.service" >/dev/null 2>&1
+    sudo systemctl enable oxp3-xpad-sleep.service oxp3-rapl-pp1.service "oxp3-audio-resume@$me.service" \
+        oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service >/dev/null 2>&1
     sudo systemctl enable oxp3-tdp-sync.service >/dev/null 2>&1
     sudo systemctl restart oxp3-tdp-sync.service
+    sudo systemctl restart oxp3-sleep-wakeup.service
+    sudo udevadm control --reload 2>/dev/null || true
     sudo systemctl --global enable oxp3-audio-route.service >/dev/null 2>&1
     systemctl --user daemon-reload
     # thermald exits at boot here: the BIOS has no PSVT tables for it ("THD engine init failed")
@@ -734,6 +743,7 @@ install_extras() {
         sudo install -d "$EXTRA_STATE"; sudo touch "$EXTRA_STATE/thermald-disabled"
     fi
     echo "  TDP sync, speaker route check (+ resume), speaker name, xpad sleep, GPU power zone check"
+    echo "  suspend: only lid/power/sleep button + the RTC alarm can wake it now (tools/sleep-power-measure.sh)"
     echo "  (the speaker name shows after WirePlumber restarts: next login, or systemctl --user restart wireplumber)"
 }
 
@@ -744,7 +754,11 @@ uninstall_extras() {
     for u in "${EXTRA_UNITS[@]}" oxp3-audio-resume@.service; do sudo rm -f "/etc/systemd/system/$u"; done
     sudo rm -f /etc/systemd/user/oxp3-audio-route.service \
         /etc/wireplumber/wireplumber.conf.d/52-oxp3-speakers.conf /etc/modprobe.d/oxp3-bmi160.conf \
-        /usr/local/libexec/oxp3-tdp-sync /usr/local/libexec/oxp3-xpad-sleep /usr/local/libexec/oxp3-audio-route
+        /usr/local/libexec/oxp3-tdp-sync /usr/local/libexec/oxp3-xpad-sleep /usr/local/libexec/oxp3-audio-route \
+        /usr/local/libexec/oxp3-sleep-wakeup /usr/local/libexec/oxp3-sleep-log \
+        /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules
+    # the wake-source policy is applied at boot, so a plain reboot restores the firmware defaults
+    sudo udevadm control --reload 2>/dev/null || true
     if [[ -e $EXTRA_STATE/thermald-disabled ]]; then
         sudo systemctl enable thermald.service >/dev/null 2>&1 || true
         sudo rm -f "$EXTRA_STATE/thermald-disabled"

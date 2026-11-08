@@ -14,7 +14,7 @@ here, so `build` + `install` reapplies it to whatever Anatase ships next.
 | kernel modules | xe: VBT VS/PE-O backport (white dots, HDR retoggle black screen), 7.3 VRR/DSB flip timing, resume out-of-memory fix, 7.2.8-7.2.13 stable fixes, IBC v3 on PTL, eDP HDR switches. iwlwifi/iwlmld and btintel/btintel_pcie: 7.2.13 stable and 7.3/7.4 fixes | built for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3` in `updates/` with a regenerated initramfs |
 | firmware | display DMC v2.20 (v2.36 caps VRR at about 74 fps), Bluetooth 24.80, CPU microcode 0x11c | `oxp3-firmware`, layered with the modules, in `/usr/lib/firmware/updates` (searched first, also by dracut) |
 | `rapl-power` | CPU/GPU power for the overlay without opening the RAPL counters to users | `/usr/local/libexec` + `/etc/systemd/system` |
-| extras | TDP above 25 W actually applied, speakers after boot/resume, volume rocker no longer sticks, no 5 s wait on suspend, GPU power reading on every boot | services and configs in `/etc`; the hhd volume patch in the `/usr` overlay |
+| extras | TDP above 25 W actually applied, speakers after boot/resume, volume rocker no longer sticks, no 5 s wait on suspend, GPU power reading on every boot; only the lid, power button, sleep button and RTC alarm can wake it, and every resume logs what woke it ([docs/hw/sleep-power.md](docs/hw/sleep-power.md)) | services and configs in `/etc`; the hhd volume patch in the `/usr` overlay |
 
 You keep booting the stock Anatase kernel; only the modules above are replaced. Kernel
 patches Anatase already carries are skipped one by one; firmware that Anatase ships in the

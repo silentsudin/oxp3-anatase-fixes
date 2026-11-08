@@ -1,0 +1,71 @@
+#!/bin/bash
+# oxp3-sleep-log: ask the platform after every resume what actually woke it.
+#
+# Installed as /usr/lib/systemd/system-sleep/oxp3-sleep-log, so systemd runs it as root
+# right before the system suspends ($1 = pre) and right after it resumes ($1 = post).
+# It changes nothing: it records, into the journal (logger -t oxp3-sleep), ...
+#
+#   * whether the kernel counted a successful suspend and how long the hardware really
+#     slept (suspend_stats success / last_hw_sleep), including a failed step and device if
+#     the attempt aborted,
+#   * the S0ix residency delta from intel_pmc_core, which is the number that says whether
+#     the package ever reached the low-power state it was asked for,
+#   * which wakeup sources incremented across the suspend: this is how a spurious wake
+#     ("it woke up in the bag") gets a name instead of a guess.
+#
+# Read it back with:  journalctl -t oxp3-sleep -b
+set -u
+
+STATE=/run/oxp3-sleep.log-state
+W=/sys/class/wakeup
+PMC=/sys/kernel/debug/pmc_core/slp_s0_residency_usec
+S=/sys/power/suspend_stats
+
+read_num() { [[ -r $1 ]] && tr -d '\n' < "$1" || echo 0; }
+
+case ${1:-} in
+pre)
+    {
+        echo "success $(read_num $S/success)"
+        echo "fail $(read_num $S/fail)"
+        echo "hw_sleep $(read_num $S/total_hw_sleep)"
+        echo "s0ix $(read_num $PMC)"
+        echo "when $(date +%s)"
+        for d in "$W"/*; do
+            [[ -r $d/event_count ]] || continue
+            printf 'wake %s %s %s\n' "$(basename "$d")" "$(read_num "$d/event_count")" \
+                "$(tr -d '\n' < "$d/name" 2>/dev/null)"
+        done
+    } > "$STATE" 2>/dev/null
+    ;;
+post)
+    [[ -r $STATE ]] || { logger -t oxp3-sleep "resumed (${2:-?}) without a pre-suspend record"; exit 0; }
+    success=$(read_num $S/success); fail=$(read_num $S/fail)
+    hw=$(read_num $S/total_hw_sleep); s0ix=$(read_num $PMC)
+    when=$(awk '$1=="when"{print $2}' "$STATE")
+
+    last_hw=$(read_num $S/last_hw_sleep)
+    failed_step=$(tr -d '\n' < $S/last_failed_step 2>/dev/null)
+    failed_dev=$(tr -d '\n' < $S/last_failed_dev 2>/dev/null)
+
+    logger -t oxp3-sleep "resume (${2:-?}): success +$(awk -v a="$(awk '$1=="success"{print $2}' "$STATE")" -v b="$success" 'BEGIN{print b-a}')" \
+        "fail +$(awk -v a="$(awk '$1=="fail"{print $2}' "$STATE")" -v b="$fail" 'BEGIN{print b-a}')" \
+        "hw_sleep +$(awk -v a="$(awk '$1=="hw_sleep"{print $2}' "$STATE")" -v b="$hw" 'BEGIN{printf "%.1f", (b-a)/1e9}')s" \
+        "last_hw_sleep=$(awk -v n="$last_hw" 'BEGIN{printf "%.1f", n/1e9}')s" \
+        "s0ix +$(awk -v a="$(awk '$1=="s0ix"{print $2}' "$STATE")" -v b="$s0ix" 'BEGIN{printf "%.1f", (b-a)/1e6}')s" \
+        "${failed_step:+failed_step=$failed_step} ${failed_dev:+failed_dev=$failed_dev}"
+
+    # Which wakeup source fired? Anything whose counter moved is a suspect; name it with
+    # the device path a human can act on.
+    while read -r kind name old rest; do
+        [[ $kind == wake ]] || continue
+        now=$(read_num "$W/$name/event_count")
+        (( now > old )) || continue
+        dev=$(readlink -f "$W/$name/device" 2>/dev/null)
+        logger -t oxp3-sleep "wake source $rest (+$((now - old))): ${dev#/sys/devices/}"
+    done < "$STATE"
+
+    rm -f "$STATE"
+    ;;
+esac
+exit 0

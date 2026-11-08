@@ -1,0 +1,121 @@
+#!/bin/bash
+# oxp3-sleep-wakeup: apply the OneXPlayer 3's bag-safe wake-source policy.
+#
+# s2idle itself works on this device (the platform advertises low-power S0 idle and
+# /sys/power/mem_sleep selects s2idle), but out of the box nine ACPI wake sources and the
+# two internal HID endpoints are armed. That is the difference between "asleep for eight
+# hours" and "woke up in the bag at 03:00, ran a Steam update at 40 C, went back to sleep":
+# the second one is what makes the machine warm and the battery flat.
+#
+# What stays armed, and why:
+#   LID0   lid switch      - closing/opening the lid must wake it
+#   PWRB   power button    - the only wake control a handheld really has
+#   SLPB   sleep button    - harmless, present on the EC
+#   AWAC   ACPI wake alarm - this is what rtcwake/alarmtimer program; without it a timed
+#                            wake (and any "suspend, then hibernate" plan) cannot happen
+#   rtc_cmos / alarmtimer  - kernel-level wake timers, kept for the same reason
+#
+# What gets disarmed (unless overridden, see below):
+#   XHCI/TXHC/TDM0/TRP0/TRP1 - the two xHCI controllers (USB-A ports, internal pad and the
+#                              two internal HID endpoints) plus the USB4/Type-C root ports.
+#                              A gamepad or a dongle that gets nudged in a bag wakes the
+#                              machine; nothing on USB needs to wake it from a bag.
+#   RP03/RP09               - the SD-card reader and the NVMe root port. Storage does not
+#                              need to wake the machine, and their PME can fire while the
+#                              root port link is training.
+#   ADP1 (AC)               - plugging the charger should not wake a sleeping handheld.
+#
+# Knobs (edit below or override in the unit):
+#   ALLOW_USB_WAKE=1  keep XHCI/TXHC and the internal HID/gamepad wake sources armed, so a
+#                     button on the pad wakes the device (nice at home, bad in a bag)
+#   ALLOW_AC_WAKE=1   let plugging the charger wake the device
+set -u
+
+ALLOW_USB_WAKE=${ALLOW_USB_WAKE:-0}
+ALLOW_AC_WAKE=${ALLOW_AC_WAKE:-0}
+
+changed=0
+failed=0
+say() { echo "oxp3-sleep-wakeup: $*"; }
+
+# ---------------------------------------------------------------- /proc/acpi/wakeup
+# Writing a name here *toggles* it, so only touch entries that are enabled and not in the
+# keep list. Never write a name that is currently disabled: that would arm it.
+acpi_keep=" LID0 PWRB SLPB AWAC "
+[[ $ALLOW_USB_WAKE == 1 ]] && acpi_keep+="XHCI TXHC TDM0 TDM1 TRP0 TRP1 TRP2 TRP3 "
+[[ $ALLOW_AC_WAKE  == 1 ]] && acpi_keep+="ADP1 "
+
+if [[ -w /proc/acpi/wakeup ]]; then
+    while read -r name state status rest; do
+        [[ $status == "*enabled" ]] || continue
+        [[ -n ${name:-} ]] || continue
+        [[ $acpi_keep == *" $name "* ]] && continue
+        if echo "$name" 2>/dev/null > /proc/acpi/wakeup; then
+            say "ACPI wake $name -> disabled${rest:+ ($rest)}"
+            changed=1
+        else
+            say "ACPI wake $name: could not disable"
+            failed=1
+        fi
+    done < <(awk 'NR>1' /proc/acpi/wakeup)
+else
+    say "no writable /proc/acpi/wakeup"
+fi
+
+# ---------------------------------------------------------------- device wakeup bits
+# These are the PME/runtime-PM wake bits. The ACPI table above is the GPE routing; both
+# have to be off for a device to be unable to wake the machine, and the PCI one is also
+# what a resuming driver looks at.
+disable_pci_wake() {
+    local p=/sys/bus/pci/devices/$1/power/wakeup
+    [[ -e $p ]] || return 0
+    [[ $(< "$p") == enabled ]] || return 0
+    if echo disabled 2>/dev/null > "$p"; then
+        say "pci $1 wakeup -> disabled"
+        changed=1
+    else
+        say "pci $1: could not disable wakeup"
+        failed=1
+    fi
+}
+
+# storage and card reader
+disable_pci_wake 0000:00:06.0    # PCIe root port #9 -> NVMe
+disable_pci_wake 0000:01:00.0    # the NVMe device itself
+disable_pci_wake 0000:00:1c.0    # PCIe root port #3 -> card reader
+disable_pci_wake 0000:56:00.0    # the card reader
+# USB4 / Type-C subsystem (also covered by the ACPI names above)
+disable_pci_wake 0000:00:07.0
+disable_pci_wake 0000:00:07.1
+if [[ $ALLOW_USB_WAKE != 1 ]]; then
+    disable_pci_wake 0000:00:14.0   # standalone xHCI: USB-A ports, internal HID pair, pad
+    disable_pci_wake 0000:00:0d.0   # Type-C xHCI
+    disable_pci_wake 0000:00:0d.2   # Thunderbolt/USB4 DMA
+    # The two internal HID endpoints: the EC bridge (1a86:fe00) and the "mini keyboard"
+    # (1997:2433). Both are `removable=fixed`, both are on the standalone xHCI.
+    for d in /sys/bus/usb/devices/*/power/wakeup; do
+        [[ -e $d ]] || continue
+        dev=$(dirname "$(dirname "$d")")
+        [[ -r $dev/removable ]] || continue
+        [[ $(< "$dev/removable") == fixed ]] || continue
+        [[ $(< "$d") == enabled ]] || continue
+        if echo disabled 2>/dev/null > "$d"; then
+            say "usb $(basename "$dev") ($(< "$dev/idVendor"):$(< "$dev/idProduct")) wakeup -> disabled"
+            changed=1
+        else
+            say "usb $(basename "$dev"): could not disable wakeup"
+            failed=1
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------- report
+if (( failed )); then
+    say "some sources could not be disarmed (needs root: systemctl status oxp3-sleep-wakeup)"
+    exit 1
+elif (( changed )); then
+    say "policy applied"
+else
+    say "policy already in place, nothing to do"
+fi
+exit 0

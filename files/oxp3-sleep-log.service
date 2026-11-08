@@ -1,0 +1,27 @@
+[Unit]
+Description=OneXPlayer 3: log what the platform did across the last suspend
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/hw/sleep-power.md
+# Reached only once the machine is back: units ordered after suspend.target run on resume.
+After=suspend.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-sleep-log post
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @swap @reboot
+
+[Install]
+WantedBy=suspend.target

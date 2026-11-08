@@ -1,0 +1,35 @@
+# OneXPlayer 3 (OXP3): keep the bag-safe wake source policy in place across re-enumeration.
+#
+# oxp3-sleep-wakeup.service applies the full policy once at boot. USB and PCI devices are
+# re-created on every resume and on every dock/charger hotplug, and a freshly probed device
+# comes back with its default wakeup=enabled, so the same decisions are repeated here for
+# the devices that can actually wake an s2idle suspend on this machine.
+#
+# The ACPI /proc/acpi/wakeup side (GPE routing) cannot be done from udev; that stays in the
+# service. See docs/hw/sleep-power.md.
+#
+# To allow wake-on-USB (a button on the internal pad wakes the device), comment out the
+# 00:14.0 / 00:0d.0 / 00:0d.2 lines and the two USB lines, or set ALLOW_USB_WAKE=1 in
+# oxp3-sleep-wakeup.service.
+
+# Internal HID pair on the standalone xHCI:
+#   1a86:fe00  the EC bridge (usbhid, serial 0123456789)
+#   1997:2433  the "mini keyboard" endpoint
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="fe00", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1997", ATTR{idProduct}=="2433", ATTR{power/wakeup}="disabled"
+# The internal gamepad (Microsoft X-Box 360 pad descriptor) - wakes on rumble/USB traffic.
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="045e", ATTR{idProduct}=="028e", ATTR{power/wakeup}="disabled"
+
+# Storage and card reader must not wake the machine; their PME can fire while the link
+# retrains and turn a 0.5 W suspend into a 6 W idle desktop.
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:06.0", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:01:00.0", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:1c.0", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:56:00.0", ATTR{power/wakeup}="disabled"
+
+# USB4 / Type-C subsystem.
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:07.0", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:07.1", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:0d.0", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:0d.2", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:14.0", ATTR{power/wakeup}="disabled"
