@@ -169,9 +169,60 @@ MESA_BUILD_DIR="${OXP3_MESA_BUILD:-$HOME/git/linux_scratch/mesa-build/install-sh
 MESA_BACKUP=/usr/local/share/oxp3-fixes-fast
 
 build_mesa() {
-    [[ -x $MESA_BUILD_DIR/lib64/libvulkan_intel.so ]] ||
-        die "no prebuilt driver at $MESA_BUILD_DIR/lib64/libvulkan_intel.so (set OXP3_MESA_BUILD)"
-    say "mesa: using the prebuilt driver in $MESA_BUILD_DIR (no rebuild)"
+    # Reuse an explicitly selected tree, otherwise build with podman (the recipe the benchmarks used)
+    if [[ -n ${OXP3_MESA_BUILD:-} && -x $OXP3_MESA_BUILD/lib64/libvulkan_intel.so ]]; then
+        MESA_BUILD_DIR=$OXP3_MESA_BUILD
+        say "mesa: using $MESA_BUILD_DIR (OXP3_MESA_BUILD)"
+        return 0
+    fi
+    local out="$CACHE/mesa-fast/usr/local" src="$CACHE/mesa-fast/src"
+    if [[ -x $out/lib64/libvulkan_intel.so ]]; then
+        MESA_BUILD_DIR=$out
+        say "mesa: reusing the podman build in $out"
+        return 0
+    fi
+    command -v podman >/dev/null || die "podman is required to build Mesa"
+    local tarball="$CACHE/mesa/mesa-$MESA_COMMIT.tar.gz"
+    mkdir -p "$CACHE/mesa" "$CACHE/mesa-fast"
+    [[ -s $tarball ]] || curl -sfL --retry 3 -o "$tarball" "$MESA_URL" || die "download failed: $MESA_URL"
+
+    say "mesa: source $MESA_COMMIT + patches/mesa"
+    rm -rf "$src"; mkdir -p "$src"
+    tar xzf "$tarball" -C "$src" --strip-components=1
+    # Anatase's overrides.patch, minus the RADV Forza Horizon hunk (AMD only)
+    python3 - "$CACHE/anatase/cards/drivers/mesa/overrides.patch" "$CACHE/mesa-fast/overrides.patch" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+parts = re.split(r'(?m)^(?=diff --git )', s)
+keep = [x for x in parts if not x.startswith('diff --git a/src/amd/vulkan/00-radv-defaults.conf')]
+open(sys.argv[2], 'w').write(''.join(keep))
+PYEOF
+    git -C "$src" apply -p1 "$CACHE/mesa-fast/overrides.patch" || die "overrides.patch does not apply"
+    local f
+    for f in "$here"/patches/mesa/*.patch; do
+        git -C "$src" apply -p1 "$f" || die "$(basename "$f") does not apply to $MESA_COMMIT"
+    done
+
+    say "mesa: podman meson build (fedora:45)"
+    podman run --rm -v "$src":/src:ro,z -v "$CACHE/mesa-fast":/out:z registry.fedoraproject.org/fedora:45 bash -lc '
+set -e
+dnf -y -q install meson ninja-build gcc gcc-c++ bison flex pkgconf-pkg-config python3-mako \
+  python3-yaml python3-packaging python3-setuptools llvm22-devel llvm22-libs clang22 clang22-devel \
+  zlib-devel expat-devel libdrm-devel libxcb-devel libX11-devel xorg-x11-proto-devel libXext-devel \
+  libXrandr-devel libXfixes-devel libxshmfence-devel wayland-devel wayland-protocols-devel \
+  libzstd-devel glslang-devel > /tmp/dnf.log 2>&1
+rm -rf /b /out/usr; mkdir -p /out/usr/local
+meson setup /b /src --prefix=/usr/local --buildtype=release \
+  -Dvulkan-drivers=intel -Dgallium-drivers=iris,llvmpipe -Dplatforms=x11 -Dglx=dri -Dllvm=enabled \
+  > /tmp/cfg.log 2>&1 || { tail -25 /tmp/cfg.log; exit 1; }
+ninja -C /b -j"$(nproc)" > /tmp/build.log 2>&1 || { grep -m15 "error:" /tmp/build.log; exit 2; }
+DESTDIR=/out ninja -C /b install > /tmp/inst.log 2>&1
+cp /usr/lib64/libexpat.so.1 /out/usr/local/lib64/ 2>/dev/null || true
+echo MESA_PODMAN_BUILD_DONE
+' || die "Mesa build failed (see the podman output above)"
+    [[ -x $out/lib64/libvulkan_intel.so ]] || die "build produced no libvulkan_intel.so"
+    MESA_BUILD_DIR=$out
+    say "mesa: built $out ($(strings -a "$out/lib64/libvulkan_intel.so" | grep -m1 -oE 'Mesa [0-9][^ ]*'))"
 }
 
 install_mesa_fast() {
@@ -198,7 +249,7 @@ remove_mesa_fast() {
         [[ -z $f ]] && continue
         local base=${f##*/}
         if [[ -e $MESA_BACKUP/stock/$base ]]; then
-            sudo install -m 0755 "$MESA_BACKUP/stock/$base" "$f"
+            sudo cp -a "$MESA_BACKUP/stock/$base" "$f"
         else
             sudo rm -f "$f"
         fi
@@ -209,13 +260,28 @@ remove_mesa_fast() {
 
 # The Steam Flatpak runtime keeps its own copy; same list, our file only
 install_flatpak_mesa_fast() {
-    local src="$MESA_BUILD_DIR/lib64/libvulkan_intel.so"
+    local src="$MESA_BUILD_DIR/lib64"
     [[ -d $FLATPAK_RT/overrides ]] || { echo "  no Anatase Flatpak runtime overrides - Steam keeps Anatase's Mesa"; return 0; }
-    [[ -e $src ]] || return 0
-    sudo mkdir -p "$FLATPAK_RT/overrides/lib64"
-    sudo install -m 0755 "$src" "$FLATPAK_RT/overrides/lib64/libvulkan_intel.so"
-    echo "lib64/libvulkan_intel.so" | sudo tee "$FLATPAK_MESA_LIST" >/dev/null
-    echo "  Intel Vulkan driver in the Steam Flatpak runtime overrides"
+    [[ -e $src/libvulkan_intel.so ]] || return 0
+    sudo mkdir -p "$FLATPAK_RT/overrides/lib64" "$MESA_BACKUP/flatpak-stock"
+    # The runtime's own expat is older than the one the driver links against
+    # (LIBEXPAT_2.9.0 missing), so overriding only libvulkan_intel.so makes the Intel ICD
+    # fail to load inside the sandbox and Vulkan silently falls back to lavapipe (software
+    # rendering: single-digit FPS, CPU pegged). Ship the same expat the host install uses.
+    if [[ ! -e $MESA_BACKUP/flatpak-stock/libexpat.so.1 ]]; then
+        [[ -e $FLATPAK_RT/files/lib64/libexpat.so.1 ]] &&
+            sudo cp -a "$FLATPAK_RT/files/lib64/libexpat.so.1" "$MESA_BACKUP/flatpak-stock/libexpat.so.1"
+    fi
+    sudo install -m 0755 "$src/libvulkan_intel.so" "$FLATPAK_RT/overrides/lib64/libvulkan_intel.so"
+    local list=$'lib64/libvulkan_intel.so
+'
+    if [[ -e $src/libexpat.so.1 ]]; then
+        sudo install -m 0755 "$src/libexpat.so.1" "$FLATPAK_RT/overrides/lib64/libexpat.so.1"
+        list+=$'lib64/libexpat.so.1
+'
+    fi
+    printf '%s' "$list" | sudo tee "$FLATPAK_MESA_LIST" >/dev/null
+    echo "  Intel Vulkan driver + bundled expat in the Steam Flatpak runtime overrides"
     refresh_flatpak_runtime
 }
 
@@ -934,6 +1000,15 @@ do_status() {
     ls /etc/udev/rules.d/70-*rapl.rules >/dev/null 2>&1 && echo "  WARNING: old RAPL udev rule still present (run install)"
     stat -c '  RAPL counters: %A %n' /sys/class/powercap/intel-rapl:0/energy_uj 2>/dev/null
     echo "  Mesa: host $(host_mesa)$(grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so && echo ' with the XeSS XMX patches'), Steam Flatpak: $(flatpak_mesa)"
+    local rtx=/run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files/lib64
+    if [[ -e $rtx/libexpat.so.1 ]]; then
+        if nm -D --with-symbol-versions "$rtx/libexpat.so.1" 2>/dev/null | grep -q LIBEXPAT_2.9.0; then
+            echo "  Steam runtime: expat has LIBEXPAT_2.9.0 (Intel ICD can load)"
+        else
+            echo "  Steam runtime: expat LACKS LIBEXPAT_2.9.0 -> Intel ICD fails, games fall back to"
+            echo "                 lavapipe (single-digit FPS). Run 'install' to fix the override."
+        fi
+    fi
     if cmp -s "$MESA_BUILD_DIR/lib64/libvulkan_intel.so" /usr/lib64/libvulkan_intel.so 2>/dev/null; then
         echo "  Mesa: PREBUILT driver installed ($MESA_BUILD_DIR)"
     else
