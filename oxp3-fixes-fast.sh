@@ -249,6 +249,15 @@ install_mesa_fast() {
         sudo install -m 0755 "$src/$f" "$target"
         echo "/usr/lib64/$f" | sudo tee -a "$manifest" >/dev/null
     done
+    if [[ $need_expat == 0 ]]; then
+        # self-contained driver: if an older install replaced the host expat, put the stock one back
+        if [[ -e $MESA_BACKUP/stock/libexpat.so.1 ]] && [[ -e $MESA_BACKUP/mesa.manifest.old-expat ]]; then
+            sudo cp -a "$MESA_BACKUP/stock/libexpat.so.1" /usr/lib64/libexpat.so.1
+            echo "  driver needs no expat: restored the stock /usr/lib64/libexpat.so.1"
+        fi
+    elif [[ $need_expat == 1 ]]; then
+        sudo touch "$MESA_BACKUP/mesa.manifest.old-expat"
+    fi
     echo "  $(grep -c . "$manifest") Mesa file(s) into /usr/lib64 (stock backed up in $MESA_BACKUP/stock)"
 }
 
@@ -1055,7 +1064,13 @@ verify() {
     else
         echo "  /usr/lib64/libvulkan_intel.so FAILS to load -> Vulkan falls back to lavapipe"
     fi
-    echo "steam runtime:"
+    if [[ -d $HOME/.local/share/Steam || -d $HOME/.steam ]]; then
+        echo "steam (native, Steam Linux Runtime):"
+        echo "  pressure-vessel maps the host /usr/lib64/libvulkan_intel.so into the container but"
+        echo "  resolves libexpat from the container's own older copy - so the host line above is"
+        echo "  what decides whether a Steam game gets the Intel driver or lavapipe."
+    fi
+    echo "steam flatpak runtime:"
     if [[ ! -e $rtf/libvulkan_intel.so ]]; then
         echo "  no runtime driver present"
     elif LD_LIBRARY_PATH=$rtf python3 -c "import ctypes;l=ctypes.CDLL('$rtf/libvulkan_intel.so');assert l.vk_icdGetInstanceProcAddr" 2>/dev/null; then
