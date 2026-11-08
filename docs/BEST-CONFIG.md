@@ -95,3 +95,38 @@ numbers (51-53 FPS) are not reached. Launch Proton directly instead:
 
 This keeps the Steam environment (and the runtime driver) but removes the Heroic/umu layer between Steam and
 Proton. Undisturbed direct-Proton runs measured 47.9-53.2 FPS at 1920x1200, upscaling off, texture Medium.
+
+## Final reproducible configuration (2026-11-08 18:0x)
+
+Everything the working system needs is now produced by the podman build; no hand-built trees are required.
+
+Build (one command, no sudo):
+
+    ./oxp3-fixes-fast.sh build --skip-gamescope --skip-mangohud --skip-kernel --skip-firmware --skip-xess --skip-extras
+
+Recipe: Mesa main `ea40598`, Anatase overrides, patches `0200 0201 0206 0207 0212`, meson flags
+`-Dbuildtype=release -Dprefer_static=true -Dvulkan-drivers=intel -Dgallium-drivers=iris,llvmpipe
+-Dplatforms=x11,wayland -Dglx=dri -Dllvm=enabled`.
+
+Why those details matter:
+- `platforms=x11,wayland`: gamescope presents through a Wayland surface. With x11 only, every Steam game crashed
+  or black-screened in Gamemode at `wsi_GetPhysicalDeviceSurfaceSupportKHR`, while desktop (XWayland) worked.
+- `0212` (from the rt-ref worktree, now a proper patch): VRT env gate, RT drirc knobs, TLAS encode subgroup 32,
+  morton experiment knobs, AS sort workgroup. This is the content the hand-built `install-shiprt` had, which is
+  why podman builds without it stopped at 48.6 while the hand build hit 51.5-53.2.
+- `prefer_static` + expat-static: the driver has no libexpat dependency, so no library override is needed in the
+  Steam Flatpak runtime and it can't break unrelated sandboxed processes.
+
+`0205`, `0208` and `0211` are subsumed by `0212` (the rt-ref branch contains them) and live in `patches/subsumed/`.
+
+Install (host and Flatpak runtime get the same driver):
+
+    ./oxp3-fixes-fast.sh install --skip-gamescope --skip-mangohud --skip-kernel --skip-firmware --skip-xess --skip-extras
+    sudo systemctl restart anatase-flatpak-extensions.service
+
+Verified state: host and runtime both `ec418f04e589965a…`, no `libexpat.so.1` in the runtime overrides, PL1 35 W,
+patched xe module loaded, `platform_profile=balanced`.
+
+Benchmark protocol: single runs of the Cyberpunk benchmark vary by ~10 % (47.9-53.2 today on identical builds), so
+quote the summary.json average together with `./state-snapshot.sh`, and compare medians of two runs before
+concluding that a build regressed.
