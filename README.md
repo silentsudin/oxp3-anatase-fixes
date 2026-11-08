@@ -70,6 +70,11 @@ A copy of the installer for testing the driver we benchmark with. Everything els
 (kernel modules, firmware, gamescope, MangoHud, XeSS, extras); the Mesa step uses a podman/meson
 build of the pinned main tree instead of the RPM path.
 
+Verified shape of the fix: with the Steam-runtime expat (1.12.3, no `LIBEXPAT_2.9.0`) forced in the
+search path, the statically linked driver loads, `vkCreateInstance` returns 0 and the loader
+enumerates `Intel(R) Arc(tm) B390 (PTL)`; the older expat-dependent driver fails to load in the same
+condition.
+
 `build` compiles Mesa in the fedora:45 container (source tarball + Anatase `overrides.patch` +
 `patches/mesa`, output in `~/.cache/oxp3-fixes/mesa-fast/usr/local`), and `install` copies that
 driver plus the bundled libexpat into `/usr` and into the Steam Flatpak runtime overrides. Point
