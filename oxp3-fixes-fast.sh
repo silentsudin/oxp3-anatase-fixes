@@ -934,6 +934,11 @@ do_status() {
     ls /etc/udev/rules.d/70-*rapl.rules >/dev/null 2>&1 && echo "  WARNING: old RAPL udev rule still present (run install)"
     stat -c '  RAPL counters: %A %n' /sys/class/powercap/intel-rapl:0/energy_uj 2>/dev/null
     echo "  Mesa: host $(host_mesa)$(grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so && echo ' with the XeSS XMX patches'), Steam Flatpak: $(flatpak_mesa)"
+    if cmp -s "$MESA_BUILD_DIR/lib64/libvulkan_intel.so" /usr/lib64/libvulkan_intel.so 2>/dev/null; then
+        echo "  Mesa: PREBUILT driver installed ($MESA_BUILD_DIR)"
+    else
+        echo "  Mesa: stock (prebuilt driver at $MESA_BUILD_DIR is not installed)"
+    fi
     local m; for m in xe iwlwifi iwlmld btintel btintel_pcie; do
         printf '  %-13s %s\n' "$m:" "$(modinfo -F filename "$m" 2>/dev/null)"
     done

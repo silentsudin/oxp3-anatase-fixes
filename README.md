@@ -64,6 +64,30 @@ Rejected patches are kept in `patches/rejected/` but are **not** applied: `0210`
 shadow copies) measured -1.87 % under HPLOC, and `0209` (VKD3D vrt-off default) measured worse under
 Proton.
 
+## Fast Mesa test install (`oxp3-fixes-fast.sh`)
+
+A copy of the installer for testing the driver we benchmark with, without rebuilding Mesa RPMs.
+Everything else is the same code (kernel modules, firmware, gamescope, MangoHud, XeSS, extras);
+only the Mesa step is swapped for a copy of an already-built podman driver.
+
+```sh
+# Mesa only, seconds (uses mesa-build/install-shiprt/usr/local by default):
+./oxp3-fixes-fast.sh install --skip-gamescope --skip-mangohud --skip-kernel --skip-firmware --skip-xess --skip-extras
+
+# or the full stack as usual; Mesa still comes from the prebuilt driver:
+./oxp3-fixes-fast.sh build     # builds the non-Mesa parts only; Mesa is not rebuilt
+./oxp3-fixes-fast.sh install
+
+./oxp3-fixes-fast.sh status    # says whether the prebuilt driver is the one installed
+./oxp3-fixes-fast.sh uninstall # restores the stock driver from the backup manifest
+```
+
+Pick another build with `OXP3_MESA_BUILD=/path/to/prefix ./oxp3-fixes-fast.sh install ...`.
+The install goes into the writable `/usr` overlay (so it lasts until the next boot/deployment),
+with the stock `libvulkan_intel.so`/`libexpat.so.1` backed up under
+`/usr/local/share/oxp3-fixes-fast/stock`; GL stays stock, only the Intel Vulkan driver changes.
+The Steam Flatpak runtime gets the same file through its overrides.
+
 ## Install and uninstall
 
 The script is this repository; nothing to install for it. Clone it and run it from the checkout:

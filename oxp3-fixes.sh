@@ -210,12 +210,33 @@ rep('%autosetup -n %{name}-%{ver} -p1', f'%autosetup -n mesa-{commit} -p1')
 import os
 if os.environ.get('OXP3_HAS_ANTILAG_LAYER', '1') != '1':
     opt('%global with_vulkan_layers_anti_lag 1\n', '', 'anti-lag global')
-if os.environ.get('OXP3_HAS_VIRTIO', '1') != '1':
-    opt('%global with_virtio    1\n', '', 'virtio global')
+# always: the virtio (venus) driver needs venus-protocol 1.1.3, and Fedora packaging disables
+# wrap downloads, so enabling it fails the build with "Subproject venus-protocol is buildable: NO"
+opt('%global with_virtio    1\n', '', 'virtio global')
 # new in 26.3, next to the RADV defaults
 import os
 if '01-radv-performance.conf' not in s and os.environ.get('OXP3_HAS_RADV_PERF', '0') == '1':
     rep('%{_datadir}/drirc.d/00-radv-defaults.conf\n', '%{_datadir}/drirc.d/00-radv-defaults.conf\n%{_datadir}/drirc.d/01-radv-performance.conf\n')
+# panfrost/kraid builds a Rust compiler that pulls the bitflags-2-rs crate via a meson wrap,
+# which Fedora packaging refuses to download; this machine has no Mali GPU, so undefine it.
+s, n = re.subn(r'(?m)^%global with_panfrost\s+1$', '%undefine with_panfrost', s)
+if n != 1:
+    sys.exit("mesa.spec: expected one with_panfrost global")
+# the panfrost Vulkan driver comes in through with_vulkan_hw (broadcom/freedreno/panfrost/
+# imagination). Its kraid Rust compiler needs the same crate wrap, so drop that set; this is an
+# Intel machine and the intel_platform_vulkan driver is separate.
+# with_vulkan_hw is also used in a bare %if, so it cannot be undefined; set it to 0 and empty the
+# driver list it feeds, which is what actually pulls in the panfrost Vulkan driver.
+s, n = re.subn(r'(?m)^%global with_vulkan_hw\s+1$', '%global with_vulkan_hw 0', s)
+s, n = re.subn(r'(?m)^%global with_nvk .*$', '%undefine with_nvk', s)
+if n != 1:
+    sys.exit("mesa.spec: expected one with_nvk global")
+
+if n != 1:
+    sys.exit("mesa.spec: expected one with_vulkan_hw global")
+s, n = re.subn(r'(?m)^%global extra_platform_vulkan .*$', '%global extra_platform_vulkan %{nil}', s)
+if n != 1:
+    sys.exit("mesa.spec: expected one extra_platform_vulkan global")
 # i686: no rusticl/NVK (no i686 Rust std), and meson must use the 32-bit llvm-config
 # (Fedora installs it as /usr/lib/llvmNN/bin/llvm-config)
 rep('%global vulkan_drivers ', '%ifarch %{ix86}\n%undefine with_opencl\n%undefine with_nvk\n%endif\n\n%global vulkan_drivers ')
