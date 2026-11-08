@@ -6,8 +6,8 @@
 set -u
 tag=${1:-}
 case "$tag" in
-  baseline|cake|cosmos-turbo|cosmos-perf|p2dq|lavd-nc|bpfland|tickless|epp-perf|gov-perf) ;;
-  *) echo "usage: $0 <tag>   (baseline cake cosmos-turbo cosmos-perf p2dq lavd-nc bpfland tickless epp-perf gov-perf)"; exit 2 ;;
+  baseline|cake|cosmos-gaming|cosmos-lowlat|p2dq|lavd-nc|bpfland|tickless|epp-perf|gov-perf) ;;
+  *) echo "usage: $0 <tag>   (baseline cake cosmos-gaming cosmos-lowlat p2dq lavd-nc bpfland tickless epp-perf gov-perf)"; exit 2 ;;
 esac
 repo=$(cd "$(dirname "$0")/.." && pwd)
 gm=$HOME/git/linux_scratch/gravitymark/bin
@@ -32,8 +32,8 @@ stop_scx
 case "$tag" in
   baseline) ;;
   cake) start_scx scx_cake ;;
-  cosmos-turbo) start_scx scx_cosmos -m turbo ;;
-  cosmos-perf) start_scx scx_cosmos -m performance ;;
+  cosmos-gaming) start_scx scx_cosmos -c 0 -p 0 ;;
+  cosmos-lowlat) start_scx scx_cosmos -c 0 -p 0 -m performance ;;
   p2dq) start_scx scx_p2dq ;;
   lavd-nc) start_scx scx_lavd --balanced --no-core-compaction ;;
   bpfland) start_scx scx_bpfland ;;
@@ -47,7 +47,7 @@ case "$tag" in
 esac
 applied_sched=$(sched_state); a0=$(current_epp 0); a2=$(current_epp 2); a10=$(current_epp 10)
 valid=yes
-case "$tag" in cake|cosmos-turbo|cosmos-perf|p2dq|lavd-nc|bpfland|tickless)
+case "$tag" in cake|cosmos-gaming|cosmos-lowlat|p2dq|lavd-nc|bpfland|tickless)
     [ "$applied_sched" = enabled ] || valid=no ;; esac
 echo "== $tag sched=$applied_sched epp(p0)=$a0 epp(p2)=$a2 epp(lpe)=$a10 valid=$valid"
 

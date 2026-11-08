@@ -34,3 +34,20 @@ Tags: `baseline`, `lavd`, `lavd-autopower`, `bpfland`, `epp-perf`, `epp-perf-lav
 
 Rules: one variable per run, warm caches (the Cyberpunk harness warms itself), Steam closed, and record the
 state (`./state-snapshot.sh`) alongside. Compare medians of at least two runs per tag before concluding.
+
+## Candidates for this architecture (scx 1.1.3, kernel 7.2.7)
+
+17 sched_ext schedulers are installed; the ones that matter for a hybrid gaming handheld:
+
+| tag | what it is | why |
+|---|---|---|
+| `cake` | `scx_cake`, gaming-first, no knobs ("no task waits while a CPU sits free, warm cache, fair") | designed for exactly this; zero configuration |
+| `cosmos-gaming` | `scx_cosmos -c 0 -p 0` (official scx_loader gaming profile) | locality-preserving, express lane for interactive tasks |
+| `cosmos-lowlat` | `scx_cosmos -c 0 -p 0 -m performance` (official lowlatency profile) | same + prioritises the fastest CPUs on hybrid |
+| `p2dq` | `scx_p2dq` pick-two, multi-layer queues | interactive task handling, good on multiple LLC/domains |
+| `lavd-nc` | `scx_lavd --balanced --no-core-compaction` | purpose-built for handheld gaming; plain `--balanced` aborted with a runnable-task stall on this kernel |
+| `bpfland` | `scx_bpfland` | stable interactive reference |
+
+Harness v3 (`tools/cpu-sched-test.sh <tag>`) now also samples package power for the whole window and records
+FPS/W, the applied scheduler/EPP state and a validity flag, and runs the game **without** affinity restrictions so
+the scheduler decides placement.
