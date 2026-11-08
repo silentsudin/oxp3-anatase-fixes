@@ -1,0 +1,377 @@
+diff --git a/src/intel/common/intel_common.c b/src/intel/common/intel_common.c
+index e1705ef..e4b0a47 100644
+--- a/src/intel/common/intel_common.c
++++ b/src/intel/common/intel_common.c
+@@ -285,7 +285,12 @@ static unsigned
+ intel_register_blocks_bits(const struct intel_device_info *devinfo)
+ {
+ #define BIT_FOR_NUM_GRF(GRFS) (1u << (((GRFS) / 32) - 1))
+-   if (INTEL_DEBUG(DEBUG_NO_VRT) || devinfo->ver < 30)
++   /* ANV_GRF128 mirrors INTEL_DEBUG=no-vrt without the debug bits: cap the
++    * supported register blocks at 128 so RA must fit 128 GRFs.  Used to test
++    * the latency-bound ray-tracing path (RT: 45-49% RCS busy).
++    */
++   if (INTEL_DEBUG(DEBUG_NO_VRT) || devinfo->ver < 30 ||
++       getenv("ANV_DISABLE_VRT") != NULL)
+       return BIT_FOR_NUM_GRF(128); /* No VRT, so only 128 grfs */
+ 
+    const unsigned xe3_bits =
+diff --git a/src/intel/dev/intel_device_info.h b/src/intel/dev/intel_device_info.h
+index 0215609..2e21d94 100644
+--- a/src/intel/dev/intel_device_info.h
++++ b/src/intel/dev/intel_device_info.h
+@@ -286,7 +286,8 @@ intel_device_info_update_from_masks(struct intel_device_info *devinfo,
+ static inline bool
+ intel_has_vrt(const struct intel_device_info *devinfo)
+ {
+-   return devinfo->ver >= 30 && !unlikely(INTEL_DEBUG(DEBUG_NO_VRT));
++   return devinfo->ver >= 30 && !unlikely(INTEL_DEBUG(DEBUG_NO_VRT)) &&
++          getenv("ANV_DISABLE_VRT") == NULL;
+ }
+ 
+ #ifdef __cplusplus
+diff --git a/src/intel/vulkan/anv_physical_device.c b/src/intel/vulkan/anv_physical_device.c
+index fd28725..b51822a 100644
+--- a/src/intel/vulkan/anv_physical_device.c
++++ b/src/intel/vulkan/anv_physical_device.c
+@@ -116,6 +116,30 @@ anv_physical_device_init_drirc(struct anv_physical_device *device)
+       return device->drirc_status;
+    }
+ 
++   /* Env overrides for the RT resource knobs (A/B experiments). */
++   {
++      const char *e;
++      if ((e = getenv("ANV_RT_STACK_IDS")) != NULL) {
++         unsigned v = (unsigned) atoi(e);
++         if (v == 256 || v == 512 || v == 1024 || v == 2048)
++            device->drirc.perf.stack_ids = v;
++      }
++      if (getenv("ANV_RT_DYNSTACK") != NULL)
++         device->drirc.perf.dynamic_stack_id_control = true;
++      if (getenv("ANV_RT_LOWLAT") != NULL)
++         device->drirc.perf.guc_low_latency = true;
++      if ((e = getenv("ANV_RT_TILE_X")) != NULL) {
++         unsigned v = (unsigned) atoi(e);
++         if (v == 0 || util_is_power_of_two_nonzero(v))
++            device->drirc.perf.rt_tile_x = v;
++      }
++      if ((e = getenv("ANV_RT_TIMEOUT")) != NULL) {
++         unsigned v = (unsigned) atoi(e);
++         if (v >= 64 && v <= 4096)
++            device->drirc.perf.rt_dispatch_timeout = v;
++      }
++   }
++
+    if (instance->vk.app_info.engine_name &&
+        !strcmp(instance->vk.app_info.engine_name, "DXVK")) {
+       /* Since 2.3.1+, DXVK uses the application version to signal D3D9. */
+diff --git a/src/intel/vulkan/genX_acceleration_structure.c b/src/intel/vulkan/genX_acceleration_structure.c
+index 39e5ce3..5a3c9be 100644
+--- a/src/intel/vulkan/genX_acceleration_structure.c
++++ b/src/intel/vulkan/genX_acceleration_structure.c
+@@ -25,6 +25,8 @@
+ #if GFX_VERx10 >= 125
+ 
+ /* Id to track bvh_dump */
++static void bvh_ts_encode_entry(struct anv_cmd_buffer *cmd_buffer);
++
+ static uint32_t blas_id = 0;
+ static uint32_t tlas_id = 0;
+ 
+@@ -350,8 +352,14 @@ anv_get_build_config(VkDevice _device, struct vk_acceleration_structure_build_st
+    VkGeometryTypeKHR geometry_type = vk_get_as_geometry_type(state->build_info);
+    state->config.late_pair_compression = geometry_type == VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+ 
+-   state->config.u64_keys =
+-      state->build_info->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
++   /* Use the hierarchical PLOC builder for top-level acceleration structures.
++    * LBVH (the default here) is cheaper to build but produces a lower quality
++    * tree; GravityMark rebuilds its TLAS every frame and measures ~6-13% higher
++    * RT frame rate with HPLOC because the traversal savings exceed the extra
++    * build cost.  RADV also uses HPLOC for TLAS.
++    */
++   if (state->build_info->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
++      state->config.internal_type = VK_INTERNAL_BUILD_TYPE_HPLOC;
+ }
+ 
+ static void
+@@ -586,14 +594,52 @@ anv_encode_as(VkCommandBuffer commandBuffer, struct vk_device *vk_device, struct
+               uint32_t build_count, uint32_t build_flags)
+ {
+    VK_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
++   bvh_ts_encode_entry(cmd_buffer);
+    trace_intel_begin_as_encode(&cmd_buffer->trace);
+ 
+    /* TODO: Current encode.comp spilling a lot. Once we flip the swtich to Jay,
+     * let's set the subgroup size to 32 on Xe2+.
+     */
+    struct anv_device *device = cmd_buffer->device;
++
++   /* Encode used to spill badly at subgroup 32, which is why it was pinned to
++    * 16 on Xe2+.  With the current compiler that no longer holds, and 32 is
++    * measurably faster (+1.5% with the TLAS sort workgroup below).  It must
++    * stay at 16 whenever VRT is disabled: with the 128-GRF budget the shader's
++    * effective SIMD no longer matches the host-side dispatch geometry and the
++    * encoded TLAS is wrong.
++    */
++   const bool vrt_disabled = getenv("ANV_DISABLE_VRT") != NULL ||
++                             INTEL_DEBUG(DEBUG_NO_VRT);
+    device->accel_struct_build.build_args.subgroup_size =
+-      device->info->ver >= 20 ? 16 : 8;
++      device->info->ver >= 20 ? (vrt_disabled ? 16 : 32) : 8;
++   {
++      /* Test hook: the TODO above says encode should move to subgroup 32 on
++       * Xe2+ once Jay is the default compiler.  Experiment knob only.
++       */
++      const char *s = getenv("ANV_ENCODE_SUBGROUP");
++      if (s) {
++         uint32_t sub = (uint32_t) atoi(s);
++         if (sub >= 8 && sub <= 32 && (sub & (sub - 1)) == 0) {
++            if (sub > 16 &&
++                (getenv("ANV_DISABLE_VRT") != NULL ||
++                 (INTEL_DEBUG(DEBUG_NO_VRT)))) {
++               /* Measured: this combination renders a broken RT image
++                * (asteroid field empty, 89% of pixels changed, far outside the
++                * 36-41% A/A floor).  Refuse it rather than corrupt output.
++                */
++               static bool warned;
++               if (!warned) {
++                  fprintf(stderr, "ANV_ENCODE_SUBGROUP>16 is unsupported with "
++                                  "VRT disabled; keeping subgroup 16\n");
++                  warned = true;
++               }
++            } else {
++               device->accel_struct_build.build_args.subgroup_size = sub;
++            }
++         }
++      }
++   }
+ 
+    struct encode_batch *batch = anv_encode_init_batch(cmd_buffer, states, build_count, build_flags);
+    if (batch == NULL) {
+@@ -621,7 +667,23 @@ anv_encode_as(VkCommandBuffer commandBuffer, struct vk_device *vk_device, struct
+     * batches in parallel improves performance. Final dispatch is not batched
+     * to avoid thread wastage for shorter trees.
+     */
+-   for (uint nodes = 32, node_offset = 0; node_offset < batch->max_leaf_count; nodes *= 4) {
++   /* Encode batch growth is tunable for experimentation (measurement knob):
++    * starting size and growth factor do not change the encoded data, only how
++    * the work is split across dispatches.
++    */
++   uint32_t enc_start = 32, enc_grow = 4;
++   {
++      const char *s = getenv("ANV_ENCODE_START");
++      const char *g = getenv("ANV_ENCODE_GROW");
++      if (s) enc_start = (uint32_t) atoi(s);
++      if (g) enc_grow = (uint32_t) atoi(g);
++      if (enc_start < 1) enc_start = 1;
++      if (enc_grow < 2) enc_grow = 2;
++   }
++   for (uint nodes = enc_start, node_offset = 0;
++        node_offset < batch->max_leaf_count;
++        nodes = (nodes > batch->max_leaf_count ? batch->max_leaf_count
++                                               : nodes * enc_grow)) {
+       anv_encode_as_batch(commandBuffer, states, build_count, build_flags,
+                           batch, nodes, node_offset);
+       node_offset += nodes;
+@@ -946,12 +1008,28 @@ anv_device_init_accel_struct_build_state(struct anv_device *device)
+          .subgroup_size = device->info->ver >= 20 ? 32 : 16,
+          .morton_sort_workgroup_size = 512,
+          .morton_sort_kvs_per_thread = 2,
++         /* overridden below by experiment knobs */
+          /* See struct anv_accel_struct_header from anv_bvh_defines.h
+           */
+          .bvh_bounds_offset = 0,
+          .root_flags_offset = offsetof(struct anv_accel_struct_header, root_flags),
+    };
+ 
++   {
++      const char *wg = getenv("ANV_MORTON_WG");
++      const char *kvs = getenv("ANV_MORTON_KVS");
++      if (wg) {
++         uint32_t v = (uint32_t) atoi(wg);
++         if (v >= 32 && v <= 4096)
++            device->accel_struct_build.build_args.morton_sort_workgroup_size = v;
++      }
++      if (kvs) {
++         uint32_t v = (uint32_t) atoi(kvs);
++         if (v >= 1 && v <= 16)
++            device->accel_struct_build.build_args.morton_sort_kvs_per_thread = v;
++      }
++   }
++
+ exit:
+    simple_mtx_unlock(&device->accel_struct_build.mutex);
+    return result;
+@@ -993,6 +1071,122 @@ genX(GetDeviceAccelerationStructureCompatibilityKHR)(
+    }
+ }
+ 
++
++/* --- ANV_BVH_TS: acceleration-structure build stage timer (docs section 156) ---
++ * PIPE_CONTROL WriteTimestamp at build start, encode-stage entry and build end,
++ * written into a host-visible BO ring (3 timestamps per build), aggregated
++ * in-process.  Measurement only: no command-stream or state changes.
++ */
++#define BVH_TS_BUILD_SLOTS 8
++
++static struct {
++   struct anv_bo *bo;
++   volatile uint64_t *map;
++   uint64_t freq;
++   bool init, enabled, encode_emitted;
++   unsigned slot;
++   uint64_t builds, infos, top, bottom;
++   uint64_t sum_total, sum_generic, sum_encode;
++   uint64_t first, last;
++} bvh_ts;
++
++static void
++bvh_ts_report(void)
++{
++   if (!bvh_ts.builds || !bvh_ts.freq)
++      return;
++   const double ms = 1000.0 / (double) bvh_ts.freq;
++   const double total = (double) bvh_ts.sum_total * ms;
++   const double span = (double) (bvh_ts.last - bvh_ts.first) * ms;
++   fprintf(stderr,
++           "BVHTS builds=%llu infos=%llu top=%llu bottom=%llu "
++           "total_build_ms=%.1f avg_us=%.1f generic_ms=%.1f encode_ms=%.1f "
++           "generic_us=%.1f encode_us=%.1f span_ms=%.1f share=%.1f%%\n",
++           (unsigned long long) bvh_ts.builds,
++           (unsigned long long) bvh_ts.infos,
++           (unsigned long long) bvh_ts.top,
++           (unsigned long long) bvh_ts.bottom,
++           total,
++           bvh_ts.builds ? total * 1000.0 / (double) bvh_ts.builds : 0.0,
++           (double) bvh_ts.sum_generic * ms,
++           (double) bvh_ts.sum_encode * ms,
++           bvh_ts.builds ? (double) bvh_ts.sum_generic * ms * 1000.0 / (double) bvh_ts.builds : 0.0,
++           bvh_ts.builds ? (double) bvh_ts.sum_encode * ms * 1000.0 / (double) bvh_ts.builds : 0.0,
++           span, span > 0.0 ? 100.0 * total / span : 0.0);
++}
++
++static void
++bvh_ts_init(struct anv_device *device)
++{
++   if (bvh_ts.init)
++      return;
++   bvh_ts.init = true;
++   if (getenv("ANV_BVH_TS") == NULL)
++      return;
++   if (anv_device_alloc_bo(device, "ANV_BVH_TS", 4096,
++                           ANV_BO_ALLOC_MAPPED | ANV_BO_ALLOC_HOST_COHERENT,
++                           0, &bvh_ts.bo) != VK_SUCCESS)
++      return;
++   bvh_ts.map = bvh_ts.bo->map;
++   bvh_ts.freq = device->info->timestamp_frequency;
++   bvh_ts.enabled = bvh_ts.freq != 0;
++   if (bvh_ts.enabled)
++      atexit(bvh_ts_report);
++}
++
++static void
++bvh_ts_emit(struct anv_cmd_buffer *cmd_buffer, unsigned offset_bytes)
++{
++   genX(batch_emit_pipe_control_write)(&cmd_buffer->batch,
++                                       cmd_buffer->device->info, 0,
++                                       WriteTimestamp,
++                                       (struct anv_address) {
++                                          .bo = bvh_ts.bo,
++                                          .offset = offset_bytes,
++                                       }, 0, 0, NULL);
++}
++
++static void
++bvh_ts_start(struct anv_cmd_buffer *cmd_buffer)
++{
++   if (!bvh_ts.enabled)
++      return;
++   const unsigned prev = ((bvh_ts.slot + BVH_TS_BUILD_SLOTS - 2) %
++                          BVH_TS_BUILD_SLOTS) * 3;
++   const uint64_t a = bvh_ts.map[prev + 0];
++   const uint64_t b = bvh_ts.map[prev + 1];
++   const uint64_t c = bvh_ts.map[prev + 2];
++   if (a && b && c && b >= a && c >= b) {
++      bvh_ts.sum_total   += c - a;
++      bvh_ts.sum_generic += b - a;
++      bvh_ts.sum_encode  += c - b;
++      bvh_ts.builds++;
++      if (bvh_ts.first == 0)
++         bvh_ts.first = a;
++      bvh_ts.last = c;
++   }
++   bvh_ts.encode_emitted = false;
++   bvh_ts_emit(cmd_buffer, bvh_ts.slot * 3 * sizeof(uint64_t));
++}
++
++static void
++bvh_ts_encode_entry(struct anv_cmd_buffer *cmd_buffer)
++{
++   if (!bvh_ts.enabled || bvh_ts.encode_emitted)
++      return;
++   bvh_ts.encode_emitted = true;
++   bvh_ts_emit(cmd_buffer, (bvh_ts.slot * 3 + 1) * sizeof(uint64_t));
++}
++
++static void
++bvh_ts_end(struct anv_cmd_buffer *cmd_buffer)
++{
++   if (!bvh_ts.enabled)
++      return;
++   bvh_ts_emit(cmd_buffer, (bvh_ts.slot * 3 + 2) * sizeof(uint64_t));
++   bvh_ts.slot = (bvh_ts.slot + 1) % BVH_TS_BUILD_SLOTS;
++}
++
+ void
+ genX(CmdBuildAccelerationStructuresKHR)(
+     VkCommandBuffer                             commandBuffer,
+@@ -1026,11 +1220,24 @@ genX(CmdBuildAccelerationStructuresKHR)(
+     */
+    genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+ 
++   bvh_ts_init(device);
++   if (bvh_ts.enabled) {
++      for (uint32_t i = 0; i < infoCount; i++) {
++         bvh_ts.infos++;
++         if (pInfos[i].type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
++            bvh_ts.top++;
++         else if (pInfos[i].type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
++            bvh_ts.bottom++;
++      }
++   }
++   bvh_ts_start(cmd_buffer);
++
+    vk_cmd_build_acceleration_structures(commandBuffer, &device->vk,
+                                         &device->meta_device, infoCount,
+                                         pInfos, ppBuildRangeInfos,
+                                         &device->accel_struct_build.build_args);
+ 
++   bvh_ts_end(cmd_buffer);
+    anv_cmd_buffer_restore_state(cmd_buffer, &saved);
+ }
+ 
+diff --git a/src/intel/vulkan/genX_init_state.c b/src/intel/vulkan/genX_init_state.c
+index 6b2578f..0cc46dc 100644
+--- a/src/intel/vulkan/genX_init_state.c
++++ b/src/intel/vulkan/genX_init_state.c
+@@ -737,7 +737,8 @@ init_render_queue_state(struct anv_queue *queue, bool is_companion_rcs_batch)
+ #if GFX_VERx10 >= 125
+    anv_batch_emit(batch, GENX(STATE_COMPUTE_MODE), cm) {
+ #if GFX_VER >= 30
+-      cm.EnableVariableRegisterSizeAllocation = !INTEL_DEBUG(DEBUG_NO_VRT);
++      cm.EnableVariableRegisterSizeAllocation = !INTEL_DEBUG(DEBUG_NO_VRT) &&
++                                                  getenv("ANV_DISABLE_VRT") == NULL;
+ #endif
+       cm.Mask1 = 0xffff;
+ #if GFX_VERx10 >= 200
+@@ -916,7 +917,8 @@ init_compute_queue_state(struct anv_queue *queue)
+    anv_batch_emit(batch, GENX(STATE_COMPUTE_MODE), cm) {
+ #if GFX_VER >= 30
+       cm.EnableVariableRegisterSizeAllocationMask = 1;
+-      cm.EnableVariableRegisterSizeAllocation = !INTEL_DEBUG(DEBUG_NO_VRT);
++      cm.EnableVariableRegisterSizeAllocation = !INTEL_DEBUG(DEBUG_NO_VRT) &&
++                                                  getenv("ANV_DISABLE_VRT") == NULL;
+ #endif
+ #if GFX_VER >= 20
+       cm.AsyncComputeThreadLimit = ACTL_Disabled;
