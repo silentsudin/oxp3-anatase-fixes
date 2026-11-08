@@ -46,7 +46,7 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_FLATPAK=0
 cmd="${1:-}"; shift || true
 for a in "$@"; do
     case $a in
@@ -57,6 +57,7 @@ for a in "$@"; do
         --stock-dmc) SKIP_DMC=1 ;;
         --skip-extras) SKIP_EXTRAS=1 ;;
         --skip-mesa) SKIP_MESA=1 ;;
+        --skip-flatpak) SKIP_FLATPAK=1 ;;
         --skip-xess) SKIP_XESS=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
@@ -930,8 +931,12 @@ do_install() {
         if (( !SKIP_MESA )); then
             say "Mesa (podman build) into the writable /usr overlay (sudo)"
             install_mesa_fast
-            say "Mesa for the Steam Flatpak (sudo)"
-            install_flatpak_mesa
+            if (( !SKIP_FLATPAK )); then
+                say "Mesa for the Steam Flatpak (sudo)"
+                install_flatpak_mesa
+            else
+                echo "  --skip-flatpak: the Flatpak Steam runtime keeps Anatase's Mesa"
+            fi
         fi
         if (( !SKIP_EXTRAS )); then
             say "volume rocker (sudo)"
