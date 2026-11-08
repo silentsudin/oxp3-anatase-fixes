@@ -46,7 +46,7 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_FLATPAK=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_FLATPAK=0 SKIP_SCHED=0
 cmd="${1:-}"; shift || true
 for a in "$@"; do
     case $a in
@@ -58,6 +58,8 @@ for a in "$@"; do
         --skip-extras) SKIP_EXTRAS=1 ;;
         --skip-mesa) SKIP_MESA=1 ;;
         --skip-flatpak) SKIP_FLATPAK=1 ;;
+        --skip-sched    leave the gaming CPU scheduler (scx_cosmos) alone
+        --skip-sched) SKIP_SCHED=1 ;;
         --skip-xess) SKIP_XESS=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
@@ -692,6 +694,22 @@ remove_rapl_udev_rules() {
 EXTRA_UNITS=(oxp3-tdp-sync.service oxp3-xpad-sleep.service oxp3-rapl-pp1.service)
 EXTRA_STATE=/etc/oxp3-fixes
 
+install_sched() {
+    # scx_cosmos -c 0 -p 0 (official gaming profile) measured +4.8% Cyberpunk average and +5.7% FPS/W over EEVDF,
+    # with GravityMark unchanged and no power cost. Forcing per-cluster EPP on top was 3 FPS/1 W worse, so EPP is
+    # left at balance_power.
+    if ! command -v scx_cosmos >/dev/null 2>&1; then
+        echo "  scx_cosmos not installed - skipping the sched_ext scheduler"
+        return 0
+    fi
+    sudo install -m 0644 "$here/files/oxp3-gaming-sched.service" /etc/systemd/system/oxp3-gaming-sched.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable oxp3-gaming-sched.service >/dev/null 2>&1
+    sudo systemctl restart oxp3-gaming-sched.service
+    sleep 1
+    echo "  sched_ext: scx_cosmos gaming profile loaded (state=$(cat /sys/kernel/sched_ext/state 2>/dev/null)), EEVDF fallback if it unloads"
+}
+
 install_extras() {
     local s u me; me=$(id -un)
     for s in oxp3-tdp-sync oxp3-xpad-sleep oxp3-audio-route; do
@@ -960,6 +978,10 @@ do_install() {
                 echo "  --skip-flatpak: the Flatpak Steam runtime keeps Anatase's Mesa"
             fi
         fi
+        if (( !SKIP_SCHED )); then
+            say "Gaming CPU scheduler (scx_cosmos gaming profile)"
+            install_sched
+        fi
         if (( !SKIP_EXTRAS )); then
             say "volume rocker (sudo)"
             install_volume_fix
@@ -985,6 +1007,9 @@ do_uninstall() {
     sudo rm -f /etc/systemd/system/rapl-power.service /usr/local/libexec/rapl-power
     sudo systemctl daemon-reload
     remove_rapl_udev_rules
+    sudo systemctl disable --now oxp3-gaming-sched.service 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/oxp3-gaming-sched.service
+    sudo systemctl daemon-reload
     uninstall_extras
     uninstall_xess
     if [[ -r $FLATPAK_MESA_LIST ]]; then remove_flatpak_mesa; refresh_flatpak_runtime; fi

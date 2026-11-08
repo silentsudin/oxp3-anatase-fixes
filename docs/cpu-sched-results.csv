@@ -5,3 +5,6 @@ cosmos-lowlat,2026-11-08T19:27:25+00:00,182.5,30480,51.5,44.8,59.6,25.4,2.028,en
 cosmos-gaming,2026-11-08T19:31:48+00:00,182.6,30503,52.2,45.4,60.0,25.4,2.055,enabled,balance_power,balance_power,balance_power,yes
 p2dq,2026-11-08T19:36:10+00:00,182.8,30523,51.9,45.1,60.1,25.4,2.043,enabled,balance_power,balance_power,balance_power,yes
 lavd-nc,2026-11-08T19:40:42+00:00,182.7,30515,NA,NA,NA,18.4,NA,disabled,balance_power,balance_power,balance_power,no
+cosmos-gaming,2026-11-08T19:46:30+00:00,189.6,31670,54.0,46.6,62.8,25.0,2.16,enabled,balance_power,balance_power,balance_power,yes
+p2dq,2026-11-08T19:50:52+00:00,187.5,31323,53.1,46.2,61.8,25.3,2.099,enabled,balance_power,balance_power,balance_power,yes
+cosmos-gaming-epp,2026-11-08T19:55:15+00:00,187.5,31323,50.9,44.4,58.8,26.3,1.935,enabled,performance,balance_performance,power,yes

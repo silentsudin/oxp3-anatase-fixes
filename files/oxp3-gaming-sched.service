@@ -1,0 +1,19 @@
+[Unit]
+Description=Load the scx_cosmos gaming sched_ext scheduler (OneXPlayer 3)
+Documentation=file:///usr/local/share/oxp3-fixes-fast/README.sched
+After=multi-user.target
+ConditionCapability=CAP_SYS_ADMIN
+ConditionPathExists=/usr/bin/scx_cosmos
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Official scx_loader "gaming" profile: locality-preserving queues with the interactive express lane.
+# Balanced EPP is deliberately left alone: forcing P=performance/which was measured 3 FPS and 1 W worse.
+ExecStart=/usr/bin/scx_cosmos -c 0 -p 0
+Restart=on-failure
+RestartSec=2
+# If the scheduler cannot load, the kernel keeps the default EEVDF scheduler; nothing else breaks.
+
+[Install]
+WantedBy=multi-user.target
