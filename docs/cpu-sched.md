@@ -77,3 +77,30 @@ Conclusions:
 
 Next: repeat cosmos-gaming/p2dq to confirm, then pair the winner with per-cluster EPP (P=performance,
 E=balance_performance, LP-E=power) and compare FPS and FPS/W.
+
+## Round 2 (confirmation) and shipping decision
+
+| tag | Cyberpunk avg | Cyberpunk min | avg pkg W | FPS/W |
+|---|---|---|---|---|
+| cosmos-gaming (repeat) | **54.0** | **46.6** | 25.0 | **2.160** |
+| p2dq (repeat) | 53.1 | 46.2 | 25.3 | 2.099 |
+| cosmos-gaming + per-cluster EPP | 50.9 | 44.4 | 26.3 | 1.935 |
+
+- The gain is reproducible: `scx_cosmos -c 0 -p 0` wins both rounds (52.2/45.4 then 54.0/46.6 vs EEVDF 49.8/43.3).
+- **Do not pair it with per-cluster EPP**: P=performance / E=balance_performance / LP-E=power cost ~3 FPS and ~1 W
+  (26.3 W vs 25.0 W), i.e. worse performance *and* worse efficiency. Leave EPP at the firmware default
+  `balance_power`.
+- LAVD is excluded: `--balanced` aborts (`runnable task stall (rapl-power ...)`), `--no-core-compaction` black-screens
+  Cyberpunk.
+
+### Shipped as `oxp3-gaming-sched.service`
+
+    [Service]
+    ExecStart=/usr/bin/scx_cosmos -c 0 -p 0
+    Restart=on-failure
+
+Installed by `./oxp3-fixes-fast.sh install` (skip with `--skip-sched`), removed by `uninstall`.
+`state-snapshot.sh` now reports sched_ext state and the running scheduler.
+
+Expected result: Cyberpunk +4.8 % average and +5.7 % FPS/W over EEVDF, GravityMark unchanged, no extra power.
+The kernel falls back to EEVDF automatically if scx_cosmos ever unloads, so the failure mode is the old behaviour.

@@ -27,9 +27,9 @@
 #   ./oxp3-fixes.sh mok-setup   create a module signing key and queue it for enrolment (once)
 #
 # Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware
-#                              --skip-mesa --skip-xess --skip-extras --skip-sched (gaming CPU scheduler),
-#                              suspend)
-#                              --stock-dmc (keep Anatase's display DMC firmware)
+#                              --skip-mesa --skip-xess --skip-extras --skip-sched --stock-dmc
+#                              (--skip-sched leaves the gaming CPU scheduler alone; --stock-dmc keeps
+#                               Anatase's display DMC firmware)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
 #              OXP3_CACHE   (default ~/.cache/oxp3-fixes)
 set -euo pipefail
