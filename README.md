@@ -29,10 +29,16 @@ is Anatase's stock Mesa main-27 without this repo's patches; "after" is this pat
 
 | mode | Windows | Linux before | Linux after | Linux after vs Windows |
 |---|---:|---:|---:|---:|
-| hardware raster | 290.4 | 268.2 | 268.2 | -7.7 % |
-| compute raster (CS) | 202.4 | 201.6 | 201.6 | -0.4 % (parity) |
-| mesh shaders (MS) | 241.8 | 199.4 | **243.5** | **+0.7 % (above)** |
-| ray tracing (RT) | 187.7 | 149.4 (152.9 with no-vrt) | **~180** | ~-4 % |
+| hardware raster | 290.4 | 268.2 * | 268.2 | -7.7 % |
+| compute raster (CS) | 202.4 | 200.5 (stock 26.2.4) | 201.6 | -0.4 % (parity) |
+| mesh shaders (MS) | 241.8 | 208.0 | **243.5** | **+0.7 % (above)** |
+| ray tracing (RT) | 187.7 | 149.3 | **~180** | ~-4 % |
+
+\* The only stock-Mesa (26.2.4) figures ever recorded are the compute numbers: **CS 50k/720 =
+200.5 FPS** and the primary pass at 1920x1200 = **60.9 FPS**. Hardware raster, mesh and RT were not
+measured on stock 26.2.4, so the raster row's "before" is the **Mesa main-27 pre-patch** baseline
+(268.2) and the mesh/RT "before" rows are the pre-patch main-27 numbers (208.0 and 149.3); they are
+lower than the "after" figures but are not stock-Mesa measurements.
 
 What moved, and with which patch:
 
