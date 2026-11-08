@@ -1004,6 +1004,19 @@ do_status() {
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }
 
+refresh() {
+    # rebuild the Flatpak runtime image from the current overrides (driver may be newer than
+    # the image built at boot). Gamemode's Steam IS the Flatpak, so this is the step that matters.
+    if [[ -n $(flatpak ps --columns=application 2>/dev/null) ]]; then
+        echo "Flatpak apps are running (Steam in Gamemode is one). Close them first:"
+        echo "  exit Gamemode / quit Steam, then run: sudo $0 refresh"
+        return 1
+    fi
+    sudo systemctl restart anatase-flatpak-extensions.service || return 1
+    sleep 1
+    verify
+}
+
 verify() {
     local rtf=/run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files/lib64
     echo "host:"
@@ -1036,6 +1049,7 @@ case $cmd in
     all) do_build; do_install ;;
     status) do_status ;;
     verify) verify ;;
+    refresh) refresh ;;
     uninstall) do_uninstall ;;
     mok-setup) do_mok_setup ;;
     *) sed -n '2,/^set -euo pipefail/{/^#/p}' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
