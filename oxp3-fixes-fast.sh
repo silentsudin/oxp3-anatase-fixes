@@ -212,7 +212,7 @@ dnf -y -q install meson ninja-build gcc gcc-c++ bison flex pkgconf-pkg-config py
 ln -sf /usr/lib64/pkgconfig/LLVMSPIRVLib.pc /usr/lib64/pkgconfig/llvmspirvlib.pc 2>/dev/null || true
 rm -rf /b; mkdir -p /out/usr/local
 meson setup /b /src --prefix=/usr/local --buildtype=release -Dprefer_static=true \
-  -Dvulkan-drivers=intel -Dgallium-drivers=iris,llvmpipe -Dplatforms=x11 -Dglx=dri -Dllvm=enabled \
+  -Dvulkan-drivers=intel -Dgallium-drivers=iris,llvmpipe -Dplatforms=x11,wayland -Dglx=dri -Dllvm=enabled \
   > /tmp/cfg.log 2>&1 || { tail -25 /tmp/cfg.log; exit 1; }
 ninja -C /b -j"$(nproc)" > /tmp/build.log 2>&1 || { grep -m15 "error:" /tmp/build.log; exit 2; }
 DESTDIR=/out ninja -C /b install > /tmp/inst.log 2>&1
