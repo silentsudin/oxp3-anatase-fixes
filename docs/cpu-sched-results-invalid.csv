@@ -1,0 +1,5 @@
+tag,date,gravity_fps,cp_avg,cp_min,cp_max,scheduler,epp_pcores,epp_ecores,epp_lpecores
+baseline,2026-11-08T18:30:57+00:00,166.0,NA,NA,NA,disabled,balance_power,balance_power,balance_power
+lavd,2026-11-08T18:35:17+00:00,165.1,NA,NA,NA,disabled,balance_power,balance_power,balance_power
+bpfland,2026-11-08T18:39:39+00:00,166.0,NA,NA,NA,disabled,balance_power,balance_power,balance_power
+epp-perf,2026-11-08T18:43:59+00:00,166.1,NA,NA,NA,disabled,balance_power,balance_power,balance_power

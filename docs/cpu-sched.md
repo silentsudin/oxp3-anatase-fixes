@@ -51,3 +51,29 @@ state (`./state-snapshot.sh`) alongside. Compare medians of at least two runs pe
 Harness v3 (`tools/cpu-sched-test.sh <tag>`) now also samples package power for the whole window and records
 FPS/W, the applied scheduler/EPP state and a validity flag, and runs the game **without** affinity restrictions so
 the scheduler decides placement.
+
+## Round 1 results (2026-11-08 19:18-19:40, warm caches, EPP balance_power, no affinity restrictions)
+
+| tag | GravityMark FPS | Cyberpunk avg | Cyberpunk min | avg pkg W | FPS/W | valid |
+|---|---|---|---|---|---|---|
+| baseline (EEVDF) | 182.8 | 49.8 | 43.3 | 25.6 | 1.945 | yes |
+| cake | 182.8 | 50.8 | 44.7 | 25.5 | 1.992 | yes |
+| cosmos-lowlat | 182.5 | 51.5 | 44.8 | 25.4 | 2.028 | yes |
+| **cosmos-gaming** | 182.6 | **52.2** | **45.4** | 25.4 | **2.055** | yes |
+| p2dq | 182.8 | 51.9 | 45.1 | 25.4 | 2.043 | yes |
+| lavd-nc | 182.7 | - | - | 18.4 | - | **no** (Cyberpunk black screen) |
+
+Conclusions:
+- GravityMark is scheduler-insensitive at this workload (~182.8 everywhere) - it is geometry/GPU-bound, so it only
+  guards against regressions, it does not discriminate between good schedulers.
+- Every shipped sched_ext candidate beats EEVDF on Cyberpunk by 2-5 % with no measurable power cost:
+  +4.8 % avg / +4.9 % min (cosmos-gaming), +4.2 %/+4.2 % (p2dq), +3.4 %/+3.5 % (cosmos-lowlat), +2.0 %/+3.2 % (cake).
+- `scx_cosmos -c 0 -p 0` (official gaming profile) is the current best both on FPS and FPS/W (2.055 vs 1.945 baseline,
+  +5.7 % efficiency).
+- LAVD is not usable on this kernel+hardware: `--balanced` aborts with a runnable-task stall (rapl-power starved),
+  and `--balanced --no-core-compaction` black-screens Cyberpunk. Excluded.
+- The old invalid CSV rows (18:30-18:43, before the harness fixes) are preserved in
+  `docs/cpu-sched-results-invalid.csv`; the live CSV now carries efficiency and validity columns.
+
+Next: repeat cosmos-gaming/p2dq to confirm, then pair the winner with per-cluster EPP (P=performance,
+E=balance_performance, LP-E=power) and compare FPS and FPS/W.

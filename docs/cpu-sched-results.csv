@@ -1,5 +1,7 @@
-tag,date,gravity_fps,cp_avg,cp_min,cp_max,scheduler,epp_pcores,epp_ecores,epp_lpecores
-baseline,2026-11-08T18:30:57+00:00,166.0,NA,NA,NA,disabled,balance_power,balance_power,balance_power
-lavd,2026-11-08T18:35:17+00:00,165.1,NA,NA,NA,disabled,balance_power,balance_power,balance_power
-bpfland,2026-11-08T18:39:39+00:00,166.0,NA,NA,NA,disabled,balance_power,balance_power,balance_power
-epp-perf,2026-11-08T18:43:59+00:00,166.1,NA,NA,NA,disabled,balance_power,balance_power,balance_power
+tag,date,gm_fps,gm_score,cp_avg,cp_min,cp_max,avg_pkg_w,fps_per_w,applied_sched,epp_p0,epp_p2,epp_lpe,valid
+baseline,2026-11-08T19:18:41+00:00,182.8,30532,49.8,43.3,58.0,25.6,1.945,disabled,balance_power,balance_power,balance_power,yes
+cake,2026-11-08T19:23:03+00:00,182.8,30535,50.8,44.7,58.8,25.5,1.992,enabled,balance_power,balance_power,balance_power,yes
+cosmos-lowlat,2026-11-08T19:27:25+00:00,182.5,30480,51.5,44.8,59.6,25.4,2.028,enabled,balance_power,balance_power,balance_power,yes
+cosmos-gaming,2026-11-08T19:31:48+00:00,182.6,30503,52.2,45.4,60.0,25.4,2.055,enabled,balance_power,balance_power,balance_power,yes
+p2dq,2026-11-08T19:36:10+00:00,182.8,30523,51.9,45.1,60.1,25.4,2.043,enabled,balance_power,balance_power,balance_power,yes
+lavd-nc,2026-11-08T19:40:42+00:00,182.7,30515,NA,NA,NA,18.4,NA,disabled,balance_power,balance_power,balance_power,no

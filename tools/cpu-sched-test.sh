@@ -6,7 +6,7 @@
 set -u
 tag=${1:-}
 case "$tag" in
-  baseline|cake|cosmos-gaming|cosmos-lowlat|p2dq|lavd-nc|bpfland|tickless|epp-perf|gov-perf) ;;
+  baseline|cake|cosmos-gaming|cosmos-lowlat|p2dq|lavd-nc|bpfland|tickless|epp-perf|gov-perf|cosmos-gaming-epp|cake-epp|p2dq-epp) ;;
   *) echo "usage: $0 <tag>   (baseline cake cosmos-gaming cosmos-lowlat p2dq lavd-nc bpfland tickless epp-perf gov-perf)"; exit 2 ;;
 esac
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,6 +33,19 @@ case "$tag" in
   baseline) ;;
   cake) start_scx scx_cake ;;
   cosmos-gaming) start_scx scx_cosmos -c 0 -p 0 ;;
+  cosmos-gaming-epp)
+      start_scx scx_cosmos -c 0 -p 0
+      for c in 0 1; do set_epp "$c" performance; done
+      for c in 2 3 4 5 6 7 8 9; do set_epp "$c" balance_performance; done
+      for c in 10 11 12 13; do set_epp "$c" power; done ;;
+  cake-epp) start_scx scx_cake
+      for c in 0 1; do set_epp "$c" performance; done
+      for c in 2 3 4 5 6 7 8 9; do set_epp "$c" balance_performance; done
+      for c in 10 11 12 13; do set_epp "$c" power; done ;;
+  p2dq-epp) start_scx scx_p2dq
+      for c in 0 1; do set_epp "$c" performance; done
+      for c in 2 3 4 5 6 7 8 9; do set_epp "$c" balance_performance; done
+      for c in 10 11 12 13; do set_epp "$c" power; done ;;
   cosmos-lowlat) start_scx scx_cosmos -c 0 -p 0 -m performance ;;
   p2dq) start_scx scx_p2dq ;;
   lavd-nc) start_scx scx_lavd --balanced --no-core-compaction ;;
@@ -47,7 +60,7 @@ case "$tag" in
 esac
 applied_sched=$(sched_state); a0=$(current_epp 0); a2=$(current_epp 2); a10=$(current_epp 10)
 valid=yes
-case "$tag" in cake|cosmos-gaming|cosmos-lowlat|p2dq|lavd-nc|bpfland|tickless)
+case "$tag" in cake|cosmos-gaming|cosmos-lowlat|p2dq|lavd-nc|bpfland|tickless|cosmos-gaming-epp|cake-epp|p2dq-epp)
     [ "$applied_sched" = enabled ] || valid=no ;; esac
 echo "== $tag sched=$applied_sched epp(p0)=$a0 epp(p2)=$a2 epp(lpe)=$a10 valid=$valid"
 
