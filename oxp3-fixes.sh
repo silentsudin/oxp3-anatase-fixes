@@ -150,8 +150,8 @@ build_card() {
 # Mesa 26.3 (Jay shader compiler on Xe2/Xe3, compression/tiling work) from Anatase's packaging:
 # the 26.3 branch at MESA_COMMIT plus patches/mesa, x86_64 + i686, all installed subpackages
 # ---------------------------------------------------------------------------------------------
-MESA_COMMIT=07f74f00104644c7e3cb27b3af50e3cc96be81bd     # 26.3 branch, 2026-10-27 (after rc2)
-MESA_VERSION="26.3.0~rc2.20261027git${MESA_COMMIT:0:8}"   # no "^": Cargo.toml needs semver
+MESA_COMMIT=ea40598a68bab5690e0d08f845e2776ef9be2db9     # Mesa main, 2026-11-05 (the tree every measured win used)
+MESA_VERSION="27.0.0~devel.20261105git${MESA_COMMIT:0:8}"  # no "^": Cargo.toml needs semver
 MESA_URL=https://gitlab.freedesktop.org/mesa/mesa/-/archive/$MESA_COMMIT/mesa-$MESA_COMMIT.tar.gz
 # i686 -devel packages the 32-bit build needs beyond the container's (dnf builddep is x86_64 only)
 MESA_I686_DEVEL="llvm-devel.i686 clang-devel.i686 spirv-llvm-translator-devel.i686 spirv-tools-devel.i686
@@ -180,6 +180,10 @@ if len(keep) != len(parts):
     print("  overrides.patch: dropped the RADV FH5 hunk (AMD only, doesn't apply to 26.3)")
 open(p, 'w').write(''.join(keep))
 EOF
+    tl=$(tar -tzf "$tarball" 2>/dev/null)
+    case $tl in *01-radv-performance.conf*) export OXP3_HAS_RADV_PERF=1;; *) export OXP3_HAS_RADV_PERF=0;; esac
+    case $tl in *src/vulkan/layers/anti_lag/*) export OXP3_HAS_ANTILAG_LAYER=1;; *) export OXP3_HAS_ANTILAG_LAYER=0;; esac
+    case $tl in *src/virtio/*) export OXP3_HAS_VIRTIO=1;; *) export OXP3_HAS_VIRTIO=0;; esac
     python3 - "$spec" "$MESA_VERSION" "$MESA_COMMIT" <<'EOF'
 import sys
 p, version, commit = sys.argv[1:]
@@ -189,15 +193,28 @@ def rep(old, new):
     if s.count(old) != 1:
         sys.exit(f"mesa.spec: expected one '{old.strip()}' - Anatase packaging changed")
     s = s.replace(old, new)
+def opt(old, new, what):
+    global s
+    n = s.count(old)
+    if n == 1:
+        s = s.replace(old, new)
+    elif n > 1:
+        sys.exit(f"mesa.spec: '{what}' appears {n} times")
+    else:
+        print(f"  mesa.spec: '{what}' not present in this tree, skipped")
 import re
 s, n = re.subn(r'(?m)^Version:\s+\S+$', f'Version:        {version}', s); assert n == 1
 s, n = re.subn(r'(?m)^Source0:\s+\S+$', f'Source0:        mesa-{commit}.tar.gz', s); assert n == 1
 rep('%autosetup -n %{name}-%{ver} -p1', f'%autosetup -n mesa-{commit} -p1')
 # 26.3 removed the anti-lag layer; its virtio (venus) Vulkan driver needs venus-protocol from the net
-rep('%global with_vulkan_layers_anti_lag 1\n', '')
-rep('%global with_virtio    1\n', '')
+import os
+if os.environ.get('OXP3_HAS_ANTILAG_LAYER', '1') != '1':
+    opt('%global with_vulkan_layers_anti_lag 1\n', '', 'anti-lag global')
+if os.environ.get('OXP3_HAS_VIRTIO', '1') != '1':
+    opt('%global with_virtio    1\n', '', 'virtio global')
 # new in 26.3, next to the RADV defaults
-if '01-radv-performance.conf' not in s:
+import os
+if '01-radv-performance.conf' not in s and os.environ.get('OXP3_HAS_RADV_PERF', '0') == '1':
     rep('%{_datadir}/drirc.d/00-radv-defaults.conf\n', '%{_datadir}/drirc.d/00-radv-defaults.conf\n%{_datadir}/drirc.d/01-radv-performance.conf\n')
 # i686: no rusticl/NVK (no i686 Rust std), and meson must use the 32-bit llvm-config
 # (Fedora installs it as /usr/lib/llvmNN/bin/llvm-config)

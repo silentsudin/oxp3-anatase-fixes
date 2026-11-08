@@ -8,8 +8,8 @@ here, so `build` + `install` reapplies it to whatever Anatase ships next.
 | Part | Fixes | How it is installed |
 |---|---|---|
 | gamescope | PQ HDR on the internal SDC AMS881KB01 OLED (no black screens, real peak brightness, brightness slider in HDR); VRR frame pacing fixes from gamescope 3.16.29/3.17.0; 30-144 Hz modes | Anatase's gamescope rebuilt with `patches/gamescope`, installed into the writable `/usr` overlay (`rpm-ostree usroverlay --hotfix`) |
-| Mesa | 26.3 branch: Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling work, Panther Lake hang fix, Jay fixes, faster flushes/copies on Xe2+, and fewer per-frame driver ioctls (`patches/mesa` 0200/0201) | Anatase's Mesa package rebuilt at the pinned 26.3 commit with `patches/mesa` (x86_64 + i686), same overlay |
-| XeSS XMX | XeSS SR/FG on the Arc's XMX units in DX12 games under Proton, instead of DP4a ([xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux), our fork's `anatase` branch) | driver patches in our Mesa; shim, ControlLib, scripts and Intel's compiler in `~/.local/share/xess-xmx`; variables in a Flatpak override for `org.anatase.Steam` |
+| Mesa | **main (pinned `ea40598`, the tree every measured win used)**: Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling work, Panther Lake hang fix, Jay fixes, faster flushes/copies on Xe2+, HPLOC TLAS, mesh fixes and fewer per-frame driver ioctls (`patches/mesa` 0200/0201/0205/0206/0207/0208/0211) | Anatase's Mesa package rebuilt at the pinned main commit with `patches/mesa` (x86_64 + i686), same overlay |
+| XeSS XMX | XeSS SR/FG on the Arc's XMX units in DX12 games under Proton, instead of DP4a ([xess-xmx-linux](https://github.com/HHHHanasak1/xess-xmx-linux), our fork's `anatase` branch) | driver CM patches are authored against Mesa 26.3 and are parked in `patches/xess-26.3` while the installer pins main; the shim/ControlLib/compiler still install, but XMX is unavailable until those patches are ported to main |
 | MangoHud | CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs | Anatase's MangoHud rebuilt with `patches/mangohud`, same overlay |
 | kernel modules | xe: VBT VS/PE-O backport (white dots, HDR retoggle black screen), 7.3 VRR/DSB flip timing, resume out-of-memory fix, 7.2.8-7.2.13 stable fixes, IBC v3 on PTL, eDP HDR switches. iwlwifi/iwlmld and btintel/btintel_pcie: 7.2.13 stable and 7.3/7.4 fixes | built for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3` in `updates/` with a regenerated initramfs |
 | firmware | display DMC v2.20 (v2.36 caps VRR at about 74 fps), Bluetooth 24.80, CPU microcode 0x11c | `oxp3-firmware`, layered with the modules, in `/usr/lib/firmware/updates` (searched first, also by dracut) |
@@ -56,9 +56,9 @@ What moved, and with which patch:
   worse; this is documented in `docs/BEYOND-PARITY.md` sections 137-153 and is the remaining 7.7 %.
 
 Measurement provenance: the "after" figures were taken on a Mesa **main-27** tree at commit
-`ea40598`, which is the tree the patches were developed against. This repository builds Anatase's
-**26.3** branch plus the same patches (26.3 was measured ~1.5 % behind main-27 on the primary
-benchmark), so expect the same relative improvements rather than identical absolute FPS.
+`ea40598`, which is now the tree the installer pins. This repository now builds **the same main commit** (`ea40598`), so the figures above are what
+the installer targets. The 26.3 branch was retired after it measured 4 % slower in raster and
+8.6 % in mesh even with the patches ported.
 
 Rejected patches are kept in `patches/rejected/` but are **not** applied: `0210` (wide ray-query
 shadow copies) measured -1.87 % under HPLOC, and `0209` (VKD3D vrt-off default) measured worse under
@@ -202,14 +202,13 @@ conflicts against Anatase's VRR keepalive and frame generation resolved; and 30-
 
 ### Mesa (`patches/mesa`)
 
-The 26.3 branch at `MESA_COMMIT` (after rc2) with Anatase's `overrides.patch` (minus its RADV
-Forza Horizon 5 hunk, which doesn't apply to 26.3 and only concerns AMD) and:
+Mesa **main** at `MESA_COMMIT` (`ea40598`, 2026-11-05 - the tree every measured win used) with
+Anatase's `overrides.patch` (minus its RADV Forza Horizon 5 hunk, which only concerns AMD) and:
 
-- `0001`/`0002` (mesa!45498): stop using STC_CCS for CPB on Xe2+, fixes a Panther Lake GPU
-  hang (Crimson Desert, mesa#16357).
-- `0003` (mesa!45634): Jay, uniform derivatives without varying temporaries.
-- `0004`/`0005` (mesa!45719, open MR, measured +2% in Cyberpunk 2077 on a OneXPlayer 3):
-  cheaper write flushes and compute buffer copies on Xe2+.
+- `0001`-`0005` are 26.3-branch backports (STC_CCS on CPB, companion RCS check, Jay uniform
+  derivatives, L1/L2 flushes, compute buffer copies). They are **not applied on main** - main
+  carries its own versions - and are kept in `patches/mesa-26.3-backports/` for anyone building
+  the 26.3 tree.
 - `0200`: do not issue `DRM_IOCTL_XE_EXEC_QUEUE_GET_PROPERTY` (queue-ban check) on every
   `vkGetFenceStatus`/timeline read; rate-limit it to 50 ms (a banned queue is still reported
   by the next submit). Verified on the device (stock 26.2.4 vs patched 27.0-dev): driver
@@ -237,11 +236,12 @@ The `0200`/`0201` pair was written for this device after measuring where a Vulka
 driver CPU actually goes; the bigger remaining per-frame costs are `XE_EXEC` (the submit
 itself), syncobj waits and dma-buf fence traffic.
 
-Spec changes for 26.3: no anti-lag layer (removed upstream), no virtio Vulkan driver (needs
-venus-protocol from the network), no rusticl/NVK on i686. `INTEL_DEBUG=no-jay %command%` in
-a game's launch options switches that game back to the old compiler (Jay is reportedly still
-slower for XeSS's own shaders). Bump `MESA_COMMIT`/`MESA_VERSION` to `mesa-26.3.0` once it is
-released.
+Spec changes are source-driven: the anti-lag global is dropped only when the tarball lacks
+`src/vulkan/layers/anti_lag`, the virtio global only when it lacks `src/virtio` (main still has
+it), the RADV performance-conf file is added only when the source ships it, and rusticl/NVK are
+disabled on i686. `INTEL_DEBUG=no-jay %command%` in a game's launch options switches that game
+back to the old compiler (Jay is reportedly still slower for XeSS's own shaders). 26.3 was
+retired after measuring 4 % slower in raster and 8.6 % in mesh even with the patches ported.
 
 Games run under the Steam Flatpak, and Anatase builds its runtime (`org.anatase.Platform`) from the
 composefs `/usr` plus `/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides`,
@@ -250,10 +250,11 @@ the Intel Vulkan driver and its data; other vendors' Vulkan drivers and OpenCL s
 `/run` copy small) and restarts `anatase-flatpak-extensions.service` when no Flatpak app is running.
 `status` shows whether the Steam runtime runs the same Intel driver as the host.
 
-`0101`-`0104` are xess-xmx-linux's `patches/mesa-26.3` (C-for-Metal kernel injection, its debug tools,
-Large GRF on Xe2, the Jay divergent-barrier fix) and `0105` our fork's addition: no CM retry check in
-programs outside Wine, so the compositor and desktop don't log about it. Without the shim (games on a
-Proton without igdext, everything else) the patched driver behaves like the stock one.
+`0101`-`0105` are xess-xmx-linux's C-for-Metal kernel-injection series (the injection itself, its debug
+tools, Large GRF on Xe2, the Jay divergent-barrier fix, and our fork's no-CM-retry-check change). They
+were authored against 26.3, so they are **parked in `patches/xess-26.3/`** while the installer pins
+main: the XeSS shim, ControlLib and compiler still install, but XMX acceleration is unavailable until
+those five are ported to main. Without the shim the driver behaves like the stock one.
 
 ### XeSS on XMX (xess-xmx-linux)
 
