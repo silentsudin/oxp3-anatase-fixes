@@ -20,6 +20,93 @@ You keep booting the stock Anatase kernel; only the modules above are replaced. 
 patches Anatase already carries are skipped one by one; firmware that Anatase ships in the
 same or a newer version is skipped too.
 
+## Performance: Windows vs Linux before vs Linux after
+
+GravityMark 1.89, native Vulkan, 50k asteroids, 1280x720, fullscreen, vsync off. "Windows" is the
+GravityMark leaderboard B390 row (Windows 11, driver 32.0.101.9033, same benchmark build); "before"
+is Anatase's stock Mesa main-27 without this repo's patches; "after" is this patch set (HPLOC TLAS
+`0205`, mesh `0206`/`0207`, corrected `0211`, and the `no-vrt` guidance).
+
+| mode | Windows | Linux before | Linux after | Linux after vs Windows |
+|---|---:|---:|---:|---:|
+| hardware raster | 290.4 | 268.2 | 268.2 | -7.7 % |
+| compute raster (CS) | 202.4 | 201.6 | 201.6 | -0.4 % (parity) |
+| mesh shaders (MS) | 241.8 | 199.4 | **243.5** | **+0.7 % (above)** |
+| ray tracing (RT) | 187.7 | 149.4 (152.9 with no-vrt) | **~180** | ~-4 % |
+
+What moved, and with which patch:
+
+* **mesh**: 199.4 -> 243.5 FPS (+22 %) from `0206` (full 16-byte URB slot writes) and `0207`
+  (compact outputs stay dynamic). This is the one path now above Windows.
+* **ray tracing**: 149.4 -> ~180 FPS (-18.5 % -> ~-4 %) from `0205` HPLOC TLAS builds, `0211`'s
+  encode-subgroup tuning, and running with `ANV_DISABLE_VRT=1` (`0208` provides the switch). The
+  `0211` subgroup half only applies with VRT enabled; its Morton hunk was dropped after the matrix
+  measured upstream's 512 marginally ahead of 1024.
+* **compute raster**: already at parity, unchanged by the patches.
+* **hardware raster**: unchanged. Every driver-side and compiler-side lever tested was neutral or
+  worse; this is documented in `docs/BEYOND-PARITY.md` sections 137-153 and is the remaining 7.7 %.
+
+Rejected patches are kept in `patches/rejected/` but are **not** applied: `0210` (wide ray-query
+shadow copies) measured -1.87 % under HPLOC, and `0209` (VKD3D vrt-off default) measured worse under
+Proton.
+
+## Install and uninstall
+
+The script is this repository; nothing to install for it. Clone it and run it from the checkout:
+
+```sh
+git clone https://github.com/silentsudin/oxp3-anatase-fixes   # or use your existing checkout
+cd oxp3-anatase-fixes
+```
+
+Requirements: Anatase (Fedora-based, rpm-ostree), `podman`, and a normal user session. `build`
+never uses sudo; `install`/`uninstall` ask for it.
+
+**First time only**, if you want the kernel/firmware parts (secure boot machines):
+
+```sh
+./oxp3-fixes.sh mok-setup     # creates a MOK key and queues it for enrolment
+# reboot, enrol the key in the blue MOK manager screen
+```
+
+**Install (full stack):**
+
+```sh
+./oxp3-fixes.sh build         # builds gamescope, Mesa (x86_64+i686), MangoHud, XeSS, modules, firmware
+./oxp3-fixes.sh install       # stages kernel modules + firmware (sudo)
+systemctl reboot
+./oxp3-fixes.sh install       # gamescope, Mesa, MangoHud, XeSS and extras into the /usr overlay
+```
+
+Then leave and re-enter Gamemode. If neither the kernel nor the firmware changed, the single
+`install` is enough.
+
+**Install only the Mesa/ANV performance patches** (what the figures above come from):
+
+```sh
+./oxp3-fixes.sh build --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware --skip-xess --skip-extras
+./oxp3-fixes.sh install --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware --skip-xess --skip-extras
+```
+
+**Check what is active:**
+
+```sh
+./oxp3-fixes.sh status
+```
+
+**Uninstall (back to stock Anatase):**
+
+```sh
+./oxp3-fixes.sh uninstall     # asks for sudo; removes the overlay files, the kmod/firmware layer
+systemctl reboot
+```
+
+`uninstall` reverts every part this repo installs: the `/usr` overlay additions (gamescope, Mesa,
+MangoHud, XeSS, extras), the layered `kmod-oxp3` + `oxp3-firmware` packages and the regenerated
+initramfs, and the `/etc` services/hooks. After the reboot you are booting Anatase's unmodified
+deployment; `rpm-ostree status` should show no oxp3 layers left. Nothing outside the script is
+touched, and rebuilding is just `build` + `install` again.
+
 ## After every Anatase update
 
 ```sh
