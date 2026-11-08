@@ -810,7 +810,14 @@ remove_flatpak_mesa() {
 install_flatpak_mesa() {
     _mpick
     [[ -n $MESA_BUILD_DIR ]] || die "no Mesa build - run '$0 build' first"
-    local src="$MESA_BUILD_DIR/lib64" list
+    # OXP3_FLATPAK_BUILD selects a different tree for the Steam Flatpak runtime only: the
+    # host can run a dynamic-expat build (faster patches) while the sandbox gets a static one.
+    local root="$MESA_BUILD_DIR" src list
+    if [[ -n ${OXP3_FLATPAK_BUILD:-} ]]; then
+        root="${OXP3_FLATPAK_BUILD%/}/usr/local"
+        say "Flatpak runtime driver from OXP3_FLATPAK_BUILD: $root"
+    fi
+    src="$root/lib64"
     [[ -d $FLATPAK_RT/overrides ]] || { echo "  no Anatase Flatpak runtime overrides - Steam keeps Anatase's Mesa"; return 0; }
     [[ -e $src/libvulkan_intel.so ]] || return 0
     sudo mkdir -p "$FLATPAK_RT/overrides/lib64" "$MESA_BACKUP/flatpak-stock"
