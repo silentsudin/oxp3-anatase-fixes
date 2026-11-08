@@ -499,12 +499,16 @@ verify() {
         echo "  what decides whether a Steam game gets the Intel driver or lavapipe."
     fi
     echo "steam flatpak runtime:"
+    local ov=$FLATPAK_RT/overrides/lib64/libvulkan_intel.so
     if [[ ! -e $rtf/libvulkan_intel.so ]]; then
         echo "  no runtime driver present"
+    elif [[ -e $ov ]] && ! cmp -s "$ov" "$rtf/libvulkan_intel.so"; then
+        echo "  runtime image is STALE (overrides differ from /run): close Flatpak apps and run"
+        echo "    sudo systemctl restart anatase-flatpak-extensions.service   (or reboot)"
     elif LD_LIBRARY_PATH=$rtf python3 -c "import ctypes;l=ctypes.CDLL('$rtf/libvulkan_intel.so');assert l.vk_icdGetInstanceProcAddr" 2>/dev/null; then
-        echo "  runtime driver loads (Steam gets the Intel driver)"
+        echo "  runtime driver loads (Flatpak Steam gets the Intel driver)"
     else
-        echo "  runtime driver FAILS to load -> Steam games fall back to lavapipe (software)"
+        echo "  runtime driver FAILS to load -> Flatpak Steam falls back to lavapipe (software)"
         echo "  fix: sudo ./oxp3-fixes-fast.sh install"
     fi
 }
