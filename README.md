@@ -66,9 +66,14 @@ Proton.
 
 ## Fast Mesa test install (`oxp3-fixes-fast.sh`)
 
-A copy of the installer for testing the driver we benchmark with, without rebuilding Mesa RPMs.
-Everything else is the same code (kernel modules, firmware, gamescope, MangoHud, XeSS, extras);
-only the Mesa step is swapped for a copy of an already-built podman driver.
+A copy of the installer for testing the driver we benchmark with. Everything else is the same code
+(kernel modules, firmware, gamescope, MangoHud, XeSS, extras); the Mesa step uses a podman/meson
+build of the pinned main tree instead of the RPM path.
+
+`build` compiles Mesa in the fedora:45 container (source tarball + Anatase `overrides.patch` +
+`patches/mesa`, output in `~/.cache/oxp3-fixes/mesa-fast/usr/local`), and `install` copies that
+driver plus the bundled libexpat into `/usr` and into the Steam Flatpak runtime overrides. Point
+`OXP3_MESA_BUILD` at an existing prefix to reuse a tree instead of building.
 
 ```sh
 # Mesa only, seconds (uses mesa-build/install-shiprt/usr/local by default):
@@ -81,6 +86,12 @@ only the Mesa step is swapped for a copy of an already-built podman driver.
 ./oxp3-fixes-fast.sh status    # says whether the prebuilt driver is the one installed
 ./oxp3-fixes-fast.sh uninstall # restores the stock driver from the backup manifest
 ```
+
+Steam games: the runtime's own libexpat is older than the one the driver links against
+(`LIBEXPAT_2.9.0`). Overriding only `libvulkan_intel.so` makes the Intel ICD fail to load inside the
+sandbox, and Vulkan silently falls back to lavapipe - software rendering, single-digit FPS with the CPU
+pegged. The installer now ships the bundled libexpat into the runtime overrides too; `status` says
+whether the runtime expat satisfies the driver.
 
 Pick another build with `OXP3_MESA_BUILD=/path/to/prefix ./oxp3-fixes-fast.sh install ...`.
 The install goes into the writable `/usr` overlay (so it lasts until the next boot/deployment),

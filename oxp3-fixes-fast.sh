@@ -210,7 +210,9 @@ dnf -y -q install meson ninja-build gcc gcc-c++ bison flex pkgconf-pkg-config py
   python3-yaml python3-packaging python3-setuptools llvm22-devel llvm22-libs clang22 clang22-devel \
   zlib-devel expat-devel libdrm-devel libxcb-devel libX11-devel xorg-x11-proto-devel libXext-devel \
   libXrandr-devel libXfixes-devel libxshmfence-devel wayland-devel wayland-protocols-devel \
-  libzstd-devel glslang-devel > /tmp/dnf.log 2>&1
+  libzstd-devel glslang-devel spirv-llvm-translator22-devel spirv-tools-devel libXxf86vm-devel > /tmp/dnf.log 2>&1
+# mesa asks pkg-config for lowercase 'llvmspirvlib'; Fedora ships 'LLVMSPIRVLib.pc'
+ln -sf /usr/lib64/pkgconfig/LLVMSPIRVLib.pc /usr/lib64/pkgconfig/llvmspirvlib.pc 2>/dev/null || true
 rm -rf /b /out/usr; mkdir -p /out/usr/local
 meson setup /b /src --prefix=/usr/local --buildtype=release \
   -Dvulkan-drivers=intel -Dgallium-drivers=iris,llvmpipe -Dplatforms=x11 -Dglx=dri -Dllvm=enabled \
