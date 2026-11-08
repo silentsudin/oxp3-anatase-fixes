@@ -274,3 +274,28 @@ residual. Chasing a driver-code fix was therefore the wrong axis.
 Practical consequence: the release driver remains the XMX driver (best performance, 74.2 avg / 58.1 min at XeSS Auto,
 86 avg at Performance), our patched driver remains default for all non-XeSS games, and no further gain is available
 from owning the driver build - the code is equivalent.
+
+## ROOT CAUSE FOUND: `-doubleGRF` kernel codegen (and the fix is also faster)
+
+The CM kernels are compiled with whatever ocloc flags XeSS passes. When `-doubleGRF` is honoured, the kernels use the
+256-register codegen on Xe3 and produced the white speckles; the driver's own 128-GRF path is correct.
+
+Fix: filter `-doubleGRF` out in the CM compiler helper (`tools/xmx-cm-compile-nodgrf.sh`, a copy of the release
+`cm-compile.sh` with one line changed), then recompile the kernels (clear `~/.cache/xess-xmx/kernels`).
+
+Measured (Cyberpunk, XeSS Auto, IGC 2.10.10, fresh kernel cache):
+
+| driver | kernels | artifacts | avg | min |
+|---|---|---|---|---|
+| release binary | `-doubleGRF` | faint residual | 74.2 | 58.1 |
+| release binary | **no `-doubleGRF`** | **none** | **76.5** | **62.1** |
+| our podman build from the release commit (`b354bd5a`) | **no `-doubleGRF`** | **none** | see summary | |
+
+So the artifact was never our Mesa code (proved equivalent to the release binary by symbol/instruction comparison); it
+was the 256-GRF CM kernel codegen, and disabling it is a performance win as well.
+
+Shipping configuration (all wired):
+- driver: our podman build `~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so` (from the release commit's sources)
+- compiler: `tools/xmx-cm-compile-nodgrf.sh` (128-GRF)
+- IGC: `~/.local/share/xess-xmx-release/.../igc` (2.10.10), shim via `INTC_ALT`
+- env: `~/.config/xess-xmx/oxp3-env.sh`, Heroic envVars, `cp2077-direct.sh` (OXP3_XMX=1)
