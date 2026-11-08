@@ -1043,11 +1043,31 @@ do_status() {
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }
 
+verify() {
+    local rtf=/run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files/lib64
+    echo "host:"
+    if LD_LIBRARY_PATH=/usr/lib64 python3 -c "import ctypes;l=ctypes.CDLL('/usr/lib64/libvulkan_intel.so');assert l.vk_icdGetInstanceProcAddr" 2>/dev/null; then
+        echo "  /usr/lib64/libvulkan_intel.so loads (Intel ICD usable)"
+    else
+        echo "  /usr/lib64/libvulkan_intel.so FAILS to load -> Vulkan falls back to lavapipe"
+    fi
+    echo "steam runtime:"
+    if [[ ! -e $rtf/libvulkan_intel.so ]]; then
+        echo "  no runtime driver present"
+    elif LD_LIBRARY_PATH=$rtf python3 -c "import ctypes;l=ctypes.CDLL('$rtf/libvulkan_intel.so');assert l.vk_icdGetInstanceProcAddr" 2>/dev/null; then
+        echo "  runtime driver loads (Steam gets the Intel driver)"
+    else
+        echo "  runtime driver FAILS to load -> Steam games fall back to lavapipe (software)"
+        echo "  fix: sudo ./oxp3-fixes-fast.sh install"
+    fi
+}
+
 case $cmd in
     build) do_build ;;
     install) do_install ;;
     all) do_build; do_install ;;
     status) do_status ;;
+    verify) verify ;;
     uninstall) do_uninstall ;;
     mok-setup) do_mok_setup ;;
     *) sed -n '2,/^set -euo pipefail/{/^#/p}' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
