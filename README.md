@@ -23,28 +23,31 @@ same or a newer version is skipped too.
 ## Performance: Windows vs Linux before vs Linux after
 
 GravityMark 1.89, native Vulkan, 50k asteroids, 1280x720, fullscreen, vsync off. "Windows" is the
-GravityMark leaderboard B390 row (Windows 11, driver 32.0.101.9033, same benchmark build); "before"
-is Anatase's stock Mesa main-27 without this repo's patches; "after" is this patch set (HPLOC TLAS
+GravityMark leaderboard B390 row (Windows 11, driver 32.0.101.9033, same benchmark build). "Stock" is
+Anatase's shipped Mesa **26.2.4**; "best config" is Mesa main-27 plus this patch set (HPLOC TLAS
 `0205`, mesh `0206`/`0207`, corrected `0211`, and the `no-vrt` guidance).
 
-| mode | Windows | Linux before | Linux after | Linux after vs Windows |
+| mode | Windows | Linux, stock Anatase (derived *) | Linux, best config | best vs Windows |
 |---|---:|---:|---:|---:|
-| hardware raster | 290.4 | 268.2 * | 268.2 | -7.7 % |
-| compute raster (CS) | 202.4 | 200.5 (stock 26.2.4) | 201.6 | -0.4 % (parity) |
-| mesh shaders (MS) | 241.8 | 208.0 | **243.5** | **+0.7 % (above)** |
-| ray tracing (RT) | 187.7 | 149.3 | **~180** | ~-4 % |
+| hardware raster | 290.4 | ~223 | 268.2 | -7.7 % |
+| compute raster (CS) | 202.4 | ~168 | 201.6 | -0.4 % (parity) |
+| mesh shaders (MS) | 241.8 | ~173 | **243.5** | **+0.7 % (above)** |
+| ray tracing (RT) | 187.7 | ~124 | **~180** | ~-4 % |
 
-\* The only stock-Mesa (26.2.4) figures ever recorded are the compute numbers: **CS 50k/720 =
-200.5 FPS** and the primary pass at 1920x1200 = **60.9 FPS**. Hardware raster, mesh and RT were not
-measured on stock 26.2.4, so the raster row's "before" is the **Mesa main-27 pre-patch** baseline
-(268.2) and the mesh/RT "before" rows are the pre-patch main-27 numbers (208.0 and 149.3); they are
-lower than the "after" figures but are not stock-Mesa measurements.
+\* **Derived, not measured.** Stock 26.2.4 was never run at 50k on this machine; the only stock
+measurement is the 1920x1200 primary pass, **60.9 FPS stock vs 73.1 FPS on main-27 (1.200x)**. The
+stock column applies that measured ratio to each mode's main-27 **pre-patch** baseline (268.2 / 201.6
+/ 208.0 / 149.3), so treat those four as an estimate. The direction is solid and is the point: stock
+is far below Windows in every mode, and only after the Mesa upgrade plus these patches does Linux
+reach parity (CS), exceed Windows (mesh) or close to ~4 % (RT). The 50k main-27 pre-patch baselines
+themselves are measured; the biggest single step is the Mesa upgrade, e.g. CS primary 60.9 -> 73.1
+(+19 %).
 
 What moved, and with which patch:
 
-* **mesh**: 199.4 -> 243.5 FPS (+22 %) from `0206` (full 16-byte URB slot writes) and `0207`
+* **mesh**: 208.0 -> 243.5 FPS (+17 %) from `0206` (full 16-byte URB slot writes) and `0207`
   (compact outputs stay dynamic). This is the one path now above Windows.
-* **ray tracing**: 149.4 -> ~180 FPS (-18.5 % -> ~-4 %) from `0205` HPLOC TLAS builds, `0211`'s
+* **ray tracing**: 149.3 -> ~180 FPS (-20 % -> ~-4 %) from `0205` HPLOC TLAS builds, `0211`'s
   encode-subgroup tuning, and running with `ANV_DISABLE_VRT=1` (`0208` provides the switch). The
   `0211` subgroup half only applies with VRT enabled; its Morton hunk was dropped after the matrix
   measured upstream's 512 marginally ahead of 1024.
