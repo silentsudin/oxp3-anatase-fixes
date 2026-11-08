@@ -234,7 +234,18 @@ install_mesa_fast() {
     for f in libvulkan_intel.so libexpat.so.1; do
         [[ -e $src/$f ]] || continue
         [[ $f == libexpat.so.1 && $need_expat == 0 ]] && continue
-        [[ -e $MESA_BACKUP/stock/$f ]] || { sudo mkdir -p "$MESA_BACKUP/stock"; [[ -e /usr/lib64/$f ]] && sudo cp -a "/usr/lib64/$f" "$MESA_BACKUP/stock/$f"; }
+        # -e is false for a dangling symlink, which is how earlier versions left the stock
+        # backup (cp -a of /usr/lib64/libexpat.so.1, itself a symlink to the versioned file).
+        # Recreate it from the real file so a restore does not depend on a broken link.
+        if [[ ! -e $MESA_BACKUP/stock/$f ]]; then
+            local cand="/usr/lib64/$f"
+            [[ $f == libexpat.so.1 && -e /usr/lib64/libexpat.so.1.12.3 ]] && cand="/usr/lib64/libexpat.so.1.12.3"
+            if [[ -e $cand ]]; then
+                sudo mkdir -p "$MESA_BACKUP/stock"
+                sudo rm -f "$MESA_BACKUP/stock/$f"
+                sudo cp -L "$cand" "$MESA_BACKUP/stock/$f"
+            fi
+        fi
         sudo install -m 0755 "$src/$f" "/usr/lib64/$f"
         echo "/usr/lib64/$f" | sudo tee -a "$manifest" >/dev/null
     done
