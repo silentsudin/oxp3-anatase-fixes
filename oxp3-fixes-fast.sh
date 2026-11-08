@@ -214,11 +214,12 @@ dnf -y -q install meson ninja-build gcc gcc-c++ bison flex pkgconf-pkg-config py
   python3-yaml python3-packaging python3-setuptools llvm22-devel llvm22-libs clang22 clang22-devel \
   zlib-devel expat-devel libdrm-devel libxcb-devel libX11-devel xorg-x11-proto-devel libXext-devel \
   libXrandr-devel libXfixes-devel libxshmfence-devel wayland-devel wayland-protocols-devel \
-  libzstd-devel glslang-devel spirv-llvm-translator22-devel spirv-tools-devel libXxf86vm-devel > /tmp/dnf.log 2>&1
+  libzstd-devel expat-static glslang-devel spirv-llvm-translator22-devel spirv-tools-devel \
+  libXxf86vm-devel > /tmp/dnf.log 2>&1
 # mesa asks pkg-config for lowercase 'llvmspirvlib'; Fedora ships 'LLVMSPIRVLib.pc'
 ln -sf /usr/lib64/pkgconfig/LLVMSPIRVLib.pc /usr/lib64/pkgconfig/llvmspirvlib.pc 2>/dev/null || true
 rm -rf /b /out/usr; mkdir -p /out/usr/local
-meson setup /b /src --prefix=/usr/local --buildtype=release \
+meson setup /b /src --prefix=/usr/local --buildtype=release -Dprefer_static=true \
   -Dvulkan-drivers=intel -Dgallium-drivers=iris,llvmpipe -Dplatforms=x11 -Dglx=dri -Dllvm=enabled \
   > /tmp/cfg.log 2>&1 || { tail -25 /tmp/cfg.log; exit 1; }
 ninja -C /b -j"$(nproc)" > /tmp/build.log 2>&1 || { grep -m15 "error:" /tmp/build.log; exit 2; }
@@ -235,8 +236,11 @@ install_mesa_fast() {
     local src="$MESA_BUILD_DIR/lib64" manifest="$MESA_BACKUP/mesa.manifest" f target
     sudo mkdir -p "$MESA_BACKUP"
     : | sudo tee "$manifest" >/dev/null
+    local need_expat=0
+    readelf -d "$src/libvulkan_intel.so" 2>/dev/null | grep -q libexpat && need_expat=1
     for f in libvulkan_intel.so libexpat.so.1; do
         [[ -e $src/$f ]] || continue
+        [[ $f == libexpat.so.1 && $need_expat == 0 ]] && continue
         target=/usr/lib64/$f
         if [[ ! -e $MESA_BACKUP/stock/$f ]]; then
             sudo mkdir -p "$MESA_BACKUP/stock"

@@ -87,11 +87,13 @@ driver plus the bundled libexpat into `/usr` and into the Steam Flatpak runtime 
 ./oxp3-fixes-fast.sh uninstall # restores the stock driver from the backup manifest
 ```
 
-Steam games: the runtime's own libexpat is older than the one the driver links against
-(`LIBEXPAT_2.9.0`). Overriding only `libvulkan_intel.so` makes the Intel ICD fail to load inside the
-sandbox, and Vulkan silently falls back to lavapipe - software rendering, single-digit FPS with the CPU
-pegged. The installer now ships the bundled libexpat into the runtime overrides too; `status` says
-whether the runtime expat satisfies the driver.
+Steam games: the runtime's own libexpat is older than the one the earlier driver linked against
+(`LIBEXPAT_2.9.0`). Overriding only `libvulkan_intel.so` made the Intel ICD fail to load inside the
+sandbox, and Vulkan silently fell back to lavapipe - software rendering, single-digit FPS with the CPU
+pegged. `build` now links expat statically (`-Dprefer_static=true`), so the driver has **no expat
+dependency at all** and loads against whatever the host or the Steam runtime ships; the installer
+only adds the bundled expat when a driver from an older build still needs it. `verify` tests both load
+paths.
 
 Pick another build with `OXP3_MESA_BUILD=/path/to/prefix ./oxp3-fixes-fast.sh install ...`.
 The install goes into the writable `/usr` overlay (so it lasts until the next boot/deployment),
