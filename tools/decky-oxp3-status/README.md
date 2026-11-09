@@ -12,6 +12,31 @@ collects the configured launch environment, hashes the drivers, reads the
 scheduler/power sysfs files and returns one JSON report. `src/index.tsx` only
 polls `get_status` every 5 s and renders it.
 
+## Two-line overview (1.1.0)
+
+The first two rows of the panel answer the two questions first; the full
+matrix described below is unchanged underneath them:
+
+1. **Fix health** — the backend runs `tools/oxp3-verify.sh --json` (quick mode,
+   bounded timeout, cached for 90 s) and derives one headline. With no FAIL it
+   is green: *"All fixes applied and working"*. Otherwise it is amber/red
+   *"Needs attention: id, id +N more"*. Activate the row to expand the top five
+   issues with their message and remediation hint. SKIP/UNKNOWN checks are
+   never reported as working; an UNKNOWN-only report says *"Needs attention"*,
+   and a report where nothing passed says *"Nothing verified"*.
+2. **XeSS path of the running game** — *"XeSS XMX: active (Game)"* (green),
+   *"XeSS: detected, XMX shim NOT active (Game)"* (amber),
+   *"XeSS: current game does not use it"*, or *"No game running"*. Detection
+   reads the game process tree's `/proc/<pid>/maps`/`map_files` and `environ`
+   for `libxess*`/`xess*.so`, a Vulkan layer/ICD referencing XeSS, the per-game
+   XMX ICD (`icd-xmx.json`/`icd-flatpak.json`), the XMX driver, or the
+   helper/shim variables. Unreadable `/proc` entries are skipped. Activate the
+   row to see the evidence string.
+
+The two lines are rendered by `OverviewLines` in `src/index.tsx` from the
+`get_overview()` backend method; the verification section's *Run quick
+verification* refreshes them with the fresh result.
+
 ## Indicators
 
 | group | what it checks | expected |
@@ -54,13 +79,15 @@ cd tools/decky-oxp3-status
 ./build.sh --no-install    # rebuild from existing node_modules
 ```
 
-`build.sh` produces `build/oxp3-status-1.0.0.zip` and prints its size and
+`build.sh` produces `build/oxp3-status-1.1.0.zip` and prints its size and
 sha256. The zip is deterministic (fixed entry timestamps, sorted entries), so
 the hash is reproducible from the same sources; it is intentionally not
 hard-coded here because this README is itself inside the archive. Individual
 steps: `npm run typecheck`, `npm run build`
-(rollup → `dist/index.js`), `npm run smoke` (imports and renders the real
-bundle with stubbed loader globals), `npm run selftest`, `npm run package`.
+(rollup → `dist/index.js`), `node wrap-iife.mjs dist/index.js`, `npm run
+smoke` (evaluates and renders the real IIFE with stubbed loader globals),
+`npm run test` (renders the two overview lines in every state), `npm run
+selftest`, `npm run package`.
 
 `dist/` and `build/` are generated and not committed. There is no vendored
 `@decky/*` runtime in this repo.
@@ -79,7 +106,7 @@ does.
 ## Install
 
 Preferred: Decky → Settings → General → **Install Plugin from File** → select
-`build/oxp3-status-1.0.0.zip`. The zip root is the plugin root:
+`build/oxp3-status-1.1.0.zip`. The zip root is the plugin root:
 
 ```
 plugin.json          manifest, api_version 1
@@ -135,13 +162,13 @@ environment internally.
 
 ```sh
 python3 -m py_compile main.py
-python3 main.py --selftest          # 90 checks, synthetic fixtures, exit 0
+python3 main.py --selftest          # 137 checks, synthetic fixtures, exit 0
 ./build.sh                          # typecheck + build + smoke + selftest + zip
 python3 -m json.tool plugin.json >/dev/null
 sh -n ../oxp3-status.sh
 ```
 
-Last recorded run on this host: `--selftest` 90/90, `npm run smoke` ok,
+Last recorded run on this host: `--selftest` 137/137, `npm run smoke` ok, `npm run test` ok,
 `--json` valid, `--strict` exit 2, `overall=warn` with
 `23 ok / 5 warn / 0 fail / 0 unknown`. The five warnings are the machine's
 honest state: `sched_ext` disabled / no `scx_cosmos` / `oxp3-gaming-sched.service`
@@ -162,7 +189,8 @@ Gamemode/sandbox caveats.
 | `main.py` | backend: all checks, `Plugin.get_status()`, CLI, `--selftest` |
 | `build.sh` | install → typecheck → build → smoke → selftest → zip |
 | `package.py` | deterministic zip writer, validates the artifact layout |
-| `test/smoke.mjs` | imports/renders `dist/index.js` with loader globals |
+| `test/smoke.mjs` | evaluates/renders the IIFE `dist/index.js` with loader globals |
+| `test/overview.mjs` | renders the two overview lines in every health/XeSS state |
 | `README.md` | this file |
 
 Our own code only; no vendor binaries, decompiled listings or firmware are

@@ -57,7 +57,7 @@ check "the ownership marker is installed" test -f "$plugin/.oxp3-managed"
 check "the marker names the plugin" grep -qx 'plugin=oxp3-status' "$plugin/.oxp3-managed"
 check "the marker records the artifact digest" grep -q '^artifact_sha256=[0-9a-f]\{64\}$' "$plugin/.oxp3-managed"
 check "the installed manifest has the expected version" \
-    grep -q '"version"[[:space:]]*:[[:space:]]*"1.0.0"' "$plugin/plugin.json"
+    grep -q '"version"[[:space:]]*:[[:space:]]*"1.1.0"' "$plugin/plugin.json"
 check "the artifact digest was verified" grep -q 'recorded: .* (match)' "$tmp/install.log"
 check "the restart command is printed instead of restarting" \
     grep -q 'sudo systemctl restart plugin_loader.service' "$tmp/install.log"
@@ -69,7 +69,7 @@ else
     bad "status exits 0"
 fi
 check "status reports the decky component as ok" grep -q '^  decky:.*state=ok' "$tmp/status.log"
-check "status reports the installed version" grep -q 'version=1.0.0' "$tmp/status.log"
+check "status reports the installed version" grep -q 'version=1.1.0' "$tmp/status.log"
 check "status reports the marker" grep -q 'marker=yes' "$tmp/status.log"
 
 # --- 3. reinstall (backup created) ----------------------------------------------------------

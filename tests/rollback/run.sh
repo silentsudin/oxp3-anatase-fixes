@@ -23,7 +23,7 @@ state=$home/.local/state/oxp3-fixes
 rbt=$repo/tools/oxp3-rollback.sh
 hw=$repo/tools/oxp3-hw-install.sh
 # The Decky component is part of the same --root simulation when a built plugin zip exists.
-decky_zip=$repo/tools/decky-oxp3-status/build/oxp3-status-1.0.0.zip
+decky_zip=$repo/tools/decky-oxp3-status/build/oxp3-status-1.1.0.zip
 decky_args=()
 decky_uninstall_args=()
 if [ -f "$decky_zip" ]; then

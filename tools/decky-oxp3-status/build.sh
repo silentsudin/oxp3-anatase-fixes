@@ -74,6 +74,9 @@ node wrap-iife.mjs dist/index.js
 echo "build: headless load/render smoke test"
 npm run --silent smoke
 
+echo "build: two-line overview render test"
+npm run --silent test
+
 echo "build: backend selftest (synthetic /sys, /proc, HOME)"
 python3 main.py --selftest
 

@@ -9,4 +9,4 @@
 # Regenerate after an intentional source change:
 #   cd tools/decky-oxp3-status && ./build.sh --offline
 #   sha256sum build/oxp3-status-*.zip   # then update the line below
-9a2979f7f4b03b113480c7a90f4225e902e607f9dc944a41e3d39430a7314c74  oxp3-status-1.0.0.zip
+1deaa5892e6e35ec625f78fd716a2dcad23e0b87760b61d40ebe830afe9dfcde  oxp3-status-1.1.0.zip

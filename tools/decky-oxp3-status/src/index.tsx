@@ -81,6 +81,285 @@ const STATE_LABEL: Record<StatusState, string> = {
   na: "--",
 };
 
+// ---------------------------------------------------------------------------
+// Two-line overview, rendered above every other section:
+//   1. whether all OXP3 fixes are applied and working (verify harness)
+//   2. whether the running game loads XeSS and whether the XMX path is active
+// The backend does all detection and sends ready-to-show labels; this file only
+// colours them and keeps the expandable issue/evidence details.
+// ---------------------------------------------------------------------------
+type HealthState = "ok" | "warn" | "fail" | "error";
+
+interface OverviewIssue {
+  id: string;
+  state: string;
+  message?: string;
+  hint?: string;
+}
+
+interface OverviewHealth {
+  state?: string;
+  headline?: string;
+  summary?: string;
+  counts?: { pass?: number; fail?: number; skip?: number; unknown?: number; total?: number };
+  issues?: OverviewIssue[];
+  issues_total?: number;
+  issue_overflow?: number;
+  error?: { code?: string; message?: string } | null;
+  checked_at?: string;
+}
+
+interface OverviewXess {
+  state?: string;
+  label?: string;
+  game?: string | null;
+  pid?: number | null;
+  evidence?: string;
+  xess_loaded?: string[];
+  xmx_evidence?: string;
+}
+
+interface Overview {
+  health?: OverviewHealth;
+  xess?: OverviewXess;
+}
+
+/**
+ * Headless-render seed for test/overview.mjs. The Decky loader never sets this
+ * global, so in Gamemode the panel always fetches get_overview from the backend.
+ */
+function overviewSeed(): Overview | null {
+  const value = (globalThis as { __OXP3_STATUS_OVERVIEW__?: unknown })
+    .__OXP3_STATUS_OVERVIEW__;
+  return value && typeof value === "object" ? (value as Overview) : null;
+}
+
+/** Test-only: start with the issue/evidence details expanded. */
+function overviewOpenSeed(): boolean {
+  return Boolean(
+    (globalThis as { __OXP3_STATUS_OVERVIEW_OPEN__?: unknown })
+      .__OXP3_STATUS_OVERVIEW_OPEN__
+  );
+}
+
+const HEALTH_COLOR: Record<HealthState, string> = {
+  ok: STATE_COLOR.ok,
+  warn: STATE_COLOR.warn,
+  fail: STATE_COLOR.fail,
+  error: STATE_COLOR.fail,
+};
+
+const XESS_COLOR: Record<string, string> = {
+  "xess-on-xmx": STATE_COLOR.ok,
+  "xess-on-standard": STATE_COLOR.warn,
+  "xess-off": STATE_COLOR.unknown,
+  "no-game": STATE_COLOR.unknown,
+};
+
+const OVERVIEW_REFRESH_MS = 15000;
+
+function asHealthState(value: unknown): HealthState {
+  return value === "ok" || value === "warn" || value === "fail" ? value : "error";
+}
+
+function OverviewLines({
+  overview,
+  error,
+}: {
+  overview: Overview | null;
+  error: string | null;
+}) {
+  const [showIssues, setShowIssues] = useState(() => overviewOpenSeed());
+  const [showEvidence, setShowEvidence] = useState(() => overviewOpenSeed());
+  const health = overview?.health;
+  const xess = overview?.xess;
+  const healthState = health ? asHealthState(health.state) : "error";
+  const headline =
+    health?.headline ??
+    (overview || error ? "Fix status unavailable" : "Checking OXP3 fixes...");
+  const healthDetail =
+    health?.summary ??
+    (error
+      ? error
+      : "runs tools/oxp3-verify.sh --json (read-only, cached by the backend)");
+  const issues = health?.issues ?? [];
+  const overflow = health?.issue_overflow ?? 0;
+  const xessLabel =
+    xess?.label ??
+    (overview || error ? "Game status unavailable" : "Checking the running game...");
+  const xessColor = xess ? XESS_COLOR[xess.state ?? ""] ?? STATE_COLOR.unknown : STATE_COLOR.unknown;
+
+  return (
+    <PanelSection>
+      <PanelSectionRow>
+        <Focusable
+          onActivate={issues.length > 0 ? () => setShowIssues((value) => !value) : undefined}
+          style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "2px 0" }}
+        >
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                color: HEALTH_COLOR[healthState],
+                fontWeight: 700,
+                fontSize: "0.92em",
+                lineHeight: 1.25,
+              }}
+            >
+              {headline}
+            </div>
+            <div style={{ opacity: 0.7, fontSize: "0.76em", lineHeight: 1.2 }}>
+              {healthDetail}
+            </div>
+            {showIssues && issues.length > 0 && (
+              <div
+                style={{
+                  marginTop: 4,
+                  padding: "6px 8px",
+                  borderRadius: 4,
+                  background: "rgba(255,255,255,0.06)",
+                  fontSize: "0.76em",
+                  lineHeight: 1.3,
+                }}
+              >
+                {issues.map((issue) => (
+                  <div key={issue.id} style={{ marginBottom: 4 }}>
+                    <span
+                      style={{
+                        color:
+                          issue.state === "fail"
+                            ? STATE_COLOR.fail
+                            : STATE_COLOR.warn,
+                        fontWeight: 700,
+                        fontSize: "0.9em",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {issue.state}
+                    </span>{" "}
+                    <span style={{ fontFamily: "monospace" }}>{issue.id}</span>
+                    {issue.message ? <span> — {issue.message}</span> : null}
+                    {issue.hint ? (
+                      <div
+                        style={{
+                          opacity: 0.78,
+                          fontFamily: "monospace",
+                          fontSize: "0.92em",
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        {issue.hint}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+                {overflow > 0 && (
+                  <div style={{ opacity: 0.7 }}>
+                    +{overflow} more in the full matrix below
+                  </div>
+                )}
+              </div>
+            )}
+          </span>
+          {issues.length > 0 && (
+            <span style={{ opacity: 0.5, fontSize: "0.8em" }}>
+              {showIssues ? "-" : "+"}
+            </span>
+          )}
+        </Focusable>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <Focusable
+          onActivate={
+            xess?.evidence ? () => setShowEvidence((value) => !value) : undefined
+          }
+          style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "2px 0" }}
+        >
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                color: xessColor,
+                fontWeight: 600,
+                fontSize: "0.88em",
+                lineHeight: 1.25,
+              }}
+            >
+              {xessLabel}
+            </div>
+            {showEvidence && xess?.evidence && (
+              <div
+                style={{
+                  marginTop: 2,
+                  padding: "6px 8px",
+                  borderRadius: 4,
+                  background: "rgba(255,255,255,0.06)",
+                  fontFamily: "monospace",
+                  fontSize: "0.74em",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  opacity: 0.9,
+                }}
+              >
+                {xess.evidence}
+              </div>
+            )}
+          </span>
+          {xess?.evidence && (
+            <span style={{ opacity: 0.5, fontSize: "0.8em" }}>
+              {showEvidence ? "-" : "+"}
+            </span>
+          )}
+        </Focusable>
+      </PanelSectionRow>
+    </PanelSection>
+  );
+}
+
+function useOverview() {
+  const [overview, setOverview] = useState<Overview | null>(() => overviewSeed());
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const inFlight = useRef(false);
+
+  const load = useCallback(async (refresh = false): Promise<Overview | null> => {
+    if (inFlight.current) return null;
+    inFlight.current = true;
+    try {
+      const next = (await call<[boolean], Overview>("get_overview", refresh)) as Overview;
+      if (!mounted.current) return null;
+      if (next && typeof next === "object") {
+        setOverview(next);
+        setError(null);
+        return next;
+      }
+      setError("backend returned an unexpected overview");
+      return null;
+    } catch (err) {
+      if (mounted.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+      return null;
+    } finally {
+      inFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    void load();
+    // The backend caches the verify harness result for 90 s, so polling here
+    // only costs one /proc scan per interval.
+    const timer = setInterval(() => {
+      void load();
+    }, OVERVIEW_REFRESH_MS);
+    return () => {
+      mounted.current = false;
+      clearInterval(timer);
+    };
+  }, [load]);
+
+  return { overview, error, reload: load };
+}
+
 function asState(value: unknown): StatusState {
   return value === "ok" || value === "warn" || value === "fail" || value === "na"
     ? value
@@ -512,6 +791,11 @@ function useStatusReport(intervalMs: number) {
 
 function StatusPanel() {
   const { report, error, busy, reload } = useStatusReport(REFRESH_MS);
+  const {
+    overview,
+    error: overviewError,
+    reload: reloadOverview,
+  } = useOverview();
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -521,6 +805,7 @@ function StatusPanel() {
 
   const onManualRefresh = useCallback(async () => {
     const next = await reload();
+    void reloadOverview(true);
     toaster.toast({
       title: "OXP3 Status",
       body: next
@@ -529,7 +814,7 @@ function StatusPanel() {
           } ok · ${next.counts?.warn ?? 0} warn · ${next.counts?.fail ?? 0} fail`
         : "Refresh failed",
     });
-  }, [reload]);
+  }, [reload, reloadOverview]);
 
   const onCopyJson = useCallback(async () => {
     if (!report) return;
@@ -558,6 +843,7 @@ function StatusPanel() {
 
   return (
     <>
+      <OverviewLines overview={overview} error={overviewError} />
       <PanelSection title="OXP3 Status">
         {!report && !error && (
           <PanelSectionRow>
@@ -626,7 +912,12 @@ function StatusPanel() {
           </ButtonItem>
         </PanelSectionRow>
 
-        <VerificationSection onFinished={reload} />
+        <VerificationSection
+          onFinished={() => {
+            void reload();
+            void reloadOverview(true);
+          }}
+        />
 
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => setProblemsOnly((value) => !value)}>

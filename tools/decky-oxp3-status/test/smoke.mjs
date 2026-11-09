@@ -12,8 +12,10 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
 const require = createRequire(import.meta.url);
 const React = require("react");
@@ -89,8 +91,13 @@ window.__DECKY_SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED_deckyLoaderAPIIn
   },
 };
 
-const mod = await import("../dist/index.js");
-const plugin = mod.default;
+// The loader evaluates dist/index.js as a classic script and takes the
+// completion value as the plugin object; evaluate the wrapped IIFE the same
+// way instead of importing it as an ES module (which would have no default).
+const plugin = vm.runInThisContext(
+  readFileSync(new URL("../dist/index.js", import.meta.url), "utf8"),
+  { filename: "dist/index.js" }
+);
 
 assert.ok(plugin && typeof plugin === "object", "default export must be a plugin object");
 assert.equal(plugin.name, "OXP3 Status");
@@ -106,6 +113,16 @@ assert.match(html, /OXP3 Status/, "panel must render its section title");
 assert.match(html, /loading/, "effect has not run under server rendering: loading row expected");
 assert.match(html, /Verification/, "panel must render the verification row");
 assert.match(html, /Run quick verification/, "the quick verification button must be present");
+assert.match(html, /Checking OXP3 fixes\.\.\./, "the health line must render first");
+assert.match(html, /Checking the running game\.\.\./, "the XeSS line must render second");
+assert.ok(
+  html.indexOf("Checking OXP3 fixes") < html.indexOf("Overall"),
+  "the health line must sit above the detailed matrix"
+);
+assert.ok(
+  html.indexOf("Checking the running game") < html.indexOf("Overall"),
+  "the XeSS line must sit above the detailed matrix"
+);
 assert.match(html, /More verification modes/, "the invasive modes must stay behind a second step");
 assert.ok(
   !/Run full verification/.test(html),
@@ -130,12 +147,15 @@ mod = importlib.util.module_from_spec(spec)
 sys.modules["decky_main"] = mod
 spec.loader.exec_module(mod)
 total, failures = mod.verification_selftest()
+overview_total, overview_failures = mod.overview_selftest()
 plugin = mod.Plugin()
 last = asyncio.run(plugin.get_verification())
 bad = asyncio.run(plugin.run_verification("bogus", False))
 print(json.dumps({
     "total": total,
     "failures": failures,
+    "overviewTotal": overview_total,
+    "overviewFailures": overview_failures,
     "lastAvailable": bool(last.get("available")),
     "methods": sorted(name for name in dir(plugin) if not name.startswith("_")),
     "badMode": (bad.get("error") or {}).get("code"),
@@ -163,16 +183,27 @@ assert.deepEqual(
   `stub-verifier fixtures failed: ${JSON.stringify(fixtures.failures)}`
 );
 assert.ok(fixtures.total >= 20, `expected >=20 fixture checks, got ${fixtures.total}`);
+assert.deepEqual(
+  fixtures.overviewFailures,
+  [],
+  `overview fixtures failed: ${JSON.stringify(fixtures.overviewFailures)}`
+);
+assert.ok(
+  fixtures.overviewTotal >= 30,
+  `expected >=30 overview fixture checks, got ${fixtures.overviewTotal}`
+);
 assert.equal(fixtures.lastAvailable, true, "get_verification must report the last run");
 assert.ok(fixtures.methods.includes("run_verification"), "Plugin.run_verification must exist");
 assert.ok(fixtures.methods.includes("get_verification"), "Plugin.get_verification must exist");
+assert.ok(fixtures.methods.includes("get_overview"), "Plugin.get_overview must exist");
 assert.equal(fixtures.badMode, "bad-mode", "the backend must return an error object, not raise");
 
 console.log(
   "smoke: dist/index.js loaded and rendered (%d bytes of markup, api handshake ok), " +
-    "%d stub-verifier backend checks passed",
+    "%d stub-verifier + %d overview backend checks passed",
   html.length,
-  fixtures.total
+  fixtures.total,
+  fixtures.overviewTotal
 );
 
 

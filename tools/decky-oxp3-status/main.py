@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # Recorded expectations (docs/WORKING-BUILD-2026-11-08.md, docs/xess-xmx.md).
@@ -1937,6 +1937,688 @@ def collect_status(home_override: Optional[str] = None) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Overview: the two lines at the top of the panel.
+#
+#   health  one headline derived from `tools/oxp3-verify.sh --json` (FAIL first,
+#           then UNKNOWN, then SKIPs that carry an actionable hint) plus the
+#           counts and the short issue list the panel expands.
+#   xess    whether the running game loads XeSS and whether the XMX stack
+#           (ICD, driver, helper or shim) is actually part of that launch.
+#
+# Both are read-only and defensive: a missing verifier, an unreadable /proc
+# entry or a game that lives in another PID namespace degrades to an explicit
+# label, never to an exception and never to a claim that a SKIP/UNKNOWN check
+# is working.
+# ---------------------------------------------------------------------------
+_OVERVIEW_ISSUE_LIMIT = 5
+_OVERVIEW_HEADLINE_IDS = 3
+_OVERVIEW_HEALTH_TTL = 90.0
+_OVERVIEW_XESS_TTL = 3.0
+_OVERVIEW_HEALTH_CACHE: Dict[str, Any] = {"ts": 0.0, "value": None}
+_OVERVIEW_XESS_CACHE: Dict[str, Any] = {"key": None, "ts": 0.0, "value": None}
+
+# Environment keys that can carry a Vulkan layer or ICD referencing XeSS.
+_XESS_ENV_KEYS = (
+    "VK_ICD_FILENAMES",
+    "VK_DRIVER_FILES",
+    "VK_LAYER_PATH",
+    "VK_ADD_LAYER_PATH",
+    "VK_INSTANCE_LAYERS",
+    "VK_LOADER_LAYERS_ENABLE",
+)
+# The per-game ICD files the XMX work installs (`docs/hw/xess-xmx.md` and the
+# Flatpak variant in `docs/hw/flatpak-xmx.md`).
+_XMX_ICD_MARKERS = ("icd-xmx.json", "icd-flatpak.json")
+# Environment that points at the XMX driver/helper/shim stack.
+_XMX_ENV_KEYS = (
+    "LD_PRELOAD",
+    "ANV_CM_HELPER",
+    "ANV_CM_KERNEL_DIR",
+    "XMX_IGC_DIR",
+    "INTC_ALT_DRIVER_EXTENSIONS_PATH",
+    "OXP3_XMX_ENV_FILE",
+)
+_STEAM_ANCESTOR_MARKERS = ("steam", "reaper", "gamescope", "proton")
+
+
+def _overview_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _overview_short(value: Any, limit: int = 120) -> str:
+    text = _as_text(value).replace("\r", " ").replace("\n", " ").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _overview_zero_counts() -> Dict[str, int]:
+    return {"total": 0, "pass": 0, "fail": 0, "skip": 0, "unknown": 0}
+
+
+def _overview_int(value: Any, default: int = 0) -> int:
+    return value if isinstance(value, int) and value >= 0 else default
+
+
+# -- health -----------------------------------------------------------------
+def _health_check_items(payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Normalise a raw schema-1 verify report or the compact run result."""
+    items: List[Dict[str, str]] = []
+    raw_checks = payload.get("checks")
+    if isinstance(raw_checks, list):
+        for check in raw_checks:
+            if not isinstance(check, dict):
+                continue
+            state = _as_text(check.get("state")).strip().lower()
+            items.append(
+                {
+                    "id": _overview_short(check.get("id") or "?", 80),
+                    "state": state,
+                    "message": _overview_short(
+                        check.get("summary") or check.get("title") or "", 160
+                    ),
+                    "hint": _overview_short(
+                        check.get("remediation") or check.get("hint") or "", 240
+                    ),
+                }
+            )
+        return items
+    for key, state in (
+        ("failures", "fail"),
+        ("unknowns", "unknown"),
+        ("skips", "skip"),
+    ):
+        for item in payload.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            items.append(
+                {
+                    "id": _overview_short(item.get("id") or "?", 80),
+                    "state": state,
+                    "message": _overview_short(
+                        item.get("summary") or item.get("title") or "", 160
+                    ),
+                    "hint": _overview_short(item.get("hint") or "", 240),
+                }
+            )
+    return items
+
+
+def _health_counts(payload: Dict[str, Any], items: List[Dict[str, str]]) -> Dict[str, int]:
+    if isinstance(payload.get("checks"), list):
+        return _verification_counts(payload)
+    declared = payload.get("counts") or {}
+    counts = {
+        "pass": _overview_int(declared.get("pass")),
+        "fail": _overview_int(declared.get("fail")),
+        "skip": _overview_int(declared.get("skip")),
+        "unknown": _overview_int(declared.get("unknown")),
+    }
+    total = declared.get("total")
+    counts["total"] = _overview_int(total, sum(counts.values()))
+    return counts
+
+
+def _health_headline(ids: List[str], prefix: str) -> str:
+    shown = ids[:_OVERVIEW_HEADLINE_IDS]
+    hidden = len(ids) - len(shown)
+    text = "%s%s" % (prefix, ", ".join(shown))
+    if hidden > 0:
+        text += " +%d more" % hidden
+    return _overview_short(text, 180)
+
+
+def build_health(
+    payload: Optional[Dict[str, Any]] = None,
+    error: Optional[Dict[str, Any]] = None,
+    *,
+    checked_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Turn one verify payload (raw schema-1 report or compact result) into
+    the two-line panel contract. Pure: no I/O, so it is directly testable."""
+    if not isinstance(payload, dict):
+        payload = {}
+    items = _health_check_items(payload)
+    counts = _health_counts(payload, items)
+    total = counts["total"]
+    fail_items = [item for item in items if item["state"] == "fail"]
+    unknown_hinted = [
+        item for item in items if item["state"] == "unknown" and item["hint"]
+    ]
+    unknown_plain = [
+        item for item in items if item["state"] == "unknown" and not item["hint"]
+    ]
+    skip_hinted = [item for item in items if item["state"] == "skip" and item["hint"]]
+    unknown_items = unknown_hinted + unknown_plain
+
+    if error is not None or (not items and total <= 0):
+        message = ""
+        if isinstance(error, dict):
+            message = _overview_short(error.get("message") or error.get("code") or "", 140)
+        if not message:
+            message = "oxp3-verify.sh returned no checks"
+        return {
+            "schema": 1,
+            "state": "error",
+            "headline": _overview_short("Verification unavailable: " + message, 180),
+            "summary": "the acceptance harness could not be read",
+            "counts": _overview_zero_counts(),
+            "issues": [],
+            "issues_total": 0,
+            "issue_overflow": 0,
+            "available": False,
+            "error": error
+            if isinstance(error, dict)
+            else {"code": "no-checks", "message": message},
+            "checked_at": checked_at or _overview_iso(),
+            "mode": _as_text(payload.get("mode") or ""),
+            "cached": False,
+            "stale": False,
+        }
+
+    if counts["fail"] > 0:
+        state = "fail"
+        if fail_items:
+            headline = _health_headline(
+                [item["id"] for item in fail_items], "Needs attention: "
+            )
+        else:
+            headline = "Needs attention: %d failing check(s)" % counts["fail"]
+        ranked = fail_items + unknown_hinted + unknown_plain + skip_hinted
+    elif counts["unknown"] > 0:
+        state = "warn"
+        if unknown_items:
+            headline = _health_headline(
+                [item["id"] for item in unknown_items], "Needs attention: "
+            )
+        else:
+            headline = "Needs attention: %d check(s) could not be verified" % counts[
+                "unknown"
+            ]
+        ranked = unknown_hinted + unknown_plain + skip_hinted
+    elif counts["pass"] > 0:
+        state = "ok"
+        headline = "All fixes applied and working"
+        ranked = []
+    else:
+        state = "warn"
+        headline = "Nothing verified: %d check(s) were skipped" % counts["skip"]
+        ranked = []
+
+    issues = ranked[:_OVERVIEW_ISSUE_LIMIT]
+    overflow = max(0, len(ranked) - len(issues))
+    summary = "%d fail · %d unknown · %d skip · %d pass" % (
+        counts["fail"],
+        counts["unknown"],
+        counts["skip"],
+        counts["pass"],
+    )
+    return {
+        "schema": 1,
+        "state": state,
+        "headline": headline,
+        "summary": summary,
+        "counts": counts,
+        "issues": issues,
+        "issues_total": len(ranked),
+        "issue_overflow": overflow,
+        "available": True,
+        "error": None,
+        "checked_at": _as_text(payload.get("finished_at") or payload.get("generated_at"))
+        or checked_at
+        or _overview_iso(),
+        "mode": _as_text(payload.get("mode") or ""),
+        "cached": False,
+        "stale": False,
+    }
+
+
+def _health_timeout() -> float:
+    raw = os.environ.get("OXP3_OVERVIEW_TIMEOUT", "").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 120.0
+    return max(10.0, min(value, 600.0))
+
+
+def collect_health(
+    verify_report: Optional[Dict[str, Any]] = None,
+    *,
+    verifier: Optional[str] = None,
+    timeout: Optional[float] = None,
+    use_cache: bool = True,
+    refresh: bool = False,
+) -> Dict[str, Any]:
+    """Headline health. Runs the verifier at most once per TTL; `refresh`
+    reuses the last manual verification result instead of running it again."""
+    if isinstance(verify_report, dict):
+        return build_health(verify_report)
+
+    now = time.monotonic()
+    cached = _OVERVIEW_HEALTH_CACHE.get("value")
+    if use_cache and not refresh and isinstance(cached, dict):
+        if now - float(_OVERVIEW_HEALTH_CACHE.get("ts") or 0.0) < _OVERVIEW_HEALTH_TTL:
+            out = dict(cached)
+            out["cached"] = True
+            return out
+
+    last = _VERIFY_LAST
+    last_fresh = (
+        isinstance(last, dict)
+        and last.get("ok")
+        and now - float(_VERIFY_LAST_TS or 0.0) < _OVERVIEW_HEALTH_TTL
+    )
+    if refresh and last_fresh:
+        health = build_health(last)
+    else:
+        result = run_verification_once(
+            "quick", verifier=verifier, timeout=timeout if timeout else _health_timeout()
+        )
+        if result.get("ok"):
+            health = build_health(result)
+        else:
+            err = result.get("error") or {
+                "code": "unknown",
+                "message": "verification failed",
+            }
+            if err.get("code") == "busy" and isinstance(last, dict) and last.get("ok"):
+                health = build_health(last)
+                health["stale"] = True
+            else:
+                health = build_health(None, err)
+
+    if use_cache and health.get("state") != "error":
+        _OVERVIEW_HEALTH_CACHE["ts"] = time.monotonic()
+        _OVERVIEW_HEALTH_CACHE["value"] = dict(health)
+    return health
+
+
+# -- live XeSS/XMX detection ------------------------------------------------
+def _proc_leaf_text(pid: int, leaf: str, limit: int = 262144) -> Optional[str]:
+    return _read_text(_proc_entry(pid, leaf), limit)
+
+
+def _proc_ppid(pid: int) -> Optional[int]:
+    text = _proc_leaf_text(pid, "stat", 8192)
+    if text and ")" in text:
+        fields = text.rsplit(")", 1)[1].split()
+        if len(fields) >= 2:
+            try:
+                return int(fields[1])
+            except ValueError:
+                pass
+    text = _proc_leaf_text(pid, "status", 16384)
+    if text:
+        for line in text.splitlines():
+            if line.startswith("PPid:"):
+                try:
+                    return int(line.split()[1])
+                except (IndexError, ValueError):
+                    return None
+    return None
+
+
+def _clean_map_path(path: str) -> str:
+    value = path.strip()
+    if value.endswith(" (deleted)"):
+        value = value[: -len(" (deleted)")]
+    return value if value.startswith("/") else ""
+
+
+def _proc_map_paths(pid: int) -> List[str]:
+    """Absolute paths mapped by a process, from map_files and maps. Unreadable
+    entries are skipped; the result is deduplicated and order-preserving."""
+    paths: List[str] = []
+    seen = set()
+
+    def add(value: str) -> None:
+        path = _clean_map_path(value)
+        if not path or path in seen:
+            return
+        seen.add(path)
+        paths.append(path)
+
+    base = _proc_entry(pid, "map_files")
+    try:
+        for name in os.listdir(base):
+            try:
+                target = os.readlink(os.path.join(base, name))
+            except OSError:
+                continue
+            add(target)
+    except OSError:
+        pass
+    text = _proc_leaf_text(pid, "maps", 2 * 1024 * 1024)
+    if text:
+        for line in text.splitlines():
+            fields = line.split(None, 5)
+            if len(fields) >= 6:
+                add(fields[5])
+    return paths
+
+
+def _is_xess_library(path: str) -> bool:
+    name = os.path.basename(path).lower()
+    if not name:
+        return False
+    if name.startswith("libxess"):
+        return True
+    return name.startswith("xess") and ".so" in name
+
+
+def _is_xmx_driver(path: str, home: Path) -> bool:
+    if not path:
+        return False
+    low = path.lower()
+    if "xmx-driver" in low or "/xess-xmx/" in low:
+        return True
+    try:
+        target = os.path.realpath(str(home / XMX_DRIVER_REL))
+        return os.path.realpath(path) == target
+    except OSError:
+        return False
+
+
+def _env_xess_hits(env: Dict[str, str]) -> List[str]:
+    hits: List[str] = []
+    for key in _XESS_ENV_KEYS:
+        value = env.get(key) or ""
+        if "xess" in value.lower():
+            hits.append("%s=%s" % (key, _overview_short(value, 100)))
+    return hits
+
+
+def _env_xmx_hit(env: Dict[str, str], home: Path) -> str:
+    for key in ("VK_ICD_FILENAMES", "VK_DRIVER_FILES"):
+        value = env.get(key) or ""
+        if not value:
+            continue
+        low = value.lower()
+        if any(marker in low for marker in _XMX_ICD_MARKERS):
+            return "%s=%s" % (key, _overview_short(value, 100))
+        if "xess-xmx" in low or "xmx-driver" in low:
+            return "%s=%s" % (key, _overview_short(value, 100))
+        for item in resolve_icd_entry(value, home):
+            library = item.get("library") or ""
+            if _is_xmx_driver(library, home):
+                return "%s=%s -> XMX driver" % (key, _overview_short(value, 90))
+    for key in _XMX_ENV_KEYS:
+        value = env.get(key) or ""
+        low = value.lower()
+        if "xmx" in low or "xess-xmx" in low or "igdext" in low:
+            return "%s=%s" % (key, _overview_short(value, 100))
+    return ""
+
+
+def _process_tree(pid: int, ppid_map: Dict[int, Optional[int]]) -> List[int]:
+    children: Dict[int, List[int]] = {}
+    for child, parent in ppid_map.items():
+        if parent is not None:
+            children.setdefault(parent, []).append(child)
+    out: List[int] = []
+    seen = set()
+    stack = [pid]
+    while stack and len(out) < 512:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        out.append(current)
+        stack.extend(children.get(current) or [])
+    return out
+
+
+def _steam_ancestor(
+    pid: int,
+    ppid_map: Dict[int, Optional[int]],
+    comm_cache: Dict[int, str],
+    cmd_cache: Dict[int, List[str]],
+) -> bool:
+    current = ppid_map.get(pid)
+    seen = set()
+    while current and current not in seen and len(seen) < 8:
+        seen.add(current)
+        if current not in comm_cache:
+            comm_cache[current] = _proc_comm(current)
+        if current not in cmd_cache:
+            cmd_cache[current] = _proc_cmdline(current)
+        blob = (comm_cache[current] + " " + " ".join(cmd_cache[current])).lower()
+        if any(marker in blob for marker in _STEAM_ANCESTOR_MARKERS):
+            return True
+        current = ppid_map.get(current)
+    return False
+
+
+def _game_name(pid: int, cmdline: List[str], comm: str) -> Optional[str]:
+    for arg in cmdline:
+        if arg.lower().endswith(".exe"):
+            return _pretty_game_name(arg.replace("\\", "/"))
+    for arg in cmdline:
+        match = re.search(r"/steamapps/common/([^/]+)/", arg.replace("\\", "/"), re.I)
+        if match:
+            return match.group(1).replace("_", " ").strip()
+    if comm and comm.lower() not in _WINE_COMMS and comm.lower() not in (
+        "steam",
+        "steamwebhelper",
+        "reaper",
+        "python3",
+        "bash",
+        "sh",
+    ):
+        return _pretty_game_name(comm)
+    return None
+
+
+def _process_signals(pid: int) -> Dict[str, Any]:
+    env = _proc_environ(pid)
+    maps = _proc_map_paths(pid)
+    comm = _proc_comm(pid)
+    cmdline = _proc_cmdline(pid)
+    return {
+        "pid": pid,
+        "env": env,
+        "maps": maps,
+        "comm": comm,
+        "cmdline": cmdline,
+        "steam_appid": env.get("SteamAppId") or env.get("SteamGameId") or "",
+        "xess_libs": [path for path in maps if _is_xess_library(path)],
+        "xess_env": _env_xess_hits(env),
+    }
+
+
+def _xmx_hit_for(sig: Dict[str, Any], home: Path) -> str:
+    hit = _env_xmx_hit(sig.get("env") or {}, home)
+    if hit:
+        return hit
+    for path in sig.get("maps") or []:
+        if _is_xmx_driver(path, home):
+            return "mapped %s" % os.path.basename(path)
+    return ""
+
+
+def _xess_label(state: str, game: Optional[str]) -> str:
+    name = game or ""
+    if state == "xess-on-xmx":
+        return "XeSS XMX: active (%s)" % name if name else "XeSS XMX: active"
+    if state == "xess-on-standard":
+        return (
+            "XeSS: detected, XMX shim NOT active (%s)" % name
+            if name
+            else "XeSS: detected, XMX shim NOT active"
+        )
+    if state == "xess-off":
+        return "XeSS: current game does not use it"
+    return "No game running"
+
+
+def _no_game(evidence: str) -> Dict[str, Any]:
+    return {
+        "state": "no-game",
+        "game": None,
+        "pid": None,
+        "label": _xess_label("no-game", None),
+        "evidence": _overview_short(evidence, 160),
+        "xess_loaded": [],
+        "xmx_evidence": "",
+    }
+
+
+def collect_xess(home: Optional[Path] = None, *, use_cache: bool = True) -> Dict[str, Any]:
+    """Classify the running game's XeSS path. Never raises on /proc access."""
+    try:
+        resolved = Path(home) if home is not None else resolve_home()[0]
+    except Exception:  # noqa: BLE001 - never break the panel over a home probe
+        resolved = Path(os.path.expanduser("~"))
+    key = (str(PROC_ROOT), str(resolved))
+    now = time.monotonic()
+    cached = _OVERVIEW_XESS_CACHE.get("value")
+    if (
+        use_cache
+        and _OVERVIEW_XESS_CACHE.get("key") == key
+        and isinstance(cached, dict)
+        and now - float(_OVERVIEW_XESS_CACHE.get("ts") or 0.0) < _OVERVIEW_XESS_TTL
+    ):
+        return dict(cached)
+    try:
+        value = _collect_xess_uncached(resolved)
+    except Exception as exc:  # noqa: BLE001 - a broken /proc must not crash Decky
+        value = _no_game("XeSS detection failed: %s" % _overview_short(exc, 120))
+    if use_cache:
+        _OVERVIEW_XESS_CACHE["key"] = key
+        _OVERVIEW_XESS_CACHE["ts"] = time.monotonic()
+        _OVERVIEW_XESS_CACHE["value"] = dict(value)
+    return value
+
+
+def _collect_xess_uncached(home: Path) -> Dict[str, Any]:
+    try:
+        names = os.listdir(PROC_ROOT)
+    except OSError as exc:
+        return _no_game("cannot list %s: %s" % (PROC_ROOT, exc))
+    pids = sorted(int(name) for name in names if name.isdigit())
+    if len(pids) > 8000:
+        pids = pids[-8000:]
+    if not pids:
+        return _no_game("no processes visible in %s" % PROC_ROOT)
+
+    ppid_map: Dict[int, Optional[int]] = {pid: _proc_ppid(pid) for pid in pids}
+    signals: Dict[int, Dict[str, Any]] = {pid: _process_signals(pid) for pid in pids}
+    comm_cache: Dict[int, str] = {}
+    cmd_cache: Dict[int, List[str]] = {}
+
+    best: Optional[Tuple[int, int]] = None  # (score, pid)
+    best_xess: List[str] = []
+    best_xess_env: List[str] = []
+    best_xmx = ""
+    for pid in pids:
+        sig = signals[pid]
+        blob = " ".join(sig["cmdline"]).lower()
+        game_shape = bool(
+            sig["xess_libs"]
+            or sig["comm"].lower() in _WINE_COMMS
+            or any(arg.lower().endswith(".exe") for arg in sig["cmdline"])
+            or "/steamapps/common/" in blob
+            or "\\steamapps\\common\\" in blob
+        )
+        steam_child = bool(
+            sig["steam_appid"]
+            and _steam_ancestor(pid, ppid_map, comm_cache, cmd_cache)
+        )
+        if not (game_shape or steam_child):
+            continue
+        tree = _process_tree(pid, ppid_map)
+        tree_xess: List[str] = []
+        tree_xess_env: List[str] = []
+        tree_xmx = ""
+        for member in tree:
+            msig = signals.get(member)
+            if not msig:
+                continue
+            tree_xess.extend(msig["xess_libs"])
+            tree_xess_env.extend(msig["xess_env"])
+            if not tree_xmx:
+                tree_xmx = _xmx_hit_for(msig, home)
+        score = 0
+        if sig["steam_appid"]:
+            score += 20
+            if _steam_ancestor(pid, ppid_map, comm_cache, cmd_cache):
+                score += 10
+        if sig["xess_libs"]:
+            score += 40
+        if tree_xess:
+            score += 30
+        if sig["comm"].lower() in _WINE_COMMS:
+            score += 5
+        if sig["xess_env"]:
+            score += 5
+        if best is None or (score, pid) > best:
+            best = (score, pid)
+            best_xess = tree_xess or list(sig["xess_libs"])
+            best_xess_env = tree_xess_env or list(sig["xess_env"])
+            best_xmx = tree_xmx
+
+    if best is None:
+        return _no_game("no Steam game process and no libxess mapping found")
+
+    pid = best[1]
+    sig = signals[pid]
+    game = _game_name(pid, sig["cmdline"], sig["comm"])
+    if best_xess or best_xess_env:
+        state = "xess-on-xmx" if best_xmx else "xess-on-standard"
+        if best_xess:
+            evidence = "%s in pid %d" % (os.path.basename(best_xess[0]), pid)
+        else:
+            evidence = "%s in pid %d" % (best_xess_env[0], pid)
+        if best_xmx:
+            evidence += "; " + best_xmx
+        else:
+            evidence += "; no XMX ICD/driver/shim in the launch environment"
+    else:
+        state = "xess-off"
+        evidence = "pid %d (%s) has no libxess mapping or XeSS layer" % (
+            pid,
+            game or sig["comm"] or "game",
+        )
+        if best_xmx:
+            evidence += "; XMX stack is configured but XeSS is not loaded"
+    return {
+        "state": state,
+        "game": game,
+        "pid": pid,
+        "label": _xess_label(state, game),
+        "evidence": _overview_short(evidence, 180),
+        "xess_loaded": [os.path.basename(path) for path in best_xess[:3]],
+        "xmx_evidence": _overview_short(best_xmx, 140),
+    }
+
+
+def collect_overview(
+    home: Optional[Path] = None,
+    *,
+    verifier: Optional[str] = None,
+    verify_report: Optional[Dict[str, Any]] = None,
+    use_cache: bool = True,
+    refresh: bool = False,
+) -> Dict[str, Any]:
+    """Everything the two top lines need, in one read-only payload."""
+    try:
+        health = collect_health(
+            verify_report,
+            verifier=verifier,
+            use_cache=use_cache,
+            refresh=refresh,
+        )
+    except Exception as exc:  # noqa: BLE001 - last-resort guard
+        health = build_health(
+            None, {"code": "internal", "message": _overview_short(exc, 200)}
+        )
+    try:
+        xess = collect_xess(home, use_cache=use_cache)
+    except Exception as exc:  # noqa: BLE001
+        xess = _no_game("XeSS detection failed: %s" % _overview_short(exc, 120))
+    return {"schema": 1, "health": health, "xess": xess}
+
+
+# ---------------------------------------------------------------------------
 # Verification action: run tools/oxp3-verify.sh on demand.
 #
 # The Decky backend normally runs as root under plugin_loader.service. This
@@ -1959,6 +2641,7 @@ _VERIFY_TEXT_CAP = 240
 _VERIFY_STDERR_CAP = 8192
 _VERIFY_LOCK = threading.Lock()
 _VERIFY_LAST: Optional[Dict[str, Any]] = None
+_VERIFY_LAST_TS = 0.0
 
 
 def _verify_now() -> str:
@@ -2004,8 +2687,9 @@ def _verify_error(
 
 
 def _remember_verification(result: Dict[str, Any]) -> Dict[str, Any]:
-    global _VERIFY_LAST
+    global _VERIFY_LAST, _VERIFY_LAST_TS
     _VERIFY_LAST = result
+    _VERIFY_LAST_TS = time.monotonic()
     return result
 
 
@@ -2127,23 +2811,34 @@ def _parse_verification(report: Any) -> Optional[Dict[str, Any]]:
     return report
 
 
-def _verification_items(report: Dict[str, Any]) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+def _verification_items(
+    report: Dict[str, Any],
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], List[Dict[str, str]]]:
+    """(failures, skips, unknowns), each capped for the panel."""
     failures: List[Dict[str, str]] = []
     skips: List[Dict[str, str]] = []
+    unknowns: List[Dict[str, str]] = []
+    buckets = {"fail": failures, "skip": skips, "unknown": unknowns}
     for check in report.get("checks") or []:
         if not isinstance(check, dict):
             continue
         state = str(check.get("state") or "").lower()
-        if state not in ("fail", "skip"):
+        bucket = buckets.get(state)
+        if bucket is None:
             continue
-        item = {
-            "id": _verify_text(check.get("id") or "?", 80),
-            "title": _verify_text(check.get("title") or "", 120),
-            "summary": _verify_text(check.get("summary") or "", 160),
-            "hint": _verify_text(check.get("remediation") or "", _VERIFY_TEXT_CAP),
-        }
-        (failures if state == "fail" else skips).append(item)
-    return failures[:_VERIFY_MAX_ITEMS], skips[:_VERIFY_MAX_ITEMS]
+        bucket.append(
+            {
+                "id": _verify_text(check.get("id") or "?", 80),
+                "title": _verify_text(check.get("title") or "", 120),
+                "summary": _verify_text(check.get("summary") or "", 160),
+                "hint": _verify_text(check.get("remediation") or "", _VERIFY_TEXT_CAP),
+            }
+        )
+    return (
+        failures[:_VERIFY_MAX_ITEMS],
+        skips[:_VERIFY_MAX_ITEMS],
+        unknowns[:_VERIFY_MAX_ITEMS],
+    )
 
 
 def _verification_counts(report: Dict[str, Any]) -> Dict[str, int]:
@@ -2387,7 +3082,7 @@ def run_verification_once(
             )
 
         counts = _verification_counts(report)
-        failures, skips = _verification_items(report)
+        failures, skips, unknowns = _verification_items(report)
         if rc == 1 or counts["fail"]:
             overall = "fail"
         elif rc == 2 or counts["pass"] == 0:
@@ -2405,6 +3100,7 @@ def run_verification_once(
             "reported_exit_code": reported if isinstance(reported, int) else None,
             "failures": failures,
             "skips": skips,
+            "unknowns": unknowns,
             "error": None,
             "started_at": time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_ts)
@@ -2477,6 +3173,30 @@ class Plugin:
                     )
                 ],
                 "notes": ["status collection failed: %s" % exc],
+            }
+
+    async def get_overview(self, refresh: bool = False) -> Dict[str, Any]:
+        """Two-line overview: fix health + the running game's XeSS/XMX path.
+
+        Read-only. The health side runs tools/oxp3-verify.sh --json at most
+        once per 90 s (cached), and `refresh=True` reuses the last manual
+        verification run instead of starting another one. Every /proc read is
+        bounded and skippable, so this can never take the loader down.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None, lambda: collect_overview(refresh=bool(refresh))
+            )
+        except Exception as exc:  # never crash the plugin host
+            return {
+                "schema": 1,
+                "health": build_health(
+                    None, {"code": "internal", "message": _overview_short(exc, 200)}
+                ),
+                "xess": _no_game(
+                    "XeSS detection failed: %s" % _overview_short(exc, 120)
+                ),
             }
 
     async def get_info(self) -> Dict[str, Any]:
@@ -3003,6 +3723,416 @@ def verification_selftest() -> Tuple[int, List[str]]:
     return checks.total, checks.failures
 
 
+def _health_fixture_entry(
+    cid: str, state: str, summary: str = "", hint: str = ""
+) -> Dict[str, Any]:
+    return {
+        "id": cid,
+        "group": "demo",
+        "title": "demo " + cid,
+        "state": state,
+        "summary": summary,
+        "detail": "",
+        "remediation": hint,
+    }
+
+
+def _health_fixture_report(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    counts = {"total": len(entries), "pass": 0, "fail": 0, "skip": 0, "unknown": 0}
+    for entry in entries:
+        if entry["state"] in counts:
+            counts[entry["state"]] += 1
+    return {
+        "schema": 1,
+        "tool": "oxp3-verify",
+        "version": "1.0.0",
+        "generated_at": "2026-11-09T00:00:00Z",
+        "mode": "quick",
+        "root": False,
+        "with_changes": False,
+        "kernel": "fixture",
+        "counts": counts,
+        "exit_code": 0,
+        "checks": entries,
+    }
+
+
+def _proc_fixture(
+    root: Path,
+    pid: int,
+    *,
+    comm: str = "",
+    args: Optional[List[str]] = None,
+    environ: Optional[Dict[str, str]] = None,
+    maps: str = "",
+    ppid: int = 1,
+) -> Path:
+    entry = root / str(pid)
+    entry.mkdir(parents=True, exist_ok=True)
+    (entry / "comm").write_text((comm or "fixture") + "\n", encoding="utf-8")
+    (entry / "cmdline").write_bytes(
+        b"\0".join(arg.encode("utf-8") for arg in (args or [])) + b"\0"
+    )
+    pairs = ["%s=%s" % (key, value) for key, value in (environ or {}).items()]
+    (entry / "environ").write_bytes(
+        b"\0".join(pair.encode("utf-8") for pair in pairs) + (b"\0" if pairs else b"")
+    )
+    (entry / "maps").write_text(maps, encoding="utf-8")
+    (entry / "stat").write_text(
+        "%d (%s) S %d 0 0 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 1\n" % (pid, comm or "fixture", ppid),
+        encoding="utf-8",
+    )
+    return entry
+
+
+@contextlib.contextmanager
+def _proc_fixture_globals(root: Path):
+    saved = PROC_ROOT
+    globals()["PROC_ROOT"] = str(root)
+    _OVERVIEW_XESS_CACHE["key"] = None
+    _OVERVIEW_XESS_CACHE["ts"] = 0.0
+    _OVERVIEW_XESS_CACHE["value"] = None
+    try:
+        yield
+    finally:
+        globals()["PROC_ROOT"] = saved
+        _OVERVIEW_XESS_CACHE["key"] = None
+        _OVERVIEW_XESS_CACHE["ts"] = 0.0
+        _OVERVIEW_XESS_CACHE["value"] = None
+
+
+def overview_selftest() -> Tuple[int, List[str]]:
+    """Synthetic verify reports and synthetic /proc trees for the two top
+    lines. Nothing here reads the real /proc of a game or runs the harness."""
+    checks = _Checks()
+
+    # -- health: nothing failed -> the green headline --------------------
+    health = build_health(
+        _health_fixture_report(
+            [
+                _health_fixture_entry("vol.unit", "pass"),
+                _health_fixture_entry("xmx.icd", "pass"),
+            ]
+        )
+    )
+    checks.eq("health: all-pass state", health["state"], "ok")
+    checks.eq(
+        "health: all-pass headline", health["headline"], "All fixes applied and working"
+    )
+    checks.eq("health: all-pass issues", health["issues"], [])
+    checks.eq("health: all-pass counts", health["counts"]["pass"], 2)
+
+    # -- health: FAIL first, hint preserved ------------------------------
+    health = build_health(
+        _health_fixture_report(
+            [
+                _health_fixture_entry("led.sides", "pass"),
+                _health_fixture_entry(
+                    "vol.unit", "fail", "volume keys on the wrong sink", "install the udev rule"
+                ),
+                _health_fixture_entry(
+                    "aud.sink", "unknown", "only auto_null is visible", "run inside the game session"
+                ),
+            ]
+        )
+    )
+    checks.eq("health: fail state", health["state"], "fail")
+    checks.check(
+        "health: fail headline",
+        health["headline"].startswith("Needs attention:")
+        and "vol.unit" in health["headline"],
+        health["headline"],
+    )
+    checks.eq("health: fail first id", health["issues"][0]["id"], "vol.unit")
+    checks.eq("health: fail first hint", health["issues"][0]["hint"], "install the udev rule")
+    checks.eq("health: fail counts", health["counts"]["fail"], 1)
+    checks.check(
+        "health: skip/unknown never counted as pass",
+        health["counts"]["pass"] == 1 and health["counts"]["unknown"] == 1,
+    )
+
+    # -- health: UNKNOWN only -> amber, never "all working" --------------
+    health = build_health(
+        _health_fixture_report(
+            [
+                _health_fixture_entry(
+                    "aud.sink", "unknown", "only auto_null is visible", "run in a graphical session"
+                )
+            ]
+        )
+    )
+    checks.eq("health: unknown-only state", health["state"], "warn")
+    checks.check(
+        "health: unknown-only is not all-working",
+        "All fixes applied and working" not in health["headline"],
+        health["headline"],
+    )
+    checks.check("health: unknown-only names the check", "aud.sink" in health["headline"])
+    checks.eq("health: unknown-only hint", health["issues"][0]["hint"], "run in a graphical session")
+
+    # -- health: SKIP only -> nothing was verified -----------------------
+    health = build_health(
+        _health_fixture_report(
+            [
+                _health_fixture_entry(
+                    "gfx.xmx.trace", "skip", "no trace this launch", "launch with XESS_LOG=1"
+                )
+            ]
+        )
+    )
+    checks.eq("health: skip-only state", health["state"], "warn")
+    checks.check(
+        "health: skip-only headline",
+        health["headline"].startswith("Nothing verified"),
+        health["headline"],
+    )
+    checks.check(
+        "health: skip-only not all-working",
+        "All fixes applied and working" not in health["headline"],
+    )
+
+    # -- health: issue ordering ------------------------------------------
+    ordered = build_health(
+        _health_fixture_report(
+            [
+                _health_fixture_entry("skip.one", "skip", "skipped", "optional hint"),
+                _health_fixture_entry("unk.one", "unknown", "cannot tell", "remedy one"),
+                _health_fixture_entry("fail.one", "fail", "broken", "fix one"),
+            ]
+        )
+    )
+    checks.eq(
+        "health: fail then unknown then skip",
+        [item["id"] for item in ordered["issues"]],
+        ["fail.one", "unk.one", "skip.one"],
+    )
+
+    # -- health: issue truncation ----------------------------------------
+    many = _health_fixture_report(
+        [
+            _health_fixture_entry("fail.%02d" % index, "fail", "broken", "fix %d" % index)
+            for index in range(8)
+        ]
+    )
+    health = build_health(many)
+    checks.eq("health: issues truncated to 5", len(health["issues"]), 5)
+    checks.eq("health: issues total", health["issues_total"], 8)
+    checks.eq("health: issue overflow", health["issue_overflow"], 3)
+    checks.eq("health: first fail kept", health["issues"][0]["id"], "fail.00")
+    checks.check(
+        "health: headline truncation marker",
+        "+5 more" in health["headline"],
+        health["headline"],
+    )
+
+    # -- health: verifier failure -> explicit error line -----------------
+    health = build_health(
+        None, {"code": "missing-verifier", "message": "tools/oxp3-verify.sh was not found"}
+    )
+    checks.eq("health: error state", health["state"], "error")
+    checks.check(
+        "health: error headline", "Verification unavailable" in health["headline"]
+    )
+    checks.check("health: error available flag", health["available"] is False)
+
+    # -- health: the compact run result is accepted too ------------------
+    compact = {
+        "mode": "quick",
+        "counts": {"total": 3, "pass": 1, "fail": 1, "skip": 0, "unknown": 1},
+        "failures": [
+            {"id": "vol.unit", "summary": "broken", "title": "", "hint": "fix it"}
+        ],
+        "unknowns": [
+            {"id": "sleep.mem", "summary": "unreadable", "title": "", "hint": "check kernel"}
+        ],
+        "skips": [],
+    }
+    health = build_health(compact)
+    checks.eq("health: compact state", health["state"], "fail")
+    checks.eq("health: compact first id", health["issues"][0]["id"], "vol.unit")
+    checks.eq("health: compact unknown id", health["issues"][1]["id"], "sleep.mem")
+
+    # -- XeSS/XMX detection against synthetic /proc trees ----------------
+    with tempfile.TemporaryDirectory(prefix="oxp3-overview-") as tmp:
+        base = Path(tmp)
+        home_dir = base / "home"
+
+        empty = base / "empty-proc"
+        empty.mkdir()
+        with _proc_fixture_globals(empty):
+            xess = collect_xess(home_dir, use_cache=False)
+        checks.eq("xess: no game state", xess["state"], "no-game")
+        checks.eq("xess: no game label", xess["label"], "No game running")
+
+        no_xess = base / "no-xess-proc"
+        _proc_fixture(
+            no_xess,
+            100,
+            comm="wine64",
+            args=[
+                "Z:\\home\\deck\\Games\\steamapps\\common\\Portal 2\\portal2.exe",
+                "-novid",
+            ],
+            environ={"SteamAppId": "620", "SteamGameId": "620"},
+            maps="7f00-7f10 r-xp 00000000 00:00 0 /usr/lib/libc.so.6\n",
+        )
+        with _proc_fixture_globals(no_xess):
+            xess = collect_xess(home_dir, use_cache=False)
+        checks.eq("xess: game without XeSS", xess["state"], "xess-off")
+        checks.eq(
+            "xess: game without XeSS label",
+            xess["label"],
+            "XeSS: current game does not use it",
+        )
+        checks.eq("xess: game name", xess["game"], "portal2")
+
+        xmx_proc = base / "xmx-proc"
+        _proc_fixture(
+            xmx_proc,
+            200,
+            comm="wine64",
+            args=[
+                "Z:\\home\\deck\\Games\\steamapps\\common\\Cyberpunk 2077\\bin\\x64\\Cyberpunk2077.exe"
+            ],
+            environ={
+                "SteamAppId": "1423049311",
+                "VK_DRIVER_FILES": str(home_dir / XMX_ICD_REL),
+            },
+            maps=(
+                "7f00-7f10 r-xp 00000000 00:00 0 "
+                "/opt/steam/steamapps/common/Cyberpunk 2077/bin/x64/libxess_dx12.so\n"
+            ),
+        )
+        with _proc_fixture_globals(xmx_proc):
+            xess = collect_xess(home_dir, use_cache=False)
+        checks.eq("xess: XMX env state", xess["state"], "xess-on-xmx")
+        checks.check(
+            "xess: XMX env label",
+            xess["label"].startswith("XeSS XMX: active"),
+            xess["label"],
+        )
+        checks.check(
+            "xess: XMX evidence names the ICD",
+            "icd-xmx.json" in (xess["xmx_evidence"] or ""),
+            xess["xmx_evidence"],
+        )
+        checks.eq("xess: XMX game name", xess["game"], "Cyberpunk 2077")
+
+        standard_proc = base / "standard-proc"
+        _proc_fixture(
+            standard_proc,
+            300,
+            comm="wine64",
+            args=[
+                "Z:\\home\\deck\\Games\\steamapps\\common\\Cyberpunk 2077\\bin\\x64\\Cyberpunk2077.exe"
+            ],
+            environ={"SteamAppId": "1423049311"},
+            maps="7f00-7f10 r-xp 00000000 00:00 0 /opt/libxess.so\n",
+        )
+        with _proc_fixture_globals(standard_proc):
+            xess = collect_xess(home_dir, use_cache=False)
+        checks.eq("xess: standard state", xess["state"], "xess-on-standard")
+        checks.eq(
+            "xess: standard label",
+            xess["label"],
+            "XeSS: detected, XMX shim NOT active (Cyberpunk 2077)",
+        )
+
+        layer_proc = base / "layer-proc"
+        _proc_fixture(
+            layer_proc,
+            350,
+            comm="wine64",
+            args=["Z:\\games\\steamapps\\common\\Demo\\demo.exe"],
+            environ={
+                "SteamAppId": "9",
+                "VK_LAYER_PATH": "/opt/xess/VK_LAYER_INTEL_xess.so",
+            },
+            maps="7f00-7f10 r-xp 00000000 00:00 0 /usr/lib/libc.so.6\n",
+        )
+        with _proc_fixture_globals(layer_proc):
+            xess = collect_xess(home_dir, use_cache=False)
+        checks.eq("xess: Vulkan layer env state", xess["state"], "xess-on-standard")
+        checks.check(
+            "xess: Vulkan layer env evidence",
+            "VK_LAYER_PATH" in (xess["evidence"] or ""),
+            xess["evidence"],
+        )
+
+        maps_proc = base / "maps-proc"
+        _proc_fixture(
+            maps_proc,
+            400,
+            comm="Cyberpunk2077.exe",
+            args=["Cyberpunk2077.exe"],
+            environ={},
+            maps=(
+                "7f00-7f10 r-xp 00000000 00:00 0 /usr/lib/libxess.so\n"
+                "7f20-7f30 r-xp 00000000 00:00 0 %s\n" % (home_dir / XMX_DRIVER_REL)
+            ),
+        )
+        with _proc_fixture_globals(maps_proc):
+            xess = collect_xess(home_dir, use_cache=False)
+        checks.eq("xess: mapped libxess state", xess["state"], "xess-on-xmx")
+        checks.check(
+            "xess: mapped XMX driver evidence",
+            "libvulkan_intel.so" in (xess["xmx_evidence"] or ""),
+            xess["xmx_evidence"],
+        )
+
+        child_proc = base / "child-proc"
+        _proc_fixture(
+            child_proc,
+            500,
+            comm="wine64",
+            args=["Z:\\games\\steamapps\\common\\Demo Game\\demo.exe"],
+            environ={"SteamAppId": "9"},
+            maps="7f00-7f10 r-xp 00000000 00:00 0 /usr/lib/libc.so.6\n",
+        )
+        _proc_fixture(
+            child_proc,
+            501,
+            comm="wine64",
+            args=["demo.exe"],
+            environ={},
+            maps="7f00-7f10 r-xp 00000000 00:00 0 /opt/libxess_dx11.so\n",
+            ppid=500,
+        )
+        with _proc_fixture_globals(child_proc):
+            xess = collect_xess(home_dir, use_cache=False)
+        checks.eq("xess: child mapping state", xess["state"], "xess-on-standard")
+        checks.eq("xess: child mapping game", xess["game"], "demo")
+
+        unreadable = base / "unreadable-proc"
+        entry = _proc_fixture(
+            unreadable,
+            600,
+            comm="wine64",
+            args=["game.exe"],
+            environ={"SteamAppId": "1"},
+            maps="7f00-7f10 r-xp 00000000 00:00 0 /opt/libxess.so\n",
+        )
+        for name in ("maps", "environ", "cmdline", "stat"):
+            os.chmod(entry / name, 0)
+        (unreadable / "601").mkdir()
+        os.chmod(unreadable / "601", 0)
+        with _proc_fixture_globals(unreadable):
+            try:
+                xess = collect_xess(home_dir, use_cache=False)
+                checks.check(
+                    "xess: unreadable entries are skipped",
+                    xess["state"] in ("no-game", "xess-off", "xess-on-standard"),
+                    xess["state"],
+                )
+            except Exception as exc:  # pragma: no cover - selftest failure path
+                checks.check("xess: unreadable entries do not raise", False, repr(exc))
+        for name in ("maps", "environ", "cmdline", "stat"):
+            os.chmod(entry / name, 0o644)
+        os.chmod(unreadable / "601", 0o755)
+
+    return checks.total, checks.failures
+
+
 def run_selftest() -> int:
     """Exercise every probe against synthetic fixtures. Returns 0/1."""
     checks = _Checks()
@@ -3144,6 +4274,11 @@ def run_selftest() -> int:
     verify_total, verify_failures = verification_selftest()
     checks.total += verify_total
     checks.failures.extend(verify_failures)
+
+    # -- two-line overview: synthetic verify reports + synthetic /proc ---
+    overview_total, overview_failures = overview_selftest()
+    checks.total += overview_total
+    checks.failures.extend(overview_failures)
 
     if checks.failures:
         print("selftest: %d check(s), %d FAILED" % (checks.total, len(checks.failures)))
