@@ -847,9 +847,6 @@ comp_mango_install() {
     say "MangoHud with Intel iGPU stats (patched build)"
     local rel cache rpms=0
     rel=$(rpm -q --qf '%{RELEASE}' mangohud 2>/dev/null | head -1)
-    case $rel in
-        *oxp3*) printf '  patched mangohud already installed (%s)\n' "$rel"; return 0 ;;
-    esac
     cache=$HOME/.cache/oxp3-fixes/out
     [[ -d $cache ]] || cache=/var/home/"${TARGET_USER}"/.cache/oxp3-fixes/out
     shopt -s nullglob
@@ -872,6 +869,9 @@ comp_mango_install() {
         "$PREFIX/etc/systemd/system/oxp3-mangohud-keep.service"
     systemctl daemon-reload
     systemctl enable oxp3-mangohud-keep.service
+    case $rel in
+        *oxp3*) printf '  patched mangohud already installed (%s); keep unit refreshed\n' "$rel"; return 0 ;;
+    esac
     # A default MangoHud config is what turns the patched metrics on; keep any
     # existing config the owner already has.
     local home dst
@@ -893,10 +893,6 @@ comp_gamescope_install() {
     say "gamescope with the PQ HDR patch (AMOLED black-screen fix)"
     local rel
     rel=$(rpm -q --qf '%{RELEASE}\n' gamescope 2>/dev/null | head -1)
-    if [[ $rel == *oxp3* ]]; then
-        printf '  patched gamescope already installed (%s)\n' "$rel"
-        return 0
-    fi
     if (( DRY_RUN )); then
         printf '  [dry-run] extract the cached gamescope oxp3 RPMs into the /usr overlay + enable oxp3-gamescope-keep.service\n'
         return 0
@@ -909,6 +905,11 @@ comp_gamescope_install() {
     fi
     run systemctl daemon-reload
     run systemctl enable oxp3-gamescope-keep.service
+    if [[ $rel == *oxp3* ]]; then
+        printf '  patched gamescope already installed (%s); keep unit refreshed\n' "$rel"
+        run systemctl restart oxp3-gamescope-keep.service
+        return 0
+    fi
     if "$PREFIX/usr/local/libexec/oxp3-gamescope-keep"; then
         run systemctl restart oxp3-gamescope-keep.service
         if [ -r /var/lib/oxp3-fixes/gamescope.sha256 ]; then
