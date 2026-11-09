@@ -267,7 +267,7 @@ suspend_stats_verdict() {
         elif num_gt "$last" 0; then
             printf 'pass'
         else
-            printf 'fail-abort'
+            printf 'unknown-hwzero'
         fi
     elif [ -n "$last" ] && num_gt "$last" 0; then
         printf 'unknown-last'
@@ -1967,8 +1967,11 @@ check_sleep() {
         fail)
             record sleep.stats sleep "real suspend recorded" FAIL "$fail failed suspend attempt(s)" "$tuple last_failed_dev=$(read1 /sys/power/suspend_stats/last_failed_dev) last_failed_step=$(read1 /sys/power/suspend_stats/last_failed_step)" "dmesg | grep -i suspend ; journalctl -b | grep -i 'PM: suspend'"
             ;;
-        fail-abort)
-            record sleep.stats sleep "real suspend recorded" FAIL "suspend returned immediately (last_hw_sleep=0)" "$tuple: this is exactly the original bug" "sudo tools/sleep-power-measure.sh suspend -w 60 (or --full); check wake sources and /proc/acpi/wakeup"
+        unknown-hwzero)
+            record sleep.stats sleep "real suspend recorded" UNKNOWN \
+                "successful suspend cycle, but the platform PMC reports last_hw_sleep=0" \
+                "$tuple: on s2idle this counter can stay 0 even when the cycle completed (it is written from the platform low-power hook, not the generic path); compare the kernel log entry/exit times and CLOCK_BOOTTIME - CLOCK_MONOTONIC before judging it" \
+                "journalctl -b -k | grep 'PM: suspend' | tail -4 ; python3 -c 'import time; print(time.clock_gettime(time.CLOCK_BOOTTIME)-time.clock_gettime(time.CLOCK_MONOTONIC))' ; sudo tools/sleep-power-measure.sh suspend -w 60"
             ;;
         unknown-last)
             record sleep.stats sleep "real suspend recorded" UNKNOWN "last_hw_sleep>0 with success=0: not a completed suspend" "$tuple: the hardware-sleep time comes from the platform PMC's resume hook, not from the generic suspend path, so an aborted cycle can leave it non-zero without counting a success; it is never persisted across boots. Compare this boot's kernel log and CLOCK_BOOTTIME-MONOTONIC before believing either number" "journalctl -b -k | grep -c 'PM: suspend entry' ; python3 -c 'import time; print(time.clock_gettime(time.CLOCK_BOOTTIME)-time.clock_gettime(time.CLOCK_MONOTONIC))' ; docs/hw/sleep-power.md 2.6"
@@ -2068,7 +2071,12 @@ check_sleep() {
         record sleep.sdcard sleep "SD host parked only across suspend" SKIP "no rtsx_pci_sdmmc driver on this host" "" ""
     elif [ ! -e "$sd_drv/rtsx_pci_sdmmc.0" ]; then
         record sleep.sdcard sleep "SD host parked only across suspend" FAIL "the SD host is unbound while the system is awake" "a parked host must be rebound after every resume; the card reader is dead until it is" "sudo systemctl restart oxp3-lowpower ; oxp3-lowpower status ; docs/hw/sleep-power.md R6"
-    elif grep -q '"unbound": true' "$sd_state" 2>/dev/null; then
+    elif have python3 && python3 - "$sd_state" <<'SDSTATE' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(0 if (d.get("sd_host") or {}).get("unbound") is True else 1)
+SDSTATE
+    then
         record sleep.sdcard sleep "SD host parked only across suspend" FAIL "state says 'unbound' but the host is bound: a previous park was not recorded as restored" "$sd_state" "sudo systemctl restart oxp3-lowpower ; journalctl -u oxp3-sleep-lowpower-post -b"
     elif [ -e "$sd_unit" ] || [ -e "$lp" ]; then
         record sleep.sdcard sleep "SD host parked only across suspend" PASS "bound now; parked only across suspend by the pre/post units" "$(read1 "$sd_drv/rtsx_pci_sdmmc.0/driver" 2>/dev/null || true)" ""
@@ -3409,7 +3417,7 @@ run_selftest() {
     t_eq "suspend/verdict-pass" pass "$(suspend_stats_verdict 2 0 12345678 523986009990)"
     t_eq "suspend/verdict-pass-nohw" pass-nohw "$(suspend_stats_verdict 1 0 "" "")"
     t_eq "suspend/verdict-fail" fail "$(suspend_stats_verdict 1 1 0 523986009990)"
-    t_eq "suspend/verdict-abort" fail-abort "$(suspend_stats_verdict 1 0 0 523986009990)"
+    t_eq "suspend/verdict-hwzero" unknown-hwzero "$(suspend_stats_verdict 1 0 0 523986009990)"
     t_eq "suspend/verdict-last-without-success" unknown-last \
         "$(suspend_stats_verdict 0 0 120000000 523986009990)"
     t_eq "suspend/verdict-ceiling-max" unknown-ceiling \

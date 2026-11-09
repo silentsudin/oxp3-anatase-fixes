@@ -12,8 +12,19 @@ check "runtime driver 4d043cc2" 4d043cc2851a11fd "$RT/files/lib64/libvulkan_inte
 OV=/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides
 [ -e "$OV/lib64/libexpat.so.1" ] && bad "runtime override ships libexpat.so.1" || ok "no expat override in runtime"
 [ -e "$OV/lib64/libvulkan_intel.so" ] && ok "runtime override present" || bad "runtime override missing"
-[ "$(($(cat /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null)/1000000))" = 35 ] \
-    && ok "PL1 35 W" || bad "PL1 is not 35 W"
+pl1_of() { # <zone> -> its long_term limit in W (constraint_0 is not always long_term)
+    local c
+    for c in "$1"/constraint_*_name; do
+        [ "$(cat "$c" 2>/dev/null)" = long_term ] && { echo "$(($(cat "${c%name}power_limit_uw" 2>/dev/null)/1000000))"; return; }
+    done
+}
+pl1_msr=$(pl1_of /sys/class/powercap/intel-rapl:0)
+pl1_mmio=$(pl1_of /sys/class/powercap/intel-rapl-mmio:0)
+# HHD owns the TDP profile (the panel can change it); the invariant that matters is
+# that the MSR package limit follows the MMIO limit, not a fixed number.
+[ "$pl1_msr" -gt 0 ] && [ "$pl1_msr" = "$pl1_mmio" ] \
+    && ok "PL1 ${pl1_msr} W (MSR = MMIO, HHD profile)" \
+    || bad "PL1 MSR ${pl1_msr} W does not follow MMIO ${pl1_mmio} W"
 case "$(modinfo -F filename xe 2>/dev/null)" in */updates/*) ok "patched xe module layered";; *) bad "stock xe module (patched modules missing)";; esac
 # PQ HDR: the patched gamescope build and the persistent launcher override.
 if [ -r /var/lib/oxp3-fixes/gamescope.sha256 ] && \
