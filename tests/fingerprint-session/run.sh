@@ -115,6 +115,14 @@ contains "$TMP/plan.txt" 'driver_override' && pass "the plan shows the driver_ov
     || fail "the plan shows the driver_override command"
 contains "$TMP/plan.txt" '--allow-writes' && pass "the plan shows the gated read command" \
     || fail "the plan shows the gated read command"
+"$S" --dry-run --root "$TMP/clean" --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 --allow-reset >"$TMP/plan-pins.txt" 2>&1
+contains "$TMP/plan-pins.txt" '--gpio 18' && pass "--irq-pin reaches the probe command" \
+    || fail "--irq-pin reaches the probe command"
+contains "$TMP/plan-pins.txt" '--reset-gpio 16' && pass "--reset-pin reaches the probe command" \
+    || fail "--reset-pin reaches the probe command"
+contains "$TMP/plan-pins.txt" '--gpio-chip gpiochip1' && pass "--gpio-chip reaches the probe command" \
+    || fail "--gpio-chip reaches the probe command"
+
 contains "$TMP/plan.txt" 'Undo (also performed automatically' && pass "the plan prints the undo commands" \
     || fail "the plan prints the undo commands"
 after=$(find "$TMP/clean" -printf '%p %s %T@\n' 2>/dev/null | sort | sha256sum)

@@ -77,6 +77,9 @@
 #   --no-irq                       never request the GpioInt; poll instead
 #   --gpio N                       override the GpioInt pin from _CRS
 #   --irq-edge rising|falling|both override the IRQ edge from _CRS
+#   --irq-pin N                    override the GpioInt pin (firmware may compute it
+#                                  at runtime via _INI/GNUM, so the template has 0)
+#   --reset-pin N                  override the GpioIo reset pin the same way
 #   --gpio-chip NAME               gpiochip the line lives on (gpiod backends)
 #   --allow-reset                  let the probe pulse a GpioIo reset line (only if
 #                                  _CRS has one; the plan says so first)
@@ -128,6 +131,8 @@ ALLOW_TAKEOVER=0
 ALLOW_EXISTING=0
 ALLOW_RESET=0
 NO_IRQ=0
+IRQ_PIN_OVERRIDE=""
+RESET_PIN_OVERRIDE=""
 GPIO_OVERRIDE=""
 GPIO_CHIP=""
 CPOL_OVERRIDE=""
@@ -175,6 +180,10 @@ while [ "$#" -gt 0 ]; do
         --allow-takeover) ALLOW_TAKEOVER=1; shift ;;
         --allow-existing-bind) ALLOW_EXISTING=1; shift ;;
         --allow-reset) ALLOW_RESET=1; shift ;;
+        --irq-pin) [ "$#" -ge 2 ] || exit 2; IRQ_PIN_OVERRIDE=$2; shift 2 ;;
+        --irq-pin=*) IRQ_PIN_OVERRIDE=${1#*=}; shift ;;
+        --reset-pin) [ "$#" -ge 2 ] || exit 2; RESET_PIN_OVERRIDE=$2; shift 2 ;;
+        --reset-pin=*) RESET_PIN_OVERRIDE=${1#*=}; shift ;;
         --no-irq) NO_IRQ=1; shift ;;
         --gpio) [ "$#" -ge 2 ] || exit 2; GPIO_OVERRIDE=$2; shift 2 ;;
         --gpio=*) GPIO_OVERRIDE=${1#*=}; shift ;;
@@ -748,6 +757,14 @@ parse_crs() { # run the probe's acpi_info and interpret the keys
         fail "the _CRS has no complete SpiSerialBus (speed=$CONN_SPEED mode=$CONN_MODE bits=$CONN_BITS)"
         return 1
     fi
+    if [ -n "$IRQ_PIN_OVERRIDE" ]; then
+        CONN_IRQ=$IRQ_PIN_OVERRIDE
+        note "GpioInt line     : $CONN_IRQ (from --irq-pin; the template's pin list is a runtime placeholder)"
+    fi
+    if [ -n "$RESET_PIN_OVERRIDE" ]; then
+        CONN_RESET=$RESET_PIN_OVERRIDE
+        note "GpioIo reset line: $CONN_RESET (from --reset-pin)"
+    fi
     printf '\nInterpreted transport:\n'
     note "SPI clock        : $CONN_SPEED Hz"
     note "SPI mode         : $CONN_MODE ((CPOL<<1)|CPHA)"
@@ -792,7 +809,8 @@ probe_args() { # mode(dry|real) -> words
         # owner passed --allow-reset, and then only via the probe's own
         # explicit gate (which needs the reset pin, i.e. --crs).
         if [ "$ALLOW_RESET" = 1 ] && [ -n "$CONN_RESET" ]; then
-            out+=" --crs $(sq "$CRS_FILE") --allow-reset"
+            out+=" --reset-gpio $CONN_RESET --allow-reset"
+            [ -n "$GPIO_CHIP" ] && out+=" --gpio-chip $GPIO_CHIP"
         fi
     fi
     printf '%s' "$out"
