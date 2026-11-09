@@ -4,22 +4,47 @@ Status of every hardware gap we have investigated. Each topic's document holds t
 the Windows driver stack in `/var/home/holzr/Downloads/oxp3`), the implementation and the validation steps.
 Nothing vendor-proprietary is in this repo: only our own code and our own documentation.
 
-| Topic | State | Our implementation | Doc | Needs root? |
-|---|---|---|---|---|
-| Volume keys sticking | fixed in software, awaiting on-device check | `tools/oxp3-voltap/` (EVIOCGRAB daemon + hwdb + unit) | [volume-buttons.md](volume-buttons.md) | yes (install) |
-| Home button + top LEDs | protocol recovered, tooling ready | `tools/oxp3_hid.py`, `oxp3-led.py`, `oxp3-homebtn.py`, `oxp3-hid.rules`, unit | [home-button-leds.md](home-button-leds.md) | yes (udev rule) |
-| Body RGB zones + effects | 5 zones / 11 presets mapped, daemon keeps our state over HHD | `tools/oxp3_hid.py`, `oxp3-led.py`, `oxp3-rgbd.py` + user unit | [rgb-coverage.md](rgb-coverage.md) | yes (udev rule) |
-| Sleep / battery drain | **the device never suspended at all**; fix shipped | `files/oxp3-sleep-*` units/rules, `tools/sleep-power-measure.sh` | [sleep-power.md](sleep-power.md) | yes (units) |
-| Speaker tuning (Harman APO) | recovered + reproduced, 0.03 dB model error | `tools/audio/` (PipeWire filter-chain, measure/extract scripts) | [audio-harman-apo.md](audio-harman-apo.md) | no |
-| Fingerprint reader | unsupported; protocol recovered + tested userspace library, driver compiles (enrol/verify unimplemented) | `tools/fingerprint/` (probe, `fpbf63112` library + tests, C proto core, libfprint driver) | [fingerprint.md](fingerprint.md) | later (driver) |
-| Bluetooth dead | **firmware was present**; initramfs never got it | `tools/oxp3-bt-firmware.sh` | [bluetooth.md](bluetooth.md) | yes |
-| Power envelope + fan | PL2/PL4/tau now settable without kernel patches; EC fan curves not exposed | `tools/oxp3-powerctl.py`, installer + units | [power-fan.md](power-fan.md) | yes |
-| Battery health, charge limit, bypass, adaptive TDP | charge limit + charge-inhibit ('bypass' approximation) reachable; EC bypass byte + charger tier not exposed; adaptive TDP daemon shipped (opt-in) | `tools/oxp3-powerctl.py battery`, `tools/oxp3-adaptivetdp.py`, unit | [battery-tdp.md](battery-tdp.md) | yes |
-| Camera / IPU7 | **no camera hardware on this unit** (all OVTI/INT3472 `_STA=0`, no IPU7 function); not a Linux gap | `tools/oxp3-imu.py` (sensor diagnostics only) | [camera-imu.md](camera-imu.md) | n/a |
-| IMU / gyro | **works** (BMI260 on i2c-10EC5280:00, IIO 100 Hz, HHD `sync_gyro` into the emulated Steam Controller) | `tools/oxp3-imu.py`, `files/oxp3-bmi160.conf` | [camera-imu.md](camera-imu.md) | no |
-| SAGV / memory-frequency point | **no Linux interface exists** (boot-time `xe.enable_sagv` only, and it only disables); vendor path recovered (MCHBAR+0x5DA0/0x5DA4); read-only status + power-measurement tooling shipped | `tools/oxp3-sagv.sh`, `files/rapl-power` (now publishes `dram`/`psys`) | [sagv.md](sagv.md) | no to measure; yes to refresh `rapl-power` |
-| Display HDR / vibrance / colour | **panel is 10-bit PQ/HDR10 wide gamut** and Plasma 6.7 toggles it; Gamemode needs two gamescope flags; our shader + ICC shipped | `tools/display/` (display-mode.sh, vibrance.sh, oxp3-edid.py, oxp3-icc.py, oxp3-vibrance.fx) | [hdr-vibrance.md](hdr-vibrance.md) | only for the Gamemode flag |
-| Remaining gaps | ranked audit (SAGV, EC fan curves, charging bypass byte, camera only on other SKUs) | — | [gap-audit.md](gap-audit.md) | mixed |
+The matrix below is generated from [`components.yaml`](components.yaml); see [`REGISTRY.md`](REGISTRY.md) for the
+schema, the state vocabulary and the rule that generated blocks are never hand-edited. The same data file renders the
+install/verify matrix in [`../INSTALL-HW.md`](../INSTALL-HW.md) and the summary in [`../../README.md`](../../README.md).
+
+<!-- BEGIN GENERATED: hw-state (source: docs/hw/components.yaml; regenerate: tools/gen-docs.py --write) -->
+| Topic | State | Summary | Our implementation | Doc | Needs root? |
+|---|---|---|---|---|---|
+| Volume keys | awaiting-install | A hold on the rocker ramps instead of stepping: our EVIOCGRAB daemon plus a force-release hwdb entry, or the hhd patch as the alternative. | `tools/oxp3-voltap/`, `files/84-oxp3-volume-keys.hwdb`, `tools/lib/install-common.sh` | [volume-buttons.md](volume-buttons.md) | yes |
+| Home button and top LEDs | awaiting-install | The home button maps to KEY_HOMEPAGE and the top LEDs speak the recovered vendor HID protocol (5 zones, 11 presets). | `tools/oxp3_hid.py`, `tools/oxp3-led.py`, `tools/oxp3-homebtn.py`, `tools/oxp3-hid.rules`, `tools/oxp3-homebtn.service` | [home-button-leds.md](home-button-leds.md) | yes |
+| Body RGB zones | awaiting-install | 5 addressable body zones and 11 presets encoded from the captured frames, with a keeper daemon that holds our state over HHD. | `tools/oxp3-rgbd.py`, `tools/oxp3-rgbd.service`, `tools/oxp3-rgbd.toml.example`, `tools/oxp3-led.py` | [rgb-coverage.md](rgb-coverage.md) | yes |
+| Suspend and wake policy | awaiting-install | The unit never suspended at all: wake sources are disarmed at boot, a pre-suspend hook and a resume log are installed, and a real suspend is measurable. | `files/oxp3-sleep-wakeup`, `files/oxp3-sleep-wakeup.service`, `files/oxp3-sleep-pre.service`, `files/oxp3-sleep-log.service`, `files/99-oxp3-sleep-wakeup.rules`, `tools/sleep-power-measure.sh` | [sleep-power.md](sleep-power.md) | yes |
+| Speaker tuning (Harman APO) | working | The Harman speaker APO recovered as a PipeWire filter-chain sink: 8 bands, -8 dB pre-gain, 0.03 dB model error. | `tools/audio/`, `files/52-oxp3-speakers.conf`, `files/oxp3-audio-route.service`, `files/oxp3-audio-resume@.service` | [audio-harman-apo.md](audio-harman-apo.md) | no |
+| Bluetooth firmware | awaiting-install | The radio was dead because btintel_pcie has no MODULE_FIRMWARE() entries: the pinned upstream files go into /usr/lib/firmware/updates and into the initramfs. | `tools/oxp3-bt-firmware.sh` | [bluetooth.md](bluetooth.md) | yes |
+| Power envelope (PL1/PL2/PL4) | working | PL1/PL2/PL4 and tau settable on both RAPL zones without kernel patches, plus a saved boot/resume profile and the tdp-sync invariant. | `tools/oxp3-powerctl.py`, `tools/oxp3-power-install.sh`, `files/oxp3-power-profile.service`, `files/oxp3-power-resume.service`, `files/oxp3-tdp-sync`, `files/oxp3-tdp-sync.service`, `files/oxp3-rapl-pp1.service` | [power-fan.md](power-fan.md) | yes |
+| Fan curve | partial | A manual PWM fan curve works through pwm1; the EC's own fan curves are not exposed by any Linux interface. | `tools/oxp3-powerctl.py`, `files/oxp3-fan-curve.service` | [power-fan.md](power-fan.md) | yes |
+| Battery care | partial | Charge limit and charge-inhibit ('bypass' approximation) are reachable; the EC bypass byte and charger tier are not exposed. | `tools/oxp3-powerctl.py` | [battery-tdp.md](battery-tdp.md) | yes |
+| Adaptive TDP | awaiting-install | An opt-in adaptive-TDP daemon that emits one decision object per interval and is installed inactive so it cannot change power policy by accident. | `tools/oxp3-adaptivetdp.py`, `files/oxp3-adaptivetdp.service` | [battery-tdp.md](battery-tdp.md) | yes |
+| SAGV / memory frequency | blocked | No Linux control exists: Windows pins the SAGV/QCLK-GV point through an MCHBAR register pair, while Linux only has the boot-time xe.enable_sagv switch, which can only disable. | `tools/oxp3-sagv.sh`, `upstream/intel-pmdemand-sagv-request.md` | [sagv.md](sagv.md) | no |
+| Display HDR / vibrance / colour | working | The internal OLED is 10-bit PQ/HDR10 wide gamut and Plasma toggles it; our ICC profile and vibrance shader ship, and Gamemode needs two gamescope flags. | `tools/display/`, `patches/gamescope/` | [hdr-vibrance.md](hdr-vibrance.md) | partial |
+| IMU / gyro | not-a-gap | The BMI260 works out of the box at 100 Hz and HHD syncs the gyro into the emulated Steam Controller; our tool is diagnostics only. | `tools/oxp3-imu.py`, `files/oxp3-bmi160.conf` | [camera-imu.md](camera-imu.md) | no |
+| Camera / IPU7 | not-a-gap | There is no camera hardware on this unit: every OVTI/INT3472 device is _STA=0 and there is no IPU7 function, so this is not a Linux gap. | `tools/oxp3-imu.py` | [camera-imu.md](camera-imu.md) | n/a |
+| Fingerprint reader | partial | Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver. | `tools/fingerprint/` | [fingerprint.md](fingerprint.md) | partial |
+
+Recorded caveats:
+
+- **Volume keys**: do not combine with the hhd volume patch from oxp3-fixes.sh install; the standing alternative is the hhd patch, which is why the doc says pick one
+- **Home button and top LEDs**: the user unit references the checkout path; moving the repo needs a re-run; hidraw is root-only until the udev rule is installed; a press is only observed after someone presses the button once
+- **Body RGB zones**: needs ~/.config/oxp3-rgb.toml; the installer copies the example only when it is absent
+- **Suspend and wake policy**: no real suspend recorded since install: run sudo tools/sleep-power-measure.sh suspend -w 600; sleep.measure SKIPs on AC by design
+- **Speaker tuning (Harman APO)**: keep experiments in an isolated PIPEWIRE_RUNTIME_DIR; a throwaway instance can wedge the SOF card
+- **Bluetooth firmware**: the running initramfs only gets the files after a rebuild and reboot; --check downloads the pinned upstream files to verify hashes, so it is not offline
+- **Power envelope (PL1/PL2/PL4)**: the units are inert until a profile is saved; writes are root-only and were not executed in the offline round
+- **Fan curve**: SIGTERM restores EC auto mode; the acpi_fan EIO in the fan node is a known cosmetic bug; EC autonomous curves need kernel work; only manual PWM is reachable
+- **Battery care**: the EC keeps the last saved limit until it is changed again; bypass is charge-inhibit, not the vendor analog path
+- **Adaptive TDP**: SIGTERM restores the preset that was active when it started; not enabled by --all
+- **SAGV / memory frequency**: changing the point needs kernel work; the vendor path is recorded in upstream/intel-pmdemand-sagv-request.md; rapl-power's dram/psys values are what make the effect measurable
+- **Display HDR / vibrance / colour**: HDR in the Gamemode session is the only part that needs root; the panel is wide gamut; an ICC profile is what keeps SDR colours sane
+- **IMU / gyro**: HHD must be running for the gyro-to-Steam path; the blacklist is only needed if the sensor is misdetected as BMI160
+- **Camera / IPU7**: other OXP3 SKUs may populate the camera; the ACPI dump in the doc is this unit
+- **Fingerprint reader**: never run against the sensor; every runtime claim is marked inferred or unknown; the probe needs spidev bound and root, and the driver needs libfprint's internal API
+<!-- END GENERATED: hw-state -->
 
 ## Install
 

@@ -186,42 +186,89 @@ by the tools when you save/run them, not by the installer.
 
 Run everything as your user unless marked root. `sudo` is only needed where shown.
 
-| fix | command | expected |
+<!-- BEGIN GENERATED: install-verify (source: docs/hw/components.yaml; regenerate: tools/gen-docs.py --write) -->
+Start with the whole-system checks; then the per-component rows.
+
+| Whole-system check | Command | Expected |
 |---|---|---|
-| install state (all) | `tools/oxp3-hw-install.sh --status` | one line per component; `yes` / `enabled/active` for what you installed |
-| full repo matrix | `tools/oxp3-status.sh` | human report, exit 0; `--json` for machines, `--strict` fails on warn/unknown |
-| volume rocker | `systemctl status oxp3-voltap` | `active (running)` |
-| | `journalctl -u oxp3-voltap -b \| grep grabbed` | `grabbed /dev/input/eventN (Handheld Daemon Volume Keyboard)` |
-| | press volume up 3× | one step each (no ramp); `sudo systemctl stop oxp3-voltap` brings the bug back |
-| home button | `systemctl --user status oxp3-homebtn` | `active (running)` |
-| | `journalctl --user -u oxp3-homebtn -b` | unit started; a press produces `KEY_HOMEPAGE` |
-| LEDs | `tools/oxp3-led.py status` | `device:`, `zones (side ids) :`, `presets :`, `hhd rgb mode :` |
-| | `tools/oxp3-led.py selftest` | encoder self-test passes against the captured frames |
-| | `getfacl /dev/hidraw4` | `user:holzr:rw-` from `TAG+="uaccess"` |
-| RGB keeper | `systemctl --user status oxp3-rgbd` | `active (running)` once `~/.config/oxp3-rgb.toml` exists |
-| | `tools/oxp3-rgbd.py --check` | `PASS config parses (5 zones, N frames)` (or `FAIL config parses` with the parse error) |
-| | `tools/oxp3-rgbd.py --once --dry-run` | prints the 64-byte frames, writes nothing |
-| suspend policy | `systemctl status oxp3-sleep-wakeup` | `active (exited)`; journal has `policy applied` or `policy already in place` |
-| | `tools/sleep-power-measure.sh audit` | `mem_sleep : [s2idle] deep`, wake-source table; no `enabled` for pad/storage/USB4 |
-| | `sudo tools/sleep-power-measure.sh suspend -w 600` | a real suspend; PASS/WARN/FAIL against the %/h thresholds |
-| Bluetooth | `tools/oxp3-bt-firmware.sh --check` | files present with the pinned hashes; exit 0 only when this boot also loaded the firmware, exit 1 with the fix commands when the running boot still has no firmware |
-| | `ls /sys/class/bluetooth` | `hci0` |
-| | `bluetoothctl show` | a `Controller …` block with a `Powered: yes`-able radio |
-| | `journalctl -k -b \| grep 'Bluetooth: hci0'` | `Firmware timestamp …`; **no** `Failed to load Intel firmware file` |
-| power units | `systemctl status oxp3-power-profile oxp3-power-resume` | `enabled`; active only once `/etc/oxp3/power.json` exists |
-| power limits | `/usr/local/libexec/oxp3-powerctl status` | `PL1/PL2/PL4` for **both** `intel-rapl:0` and `intel-rapl-mmio:0`; `profile: balanced` after `--power-profile balanced` |
-| | `cat /sys/class/powercap/intel-rapl:0/constraint_1_power_limit_uw` | `45000000` for balanced (`80000000` performance, `25000000` quiet) |
-| battery limit | `/usr/local/libexec/oxp3-powerctl battery status` | `charge_control_end_threshold 80 [root-only]`; `bypass: off` or `bypass: on` |
-| | `cat /sys/class/power_supply/BAT0/charge_control_end_threshold` | `80` |
-| analog bypass | `cat /sys/class/power_supply/BAT0/charge_behaviour` | `[inhibit-charge] auto inhibit-charge-awake` while bypass is on |
-| adaptive TDP | `systemctl status oxp3-adaptivetdp` | `inactive (dead)` after install (opt-in, not enabled) |
-| | `sudo /usr/local/libexec/oxp3-adaptivetdp --once --dry-run --json` | one decision object, no writes, no `/var/log` entry |
-| fan | `systemctl status oxp3-fan-curve` | active only if you enabled it; stopping it restores EC auto mode |
-| | `/usr/local/libexec/oxp3-powerctl fan status` | `pwm1_enable=2` (auto) normally, `1` while the curve runs; `fan1_input` in rpm |
-| IMU | `tools/oxp3-imu.py selftest` | `RESULT: PASS (0 warning(s)) - IMU usable, gyro exposed to Steam` |
-| | `cat /sys/bus/iio/devices/iio:device0/in_anglvel_x_raw` | a changing raw value |
-| audio | `pactl list sinks short \| grep oxp3_speaker_eq` | the `oxp3_speaker_eq.sink` line (after `eq-on.sh`) |
-| | `tools/audio/eq_response.py` | the 8-band model table (max −1.6 dB, min −15.0 dB) |
+| Install state | `tools/oxp3-hw-install.sh --status` | one line per component; yes and enabled/active for what is installed; exit 0 |
+| Verification harness | `tools/oxp3-verify.sh --json` | JSON report; exit 0 with at least one PASS, 1 on any FAIL, 2 when nothing passed, 3 on usage error |
+| Repo status matrix | `tools/oxp3-status.sh --json` | schema 1 report with per-indicator ok/warn/fail/unknown and an overall state |
+| Harness self-test | `tests/verify/run.sh` | every parser asserted against tests/verify/fixtures; exit 0 |
+
+| Component | Install |
+|---|---|
+| Volume keys | `sudo tools/oxp3-hw-install.sh --volume` |
+| Home button and top LEDs | `sudo tools/oxp3-hw-install.sh --leds` |
+| Body RGB zones | `sudo tools/oxp3-hw-install.sh --rgb` |
+| Suspend and wake policy | `sudo tools/oxp3-hw-install.sh --sleep` |
+| Speaker tuning (Harman APO) | `tools/oxp3-hw-install.sh --audio --audio-activate` |
+| Bluetooth firmware | `sudo tools/oxp3-hw-install.sh --bluetooth` |
+| Power envelope (PL1/PL2/PL4) | `sudo tools/oxp3-hw-install.sh --power --power-profile balanced` |
+| Fan curve | `sudo tools/oxp3-hw-install.sh --power --fan-curve` |
+| Battery care | `sudo tools/oxp3-hw-install.sh --power --battery-limit 80 --battery-bypass on` |
+| Adaptive TDP | `sudo tools/oxp3-hw-install.sh --power --adaptive-tdp` |
+| SAGV / memory frequency | nothing is installed; the probe is read-only and needs no root |
+| Display HDR / vibrance / colour | user-scope status/HDR/ICC/vibrance tooling; the Gamemode flag is the only privileged part |
+| IMU / gyro | nothing to install; --imu only writes the modprobe snippet that keeps BMI260 bound |
+| Camera / IPU7 | nothing; not applicable to this unit |
+| Fingerprint reader | nothing is installed; tools/fingerprint/ holds the probe and the compile-checked skeleton |
+
+Manual install steps, opt-out flags, uninstall and per-component rollback are in sections 2, 3, 6 and 7 below; the machine-readable form is [`docs/hw/REGISTRY.md`](hw/REGISTRY.md).
+
+| Component | State | Verify | Expected | Root |
+|---|---|---|---|---|
+| Volume keys | awaiting-install | `vol.unit` | oxp3-voltap is active (running) | no |
+| Volume keys | awaiting-install | `vol.grab` | this boot's journal has grabbed /dev/input/eventN | no |
+| Volume keys | awaiting-install | `vol.hwdb` | the force-release entry exists and hwdb.bin is newer | no |
+| Volume keys | awaiting-install | `vol.hold` | a hold yields exactly one step, not a ramp | yes |
+| Home button and top LEDs | awaiting-install | `hid.rule` | /etc/udev/rules.d/90-oxp3-hid.rules present | no |
+| Home button and top LEDs | awaiting-install | `hid.access` | the vendor hidraw node is writable by the invoking user | no |
+| Home button and top LEDs | awaiting-install | `led.status` | oxp3-led.py status lists the device, zones and presets | no |
+| Home button and top LEDs | awaiting-install | `led.zones` | all 5 zones and 11 presets are addressable | no |
+| Home button and top LEDs | awaiting-install | `homebtn.unit` | oxp3-homebtn.service is active (running) | no |
+| Home button and top LEDs | awaiting-install | `homebtn.mapping` | a press becomes KEY_HOMEPAGE | no |
+| Home button and top LEDs | awaiting-install | `homebtn.press` | this boot's user journal has listening and pressed lines | no |
+| Home button and top LEDs | awaiting-install | `led.write` | one solid frame is accepted by the device | no |
+| Body RGB zones | awaiting-install | `rgbd.unit` | oxp3-rgbd.service active and ~/.config/oxp3-rgb.toml present | no |
+| Body RGB zones | awaiting-install | `rgbd.check` | PASS config parses (5 zones, N frames) | no |
+| Suspend and wake policy | awaiting-install | `sleep.mem` | /sys/power/mem_sleep selects [s2idle] | no |
+| Suspend and wake policy | awaiting-install | `sleep.units` | oxp3-sleep-wakeup is active and reports the pre/log units | no |
+| Suspend and wake policy | awaiting-install | `sleep.wakeup` | every listed USB id / PCI address has wakeup disabled | no |
+| Suspend and wake policy | awaiting-install | `sleep.audit` | the capability table and the suspend record block | no |
+| Suspend and wake policy | awaiting-install | `sleep.stats` | success > 0 and last_hw_sleep > 0 (a real suspend) | no |
+| Suspend and wake policy | awaiting-install | `sleep.measure` | PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h | no |
+| Suspend and wake policy | awaiting-install | `sleep.suspend` | a real s2idle cycle with wake by rtcwake | yes |
+| Speaker tuning (Harman APO) | working | `aud.scripts` | eq-on.sh and eq-off.sh are executable | no |
+| Speaker tuning (Harman APO) | working | `aud.server` | an audio session answers pactl info | no |
+| Speaker tuning (Harman APO) | working | `aud.eq` | oxp3_speaker_eq.sink is loaded | no |
+| Speaker tuning (Harman APO) | working | `aud.dummy` | the default sink is real, not auto_null | no |
+| Speaker tuning (Harman APO) | working | `aud.model` | the 8-band model table (max -1.6 dB, min -15.0 dB) | no |
+| Speaker tuning (Harman APO) | working | `aud.activate` | eq-on.sh activates the sink | no |
+| Bluetooth firmware | awaiting-install | `bt.files` | both ibt-00a0-0291 iml/pci files in updates/intel | no |
+| Bluetooth firmware | awaiting-install | `bt.dracut` | /etc/dracut.conf.d/60-oxp3-bt-firmware.conf present | no |
+| Bluetooth firmware | awaiting-install | `bt.journal` | no 'Failed to load Intel firmware file' this boot | no |
+| Bluetooth firmware | awaiting-install | `bt.controller` | btmgmt sees a controller address | no |
+| Bluetooth firmware | awaiting-install | `bt.diag` | pinned hashes match and this boot loaded the firmware | no |
+| Power envelope (PL1/PL2/PL4) | working | `pwr.zones` | both intel-rapl:0 and intel-rapl-mmio:0 report PL1/PL2/PL4 | no |
+| Power envelope (PL1/PL2/PL4) | working | `pwr.pl1` | MSR PL1 equals MMIO PL1 (tdp-sync invariant) | no |
+| Power envelope (PL1/PL2/PL4) | working | `pwr.profile` | the saved profile maps to the live platform_profile | no |
+| Fan curve | partial | `pwr.fan` | fan1_input 1-12000 rpm and pwm1_enable 1 or 2 | no |
+| Battery care | partial | `bat.threshold` | a readable charge_control_end_threshold (80 when limited) | no |
+| Battery care | partial | `bat.behaviour` | charge_behaviour lists inhibit-charge | no |
+| Adaptive TDP | awaiting-install | `pwr.adaptive` | inactive and disabled after install; FAIL when enabled but dead | no |
+| SAGV / memory frequency | blocked | cmd: `tools/oxp3-sagv.sh status` | display v30, enable_sagv 0400, no point interface, MCHBAR unreadable, RAPL domains listed | no |
+| Display HDR / vibrance / colour | working | `dsp.hdr` | HDR/WCG/depth/VRR reported for eDP-1 (HDR off is a valid state) | no |
+| Display HDR / vibrance / colour | working | `dsp.icc` | the ICC profile state is reported | no |
+| Display HDR / vibrance / colour | working | `dsp.panel` | the EDID verdict has 10-bit, PQ/HDR10 and BT.2020 | no |
+| Display HDR / vibrance / colour | working | `dsp.vibrance` | the saturation shader tooling is present | no |
+| IMU / gyro | not-a-gap | `imu.selftest` | RESULT: PASS (0 warning(s)) - IMU usable, gyro exposed to Steam | no |
+| Camera / IPU7 | not-a-gap | cmd: `grep -H . /sys/bus/acpi/devices/OVTI*/status /sys/bus/acpi/devices/INT3472*/status` | 0 on every listed device (camera function disabled / absent) | no |
+| Fingerprint reader | partial | cmd: `python3 -m unittest discover -s tools/fingerprint/tests` | Ran 85 tests ... OK | no |
+| Fingerprint reader | partial | cmd: `tools/fingerprint/tests/run-c-tests.sh` | ok: 324 checks, 10 vectors (podman fallback when no host compiler) | no |
+
+Verify rows with a backticked id are checks in `tools/oxp3-verify.sh` (`--json` for machines, `--full` for the invasive ones); `cmd:` rows are direct read-only commands. Every component below is installed through `tools/oxp3-hw-install.sh` unless its row in [`docs/hw/REGISTRY.md`](hw/REGISTRY.md) says otherwise.
+<!-- END GENERATED: install-verify -->
 
 ## 6. Uninstall
 

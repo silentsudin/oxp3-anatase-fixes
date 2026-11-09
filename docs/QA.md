@@ -156,8 +156,53 @@ The single FAIL is the licence-header/top-level-licence gap. No functional test 
 
 ## How to re-run
 
-All commands from the repository root; none of them needs root. The privileged device-side steps are in
-`docs/INSTALL-HW.md` and the per-topic documents and were deliberately not run.
+### One command (preferred)
+
+`tools/repo-test.sh` runs every offline check this repository has, with a
+per-suite timeout, captured logs and a compact PASS/FAIL/SKIP table. It needs no
+root, no network and (in `--fast`) no build:
+
+```sh
+tools/repo-test.sh --fast   # default: shell/Python syntax, fingerprint Python
+                            # + fixture drift, Decky selftest/CLI, verify
+                            # fixtures, installer status/dry-run, units/udev/hwdb
+tools/repo-test.sh --full   # adds the fingerprint C/stub-syntax builds and the
+                            # Decky build + package-determinism check
+tools/repo-test.sh --list   # suite inventory, mode, tier, timeout
+tools/repo-test.sh --json   # machine-readable result
+tools/repo-test.sh --only 'fp-*'   # one suite family (repeatable)
+
+make test                   # == tools/repo-test.sh --fast
+make test-full              # == tools/repo-test.sh --full
+```
+
+Logs and `summary.txt` go to `${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/<utc-run>/`;
+the failing command and its log path are printed when something fails. Missing
+optional tools (a C compiler/container image, `shellcheck`, a warm npm cache,
+network) are reported as `SKIP` with a reason, never as a pass. On this host the
+fast run is **18 pass / 0 fail / 6 skip** (five full-only suites plus
+`shellcheck`); `--full` is **22 pass / 0 fail / 2 skip**. See
+[TESTING.md](TESTING.md) for the suite inventory, timing tiers and CI notes.
+
+The pre-`repo-test.sh` per-suite commands are preserved verbatim in
+[Appendix A](#appendix-a--per-suite-commands-pre-repo-test) for debugging a
+single suite by hand.
+
+## Evidence files
+
+* [`docs/state/oxp3-status-2026-11-09.json`](state/oxp3-status-2026-11-09.json) — `--json` output,
+  12,377 bytes, valid JSON. Host `user`/`home`/`hostname` and all `/var/home/holzr` paths were
+  replaced with `<redacted-user>`/`<redacted-home>`/`<redacted-host>`; `overall=warn`,
+  `counts.ok=23`, `warn=5`, `fail=0`.
+* [`docs/state/snapshot-2026-11-09.txt`](state/snapshot-2026-11-09.txt) — verbatim
+  `state-snapshot.sh` output (81 lines). It is host-specific by design and contains paths and local
+  driver hashes, not secrets.
+
+## Appendix A — per-suite commands (pre-repo-test)
+
+The one-command runner wraps these; they are kept so a single suite can still be run by
+hand. All from the repository root; none needs root. The privileged device-side steps are
+in `docs/INSTALL-HW.md` and the per-topic documents and were deliberately not run.
 
 ```sh
 # 1. syntax
@@ -233,12 +278,3 @@ podman with `localhost/oxp3-fixes-build:f45`; `check-libfprint.sh` additionally 
 `v1.94.9` source tree at `/tmp/libfprint-1.94.9` (it falls back to podman, which installs GLib/GUsb
 development packages into the ephemeral container).
 
-## Evidence files
-
-* [`docs/state/oxp3-status-2026-11-09.json`](state/oxp3-status-2026-11-09.json) — `--json` output,
-  12,377 bytes, valid JSON. Host `user`/`home`/`hostname` and all `/var/home/holzr` paths were
-  replaced with `<redacted-user>`/`<redacted-home>`/`<redacted-host>`; `overall=warn`,
-  `counts.ok=23`, `warn=5`, `fail=0`.
-* [`docs/state/snapshot-2026-11-09.txt`](state/snapshot-2026-11-09.txt) — verbatim
-  `state-snapshot.sh` output (81 lines). It is host-specific by design and contains paths and local
-  driver hashes, not secrets.

@@ -148,9 +148,12 @@ variant, which is why the line count grew slightly). The duplication metric that
    expected); `tools/oxp3-hw-install.sh --dry-run --all` and `--status`; a `--root` install twice
    then uninstall (same file list, 13 -> 13 -> 2 files for the sleep/leds/rgb/imu/audio set);
    `systemd-analyze verify` on every unit copied in with its `ExecStart` stubbed.
-7. Update `docs/INSTALL-HW.md` (install/verify/rollback) and the state matrix in
-   `docs/hw/README.md` (including the "Needs root?" column). Three docs refer to the components;
-   keep them consistent.
+7. Update `docs/hw/components.yaml` (state, summary, implementation, `verify` checks, caveats) and
+   run `python3 tools/gen-docs.py --write`; it regenerates the state matrix in
+   `docs/hw/README.md`, the install/verify matrix in `docs/INSTALL-HW.md` and the summary in
+   `README.md`. Commit the data change with the regenerated blocks - `tools/repo-test.sh` fails on a
+   stale block. The uninstall/rollback prose in `docs/INSTALL-HW.md` sections 6-7 is still
+   hand-written. Schema and rules: [hw/REGISTRY.md](hw/REGISTRY.md).
 
 ## 6. Duplication that remains (intentional or out of scope)
 
@@ -167,8 +170,12 @@ variant, which is why the line count grew slightly). The duplication metric that
 * **`tools/oxp3-hw-install.sh`** keeps its own `say`/`warn`/`die`/`run`/prefix helpers. It
   orchestrates the component installers and must keep working as a standalone entry point (and
   with `--root`), so it is not a consumer of this library.
-* **The three install documents** (`README.md`, `docs/hw/README.md`, `docs/INSTALL-HW.md`) still
-  repeat component facts. That drift is documented in `docs/QA.md` and remains open.
+* **The three install documents** (`README.md`, `docs/hw/README.md`, `docs/INSTALL-HW.md`) no
+  longer repeat the per-component tables: those are generated from `docs/hw/components.yaml` by
+  `tools/gen-docs.py` (schema and rules in [`hw/REGISTRY.md`](hw/REGISTRY.md)). A component fact is
+  one edit now. What remains hand-written is the install/uninstall/rollback prose in
+  `docs/INSTALL-HW.md` sections 2, 3, 6 and 7 and the manual-order list in `docs/hw/README.md`;
+  those still need a look when an installer flag changes.
 
 ## 7. Validation performed in this round
 
