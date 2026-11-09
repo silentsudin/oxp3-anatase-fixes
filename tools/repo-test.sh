@@ -490,6 +490,74 @@ suite_firstrun() {
     printf 'selftest ok; checklist JSON ok; dry-run wrote nothing\n'
 }
 
+suite_wizard() {
+    [ -x "$REPO/tools/oxp3-wizard.sh" ] || skip "tools/oxp3-wizard.sh is missing"
+    [ -x "$REPO/tests/wizard/run.sh" ] || skip "tests/wizard/run.sh is missing"
+    need python3
+    cd "$REPO" || exit 1
+    # 1. Offline self-test of the state machine and the JSON writer.
+    tools/oxp3-wizard.sh --selftest
+    # 2. The plan must list every phase and write nothing.
+    local plan=$LOGDIR/wizard-plan.txt
+    rm -f -- "$plan"
+    tools/oxp3-wizard.sh --non-interactive --state-dir "$LOGDIR/wizard-plan" >"$plan" \
+        || { printf 'FAIL --non-interactive exited non-zero\n'; exit 1; }
+    grep -q '\[phase 10/10\]' "$plan" \
+        || { printf 'FAIL plan did not list all phases\n'; exit 1; }
+    [ ! -e "$LOGDIR/wizard-plan" ] \
+        || { printf 'FAIL plan mode created %s\n' "$LOGDIR/wizard-plan"; exit 1; }
+    # 3. Scripted-stdin end-to-end: answers, JSON schema, resume, restore, suspend gate.
+    tests/wizard/run.sh
+}
+
+suite_triage() {
+    [ -x "$REPO/tools/oxp3-triage.py" ] || skip "tools/oxp3-triage.py is missing"
+    need python3
+    cd "$REPO" || exit 1
+    # 1. Offline self-test: the eight synthetic bundles, findings + priorities.
+    tools/oxp3-triage.py --selftest
+    # 2. Every fixture must be readable and emit valid JSON.
+    local name out=$LOGDIR/triage
+    mkdir -p "$out"
+    for name in healthy preinstall bt-not-loaded xmx-no-trace audio-wedged \
+                sleep-never-triggered volume-degraded missing-files; do
+        tools/oxp3-triage.py --json "tests/fixtures/firstrun/$name" >"$out/$name.json" \
+            || rc=$?
+        # exit 1 means "a critical finding exists" - that is data, not a failure.
+        if [ "${rc:-0}" -gt 1 ]; then
+            printf 'FAIL triage exited %s on %s\n' "$rc" "$name"
+            exit 1
+        fi
+        rc=0
+        python3 -m json.tool "$out/$name.json" >/dev/null \
+            || { printf 'FAIL triage emitted invalid JSON for %s\n' "$name"; exit 1; }
+    done
+    # 3. The healthy fixture must be silent, the pre-install one must not be.
+    python3 - "$out" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+out = Path(sys.argv[1])
+healthy = json.loads((out / "healthy.json").read_text())
+pre = json.loads((out / "preinstall.json").read_text())
+if healthy["findings"]:
+    raise SystemExit("FAIL healthy fixture produced findings: %s"
+                     % [f["rule"] for f in healthy["findings"]])
+rules = [f["rule"] for f in pre["findings"]]
+for required in ("bt.initramfs-stale", "verify.not-installed"):
+    if required not in rules:
+        raise SystemExit("FAIL preinstall fixture did not report %s" % required)
+states = {f["id"]: f["state"] for f in pre["fixes"]}
+if states.get("volume") != "not-installed":
+    raise SystemExit("FAIL preinstall volume verdict is %r" % states.get("volume"))
+missing = json.loads((out / "missing-files.json").read_text())
+if any(f["state"] != "unknown" for f in missing["fixes"]):
+    raise SystemExit("FAIL missing-files fixture invented a non-unknown verdict")
+print("selftest ok; 8 fixtures valid; healthy silent; preinstall not-installed")
+PYEOF
+}
+
 suite_gen_docs() {
     [ -f "$REPO/tools/gen-docs.py" ] || skip "tools/gen-docs.py is missing"
     [ -f "$REPO/docs/hw/components.yaml" ] || skip "docs/hw/components.yaml is missing"
@@ -595,6 +663,12 @@ def_suite eq-model fast fast 60 0 \
 def_suite firstrun fast fast 120 0 \
     "first-run collector: offline selftest, checklist JSON, dry-run writes nothing" \
     "tools/oxp3-firstrun.sh --selftest && ... --check-only --json && ... --dry-run"
+def_suite wizard fast fast 300 0 \
+    "hardware validation wizard: plan, dry-run, scripted stdin, JSON schema, resume, restore" \
+    "tools/oxp3-wizard.sh --selftest && tools/oxp3-wizard.sh --non-interactive && tests/wizard/run.sh"
+def_suite triage fast fast 120 0 \
+    "evidence-bundle triage: rule selftest, 8 fixture bundles, JSON contract" \
+    "tools/oxp3-triage.py --selftest && ... 8 fixtures --json"
 def_suite gen-docs fast fast 60 0 \
     "generated component tables match docs/hw/components.yaml" \
     "python3 tools/gen-docs.py --check"

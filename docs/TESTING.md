@@ -98,10 +98,16 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `gamewrap` | fast | fast | 120 s | `python3` | – (synthetic HOME/config/panel state; stub commands) |
 | `eq-model` | fast | fast | 60 s | `python3` | – |
 | `firstrun` | fast | fast | 120 s | `python3`, `bash` | – (self-test in `$TMPDIR`; the dry run writes nothing) |
+| `wizard` | fast | fast | 300 s | `python3`, `bash` | – (scripted stdin, `--simulate`, private state dir) |
 | `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check) |
 
 Areas and what is actually proven:
 
+* **wizard** — the interactive hardware-validation workflow
+  (`tools/oxp3-wizard.sh`, [WIZARD.md](WIZARD.md)): its offline `--selftest`,
+  a plan run that must write nothing, and `tests/wizard/run.sh`, which feeds
+  scripted stdin through the real prompt/answer machine in `--simulate` mode and
+  asserts the JSON schema, resume, the suspend gate and the restore registration.
 * **shell syntax** — `bash -n` / `sh -n` on every tracked script, chosen by
   shebang (`bash` first, then `sh`, so `#!/usr/bin/env sh` is covered).
 * **Python** — `py_compile` on every tracked `.py` plus the extensionless
@@ -332,7 +338,8 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 The six fast-mode skips are the five full-only suites plus `shellcheck`; they
 are enumerated in the table on every run, not implied.
 
-*Added after this snapshot:* the `gamewrap`, `gen-docs` and `firstrun` suites. A
+*Added after this snapshot:* the `gamewrap`, `gen-docs`, `firstrun` and `wizard`
+suites (later rounds add more; the table above is authoritative). A
 fresh `--fast` on 2026-11-09 reported **27 suites: 21 pass, 0 fail, 6 skip**, and
 `--list` reports 22 suites run in `--fast`, 27 in `--full` (the `unit` row has
 since grown to 535 cases, see [UNIT-TESTS.md](UNIT-TESTS.md)). The `firstrun`
