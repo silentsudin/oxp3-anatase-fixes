@@ -1,0 +1,16 @@
+[Unit]
+Description=OneXPlayer 3 home button -> KEY_HOMEPAGE
+Documentation=file:///var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/hw/home-button-leds.md
+# The vendor hidraw node must be usable (see tools/oxp3-hid.rules).
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Adjust the path if the checkout lives elsewhere.
+ExecStart=%h/git/linux_scratch/oxp3-anatase-fixes/tools/oxp3-homebtn.py --key homepage
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

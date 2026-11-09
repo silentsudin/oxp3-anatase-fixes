@@ -1,0 +1,20 @@
+# OneXPlayer 3 (ONEXPLAYER 3) vendor HID access.
+#
+# 1a86:fe00 interface 1.2 (bInterfaceNumber 02) is the vendor HID
+# collection used for body RGB and the home/extra buttons.  It is
+# hidraw-only (no input node), and ships root-only (0600).  The uaccess
+# tag gives the logged-in seat an ACL instead of widening the mode.
+#
+# Install:  sudo install -m 0644 tools/oxp3-hid.rules /etc/udev/rules.d/90-oxp3-hid.rules
+#           sudo udevadm control --reload-rules
+#           sudo udevadm trigger --subsystem-match=hidraw --action=change
+#
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", \
+  ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="fe00", \
+  ATTRS{bInterfaceNumber}=="02", \
+  TAG+="uaccess", MODE="0660", GROUP="input"
+
+# Virtual keyboard used by oxp3-homebtn.py.  Harmless if the seat ACL is
+# already applied by the distro; keeps the daemon working on images that
+# only ship 0600 root:root.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", MODE="0660"

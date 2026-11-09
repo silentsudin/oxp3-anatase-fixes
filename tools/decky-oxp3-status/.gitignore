@@ -1,0 +1,6 @@
+# build artefacts: `pnpm build` creates dist/index.js, required at install time
+# but never committed (generated from src/)
+node_modules/
+dist/
+__pycache__/
+*.pyc

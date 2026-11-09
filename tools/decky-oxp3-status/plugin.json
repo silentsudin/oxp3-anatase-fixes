@@ -1,0 +1,10 @@
+{
+  "name": "OXP3 Status",
+  "author": "silentsudin",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["status", "diagnostics", "onexplayer", "oxp3", "xess", "scheduler"],
+    "description": "Live, read-only status of the OneXPlayer 3 (OXP3) Anatase fixes for the current game: Mesa driver, XeSS XMX stack, CPU scheduler, and the other shipped fixes."
+  }
+}
