@@ -57,6 +57,36 @@ for an experiment; the plan prints what it will use), `--irq-pin N` /
 `--gpio-backend auto|gpiod|chardev|sysfs|poll` (force the GPIO backend; the
 default also honours `$FPBF63112_GPIO_BACKEND`).
 
+### Next owner command (normal read-only run, not a matrix)
+
+The electrical side is pinned and the read frame is recovered
+(`fingerprint-transport.md` §8.9): active-high reset, 10 ms settle, rising
+edge, 4 MHz, mode 0, and the probe's default `--read-shape frame` (selector +
+the measured lead bytes). The next run is the ordinary read, not another
+experiment:
+
+```sh
+sudo tools/fingerprint/oxp3-fp-session.sh --reads "fw scheme info" \
+    --reset-polarity active-high --settle-ms 10
+```
+
+If the session wrapper cannot run on the host, the equivalent direct probe
+command (the one the wrapper prints) is:
+
+```sh
+sudo python3 tools/fingerprint/oxp3-fp-probe.py --spidev /dev/spidev0.0 \
+    --speed 4000000 --mode 0 --bits 8 --reset-polarity active-high \
+    --settle-ms 10 --gpio 18 --gpio-chip gpiochip1 --irq-edge rising \
+    --reset-gpio 16 --allow-writes --allow-reset fw scheme info
+```
+
+It sends only `0xA0`, `0xA1` and `0xC1`, keeps the read allowlist and every
+safety gate, and pulses the reset only because `--allow-reset` is explicit.
+Expected on success: `fw` decodes the 7-byte record (`state`, project
+`0x7F50`, version), `scheme` returns its table and `info` the 9-byte geometry.
+`--read-shape selector` reruns the DLL-exact one-byte frame for comparison and
+is expected to leave the payload 3/2 bytes into the window.
+
 Exit codes: `0` done and restore verified, `1` a step failed (the restore still
 ran and is reported), `2` usage or precondition refusal (nothing was changed),
 `3` the restore could not be verified (**check `summary.json`, then restore by

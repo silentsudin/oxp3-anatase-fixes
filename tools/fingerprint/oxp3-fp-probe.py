@@ -469,6 +469,13 @@ def main(argv=None):
                          "(default: write-shape.json in the current directory)")
     ap.add_argument("--write-shape-timeout-ms", type=int, default=400,
                     help="per-cell write-shape timeout in ms (default 400)")
+    ap.add_argument("--read-shape", choices=("frame", "selector"),
+                    default="frame",
+                    help="read frame: 'frame' (default) = the selector plus "
+                         "the observed lead bytes (3 for 0xA0, 2 for 0xA1, "
+                         "0xC1 unknown), so the payload starts at answer "
+                         "offset 0; 'selector' = the DLL-exact one-byte "
+                         "selector for comparison")
     args = ap.parse_args(argv)
 
     if args.crypto_selftest:
@@ -551,6 +558,7 @@ def _refuse_destructive(spi, opcode):
 
 def _spi_plan(spi, args, cmd):
     """Return ``(label, SpiPlan)`` for one command; never performs I/O."""
+    shape = getattr(args, "read_shape", "frame")
     if cmd == "raw":
         if args.op is None:
             raise spi.SpiError("--op is required for the raw command")
@@ -562,12 +570,20 @@ def _spi_plan(spi, args, cmd):
             raise spi.SpiError("SPI writes are deliberately not implemented; "
                                "--data belongs to the frame transport")
         _refuse_destructive(spi, args.op)
+        if shape == "frame":
+            return (f"op 0x{args.op:02x}",
+                    spi.build_read_frame(args.op, args.rx).plan)
         return (f"op 0x{args.op:02x}",
                 spi.build_plan(args.op, operation="read",
                                read_len=args.rx))
     if cmd in spi.COMMANDS:
         command = spi.COMMANDS[cmd]
         _refuse_destructive(spi, command.opcode)
+        if shape == "frame":
+            return (cmd, spi.build_read_frame(
+                command.opcode, command.read_len,
+                timeout_ms=command.timeout_ms,
+                total_ms=command.total_ms).plan)
         return (cmd, spi.plan_command(command))
     raise spi.SpiError(f"unknown command {cmd!r}; choose from "
                        f"{', '.join(spi.COMMANDS)}")
@@ -881,14 +897,17 @@ def run_spi(args, cmds):
     if args.dry_run:
         print(f"dry-run: transport=spi spidev={args.spidev or '(unset)'} "
               f"allow_writes={args.allow_writes} "
-              f"gpio_backend={args.gpio_backend or 'auto'}")
+              f"gpio_backend={args.gpio_backend or 'auto'} "
+              f"read_shape={args.read_shape}")
         print(f"         speed={params['speed']} mode={params['mode']} "
               f"bits={params['bits']} chip-select={params['chip_select']} "
               f"gpio={params['gpio']} reset={params['reset_gpio']}")
         for label, plan in plans:
+            lead = plan.shape.padding if plan.shape is not None else b""
             print(f"{label}: opcode 0x{plan.opcode:02x} "
                   f"selector 0x{plan.selector:02x} "
                   f"{plan.operation} {plan.answer_len} B, "
+                  f"lead {len(lead)} B{(': ' + lead.hex(' ')) if lead else ''}, "
                   f"timeout {plan.timeout_ms}/{plan.total_ms} ms")
             print(f"    {plan.hexdump()}")
         return 0
@@ -945,14 +964,31 @@ def run_spi(args, cmds):
             except spi.SpiError as exc:
                 print(f"{label}: FAILED - {exc}", file=sys.stderr)
                 return 1
+            lead = plan.shape.padding if plan.shape is not None else b""
             print(f"{label}: opcode 0x{plan.opcode:02x} "
                   f"selector 0x{plan.selector:02x} answer {len(answer)} B")
             if answer:
                 print(f"    {answer.hex(' ')}")
+            payload = answer
+            parsed = None
+            if args.read_shape == "frame" and answer:
+                try:
+                    parsed = spi.parse_read_answer(plan.opcode, answer,
+                                                   lead=lead)
+                except spi.AnswerError as exc:
+                    print(f"{label}: answer rejected - {exc}", file=sys.stderr)
+                    return 1
+                payload = parsed.payload
+                if parsed.framing == "frame":
+                    print(f"    0xAA frame, CRC-32 ok, payload "
+                          f"{len(payload)} B: {payload.hex(' ')}")
+                elif parsed.skipped:
+                    print(f"    skipped {parsed.skipped} lead byte(s): "
+                          f"{answer[:parsed.skipped].hex(' ')}")
             if label == "fw":
-                print("   ", show_fw(answer))
+                print("   ", show_fw(payload))
             elif label == "info":
-                print("   ", show_info(answer))
+                print("   ", show_info(payload))
             if args.raw_info:
                 for transfer, data in zip(
                         getattr(transport._io, "last_transfers", ()),

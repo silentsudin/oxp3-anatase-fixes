@@ -889,9 +889,19 @@ class TestProbeCLI(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("selector 0x40", out)
         self.assertIn("selector 0x02", out)
-        self.assertIn("40 | <- 7 B", out)
+        self.assertIn("read_shape=frame", out)
+        self.assertIn("40 00 00 00 | <- 7 B", out)
         self.assertIn("02 | <- 9 B", out)
         self.assertIn("timeout 1000/2030 ms", out)
+
+    def test_dry_run_selector_only_comparison_shape(self):
+        rc, out, err = self.run_main(
+            ["--dry-run", "--read-shape", "selector",
+             "--spidev", "/dev/spidev-fake", "fw"])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("read_shape=selector", out)
+        self.assertIn("40 | <- 7 B", out)
+        self.assertIn("lead 0 B", out)
 
     def test_dry_run_uses_crs_values(self):
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as fh:
@@ -1036,3 +1046,157 @@ class TestReadShapes(unittest.TestCase):
                                     total_ms=400)
         with self.assertRaises(spi.CommandNotAllowed):
             transport.execute(plan)
+
+
+# ---------------------------------------------------------------------------
+# Recovered read frame (selector + observed lead bytes) and answer parsing
+# ---------------------------------------------------------------------------
+
+from fpbf63112 import protocol as _protocol  # noqa: E402  (test-only import)
+
+
+class TestReadFrame(unittest.TestCase):
+    def test_fw_frame_is_selector_plus_three_zero_lead_bytes(self):
+        frame = spi.build_read_frame(0xA0)
+        self.assertEqual(frame.selector, 0x40)
+        self.assertEqual(frame.read_len, 7)
+        self.assertEqual(frame.lead, b"\x00\x00\x00")
+        self.assertEqual(frame.tx, b"\x40\x00\x00\x00")
+        self.assertEqual(frame.transfers[0].tx, b"\x40\x00\x00\x00")
+        self.assertEqual(frame.transfers[1].rx_len, 7)
+        self.assertEqual(frame.transfers[1].tx, b"")
+        self.assertEqual(frame.hexdump(), "40 00 00 00 | <- 7 B")
+
+    def test_scheme_frame_is_selector_plus_two_zero_lead_bytes(self):
+        frame = spi.build_read_frame(0xA1)
+        self.assertEqual(frame.selector, 0x42)
+        self.assertEqual(frame.read_len, 64)
+        self.assertEqual(frame.tx, b"\x42\x00\x00")
+
+    def test_info_lead_is_unknown_so_it_stays_selector_only(self):
+        # The 2026-11-09 write-shape run stopped at 0xA1; 0xC1's lead is not
+        # measured, so the builder must not invent one.
+        frame = spi.build_read_frame(0xC1)
+        self.assertEqual(frame.selector, 0x02)
+        self.assertEqual(frame.lead, b"")
+        self.assertEqual(frame.tx, b"\x02")
+        self.assertEqual(frame.read_len, 9)
+
+    def test_explicit_empty_lead_is_the_dll_selector_only_frame(self):
+        frame = spi.build_read_frame(0xA0, 7, lead=b"")
+        self.assertEqual(frame.tx, b"\x40")
+
+    def test_explicit_lead_and_selector_variant(self):
+        frame = spi.build_read_frame(0xA0, 7, lead=b"\xaa",
+                                     selector_variant="read-bit0")
+        self.assertEqual(frame.tx, b"\x41\xaa")
+
+    def test_bad_frame_arguments_are_refused(self):
+        with self.assertRaises(ValueError):
+            spi.build_read_frame(0x7E, None)  # unknown opcode, no length
+        with self.assertRaises(ValueError):
+            spi.build_read_frame(0xA0, 0)
+        with self.assertRaises(ValueError):
+            spi.build_read_frame(0xA0, 7, lead=b"\x00" * 9)
+
+    def test_send_read_builds_and_executes_the_frame(self):
+        io_obj = RecordingIO(b"\xff\x7f\x50\x03\x00\x00\x00")
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     read_allowlist=[0xA0], spi_io=io_obj)
+        answer = spi.send_read(transport, 0xA0)
+        self.assertEqual(answer, b"\xff\x7f\x50\x03\x00\x00\x00")
+        self.assertEqual(io_obj.messages[0][0].tx, b"\x40\x00\x00\x00")
+
+    def test_read_frame_keeps_gates(self):
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     read_allowlist=[0xA1],
+                                     spi_io=RecordingIO(b"\x00" * 7))
+        with self.assertRaises(spi.CommandNotAllowed):
+            transport.read_frame(0xA0)
+        no_write = spi.SpiTransport("/dev/fake", spi_io=RecordingIO())
+        with self.assertRaises(spi.CommandNotAllowed):
+            no_write.read_frame(0xA0)
+
+    def test_transport_read_command_frame(self):
+        io_obj = RecordingIO(b"\xff\x7f\x50\x03\x00\x00\x00")
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     read_allowlist=[0xA0], spi_io=io_obj)
+        self.assertEqual(transport.read_command_frame("fw"),
+                         b"\xff\x7f\x50\x03\x00\x00\x00")
+        self.assertEqual(io_obj.messages[0][0].tx, b"\x40\x00\x00\x00")
+
+
+class TestReadAnswer(unittest.TestCase):
+    def test_bare_fw_answer_with_lead(self):
+        answer = b"\xff\x7f\x50\x03\x00\x00\x00"
+        parsed = spi.parse_read_answer(0xA0, answer, lead=b"\x00\x00\x00")
+        self.assertEqual(parsed.framing, "bare")
+        self.assertEqual(parsed.skipped, 0)
+        self.assertEqual(parsed.payload, answer)
+        self.assertIsInstance(parsed.fields, _protocol.FirmwareInfo)
+        self.assertEqual(parsed.fields.state, 0xFF)
+        self.assertEqual(parsed.fields.project_hi, 0x7F)
+        self.assertEqual(parsed.fields.project_lo, 0x50)
+        self.assertEqual(parsed.fields.version, 3)
+
+    def test_bare_fw_answer_from_the_selector_only_frame_is_shifted(self):
+        raw = b"\x00\x00\x00\xff\x7f\x50\x03\x00\x00\x00"
+        parsed = spi.parse_read_answer(0xA0, raw, lead=b"")
+        self.assertEqual(parsed.skipped, 3)
+        self.assertEqual(parsed.payload, b"\xff\x7f\x50\x03\x00\x00\x00")
+        self.assertEqual(parsed.fields.version, 3)
+        # The recovered 7-byte read window loses 3 payload bytes when the
+        # selector-only frame is used, so the strict parse of that run fails.
+        with self.assertRaises(spi.AnswerError):
+            spi.parse_read_answer(0xA0, raw[:7], lead=b"")
+
+    def test_non_zero_lead_bytes_are_rejected(self):
+        with self.assertRaises(spi.AnswerError):
+            spi.parse_read_answer(0xA0, b"\x01\x00\x00\xff\x7f\x50\x03",
+                                  lead=b"")
+
+    def test_short_bare_answers_are_rejected(self):
+        with self.assertRaises(spi.AnswerError):
+            spi.parse_read_answer(0xA0, b"\x01\x02")
+        with self.assertRaises(spi.AnswerError):
+            spi.parse_read_answer(0xC1, b"\x00" * 8)
+
+    def test_bare_sensor_info(self):
+        payload = _protocol.SensorInfo.build(width=0x01F4, height=0x03E8,
+                                             flags=3)
+        parsed = spi.parse_read_answer(0xC1, payload, lead=b"")
+        self.assertEqual(parsed.fields.width, 0x01F4)
+        self.assertEqual(parsed.fields.height, 0x03E8)
+        self.assertEqual(parsed.fields.flags, 3)
+
+    def test_bare_scheme_table_has_no_decoded_fields(self):
+        parsed = spi.parse_read_answer(0xA1, b"\xff\x7f\x50\x03" + b"\x00" * 60,
+                                       lead=b"\x00\x00")
+        self.assertIsNone(parsed.fields)
+
+    def test_empty_answer_is_rejected(self):
+        with self.assertRaises(spi.AnswerError):
+            spi.parse_read_answer(0xA0, b"", lead=b"")
+
+    def test_crc32_valid_frame_is_accepted(self):
+        body = _protocol.FirmwareInfo.build(0xFF, 0x7F, 0x50, 3)
+        frame = _protocol.build_frame(0xA0, data=body)
+        parsed = spi.parse_read_answer(0xA0, frame)
+        self.assertEqual(parsed.framing, "frame")
+        self.assertEqual(parsed.payload, body)
+        self.assertEqual(parsed.fields.version, 3)
+
+    def test_crc32_mismatch_is_rejected(self):
+        body = _protocol.FirmwareInfo.build(0xFF, 0x7F, 0x50, 3)
+        frame = bytearray(_protocol.build_frame(0xA0, data=body))
+        frame[-1] ^= 0xFF  # corrupt the last CRC-32 byte
+        with self.assertRaises(spi.AnswerError):
+            spi.parse_read_answer(0xA0, bytes(frame))
+
+    def test_truncated_frame_and_wrong_opcode_are_rejected(self):
+        body = _protocol.FirmwareInfo.build(0xFF, 0x7F, 0x50, 3)
+        frame = _protocol.build_frame(0xA0, data=body)
+        with self.assertRaises(spi.AnswerError):
+            spi.parse_read_answer(0xA0, frame[:5])
+        with self.assertRaises(spi.AnswerError):
+            spi.parse_read_answer(0xC1, _protocol.build_frame(0xA0, data=body))

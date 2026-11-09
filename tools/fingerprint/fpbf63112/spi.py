@@ -12,7 +12,9 @@ branch, not the USB branch); the full evidence is in
   i.e. bit 7 is the direction (1 = write), bits 6..1 are the low six opcode
   bits, bit 0 is always zero.  This is ``FUN_180017020`` (read, selector
   ``(x & 0x3f) * 2``) and ``FUN_180017404`` (write, ``(x | 0xc0) * 2``);
-  the two forms differ by the 0x80 bit.
+  the two forms differ by the 0x80 bit.  The only read frame in the DLL is
+  this one byte: there is no 0xAA, no length, no phase/argument and no CRC on
+  the ACPI/SPB path (see §8.9 of docs/hw/fingerprint-transport.md).
 
   **Consequence that the safety gate must handle:** the selector only carries
   six opcode bits, so the wire cannot distinguish ``0xA0`` from ``0x20``, nor
@@ -319,6 +321,10 @@ class CommandNotAllowed(SpiRefused):
 
 class UnsafeCommand(SpiRefused):
     """A destructive opcode (enrol/identify/remove/JTAG/restore/update)."""
+
+
+class AnswerError(SpiError):
+    """A read answer could not be validated (short, bad lead, bad CRC)."""
 
 
 class SpiTimeout(SpiError):
@@ -1020,6 +1026,222 @@ COMMANDS: dict[str, SpiCommand] = {
     "status": SpiCommand("status", OP_STATUS_REG, 1,
                          description="recovered SPI status register"),
 }
+
+
+# ---------------------------------------------------------------------------
+# Recovered read frame (selector + observed lead bytes)
+# ---------------------------------------------------------------------------
+#
+# The DLL's own SPI read frame is exactly one byte: FUN_180017020 writes
+# ``(opcode & 0x3f) << 1`` and then clocks the answer with no header, length,
+# phase, argument or CRC (FUN_18001197c builds the two-entry SPB transfer
+# list, chip select held).  The 0xAA/L/16-byte-header/0x4C-block/CRC-32 frame
+# belongs to the USB branch (FUN_180004358/FUN_1800028f8) and is never built
+# on the ACPI/SPB path.
+#
+# The 2026-11-09 hardware run (docs/state/fp-session-20261109T121445Z/
+# write-shape.json) showed that the device streams its answer from the first
+# clock after the selector.  Reading with padding P moves the read window P
+# bytes into that stream, so the bytes between the selector and the payload
+# are lost to the tx-only selector transfer.  The observed lead counts are 3
+# bytes for selector 0x40 (0xA0) and 2 for selector 0x42 (0xA1); 0xC1's lead
+# was never measured (the run stopped at the first aligned scheme answer).
+#
+# ``build_read_frame`` therefore exposes the frame the probe should send:
+# selector + the observed lead bytes, so the payload starts at answer offset
+# 0.  ``lead=b""`` is the DLL-exact selector-only frame, kept as the
+# comparison path.  The prefix is data, not a length: there is no length
+# field on this link.
+
+#: Observed answer lead bytes for the read selectors used on this unit.
+#: Keys are *opcodes*; the value is what the 2026-11-09 run needed after the
+#: selector for the payload to begin at offset 0.  0xC1 is unknown (the
+#: write-shape run stopped at 0xA1).
+READ_LEAD_BYTES: dict[int, bytes] = {
+    0xA0: b"\x00\x00\x00",
+    0xA1: b"\x00\x00",
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class ReadFrame:
+    """One recovered read frame: selector, lead bytes, then ``read_len`` clocks."""
+
+    opcode: int
+    read_len: int
+    lead: bytes
+    plan: SpiPlan = dataclasses.field(compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "lead", bytes(self.lead))
+        if self.plan.operation != "read":
+            raise ValueError("a ReadFrame plan must be a read")
+        if self.plan.opcode != self.opcode:
+            raise ValueError("ReadFrame plan opcode mismatch")
+        if self.plan.read_len != self.read_len:
+            raise ValueError("ReadFrame plan read_len mismatch")
+
+    @property
+    def selector(self) -> int:
+        return self.plan.selector
+
+    @property
+    def tx(self) -> bytes:
+        """The exact bytes the host writes (selector + lead bytes)."""
+        return self.plan.transfers[0].tx
+
+    @property
+    def transfers(self) -> tuple[SpiTransfer, ...]:
+        return self.plan.transfers
+
+    @property
+    def timeout_ms(self) -> int:
+        return self.plan.timeout_ms
+
+    @property
+    def total_ms(self) -> int:
+        return self.plan.total_ms
+
+    def hexdump(self) -> str:
+        return self.plan.hexdump()
+
+
+def _command_by_opcode(opcode: int) -> SpiCommand | None:
+    for command in COMMANDS.values():
+        if command.opcode == opcode:
+            return command
+    return None
+
+
+def build_read_frame(opcode: int, read_len: int | None = None, *,
+                     lead: bytes | None = None,
+                     selector_variant: str = "read",
+                     timeout_ms: int | None = None,
+                     total_ms: int | None = None) -> ReadFrame:
+    """Build the recovered read frame without touching hardware.
+
+    ``lead`` defaults to :data:`READ_LEAD_BYTES` for the measured opcodes and
+    to ``b""`` otherwise (0xC1's lead is unknown).  Pass ``lead=b""`` for the
+    DLL-exact selector-only frame; pass an explicit bytes value to try another
+    lead.  The safety gate is not applied here - :meth:`SpiTransport.execute`
+    still enforces allowlist, destructive-opcode/selector and ``allow_writes``.
+    """
+    command = _command_by_opcode(opcode)
+    if read_len is None:
+        if command is None:
+            raise ValueError(f"read_len is required for opcode 0x{opcode:02x}")
+        read_len = command.read_len
+    if read_len <= 0:
+        raise ValueError("read_len must be > 0")
+    if lead is None:
+        lead = READ_LEAD_BYTES.get(opcode, b"")
+    lead = bytes(lead)
+    if len(lead) > 8:
+        raise ValueError("read lead is limited to 8 bytes")
+    if timeout_ms is None:
+        timeout_ms = command.timeout_ms if command is not None else CMD_TIMEOUT_MS
+    if total_ms is None:
+        total_ms = command.total_ms if command is not None else CMD_TOTAL_MS
+    plan = build_shape_plan(opcode, selector_variant=selector_variant,
+                            padding=lead, read_len=read_len,
+                            timeout_ms=timeout_ms, total_ms=total_ms)
+    return ReadFrame(opcode, read_len, lead, plan)
+
+
+def send_read(transport: "SpiTransport", opcode: int,
+              read_len: int | None = None, **kwargs) -> bytes:
+    """Build one recovered read frame and execute it through ``transport``."""
+    return transport.execute(build_read_frame(opcode, read_len, **kwargs).plan)
+
+
+@dataclasses.dataclass(frozen=True)
+class ReadAnswer:
+    """One validated read answer."""
+
+    opcode: int
+    raw: bytes
+    payload: bytes
+    framing: str              # "frame" (0xAA/CRC-32) or "bare"
+    skipped: int              # leading lead bytes consumed before the payload
+    fields: object | None = None
+
+
+def parse_read_answer(opcode: int, answer: bytes | bytearray | memoryview, *,
+                      lead: bytes | None = None,
+                      strict: bool = True) -> ReadAnswer:
+    """Validate and decode one read answer (synthetic bytes; no I/O).
+
+    Two framings are accepted:
+
+    * ``0xAA | L:u32 | ... | CRC-32`` - the USB answer frame.  The CRC-32 is
+      checked by :func:`fpbf63112.protocol.parse_frame`; a corrupt CRC is a
+      rejection, not a warning.
+    * the bare fixed-size answer used on SPI.  When the DLL-exact
+      selector-only frame was used (``lead=b""``), the answer still begins
+      with the observed lead bytes (three for 0xA0, two for 0xA1); they are
+      checked to be zero and skipped so the payload starts where the USB
+      layout expects it.
+
+    Known layouts are decoded with the protocol records (0xA0 ->
+    :class:`~fpbf63112.protocol.FirmwareInfo`, 0xC1 ->
+    :class:`~fpbf63112.protocol.SensorInfo`).  Short answers and mismatched
+    opcodes raise :class:`AnswerError`.
+    """
+    from . import protocol  # local import: the SPI core has no other dependency
+
+    raw = bytes(answer)
+    if not raw:
+        raise AnswerError(f"opcode 0x{opcode:02x}: empty answer")
+    try:
+        if raw[0] == protocol.SOF:
+            if len(raw) < 5:
+                raise AnswerError(
+                    f"opcode 0x{opcode:02x}: truncated 0xAA frame header")
+            need = 5 + int.from_bytes(raw[1:5], "little")
+            if need > len(raw):
+                raise AnswerError(
+                    f"opcode 0x{opcode:02x}: 0xAA frame needs {need}B, "
+                    f"got {len(raw)}B")
+            frame = protocol.parse_frame(raw[:need], require_magic=False)
+            if strict and frame.opcode != opcode:
+                raise AnswerError(
+                    f"opcode 0x{opcode:02x}: answer frame carries opcode "
+                    f"0x{frame.opcode:02x}")
+            payload = frame.data
+            fields = _decode_fields(opcode, payload, strict)
+            return ReadAnswer(opcode, raw, payload, "frame", 0, fields)
+    except protocol.ProtocolError as exc:
+        raise AnswerError(f"opcode 0x{opcode:02x}: {exc}") from exc
+
+    prefix = READ_LEAD_BYTES.get(opcode, b"")
+    lead = prefix if lead is None else bytes(lead)
+    skip = max(0, len(prefix) - len(lead))
+    skipped = raw[:skip]
+    if strict and any(skipped):
+        raise AnswerError(
+            f"opcode 0x{opcode:02x}: expected {skip} zero lead byte(s), got "
+            f"{skipped.hex(' ')}")
+    payload = raw[skip:]
+    try:
+        fields = _decode_fields(opcode, payload, strict)
+    except protocol.ProtocolError as exc:
+        raise AnswerError(f"opcode 0x{opcode:02x}: {exc}") from exc
+    return ReadAnswer(opcode, raw, payload, "bare", skip, fields)
+
+
+def _decode_fields(opcode: int, payload: bytes, strict: bool):
+    from . import protocol
+
+    try:
+        if opcode == 0xA0:
+            return protocol.FirmwareInfo.parse(payload)
+        if opcode == 0xC1:
+            return protocol.SensorInfo.parse(payload)
+    except protocol.ProtocolError:
+        if strict:
+            raise
+        return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1855,6 +2077,19 @@ class SpiTransport:
         return self.read(command.opcode, command.read_len,
                          timeout_ms=command.timeout_ms,
                          total_ms=command.total_ms)
+
+    def read_frame(self, opcode: int, read_len: int | None = None,
+                   **kwargs) -> bytes:
+        """Read with the recovered frame (selector + observed lead bytes)."""
+        return send_read(self, opcode, read_len, **kwargs)
+
+    def read_command_frame(self, name: str, *, lead: bytes | None = None) -> bytes:
+        """Read a named command with :func:`build_read_frame`."""
+        command = COMMANDS[name]
+        return self.execute(build_read_frame(
+            command.opcode, command.read_len, lead=lead,
+            timeout_ms=command.timeout_ms,
+            total_ms=command.total_ms).plan)
 
     def write(self, opcode: int, payload: bytes, *,
               timeout_ms: int | None = None,

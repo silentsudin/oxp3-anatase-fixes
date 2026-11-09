@@ -781,6 +781,117 @@ allowlist and the destructive-opcode/selector gate (including with selector bit
 `--allow-reset`. `write-shape.json` is embedded in `summary.json` under
 `write_shape`.
 
+## 8.9 The recovered read frame, per command (2026-11-09)
+
+Status: **the byte the driver writes is determined exactly; the lead bytes
+between the selector and the payload are a measured property, not a DLL
+field.** This subsection supersedes the "missing command bytes" reading in
+§8.8: the DLL does not build a longer frame, and the 0xAA frame is not on this
+link at all.
+
+### What the DLL writes on the ACPI/SPB path
+
+| command | DLL function | selector byte | read clocks | frame bytes on the wire |
+|---|---|---|---|---|
+| read (any opcode) | `FUN_180017020` @ `0x180017020` | `(opcode & 0x3f) << 1` | `param_4` | `selector` then `N` receive clocks |
+| write | `FUN_180017404` @ `0x180017404` | `0x80 \| ((opcode & 0x3f) << 1)` | - | `selector` + `param_4` payload bytes |
+| module id probe | `FUN_18000efa8` @ `0x18000efa8` | reads 1 byte each from registers `0x37` and `0x36` | 1 + 1 | two selector-only reads |
+
+`FUN_180017020` is three lines of interest: `local_268[0] = (param_2 & 0x3f) *
+'\x02'`, then `FUN_18001197c(puVar5, local_268, 1, param_3, param_4)`, then
+`WaitForSingleObject(event, param_5)`. `FUN_18001197c` @ `0x18001197c` builds
+one `SPB_TRANSFER_LIST` with **two entries** - `ToDevice` 1 byte (the selector)
+and `FromDevice` `param_4` bytes - and submits it as a single request, so chip
+select is asserted across both. There is no length field, status byte, phase,
+argument or CRC. `FUN_180017404` @ `0x180017404` is the same shape with the
+payload as the second entry and bit 7 set in the selector.
+
+The 0xA0/0xA1/0xC1 **opcodes do not exist on this link**: the selector carries
+only six opcode bits, so the driver's own register protocol numbers them
+`0x20`, `0x21`, `0x01` and puts `0x40`, `0x42`, `0x02` on the wire. That is the
+same aliasing the safety gate already blocks for JTAG/restore.
+
+### Where the 0xA0/0xA1/0xC1 command frames actually live (USB only)
+
+| opcode | dispatch row @ RVA `0x46F00` | request wrapper | frame builder |
+|---|---|---|---|
+| `0xA0` `CMD_QUERY_FIRMWARE_VER` | `{opcode, "CMD_QUERY_FIRMWARE_VER", 0x1800181b0, "FwVer"}` | `FUN_180001808` -> `FUN_180004874(dev, 0xa0, 0, 0, 1)` | `FUN_180004358` |
+| `0xA1` `CMD_QUERY_MODULE_SCHEME_INFORMATION` | `{..., 0x1800183b0, "Scheme"}` | `FUN_1800018c4` -> `FUN_180004874(dev, 0xa1, 0, 0, 1)` | `FUN_180004358` |
+| `0xC1` `CMD_QUERY_SENSOR_INFO` | `{..., 0x180019420, "SensorInfo"}` | `FUN_180001b8c` -> `FUN_180004874(dev, 0xc1, 0, 1, 1)` | `FUN_180004358` |
+
+The dispatch table is stride `0x20`: `{opcode:u64, name:char*, handler:fn,
+label:char*}`; the 0xA0 row is at file offset `0x45900` (RVA `0x46F00`),
+0xA1 at `+0x20`, 0xC1 at `+0x160` (file `0x45a60`). The wrapper chain is:
+`FUN_180001808` -> `FUN_180004874` @ `0x180004874` fills a 24-byte descriptor
+(`+0x10` opcode, `+0x11` phase/arg, `+0x14` data_len, `+0x20` wait flag,
+`+0x24` secure flag, `+0x2c` 1000 ms, `+0x30` 2030 ms) and calls
+`FUN_180004358` @ `0x180004358`, which builds and sends the 0xAA frame through
+`FUN_18001b6e4` (USB pipe at device context `+0x118`). The answer parsers
+`FUN_1800181b0` (7-byte fw record), `FUN_1800183b0` (scheme) and
+`FUN_180019420` (9-byte sensor info) are reached only through the USB
+continuous-reader reassembler `FUN_18001ac60`/`FUN_18001aadc`; the SPB session
+`FUN_180015acc` -> `FUN_1800151cc` -> `FUN_18000f644` never references them.
+
+For completeness, the USB frame these wrappers send is byte-exact: `0xAA`,
+`L:u32 LE` = `20 + align16(10 + data_len)`, 16 zero header bytes, `0x4C`,
+opcode, phase, `0x00`, `arg:u16 LE`, `data_len:u32 LE`, data, zero padding to
+a 16-byte block, then CRC-32 (reflected `0xEDB88320`, init `0xFFFFFFFF`, final
+XOR) little-endian over everything before it. For a datum-only query
+(`data_len = 0`) that is `AA 24 00 00 00` + 16 zeros + `4C <op> 00 00 00 00 00
+00 00 00` + 6 pad zeros + 4 CRC bytes = 41 bytes; 0xC1 is sent with the secure
+flag set (`FUN_180004874`'s `param_4 = 1`, descriptor `+0x24`), so its command
+block is SM4-transformed before the CRC.
+
+### Reconciling the shift
+
+The 2026-11-09 write-shape run (`docs/state/fp-session-20261109T121445Z/
+write-shape.json`, cells 1-12 and 25-29) read the same selector with 0..4 zero
+bytes appended to the write phase. The payload's position in the read buffer
+moved one byte left per appended byte:
+
+| padding | `0x40` (0xA0) read | `0x42` (0xA1) read |
+|---|---|---|
+| 0 | `00 00 00 ff 7f 50 03 ...` | `00 00 ff 7f 50 03 ...` |
+| 1 | `00 00 ff 7f 50 03 ...` | `00 ff 7f 50 03 ...` |
+| 2 | `00 ff 7f 50 03 ...` | `ff 7f 50 03 ...` |
+| 3 | `ff 7f 50 03 ...` | `7f 50 03 ...` |
+
+The device streams its answer continuously from the clock after the selector;
+the selector transfer is transmit-only in the DLL (`FUN_18001197c` entry 0 has
+no receive buffer), so every extra byte clocked in that phase consumes one
+answer byte. Padding `P` therefore starts the read window `P` bytes into the
+answer.
+
+Two readings fit this data and are indistinguishable from the DLL alone:
+(a) the device waits `3` (0xA0) / `2` (0xA1) bytes of command arguments and the
+zeros are placeholders; or (b) those bytes are the beginning of the answer and
+the padding throws them away. The DLL evidence favours (b): its read is one
+selector byte, and its register write/read verification (`FUN_18000f504`
+writes a byte, reads one byte back and compares) requires the first answer byte
+to arrive on the first read clock. Either way the *wire bytes* for a read that
+puts the payload at offset 0 are the same: **selector + 3 zero bytes for 0xA0,
+selector + 2 zero bytes for 0xA1**. 0xC1's lead was never measured - the run
+stopped at the first aligned scheme answer - so the builder leaves it empty
+rather than inventing it.
+
+The payloads are `ff 7f 50 03 ...` in both cases. For 0xA0 the USB layout says
+`[state:u8][project_hi:u8][project_lo:u8][version:u32 LE]`, i.e. state `0xFF`,
+project bytes `0x7F`/`0x50` (project `0x7F50`, not in the recovered
+`{1,2,3,4,6}` table) and version `3`; the scheme table has no status byte, so
+`ff 7f 50 03` there is only known to be the first four bytes of the table.
+Whether the leading zeros belong to the device's answer or are arguments the
+device consumes cannot be decided statically, and is the one open point.
+
+### Code and tests
+
+`fpbf63112/spi.py` now has `READ_LEAD_BYTES` (`0xA0: 00 00 00`, `0xA1: 00 00`),
+`ReadFrame`, `build_read_frame()`, `send_read()`, `SpiTransport.read_frame()`
+and `parse_read_answer()` (bare answer + optional 0xAA/CRC-32 frame; rejects
+short answers, non-zero lead bytes and a corrupt CRC). The probe defaults to
+`--read-shape frame` (selector + measured lead); `--read-shape selector` keeps
+the DLL-exact one-byte frame for comparison. Unit coverage is
+`tests/fingerprint/test_spi.py::TestReadFrame` and `TestReadAnswer`.
+
 ## 9. Next steps
 
 **If the goal is this unit (SPI-only, the realistic path).** This is the exact
@@ -883,11 +994,13 @@ explanation and as the fallback if the script cannot run.
   older hypotheses for a different unit;
 * the controller-side values (speed/mode/bits) and whether the PXA2xx PIO path
   with no DMA channels at 1 MHz behaves; and
-* the **write shape** after the first selector byte: the shifted answer
-  (`00 00 00 ff 7f 50 03` for `0xA0` vs `00 00 ff 7f 50 03` for `0xA1`) means
-  the payload starts at a non-zero read offset; whether the device consumes
-  padding bytes and whether selector bit 0 is the read flag is what
-  `--try-write-shape` (8.8) determines;
+* what the `00 00 00` / `00 00` lead really is. The wire frame that lands the
+  payload at offset 0 is settled (§8.9: selector + 3 zero bytes for `0xA0`,
+  + 2 for `0xA1`), but whether those bytes are a command argument the device
+  waits for or the head of its answer cannot be decided from the DLL; the DLL
+  itself writes only the selector. `0xC1`'s lead was never measured (the
+  write-shape run stopped at the first aligned `0xA1` answer), so the probe
+  sends no lead for it until a run measures one;
 
 **If a USB unit ever shows up (or for completeness):**
 
