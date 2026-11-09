@@ -478,8 +478,10 @@ systemctl cat oxp3-power-profile.service | grep -E 'After|ReadWritePaths'
    a small patch or debugfs, gap-audit #9). It is part of the vendor preset but not of the power
    envelope this tool controls.
 7. **Adaptive TDP** (`GPU_UTIL_THRESHOLD_*`, `PL1_THRESHOLD=25`, `TIME_INTERVAL=10000`, i.e. adjust PL1
-   from GPU utilisation every 10 s) is not implemented; a follow-up daemon could read `xe` fdinfo and
-   call `setpl1`. The charger-tier (`powersupplymode_mode1/2/4/8`) input for it is also not exposed.
+   from GPU utilisation every 10 s) is now implemented as an opt-in daemon — see
+   [battery-tdp.md](battery-tdp.md) §4 (`tools/oxp3-adaptivetdp.py`). It uses CPU load because this
+   `xe` exposes no `gpu_busy_percent`, and the charger-tier (`powersupplymode_mode1/2/4/8`) input is
+   still not exposed (only `ADP1.online`).
 8. **EC fan curve offsets** are the blocker for real curve control (§5.4); needs a Windows-side EC trace
    or an SSDT dump behind the unbound WMI GUIDs.
 9. **Wiring into the main installer:** `files/` and `tools/` are added here, but `oxp3-fixes.sh`'s

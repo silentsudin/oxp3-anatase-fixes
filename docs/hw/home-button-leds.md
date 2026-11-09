@@ -122,17 +122,19 @@ Hardware preset (effect):
 B8 3F 01 <preset> <side> 02 00 ... 3F B8
 ```
 
-Preset codes: `01` aurora, `03` flowing, `05` neon, `07` dreamy, `08`
-sun, `09` cyberpunk, `0B` sunset, `0C` colorful, `0D` "monster woke".
+Preset codes (firmware `mc` byte): `01` aurora, `03` flowing, `05` neon,
+`07` dreamy, `08` warm sun, `09` cyberpunk, `0B` sunset, `0C` colorful,
+`0D` monster woke, `0E` AOK classic.  The vendor's 11 preset ids and the
+full value->effect table are in **[rgb-coverage.md](rgb-coverage.md)**.
 
-Zone/side ids accepted by OXP3 firmware: `0x01..0x07`. Zone names used
-by the vendor utility (OneXConsole i18n) are left stick, right stick,
-keyboard, back, V-zone, G-key, top, controller connector; the OXP3
-firmware in this machine responds on ids `01, 02, 05, 06, 07` (HHD's
-OXP3 profile writes `01,02,07` as "handle/controller RGB" and `05,06`
-as "secondary/middle RGB"). **The physically exact side→zone mapping is
-the one open point** - the tool has a `probe` command to resolve it in
-one minute (section 6).
+Zone/side ids on the OXP3 (resolved, superseding the earlier guess):
+`0x01` left stick, `0x02` right stick, `0x05` G-key zone, `0x06` top
+strip, `0x07` controller connector.  `0x03` (V-zone) and `0x04`
+(keyboard) belong to other OneXPlayer models.  Evidence: the vendor
+partition table in `app.asar` (`pcodeList` for the `"OXP3"` profile is
+exactly `1,2,5,6,7`), HHD's independent side lists
+(`rgb_sides=(1,2,7)`, `secondary=(5,6)`) and live frame captures.
+There is no per-key addressing; see [rgb-coverage.md](rgb-coverage.md).
 
 ### Button reports (cid `0xB2`)
 
@@ -342,17 +344,19 @@ would need a USB capture on Windows.
   commands are generated). A malformed frame is ignored by the MCU in
   practice; a reboot restores the firmware defaults.
 * **HHD conflict (important).** HHD's `rgb` plugin drives the same node
-  (`0xB8` frames, sides `01,02,07,05,06`) every time its mode changes and
-  at boot. It is the current stick-LED tooling. Two consequences:
+  (`0xB8` frames, sides `01,02,07,05,06`) every time its mode changes, at
+  boot (two attempts 10 s apart) and after resume. Two consequences:
   * the last writer wins: after HHD updates its state, our colour is
     overwritten;
-  * HHD never sends the enable/brightness command for sides `01/02/07`
-    (see the captured frames), so a zone that starts disabled stays dark
-    even though its colour is written.
+  * a zone that HHD does not manage (or that it disabled) stays in its
+    current state, because HHD only re-sends brightness for its own
+    sides while its own state changes.
 
   Choose one owner:
   * keep HHD for RGB: `hhdctl set rgb.handheld.mode.solid.hue=...`, and
-    use `oxp3-led.py` only for test/probe; or
+    use `oxp3-led.py` only for test/probe; or run `tools/oxp3-rgbd.py`,
+    which re-applies our config after every HHD write (see
+    [rgb-coverage.md](rgb-coverage.md)); or
   * blacklist the RGB provider in `/etc/hhd/plugins.yml`
     (`blacklist: [rgb]`) and drive the LEDs with `oxp3-led.py`; or
   * stop the RGB plugin at runtime via HHD settings.
@@ -371,8 +375,9 @@ would need a USB capture on Windows.
 
 ## 9. Open points
 
-1. Physical side→zone map: `probe` + visual check (expected candidates:
-   `01`/`02` sticks, `07` top, `05`/`06` body halves).
+1. ~~Physical side→zone map~~ resolved in [rgb-coverage.md](rgb-coverage.md):
+   `01/02` sticks, `05` G-key, `06` top, `07` connector; `probe` is only
+   for confirming unused ids on a new firmware.
 2. Whether the top strip needs an extra global enable that the Windows
    utility sends at start-up (needs a Windows-side USB capture).
 3. Semantics of the `0xB4` mapping table (button id → HID usage); the

@@ -1,0 +1,50 @@
+# OneXPlayer 3 body RGB - persistent user config for tools/oxp3-rgbd.py
+#
+# Install:
+#   install -m 0644 tools/oxp3-rgbd.toml.example ~/.config/oxp3-rgb.toml
+#   $EDITOR ~/.config/oxp3-rgb.toml
+#   systemctl --user restart oxp3-rgbd.service
+#
+# Only the zones listed here are touched.  Delete a [zones.*] block to hand
+# that physical zone back to HHD / the firmware.
+#
+# Zone keys (firmware side ids, = vendor pcode):
+#   left_stick = 0x01   right_stick = 0x02   gkey = 0x05
+#   top        = 0x06   connector   = 0x07
+#   ("03"/"04" are V-zone/keyboard on other OneXPlayer models.)
+#
+# effect: solid | breath | preset | off
+#   solid   - static colour
+#   breath  - breathing animation of one colour (firmware 0xF0)
+#   preset  - hardware animation by name or vendor id 1..11
+#   off     - disable the zone
+#
+# preset names: monster_woke, flowing, sunset, neon, dreamy, cyberpunk,
+#   colorful, aok_classic, oxp_classic, aurora, warm_sun (or 1..11)
+#
+# brightness / level: keep | low | mid | medium | high
+#   "keep" leaves HHD's brightness alone and only writes colours/presets.
+
+[global]
+brightness = "high"
+
+[zones.left_stick]
+effect = "solid"
+color = "#ff6600"
+
+[zones.right_stick]
+effect = "solid"
+color = "#ff6600"
+
+[zones.gkey]
+effect = "breath"
+color = "#3050ff"
+
+[zones.top]
+effect = "preset"
+preset = "aurora"
+
+[zones.connector]
+effect = "solid"
+color = "#ff6600"
+level = "medium"

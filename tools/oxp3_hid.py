@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """OneXPlayer 3 (ONEXPLAYER 3, "OXP3") vendor-HID helpers.
 
 The OXP3 exposes three USB HID interfaces on 1a86:fe00 (WCH/QinHeng
@@ -16,22 +17,49 @@ validate a report ([1] == 0x3F and [-2] == 0x3F and [-1] == [0]).
 Commands:
     cid 0xB4  button/key mapping table (sent once by the vendor utility)
     cid 0xB2  button report (device -> host) / "intercept" switch (host -> device)
-    cid 0xB8  RGB: preset / brightness / per-zone solid colour
+    cid 0xB8  RGB: preset / brightness / per-zone solid colour / breathing
     cid 0xB3  rumble strength
 
     RGB brightness:  B8 3F 01 FD <side> 02 <enabled> 05 <level>
-                     level 1 = low, 3 = medium, 4 = high
+                     level 1 = low, 3 = medium, 4 = high (2 = mid-low,
+                     accepted by the vendor UI but not used by HHD)
     RGB solid:       B8 3F 01 FE <side> 02 [r g b] * 18 r g
-    RGB preset:      B8 3F 01 <preset> <side> 02
-                     preset: 01 aurora, 03 flowing, 05 neon, 07 dreamy,
-                             08 sun, 09 cyberpunk, 0B sunset, 0C colorful,
-                             0D "monster woke"
+    RGB breathing:   B8 3F 01 F0 <side> 02 [r g b] * 18 r g
+                     (same layout as solid; the vendor UI calls this
+                     "pure breathing" and only offers it for gkey/top)
+    RGB preset:      B8 3F 01 <mc> <side> 02
     Button report:   byte 6 = button id, byte 12 = 1 press / 0 release
                      ids seen on OXP3: 0x21 guide, 0x22 extra L1,
                      0x23 extra R1, 0x24 home (with real press/release)
 
-Derived from observed traffic on this machine and from the vendor
-requirement (1a86:fe00, usage page 0xFF00).  Protocol data only.
+Zones / side ids on the OXP3 (verified against the vendor partition
+table in OneXConsole app.asar, where each partition's ``pcodeList`` is
+exactly the firmware side id, and against frames captured from HHD):
+
+    0x01  left stick          (vendor "left_stick",  pcode 1)
+    0x02  right stick         (vendor "right_stick", pcode 2)
+    0x05  G-key zone          (vendor "gkey",        pcode 5)
+    0x06  top strip           (vendor "top",         pcode 6)
+    0x07  controller connector(vendor "connector",   pcode 7)
+
+    0x03 / 0x04 are the V-zone and keyboard of *other* OneXPlayer
+    models (vendor table for the 5-partition variant).  They are not
+    part of the OXP3 partition list; ``oxp3-led.py probe`` can check
+    whether this firmware still reacts to them.
+
+Effects / presets: the firmware takes one "mc" byte.  The vendor UI's
+11 preset titles (app.asar i18n ``presetTitle1..11``) map onto the
+codes below, matching HHD's OXP driver name->code table:
+
+    1  monster-woke  0x0D     7  colorful      0x0C
+    2  flowing       0x03     8  AOK classic   0x0E
+    3  sunset        0x0B     9  OXP classic   solid B7 30 00
+    4  neon          0x05    10  aurora        0x01
+    5  dreamy        0x07    11  warm sun      0x08
+    6  cyberpunk     0x09
+
+Derived from observed traffic on this machine, HHD's OXP driver and the
+vendor UI config.  Protocol data only; no vendor code is included.
 """
 
 from __future__ import annotations
@@ -51,35 +79,86 @@ CID_BUTTON = 0xB2
 CID_MAP = 0xB4
 CID_RUMBLE = 0xB3
 
-# Side / zone ids accepted by the vendor RGB command.  The OXP3 firmware
-# accepts 0x01..0x07; which physical zone each id drives is model dependent,
-# so the CLI exposes them by number and by the names below.
+# Side / zone ids accepted by the OXP3 RGB command.
 SIDE_NAMES = {
     "left_stick": 0x01,
     "right_stick": 0x02,
+    "gkey": 0x05,
+    "top": 0x06,
+    "connector": 0x07,
+}
+# Older aliases from the first protocol write-up (the physical mapping of
+# 0x05/0x06 turned out to be G-key zone and top strip, not body halves).
+SIDE_ALIASES_COMPAT = {
     "body_left": 0x05,
     "body_right": 0x06,
-    "top": 0x07,
+}
+# Present in the vendor protocol but only used by other OneXPlayer models.
+SIDE_UNUSED = {
+    0x03: "v_zone",
+    0x04: "keyboard",
 }
 SIDE_ALIASES = {
     "sticks": [0x01, 0x02],
-    "body": [0x05, 0x06],
+    "primary": [0x01, 0x02, 0x07],
+    "secondary": [0x05, 0x06],
+    "body": [0x05, 0x06],  # compatibility alias
     "all": [0x01, 0x02, 0x05, 0x06, 0x07],
+    "probe": [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
 }
 
-PRESETS = {
-    "aurora": 0x01,
-    "flowing": 0x03,
-    "neon": 0x05,
-    "dreamy": 0x07,
-    "sun": 0x08,
-    "cyberpunk": 0x09,
-    "sunset": 0x0B,
-    "colorful": 0x0C,
-    "monster_woke": 0x0D,
+# Vendor preset id -> firmware "mc" byte.  id 9 is not a preset frame: the
+# vendor's "OXP classic" is a solid cherry red.
+PRESET_IDS = {
+    "monster_woke": 1,
+    "flowing": 2,
+    "sunset": 3,
+    "neon": 4,
+    "dreamy": 5,
+    "cyberpunk": 6,
+    "colorful": 7,
+    "aok_classic": 8,
+    "oxp_classic": 9,
+    "aurora": 10,
+    "warm_sun": 11,
 }
+PRESET_ALIASES = {
+    "monster": "monster_woke",
+    "monsterwoke": "monster_woke",
+    "flow": "flowing",
+    "sun": "warm_sun",
+    "warm": "warm_sun",
+    "classic": "oxp_classic",
+    "aok": "aok_classic",
+}
+PRESET_MC = {
+    1: 0x0D,
+    2: 0x03,
+    3: 0x0B,
+    4: 0x05,
+    5: 0x07,
+    6: 0x09,
+    7: 0x0C,
+    8: 0x0E,
+    10: 0x01,
+    11: 0x08,
+}
+PRESET_CLASSIC_RGB = (0xB7, 0x30, 0x00)  # vendor "OXP classic"
 
-LEVELS = {"low": 0x01, "medium": 0x03, "high": 0x04}
+# Name -> mc, kept for the original API and for scripts that predate ids.
+PRESETS = {name: mc for name, mc in (
+    ("aurora", 0x01), ("flowing", 0x03), ("neon", 0x05), ("dreamy", 0x07),
+    ("sun", 0x08), ("cyberpunk", 0x09), ("sunset", 0x0B),
+    ("colorful", 0x0C), ("monster_woke", 0x0D), ("aok_classic", 0x0E),
+)}
+
+LEVELS = {
+    "low": 0x01,
+    "mid": 0x02,     # vendor UI level 2; HHD skips it, firmware accepts it
+    "medium": 0x03,
+    "high": 0x04,
+}
+LEVEL_NAMES = {v: k for k, v in LEVELS.items()}
 
 BUTTON_NAMES = {
     0x21: "guide",
@@ -98,7 +177,9 @@ def v1_frame(cid: int, payload) -> bytes:
     return frame + bytes(REPORT_SIZE - len(frame) - 2) + bytes([0x3F, cid])
 
 
-def rgb_brightness(side: int, enabled: bool, level: int) -> bytes:
+def rgb_brightness(side: int, enabled: bool, level) -> bytes:
+    if isinstance(level, str):
+        level = LEVELS[level]
     return v1_frame(CID_RGB, [0xFD, side, 0x02, 1 if enabled else 0, 0x05, level])
 
 
@@ -107,12 +188,27 @@ def rgb_solid(side: int, rgb) -> bytes:
     return v1_frame(CID_RGB, [0xFE, side, 0x02] + 18 * [r, g, b] + [r, g])
 
 
+def rgb_breath(side: int, rgb) -> bytes:
+    """Solid colour with the firmware's breathing animation (vendor: pure breathing)."""
+    r, g, b = rgb
+    return v1_frame(CID_RGB, [0xF0, side, 0x02] + 18 * [r, g, b] + [r, g])
+
+
 def rgb_preset(side: int, preset: int) -> bytes:
+    """Preset by raw mc byte (legacy API)."""
     return v1_frame(CID_RGB, [preset, side, 0x02])
 
 
-def rgb_off(side: int) -> bytes:
-    return v1_frame(CID_RGB, [0xFD, side, 0x02, 0x00, 0x05, 0x04])
+def rgb_preset_id(side: int, preset_id: int) -> bytes:
+    """Preset by vendor id 1..11; id 9 (OXP classic) is emitted as a solid."""
+    if preset_id == 9:
+        return rgb_solid(side, PRESET_CLASSIC_RGB)
+    mc = PRESET_MC[preset_id]
+    return rgb_preset(side, mc)
+
+
+def rgb_off(side: int, level: int = LEVELS["high"]) -> bytes:
+    return v1_frame(CID_RGB, [0xFD, side, 0x02, 0x00, 0x05, level])
 
 
 def intercept(enabled: bool) -> bytes:
@@ -178,15 +274,18 @@ def send(fd: int, frames) -> int:
 
 def parse_rgb(text: str):
     t = text.strip().lstrip("#")
-    if "," in t:
-        parts = [int(x, 0) for x in t.split(",")]
-        if len(parts) != 3:
-            raise SystemExit("colour must be r,g,b")
-        return tuple(parts)
-    if len(t) == 6:
-        return tuple(int(t[i : i + 2], 16) for i in (0, 2, 4))
-    if len(t) == 3:
-        return tuple(int(c * 2, 16) for c in t)
+    try:
+        if "," in t:
+            parts = [int(x, 0) for x in t.split(",")]
+            if len(parts) != 3:
+                raise SystemExit("colour must be r,g,b")
+            return tuple(parts)
+        if len(t) == 6:
+            return tuple(int(t[i : i + 2], 16) for i in (0, 2, 4))
+        if len(t) == 3:
+            return tuple(int(c * 2, 16) for c in t)
+    except ValueError:
+        raise SystemExit(f"cannot parse colour {text!r} (use #rrggbb, rrggbb or r,g,b)")
     named = {
         "red": (0xFF, 0, 0),
         "green": (0, 0xFF, 0),
@@ -209,10 +308,13 @@ def parse_sides(values, default="all") -> list:
             part = part.strip()
             if not part:
                 continue
-            if part in SIDE_ALIASES:
-                out.extend(SIDE_ALIASES[part])
-            elif part in SIDE_NAMES:
-                out.append(SIDE_NAMES[part])
+            low = part.lower()
+            if low in SIDE_ALIASES:
+                out.extend(SIDE_ALIASES[low])
+            elif low in SIDE_NAMES:
+                out.append(SIDE_NAMES[low])
+            elif low in SIDE_ALIASES_COMPAT:
+                out.append(SIDE_ALIASES_COMPAT[low])
             else:
                 n = int(part, 0)
                 if not 0 <= n <= 0xFF:
@@ -226,22 +328,87 @@ def parse_sides(values, default="all") -> list:
     return res
 
 
+def resolve_preset(text):
+    """Return ('mc', code) or ('solid', rgb) for a preset name or vendor id."""
+    t = str(text).strip().lower()
+    t = PRESET_ALIASES.get(t, t)
+    if t in PRESET_IDS:
+        pid = PRESET_IDS[t]
+    else:
+        try:
+            pid = int(t, 0)
+        except ValueError:
+            raise SystemExit(
+                "unknown preset %r; names: %s (or ids 1..11)"
+                % (text, ", ".join(PRESET_IDS))
+            )
+    if pid not in PRESET_IDS.values():
+        raise SystemExit(f"bad preset id {pid}; expected 1..11")
+    if pid == 9:
+        return ("solid", PRESET_CLASSIC_RGB)
+    return ("mc", PRESET_MC[pid])
+
+
+def preset_frames(side: int, preset) -> list:
+    kind, value = resolve_preset(preset)
+    return [rgb_solid(side, value) if kind == "solid" else rgb_preset(side, value)]
+
+
+# ---------------------------------------------------------------------------
+# Self test against frames captured on this machine (2026-11-09, HHD 4.1.12).
+# Each case is (description, our frame, captured 64-byte frame prefix).
+CAPTURED = {
+    # (our encoder output, exact 64-byte frame observed from HHD)
+    "brightness medium side 1": (
+        rgb_brightness(0x01, True, "medium"),
+        "b83f01fd010201050300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003fb8",
+    ),
+    "brightness high side 7": (
+        rgb_brightness(0x07, True, "high"),
+        "b83f01fd070201050400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003fb8",
+    ),
+    "off side 5": (
+        rgb_off(0x05),
+        "b83f01fd050200050400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003fb8",
+    ),
+    "preset monster_woke side 2": (
+        rgb_preset_id(0x02, 1),
+        "b83f010d020200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003fb8",
+    ),
+    "preset aurora side 7": (
+        rgb_preset_id(0x07, 10),
+        "b83f0101070200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003fb8",
+    ),
+    "preset warm sun side 1": (
+        rgb_preset_id(0x01, 11),
+        "b83f0108010200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003fb8",
+    ),
+    "oxp classic = solid cherry red side 1": (
+        rgb_preset_id(0x01, 9),
+        "b83f01fe0102b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b73000b7303fb8",
+    ),
+    "duality primary red side 1": (
+        rgb_solid(0x01, (0x7F, 0x00, 0x00)),
+        "b83f01fe01027f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f003fb8",
+    ),
+    "duality secondary green side 5": (
+        rgb_solid(0x05, (0x00, 0x7F, 0x00)),
+        "b83f01fe0502007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f00007f3fb8",
+    ),
+}
+
+
 def selftest() -> int:
-    """Compare encoders with frames captured from this machine (see docs)."""
     ok = True
-    cases = [
-        # observed at boot: brightness side 5, enabled, 0x05, high
-        (rgb_brightness(0x05, True, LEVELS["high"]), "b83f01fd0502010504"),
-        # observed at boot: solid amber (hue 53) on side 5
-        (rgb_solid(0x05, (0x7F, 0x70, 0x00)), "b83f01fe05027f70007f7000"),
-        # observed after setting hue 200: solid blue on side 7
-        (rgb_solid(0x07, (0x00, 0x54, 0x7F)), "b83f01fe070200547f0054"),
-    ]
-    for frame, want in cases:
+    for name, (frame, want) in CAPTURED.items():
+        # Captured hex is truncated in the source for a few cases; compare the
+        # full 64 bytes when both are full length, else the prefix.
         got = frame.hex()
-        good = got.startswith(want) and len(frame) == REPORT_SIZE
+        good = len(frame) == REPORT_SIZE and (
+            got == want if len(want) == REPORT_SIZE * 2 else got.startswith(want)
+        )
         ok &= good
-        print(("PASS " if good else "FAIL ") + got)
+        print(("PASS " if good else "FAIL ") + name + ("  " + got if not good else ""))
     return 0 if ok else 1
 
 

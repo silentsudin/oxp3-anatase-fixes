@@ -174,6 +174,21 @@ def fmt_w(uw):
     return f"{uw / 1_000_000:.3f} W"
 
 
+def write_platform_profile(name, *, dry_run=False):
+    """Optional ACPI platform_profile write; never fatal.
+
+    Shared by `profile --platform-profile` and oxp3-adaptivetdp so both go
+    through one place.  Returns a dict the caller can log.
+    """
+    if dry_run:
+        return {"set": name, "dry_run": True}
+    try:
+        write_text(PLATFORM_PROFILE, name)
+        return {"set": name, "actual": read_text(PLATFORM_PROFILE)}
+    except ControlError as exc:
+        return {"error": str(exc), "hint": exc.hint}
+
+
 def fmt_tau(us):
     if us >= 1_000_000:
         return f"{us / 1_000_000:.3f} s"
@@ -656,6 +671,360 @@ def run_curve(fan, points, *, interval, steps, sensor, dry_run, restore_auto,
 
 
 # --------------------------------------------------------------------------- #
+# battery: health reporting, charge limit, charge-inhibit ("bypass") 
+# --------------------------------------------------------------------------- #
+# The ACPI battery driver (drivers/acpi/battery.c) publishes the OEM's own
+# charge-control knobs when the firmware implements them, and this box does:
+#
+#   charge_control_end_threshold   <- ACPI _BTP ("battery trip point")
+#   charge_behaviour               <- ACPI _BCM charge-inhibit bits
+#
+# Both are mode 0644 root (so the kernel has a write handler; a read-only
+# property would be 0444), which is why the charge limit and a good
+# approximation of the vendor's "bypass power" are reachable from Linux with
+# no kernel work -- see docs/hw/battery-tdp.md.
+BATTERY_GLOB = "/sys/class/power_supply/BAT*"
+
+# Vendor OneXConsole semantics recovered from app.asar i18n + CompatLayerCT
+# strings, and how they map onto Linux:
+#   battery_protection_chargelimit          "charge limit"  -> charge_control_end_threshold
+#   battery_protection_bypasspower_effect_always             -> inhibit-charge
+#   battery_protection_bypasspower_effect_when_screen_on     -> inhibit-charge-awake
+#   battery_protection_normalpower                            -> auto
+BYPASS_MODES = ("inhibit-charge", "inhibit-charge-awake")
+BYPASS_ON_DEFAULT = "inhibit-charge"
+
+
+def find_battery(explicit=None):
+    """First BAT* whose type is Battery (BAT0 on this box)."""
+    if explicit:
+        return explicit
+    for path in sorted(glob.glob(BATTERY_GLOB)):
+        try:
+            if read_text(os.path.join(path, "type")) == "Battery":
+                return path
+        except ControlError:
+            continue
+    return None
+
+
+def probe_state(path):
+    """Classify a sysfs control without touching any state.
+
+    "absent"   - the kernel/BIOS does not expose it at all
+    "read-only"- exposed 0444: reading works, writing is not implemented
+    "root-only"- exposed 0644/0600: a write handler exists, needs root
+    "writable" - this uid could write it right now
+    """
+    if not os.path.exists(path):
+        return "absent"
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return "absent"
+    if not mode & 0o222:
+        return "read-only"
+    return "writable" if os.access(path, os.W_OK) else "root-only"
+
+
+def read_int(path):
+    try:
+        return int(read_text(path))
+    except (ControlError, ValueError):
+        return None
+
+
+def parse_charge_behaviour(text):
+    """'[auto] inhibit-charge inhibit-charge-awake' -> ('auto', [...])
+
+    power_supply renders the selected mode in brackets.  Some drivers (and any
+    plain-file stand-in) instead render or echo a single bare token, so fall
+    back to the only token when there is exactly one -- otherwise a correct
+    write would look like a readback mismatch.
+    """
+    modes, selected = [], None
+    for token in (text or "").split():
+        if token.startswith("[") and token.endswith("]"):
+            selected = token[1:-1]
+            modes.append(selected)
+        else:
+            modes.append(token)
+    if selected is None and len(modes) == 1:
+        selected = modes[0]
+    return selected, modes
+
+
+def battery_status(explicit=None):
+    """Everything BAT0 says, plus the capability classification per control.
+
+    health_pct is energy_full / energy_full_design, i.e. what the pack holds
+    now versus its design figure. It reads >100 % on a new pack (this one is
+    103.7 %) because the design number is a nominal, not a measured, value;
+    trend it over months rather than reading one sample as capacity loss.
+    """
+    path = find_battery(explicit)
+    info = {"path": path, "name": os.path.basename(path) if path else None,
+            "present": False, "capabilities": {}, "warnings": []}
+    if not path:
+        info["warnings"].append("no /sys/class/power_supply/BAT* battery device")
+        return info
+
+    def get(attr):
+        try:
+            return read_text(os.path.join(path, attr))
+        except ControlError:
+            return None
+
+    info["present"] = get("present") == "1"
+    info["status"] = get("status")
+    info["capacity_pct"] = read_int(os.path.join(path, "capacity"))
+    info["capacity_level"] = get("capacity_level")
+    info["manufacturer"] = get("manufacturer")
+    info["model_name"] = get("model_name")
+    info["technology"] = get("technology")
+
+    energy_now = read_int(os.path.join(path, "energy_now"))
+    energy_full = read_int(os.path.join(path, "energy_full"))
+    energy_design = read_int(os.path.join(path, "energy_full_design"))
+    info["energy_now_wh"] = None if energy_now is None else energy_now / 1e6
+    info["energy_full_wh"] = None if energy_full is None else energy_full / 1e6
+    info["energy_design_wh"] = None if energy_design is None else energy_design / 1e6
+    if energy_full and energy_design:
+        info["health_pct"] = round(100.0 * energy_full / energy_design, 1)
+    else:
+        info["health_pct"] = None
+
+    power_now = read_int(os.path.join(path, "power_now"))
+    info["power_now_w"] = None if power_now is None else power_now / 1e6
+    volt = read_int(os.path.join(path, "voltage_now"))
+    info["voltage_now_v"] = None if volt is None else volt / 1e6
+    vmin = read_int(os.path.join(path, "voltage_min_design"))
+    info["voltage_min_design_v"] = None if vmin is None else vmin / 1e6
+
+    cycles = read_int(os.path.join(path, "cycle_count"))
+    info["cycle_count"] = cycles
+    if cycles == 0:
+        info["warnings"].append(
+            "cycle_count reads 0: the EC does not implement it, so wear has to be "
+            "tracked from energy_full drift instead")
+
+    # --- charge control capabilities -------------------------------------
+    for attr in ("charge_control_end_threshold", "charge_control_start_threshold",
+                 "charge_behaviour", "cycle_count"):
+        info["capabilities"][attr] = probe_state(os.path.join(path, attr))
+
+    end_path = os.path.join(path, "charge_control_end_threshold")
+    info["charge_control_end_threshold"] = read_int(end_path)
+    start_path = os.path.join(path, "charge_control_start_threshold")
+    info["charge_control_start_threshold"] = read_int(start_path)
+
+    beh_path = os.path.join(path, "charge_behaviour")
+    selected, modes = parse_charge_behaviour(get("charge_behaviour"))
+    info["charge_behaviour"] = selected
+    info["charge_behaviour_available"] = modes
+    # "bypass" is our name for the vendor feature; on Linux it is charge
+    # inhibit, which is exactly what the vendor's own hint text describes:
+    # "when plugged in, stop charging the battery, power the device only".
+    info["bypass"] = selected in BYPASS_MODES
+    info["bypass_vendor_equivalent"] = {
+        "inhibit-charge": "bypass, always effective (vendor mode 1)",
+        "inhibit-charge-awake": "bypass, ineffective while asleep/off (vendor mode 2)",
+        "auto": "normal charging (vendor 'normal power supply')",
+    }.get(selected)
+    if info["capabilities"]["charge_behaviour"] == "absent":
+        info["warnings"].append(
+            "charge_behaviour is absent: this kernel/EC does not expose charge "
+            "inhibit, so the vendor bypass mode is not reachable in userspace")
+    elif "inhibit-charge" not in modes:
+        info["warnings"].append(
+            "charge_behaviour lists no inhibit-charge mode: bypass is not available")
+
+    # ACPI battery hwmon sibling: on this kernel it is BAT0/hwmonN (a sibling
+    # of the attributes, not BAT0/device/hwmon/), reporting mV + uW mirrors.
+    try:
+        for hw in glob.glob(os.path.join(path, "hwmon", "hwmon*")) + \
+                glob.glob(os.path.join(path, "hwmon*")):
+            if not os.path.isdir(hw):
+                continue
+            v = read_int(os.path.join(hw, "in0_input"))
+            p = read_int(os.path.join(hw, "power1_input"))
+            if v is not None:
+                info["hwmon_voltage_v"] = v / 1e6
+            if p is not None:
+                info["hwmon_power_now_w"] = p / 1e6
+    except OSError:
+        pass
+
+    ac = None
+    for cand in sorted(glob.glob("/sys/class/power_supply/A*")):
+        try:
+            if read_text(os.path.join(cand, "type")) in ("Mains", "USB"):
+                ac = {"name": os.path.basename(cand),
+                      "online": read_text(os.path.join(cand, "online")) == "1"}
+                break
+        except ControlError:
+            continue
+    info["ac"] = ac
+    return info
+
+
+def set_charge_threshold(value, *, battery=None, dry_run=False):
+    """Write charge_control_end_threshold and verify.
+
+    value is a percentage 50-100 (or None for "no limit" = 100).  The kernel
+    has no way to read back the EC's allowed range, so we validate the
+    documented power_supply contract (0-100) and warn outside 50-100.
+    """
+    path = find_battery(battery)
+    if not path:
+        raise ControlError("no battery device",
+                           hint="looked for /sys/class/power_supply/BAT*")
+    target = os.path.join(path, "charge_control_end_threshold")
+    state = probe_state(target)
+    if state == "absent":
+        raise ControlError(
+            f"{target} does not exist",
+            path=target,
+            hint=("this kernel/EC does not expose a charge limit; ACPI _BTP is missing. "
+                  "oxpec would need a charge-limit attribute backed by the EC byte "
+                  "behind the vendor's EC_ADDR_CHARGE_LIMIT (address unknown)"))
+    if value is not None and not 0 <= value <= 100:
+        raise ControlError(f"charge limit {value} out of range", hint="use 50-100, or 'off'")
+    if value is not None and not 50 <= value <= 100:
+        print(f"oxp3-powerctl: warning: {value} % is outside the usual 50-100 % range",
+              file=sys.stderr)
+    if value is None:
+        value = 100
+    rep = {"path": target, "requested": value, "applied": None, "dry_run": dry_run,
+           "capability": state}
+    if dry_run:
+        rep["applied"] = read_int(target)
+        return rep
+    if state == "read-only":
+        raise ControlError(f"{target} is read-only on this kernel", path=target,
+                           hint="the firmware exposes _BTP for reading only")
+    if state == "root-only":
+        raise ControlError(f"cannot write {target}: permission denied", path=target,
+                           hint="run this command as root (sudo)")
+    write_text(target, value)
+    got = read_int(target)
+    if got != value:
+        raise ControlError(f"readback mismatch: wanted {value}, reads {got}", path=target)
+    rep["applied"] = got
+    return rep
+
+
+def set_charge_bypass(on, *, battery=None, mode=None, dry_run=False):
+    """Turn the vendor's 'bypass power' approximation on/off.
+
+    on=True writes `inhibit-charge` (stop charging, run from the adapter);
+    mode='inhibit-charge-awake' selects the vendor's screen-on-only variant.
+    on=False writes `auto`.  The kernel prints the selection in brackets, so
+    the readback compares the bracketed token, not the whole line.
+    """
+    path = find_battery(battery)
+    if not path:
+        raise ControlError("no battery device",
+                           hint="looked for /sys/class/power_supply/BAT*")
+    target = os.path.join(path, "charge_behaviour")
+    state = probe_state(target)
+    if state == "absent":
+        raise ControlError(
+            f"{target} does not exist", path=target,
+            hint=("this kernel/EC exposes no charge-inhibit mode, so the vendor bypass "
+                  "is not reachable. It needs ACPI _BCM bits or an oxpec attribute over "
+                  "the EC byte behind the vendor's EC_ADDR_BYPASS_POWER (address unknown)"))
+    current, available = parse_charge_behaviour(read_text(target))
+    wanted = "auto" if not on else (mode or BYPASS_ON_DEFAULT)
+    if on and wanted not in BYPASS_MODES:
+        raise ControlError(f"{wanted!r} is not one of the bypass modes",
+                           hint="use inhibit-charge or inhibit-charge-awake")
+    # Only trust the advertised list when the driver actually renders one.  A
+    # single-token rendering means "current value only", not "no other modes";
+    # there the write itself decides (the kernel answers EINVAL for a mode it
+    # does not implement).
+    if len(available) > 1 and wanted not in available:
+        raise ControlError(
+            f"charge_behaviour does not offer {wanted!r}", path=target,
+            hint="available: " + ", ".join(available))
+    rep = {"path": target, "requested": wanted, "previous": current,
+           "available": available, "applied": None, "dry_run": dry_run,
+           "capability": state}
+    if dry_run:
+        rep["applied"] = current
+        return rep
+    if state == "read-only":
+        raise ControlError(f"{target} is read-only on this kernel", path=target)
+    if state == "root-only":
+        raise ControlError(f"cannot write {target}: permission denied", path=target,
+                           hint="run this command as root (sudo)")
+    try:
+        write_text(target, wanted)
+    except ControlError as exc:
+        if exc.errno == 22:  # EINVAL: this driver does not implement that mode
+            raise ControlError(
+                f"{target} does not support {wanted!r}", path=target,
+                hint="available: " + (", ".join(available) or "unknown")) from exc
+        raise
+    got, _ = parse_charge_behaviour(read_text(target))
+    if got != wanted:
+        raise ControlError(f"readback mismatch: wanted {wanted}, reads {got}", path=target)
+    rep["applied"] = got
+    return rep
+
+
+def print_battery(info):
+    name = info.get("name") or "no battery"
+    print(f"battery {name}" + ("" if info["present"] else "  (not present)"))
+    if not info.get("path"):
+        for warning in info["warnings"]:
+            print(f"  warning: {warning}")
+        return
+    bits = []
+    if info["status"]:
+        bits.append(f"status {info['status']}")
+    if info["capacity_pct"] is not None:
+        bits.append(f"{info['capacity_pct']} % (level {info['capacity_level']})")
+    if info["health_pct"] is not None:
+        bits.append(f"health {info['health_pct']} %")
+    print("  " + ", ".join(bits))
+    energy = []
+    for key, label in (("energy_now_wh", "now"), ("energy_full_wh", "full"),
+                       ("energy_design_wh", "design")):
+        if info.get(key) is not None:
+            energy.append(f"{label} {info[key]:.2f} Wh")
+    if energy:
+        print("  energy: " + ", ".join(energy))
+    live = []
+    if info.get("power_now_w") is not None:
+        live.append(f"{info['power_now_w']:.2f} W")
+    if info.get("voltage_now_v") is not None:
+        live.append(f"{info['voltage_now_v']:.3f} V")
+    if info.get("hwmon_power_now_w") is not None:
+        live.append(f"{info['hwmon_power_now_w']:.2f} W (hwmon)")
+    if live:
+        print("  now: " + ", ".join(live))
+    print(f"  cycles: {info['cycle_count']}")
+    if info.get("ac"):
+        print(f"  ac: {info['ac']['name']} online={info['ac']['online']}")
+    print("  charge control (capability = what the kernel actually exposes):")
+    for attr in ("charge_control_end_threshold", "charge_control_start_threshold",
+                 "charge_behaviour"):
+        cap = info["capabilities"].get(attr)
+        value = {"charge_control_end_threshold": info.get("charge_control_end_threshold"),
+                 "charge_control_start_threshold": info.get("charge_control_start_threshold"),
+                 "charge_behaviour": info.get("charge_behaviour")}[attr]
+        shown = "absent" if cap == "absent" else f"{value} [{cap}]"
+        print(f"    {attr:<32} {shown}")
+    print(f"  bypass: {'ON' if info['bypass'] else 'off'}"
+          + (f" ({info['bypass_vendor_equivalent']})" if info.get("bypass_vendor_equivalent") else ""))
+    if len(info["charge_behaviour_available"]) > 1:
+        print("    modes: " + " ".join(info["charge_behaviour_available"]))
+    for warning in info["warnings"]:
+        print(f"  warning: {warning}")
+
+
+# --------------------------------------------------------------------------- #
 # status / state
 # --------------------------------------------------------------------------- #
 
@@ -731,6 +1100,10 @@ def collect_status():
                 "use oxp_ec fan1_input)")
     status["saved_state"] = load_state()
     status["curve_file"] = CURVE_FILE if os.path.exists(CURVE_FILE) else None
+    try:
+        status["battery"] = battery_status()
+    except ControlError as exc:
+        status["battery"] = {"path": None, "warnings": [str(exc)], "present": False}
     return status
 
 
@@ -818,6 +1191,17 @@ def print_status(status):
         print("power now (1 s averages from rapl-power): "
               + ", ".join(f"{k} {v} W" for k, v in status["rapl_power_w"].items()))
     print(f"platform_profile: {status.get('platform_profile')}")
+    if status.get("battery"):
+        bat = status["battery"]
+        if bat.get("path"):
+            print(f"battery: {bat['name']} {bat.get('capacity_pct')} % "
+                  f"({bat.get('status')}), health {bat.get('health_pct')} %, "
+                  f"charge limit {bat.get('charge_control_end_threshold')} "
+                  f"[{bat['capabilities'].get('charge_control_end_threshold')}], "
+                  f"bypass {'on' if bat.get('bypass') else 'off'} "
+                  f"({bat.get('charge_behaviour')})")
+        else:
+            print("battery: none detected")
     if status.get("acpi_fan_fan1_input") is not None:
         print(f"acpi_fan.fan1_input: {status['acpi_fan_fan1_input']}")
     saved = status.get("saved_state") or {}
@@ -840,6 +1224,91 @@ def cmd_status(args):
     else:
         print_status(status)
     return 0 if not status["errors"] else 4
+
+
+def cmd_battery(args):
+    action = args.battery_action
+    if action == "status":
+        info = battery_status()
+        if args.json:
+            print(json.dumps(info, indent=2, sort_keys=True))
+        else:
+            print_battery(info)
+        return 0 if info.get("path") else 2
+
+    if action == "limit":
+        target = None
+        if args.percent is not None:
+            if str(args.percent).lower() in ("off", "none", "no", "0"):
+                target = None
+            else:
+                try:
+                    target = int(args.percent)
+                except ValueError:
+                    raise ControlError(f"charge limit {args.percent!r} is not a number",
+                                       hint="use 50-100, or 'off' to disable the limit")
+        if not args.dry_run:
+            check_root("changing the battery charge limit")
+        rep = set_charge_threshold(target, dry_run=args.dry_run)
+        rep["ok"] = True
+        if args.save and not args.dry_run:
+            state = load_state()
+            state.setdefault("battery", {})["end_threshold"] = rep["applied"]
+            save_state(state)
+            rep["saved"] = STATE_FILE
+        if args.json:
+            print(json.dumps(rep, indent=2, sort_keys=True))
+        else:
+            verb = "would set" if args.dry_run else "set"
+            print(f"{verb} charge limit to {rep['requested']} % "
+                  f"(reads back {rep['applied']}, capability {rep['capability']})")
+            if rep.get("saved"):
+                print(f"saved to {rep['saved']} (boot/resume units re-apply it)")
+        return 0
+
+    if action == "bypass":
+        if args.bypass_action == "status":
+            info = battery_status()
+            if args.json:
+                print(json.dumps({k: info.get(k) for k in
+                                  ("path", "name", "bypass", "charge_behaviour",
+                                   "charge_behaviour_available", "bypass_vendor_equivalent",
+                                   "capabilities", "warnings")},
+                                 indent=2, sort_keys=True))
+            else:
+                print(f"bypass: {'ON' if info.get('bypass') else 'off'}"
+                      f"  charge_behaviour={info.get('charge_behaviour')}"
+                      f"  available={' '.join(info.get('charge_behaviour_available') or [])}")
+                if info.get("bypass_vendor_equivalent"):
+                    print(f"  vendor equivalent: {info['bypass_vendor_equivalent']}")
+                for warning in info.get("warnings") or []:
+                    print(f"  warning: {warning}")
+            return 0 if info.get("path") else 2
+        on = args.bypass_action == "on"
+        if not args.dry_run:
+            check_root("changing the battery charge behaviour")
+        rep = set_charge_bypass(on, mode=args.mode, dry_run=args.dry_run)
+        rep["ok"] = True
+        if args.save and not args.dry_run:
+            state = load_state()
+            state.setdefault("battery", {})["charge_behaviour"] = rep["applied"]
+            save_state(state)
+            rep["saved"] = STATE_FILE
+        if args.json:
+            print(json.dumps(rep, indent=2, sort_keys=True))
+        else:
+            verb = "would set" if args.dry_run else "set"
+            print(f"{verb} charge_behaviour={rep['requested']} "
+                  f"(was {rep['previous']}, reads back {rep['applied']})")
+            if rep["requested"] != "auto":
+                print("  bypass: charging stops while plugged in; the device runs from "
+                      "the adapter. The EC does not bypass battery discharge, so the "
+                      "pack still buffers load spikes.")
+            if rep.get("saved"):
+                print(f"saved to {rep['saved']} (boot/resume units re-apply it)")
+        return 0
+
+    raise ControlError(f"unknown battery action {action!r}")  # pragma: no cover
 
 
 def resolve_profile(name):
@@ -1265,6 +1734,26 @@ def cmd_restore(args):
             result["errors"].extend(rep["errors"])
             result["warnings"].extend(rep["warnings"])
             result["restored"].append(f"fan {mode}" + (f" pwm={duty}" if duty is not None else ""))
+    battery_saved = state.get("battery") or {}
+    if battery_saved:
+        try:
+            if battery_saved.get("end_threshold") is not None:
+                rep = set_charge_threshold(battery_saved["end_threshold"],
+                                           dry_run=args.dry_run)
+                result["restored"].append(
+                    f"charge limit {rep['applied']} %" if not args.dry_run
+                    else f"would set charge limit {rep['requested']} %")
+            if battery_saved.get("charge_behaviour"):
+                rep = set_charge_bypass(
+                    battery_saved["charge_behaviour"] != "auto",
+                    mode=(None if battery_saved["charge_behaviour"] == "auto"
+                          else battery_saved["charge_behaviour"]),
+                    dry_run=args.dry_run)
+                result["restored"].append(
+                    f"charge_behaviour {rep['applied']}" if not args.dry_run
+                    else f"would set charge_behaviour {rep['requested']}")
+        except ControlError as exc:
+            result["warnings"].append(f"battery settings not re-applied: {exc}")
     result["ok"] = not result["errors"]
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -1330,6 +1819,29 @@ def build_parser():
     p.add_argument("--json", action="store_true")
     p.add_argument("--allow-partial", action="store_true")
     p.set_defaults(func=cmd_tau)
+
+    p = sub.add_parser("battery",
+                       help="battery health, charge limit and charge-inhibit ('bypass')")
+    bsub = p.add_subparsers(dest="battery_action", required=True)
+    bp = bsub.add_parser("status", help="health/energy/charge-control capability report")
+    bp.add_argument("--json", action="store_true")
+    bp.set_defaults(func=cmd_battery)
+    bp = bsub.add_parser("limit", help="set the charge limit (percent) or 'off'")
+    bp.add_argument("percent", nargs="?", help="50-100, or 'off' (= 100, no limit)")
+    bp.add_argument("--save", action="store_true", help="persist for the boot/resume units")
+    bp.add_argument("--dry-run", action="store_true")
+    bp.add_argument("--json", action="store_true")
+    bp.set_defaults(func=cmd_battery)
+    bp = bsub.add_parser("bypass",
+                         help="charge inhibit: stop charging while on the adapter")
+    bp.add_argument("bypass_action", choices=("on", "off", "status"))
+    bp.add_argument("--mode", choices=BYPASS_MODES, default=None,
+                    help="bypass variant: inhibit-charge (always, vendor mode 1) or "
+                         "inhibit-charge-awake (ineffective asleep/off, vendor mode 2)")
+    bp.add_argument("--save", action="store_true", help="persist for the boot/resume units")
+    bp.add_argument("--dry-run", action="store_true")
+    bp.add_argument("--json", action="store_true")
+    bp.set_defaults(func=cmd_battery)
 
     p = sub.add_parser("fan", help="fan control (auto/manual/speed/curve/status)")
     p.add_argument("fan_action", choices=("auto", "manual", "speed", "curve", "status"))

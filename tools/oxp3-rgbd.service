@@ -1,0 +1,19 @@
+[Unit]
+Description=OneXPlayer 3 RGB keeper (applies our config over HHD, at boot/resume)
+Documentation=file:///var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/hw/rgb-coverage.md
+# The vendor hidraw node must be usable by this user (tools/oxp3-hid.rules).
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Stay inert until the user has written a config (install the example first).
+ConditionPathExists=%h/.config/oxp3-rgb.toml
+Environment=PYTHONUNBUFFERED=1
+# Adjust the path if the checkout lives elsewhere.
+ExecStart=%h/git/linux_scratch/oxp3-anatase-fixes/tools/oxp3-rgbd.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

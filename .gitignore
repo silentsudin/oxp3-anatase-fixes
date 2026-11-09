@@ -6,3 +6,6 @@
 mok/
 out/
 vkd3d-proton.cache
+
+# python bytecode from the tooling helpers
+__pycache__/
