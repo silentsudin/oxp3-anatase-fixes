@@ -92,6 +92,17 @@ curve", `cooling_runmode_fixspeed`, `qs_fan_presetting1/2`, `qs_fan_lock`,
 `cooling_rgb_settings`, `rgbPartition_{left_stick,right_stick,top,back,v,kb,gkey,controller_connector}`,
 `rgbLightEffect` + `rog_le_mode_{always,breath,strobe,rainbow,circle}`.
 
+**Update 2026-11-09: the numeric addresses are recovered, and two of the names
+above turned out to be misleading.** `CompatLayerCT.exe` is *stripped*, not packed
+(2829 of 3706 method bodies are one `throw` stub), so the numbers were never in its
+IL — the Electron bootstrap passes them in as decimal arguments over the layer's
+pipe. The map, with provenance and confidence, is in
+[`upstream/oxpec-ec-addresses.md`](../../upstream/oxpec-ec-addresses.md). What it
+changes for this audit: rows 2/3 get real addresses, `Devs*FanCurve` are ASUS WMI
+device ids (`0x110024`/`0x110025`/`0x110032`) and the OXP3 EC keeps **no** curve
+table, and `cooling_runmode_intelli` is the Bluetooth water-cooling accessory.
+`tools/oxp3-powerctl.py ec map` prints the recovered table.
+
 ### 2.3 Controller, gyro, display, camera, misc
 
 * `XInputInterface.dll`, `tools/xinputplus/*` (XInputPlus injector), HidHide +

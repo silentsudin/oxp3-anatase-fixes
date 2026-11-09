@@ -19,9 +19,9 @@ Related: [power-fan.md](power-fan.md) (PL1/PL2/PL4/tau, fan, `oxp3-powerctl`),
 
 | vendor feature | reachable on Linux? | how | status |
 |---|---|---|---|
-| Charge limit ("充电上限") | **yes** | `charge_control_end_threshold` (ACPI `_BTP`) | implemented: `oxp3-powerctl battery limit N` |
-| Bypass power, always ("旁路供电", mode 1) | **approximately** | `charge_behaviour=inhibit-charge` (ACPI `_BCM`) | implemented: `oxp3-powerctl battery bypass on` |
-| Bypass power, screen-on only (mode 2) | **approximately** | `charge_behaviour=inhibit-charge-awake` | implemented: `battery bypass on --mode inhibit-charge-awake` |
+| Charge limit ("充电上限", EC `0xA3` percent) | **yes** | `charge_control_end_threshold` (ACPI `_BTP`/`oxpec`) | implemented: `oxp3-powerctl battery limit N` |
+| Bypass power, always ("旁路供电", mode 2, EC `0xA4`=`0x03`) | **yes**, via the driver's EC write | `charge_behaviour=inhibit-charge` | implemented: `oxp3-powerctl battery bypass on` |
+| Bypass power, awake only (mode 1, EC `0xA4`=`0x01`) | **yes**, via the driver's EC write | `charge_behaviour=inhibit-charge-awake` | implemented: `battery bypass on --mode inhibit-charge-awake` |
 | Normal charging | yes | `charge_behaviour=auto` | `battery bypass off` |
 | Battery health (capacity vs design) | yes | `energy_full` / `energy_full_design` | `battery status` |
 | Cycle count | attribute exists, **EC returns 0** | `cycle_count` | reported as unusable |
@@ -108,15 +108,37 @@ is what the UI calls. `PawnIOLib.dll` (`pawnio_open/…load/…execute`) and
 port I/O to the ACPI EC status/data ports through a signed kernel helper,
 because Windows has no EC driver for this board.
 
-**The addresses themselves are not in the binary's strings**, and this is where
-the RE stops being useful (see §7, open point 1): the numbers are IL `ldc.i4`
-immediates, and Ghidra has no IL decompiler. Running the isolated pod anyway,
-for the record:
+**The addresses are not in this binary at all — and now we know why.** The managed assembly is
+*stripped*, not packed: 2829 of its 3706 method bodies share one RVA whose content is
+`throw new Exception("Runtime exception")`, 189 more share a trivial `.ctor` stub, and only 35 bodies
+are distinct. Metadata (field names, method names, **parameter names**, P/Invoke imports) is intact,
+but the named API surface is one `throw` stub, and no `ldc.i4` anywhere in the remaining CIL is one of
+these addresses — so there is nothing to read and nothing to decrypt. The Ghidra run that
+"decompiled zero functions" was therefore correct about the file.
 
-```bash
-tools/ghidra-pod.sh battdp ~/.cache/oxp3-battdp/app/resources/resources/CompatLayerCT.exe '^(battery|addr|EC_|Charger)'
-# DumpAll.java> WROTE /work/out/decomp.txt functions=0 decompiled=0
-```
+The numbers are one layer up, in `app.asar`, where the per-OEM bootstrap passes them *into* the
+layer as decimal arguments. Recovered map, provenance and confidence:
+[`upstream/oxpec-ec-addresses.md`](../../upstream/oxpec-ec-addresses.md). Battery-relevant rows:
+
+| vendor field | vendor value | EC offset | encoding |
+|---|---:|---:|---|
+| `addrChargeLimit` | `0x4A3` | `0xA3` | percent 0–100, the same byte as upstream `OXP_X1_CHARGE_LIMIT_REG` |
+| `addrBypassPower` | `0x4A4` | `0xA4` | `0x00` off / `0x01` inhibit-while-awake / `0x03` inhibit-always |
+| `addrForceChargeMin` | `0x4A5` | `0xA5` | percent (unit unproven) |
+| `addrBatteryTemp` | `0x4A0` | `0xA0` | °C, 1 byte |
+| charge current H/L | `0x4A1`/`0x4A2` | `0xA1`/`0xA2` | 16-bit pair, unit unknown |
+| `addrPowerSupplyMode` | `0x4E3` | `0xE3` | `1` battery, `2` Type-C ≥100 W, `4` DC-in, `8` Type-C ≤65 W |
+
+Call site: `batteryInitEc(addrChargeLimit, addrBypassPower, addrForceChargeMin, off, mode1, mode2)`
+with `(1187, 1188, 1189, 0, 1, 3)` for the `ONEXPLAYER 3` branch; the parameter names come from
+metadata token `0x0600043e`, so the argument order is not a guess. This also matches what the driver
+in this kernel already writes (`OXP_X1_CHARGE_LIMIT_REG 0xA3`, `OXP_X1_CHARGE_INHIBIT_REG 0xA4`,
+masks `0x01`/`0x02`/`0x03`), which is why `charge_control_end_threshold` exists and works today.
+
+The `…TU` command-string set and `PawnIOLib.dll`/`InpOutx64.dll` are real, but the OXP3 branch sets
+`ECAccessType::OxpWMI` (=2), so on *this* board the layer reaches the EC through an OXP ACPI-WMI
+method, with port I/O and PawnIO as fallbacks for boards that lack it. That is why the protocol
+question (§7, open point 1) is now a curiosity rather than a blocker.
 
 0 functions: PE/CLI parses, but the body is CIL, not x86-64. Native neighbours
 were checked too — `tools/intel/PowerPlugin.dll` is CPU/RAPL only ("Battery Info
@@ -132,8 +154,8 @@ and it is enough to describe the gap precisely.
 | `battery_protection_chargelimit` | 充电上限 | "charge limit" |
 | `battery_protection_chargelimit_hint` | 设置较低的充电上限能避免过度充电，可以延长电池的使用寿命。该设置在开机和关机状态下都会生效。 | lower limit avoids overcharge and extends life; **the setting takes effect in both the on and off state** (EC-stored) |
 | `battery_protection_bypasspowermode` | 旁路供电模式 | "bypass power supply mode" |
-| `battery_protection_bypasspower_effect_always` | 始终生效 | **mode 1**: always effective |
-| `battery_protection_bypasspower_effect_when_screen_on` | 睡眠与关机状态无效 | **mode 2**: ineffective in sleep/shutdown |
+| `battery_protection_bypasspower_effect_always` | 始终生效 | **mode 2** (`0x03`): always effective |
+| `battery_protection_bypasspower_effect_when_screen_on` | 睡眠与关机状态无效 | **mode 1** (`0x01`): ineffective in sleep/shutdown |
 | `battery_protection_bypasspowermode_hint` | 旁路供电开启后，插电状态下将会停止对电池充电，仅对设备供电，可以降低发热以及延长电池的使用寿命。 | "after enabling bypass, **while plugged in, charging the battery stops; only the device is powered**; reduces heat and extends battery life" |
 | `battery_protection_normalpower` | 正常供电 | normal power supply (bypass off) |
 
@@ -176,6 +198,8 @@ control is missing / not permitted, 3 readback mismatch, 4 partial).
 ```bash
 oxp3-powerctl battery status [--json]
 oxp3-powerctl battery limit 80|off [--save] [--dry-run] [--json]
+oxp3-powerctl ec map                                       # recovered EC map (read-only)
+oxp3-powerctl ec probe                                     # EC-facing interfaces (read-only)
 oxp3-powerctl battery bypass {on|off|status} [--mode inhibit-charge|inhibit-charge-awake]
                                             [--save] [--dry-run] [--json]
 ```
@@ -224,10 +248,10 @@ battery BAT0
 
 | vendor | Linux | fidelity |
 |---|---|---|
-| `EC_ADDR_CHARGE_LIMIT` (persisted in EC, effective in S5) | `charge_control_end_threshold` / ACPI `_BTP` | **high** — same knob, firmware-stored, same persistence |
-| bypass mode 1 (always) | `charge_behaviour=inhibit-charge` | **medium-high** — charging stops, device runs from adapter; we cannot prove the EC also isolates the pack from the rail |
-| bypass mode 2 (screen-on only) | `inhibit-charge-awake` | **medium** — "awake" ≠ "screen on": it is a system-suspend boundary, close but not identical |
-| bypass off | `auto` | high |
+| `EC_ADDR_CHARGE_LIMIT` (`0xA3`, persisted in EC, effective in S5) | `charge_control_end_threshold` / ACPI `_BTP` | **high** — same byte, same unit (percent), firmware-stored, same persistence |
+| bypass mode 2 (`0x03`, always) | `charge_behaviour=inhibit-charge` | **high** — same byte `0xA4` and same value `0x03` that upstream `oxpec` writes; the only unproven part is whether the EC also isolates the pack from the rail |
+| bypass mode 1 (`0x01`, awake only) | `inhibit-charge-awake` | **high** for the byte/bit (`0x01`), **medium** for the wording: "awake" is a system-suspend boundary, the vendor says "sleep/shutdown" |
+| bypass off (`0x00`) | `auto` | high — identical value |
 | charge start threshold / `addrForceChargeMin` | — | none |
 | charger tier (`mode1/2/4/8`) | `ADP1.online` only | none |
 | `addrBatteryTemp` | — | none |
@@ -541,14 +565,15 @@ to clear it.
 
 ## 8. Open points
 
-1. **EC addresses (bypass, charge limit, charger tier, battery temp) are
-   unknown.** The vendor's managed assembly yields field names and value
-   constants but not the `EC_ADDR_*` numbers, because they are IL immediates
-   and Ghidra has no IL decompiler (0 functions on this assembly). Needs a
-   Windows EC trace on ports 0x62/0x66, an SSDT/ACPI dump, or
-   `CONFIG_ACPI_EC_DEBUGFS` on a debug kernel. Until then a real
-   `oxpec` bypass attribute cannot be written — the ACPI path is the only one,
-   and it is a good approximation, not a proof.
+1. ~~**EC addresses are unknown.**~~ **Resolved 2026-11-09** for the charge path:
+   `0xA3` charge limit, `0xA4` bypass, `0xA5` force-charge floor, `0xE3` power-supply mode, plus the
+   telemetry block — see §2.1 and
+   [`upstream/oxpec-ec-addresses.md`](../../upstream/oxpec-ec-addresses.md). The previous reasoning
+   was wrong in an interesting way: the numbers are not IL immediates at all (the managed assembly
+   is stripped) but decimal arguments the Electron layer passes into it.
+   What is still unproven: the `0xA5`/telemetry **units**, and one device-side confirmation that a
+   `charge_behaviour` write lands in `0xA4`. A single Windows EC trace, or `ec_sys` on a debug
+   kernel, settles both.
 2. **Persistence of the charge limit across S5** is claimed by the vendor and
    consistent with the value we found (80 %, set outside Linux), but a write
    from Linux through `_BTP` has not been power-cycled yet. Test in §5.2 step 2.

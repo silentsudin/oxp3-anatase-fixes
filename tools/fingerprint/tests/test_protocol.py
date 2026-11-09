@@ -37,7 +37,7 @@ class TestArithmetic(unittest.TestCase):
 
     def test_formula_matches_built_frames(self):
         for data_len in list(range(0, 80)) + [255, 256, 512, 4096]:
-            frame = P.build_frame(0xB5, 1, 0, b"\x5a" * data_len)
+            frame = P.build_frame(0xB4, 1, 0, b"\x5a" * data_len)
             self.assertEqual(len(frame), P.frame_size(data_len), data_len)
             self.assertEqual(struct.unpack_from("<I", frame, 1)[0],
                              P.length_field(data_len), data_len)
@@ -75,11 +75,11 @@ class TestBuild(unittest.TestCase):
         self.assertEqual(len(frame) - 4, 37)
 
     def test_fields_encoded(self):
-        frame = P.build_frame(0xB5, phase=1, arg=0xBEEF,
+        frame = P.build_frame(0xB4, phase=1, arg=0xBEEF,
                               data=b"abcdef", status=0x42,
                               reserved=b"\x11" * 16)
         parsed = P.parse_frame(frame, require_magic=True)
-        self.assertEqual(parsed.opcode, 0xB5)
+        self.assertEqual(parsed.opcode, 0xB4)
         self.assertEqual(parsed.phase, 1)
         self.assertEqual(parsed.arg, 0xBEEF)
         self.assertEqual(parsed.status, 0x42)
@@ -90,7 +90,7 @@ class TestBuild(unittest.TestCase):
 
     def test_zero_padding_and_alignment(self):
         for data_len in range(0, 48):
-            frame = P.build_frame(0xC2, 0, 0, b"\xaa" * data_len)
+            frame = P.build_frame(0xC1, 0, 0, b"\xaa" * data_len)
             parsed = P.parse_frame(frame, require_padding_zero=True)
             self.assertEqual(parsed.data_len, data_len)
 
@@ -118,7 +118,7 @@ class TestBuild(unittest.TestCase):
 
 class TestParse(unittest.TestCase):
     def setUp(self):
-        self.frame = P.build_frame(0xC2, 0, 0x1234, b"\x09\x08\x07")
+        self.frame = P.build_frame(0xC1, 0, 0x1234, b"\x09\x08\x07")
 
     def test_round_trip(self):
         parsed = P.parse_frame(self.frame)
@@ -221,23 +221,23 @@ class TestScan(unittest.TestCase):
 
     def test_finds_back_to_back_frames(self):
         a = P.build_frame(0xA1)
-        b = P.build_frame(0xC2, 0, 0, b"\x01\x02")
+        b = P.build_frame(0xC1, 0, 0, b"\x01\x02")
         frames, errors = P.scan_frames(a + b)
-        self.assertEqual([f.opcode for f in frames], [0xA1, 0xC2])
+        self.assertEqual([f.opcode for f in frames], [0xA1, 0xC1])
         self.assertEqual(errors, [])
 
     def test_resynchronises_after_bad_crc(self):
         a = P.build_frame(0xA1)
         bad = bytearray(P.build_frame(0xA2))
         bad[-1] ^= 0xFF
-        b = P.build_frame(0xC2)
+        b = P.build_frame(0xC1)
         frames, errors = P.scan_frames(a + bytes(bad) + b)
-        self.assertEqual([f.opcode for f in frames], [0xA1, 0xC2])
+        self.assertEqual([f.opcode for f in frames], [0xA1, 0xC1])
         self.assertEqual(len(errors), 1)
         self.assertIsInstance(errors[0].error, P.CRCMismatchError)
 
     def test_truncated_tail_is_reported(self):
-        frame = P.build_frame(0xC2, 0, 0, b"\x00" * 20)
+        frame = P.build_frame(0xC1, 0, 0, b"\x00" * 20)
         frames, errors = P.scan_frames(frame[:len(frame) - 3])
         self.assertEqual(frames, [])
         self.assertEqual(len(errors), 1)
@@ -262,7 +262,7 @@ class TestScan(unittest.TestCase):
 
     def test_every_scanned_frame_round_trips(self):
         stream = b"".join(P.build_frame(op, 0, 0, b"\x33" * (i % 9))
-                          for i, op in enumerate((0xA1, 0xC2, 0xB5)))
+                          for i, op in enumerate((0xA1, 0xC1, 0xB4)))
         frames, errors = P.scan_frames(stream)
         self.assertEqual(errors, [])
         for frame in frames:
@@ -303,7 +303,7 @@ class TestFuzzRoundTrip(unittest.TestCase):
     def test_single_byte_mutations_are_rejected(self):
         allowed = []
         for data_len in (0, 1, 7, 32):
-            frame = P.build_frame(0xB5, 1, 0x0102, b"\x7e" * data_len)
+            frame = P.build_frame(0xB4, 1, 0x0102, b"\x7e" * data_len)
             for index in range(len(frame)):
                 mutated = bytearray(frame)
                 mutated[index] ^= 0xFF
@@ -316,7 +316,7 @@ class TestFuzzRoundTrip(unittest.TestCase):
         self.assertEqual(allowed, [])
 
     def test_truncated_prefixes_never_parse(self):
-        frame = P.build_frame(0xB5, 1, 0, b"\x42" * 20)
+        frame = P.build_frame(0xB4, 1, 0, b"\x42" * 20)
         for cut in range(len(frame)):
             with self.assertRaises(P.FrameError, msg=f"cut={cut}"):
                 P.parse_frame(frame[:cut])

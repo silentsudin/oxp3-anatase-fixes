@@ -322,25 +322,26 @@ bf63112_request_start (FpDevice *dev, Bf63112Request *req,
 
 /* -------------------------------------------------------------- responses */
 
-/* CMD_QUERY_SENSOR_INFO payload.  The 9-byte layout (a:u16, b:u16, w:u16,
- * h:u16, flags:u8) is what the Windows handler reads; it is *inferred* and the
- * first hardware run must confirm it. */
+/* CMD_QUERY_SENSOR_INFO (0xC1) payload: a:u16, b:u16, w:u16, h:u16, flags:u8.
+ * Recovered from the Windows driver's handler, which parses four u16 and one u8
+ * and rejects anything shorter than 9 bytes (docs/hw/fingerprint.md). */
 static gboolean
 bf63112_parse_sensor_info (FpDeviceBf63112 *self, const guint8 *body,
                            size_t len, GError **error)
 {
   guint32 pixels;
 
-  if (len < 8)
+  if (len < 9)
     {
       g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                   "BF63112: sensor info is %zu bytes, expected >= 8", len);
+                   "BF63112: sensor info is %zu bytes, the module's answer "
+                   "must be at least 9", len);
       return FALSE;
     }
 
   self->width = (guint16) (body[4] | (body[5] << 8));
   self->height = (guint16) (body[6] | (body[7] << 8));
-  self->sensor_flags = len >= 9 ? body[8] : 0;
+  self->sensor_flags = body[8];
   pixels = (guint32) self->width * self->height;
 
   if (self->width < 8 || self->height < 8 || pixels > 65536)
@@ -357,7 +358,8 @@ bf63112_parse_sensor_info (FpDeviceBf63112 *self, const guint8 *body,
   return TRUE;
 }
 
-/* CMD_QUERY_FIRMWARE_VER payload: mode, project, variant, 4 version bytes. */
+/* CMD_QUERY_FIRMWARE_VER (0xA0) payload: state, project hi/lo, 4 version
+ * bytes; the Windows handler requires at least 7 bytes. */
 static void
 bf63112_parse_firmware (FpDeviceBf63112 *self, const guint8 *body, size_t len)
 {

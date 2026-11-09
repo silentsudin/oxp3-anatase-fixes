@@ -278,11 +278,11 @@ enum bf63112_image_result
 bf63112_image_header_parse (const uint8_t *buf, size_t len,
                             struct bf63112_image_header *out)
 {
-  if (buf == NULL || out == NULL || len < 9)
+  if (buf == NULL || out == NULL || len < BF63112_IMAGE_HEADER_SIZE)
     return BF63112_IMAGE_ERR_HEADER;
   out->status = buf[0];
-  out->total_bytes = get_le32 (buf + 1);
-  out->byte_sum = get_le32 (buf + 5);
+  out->total_bytes = get_le32 (buf + 4);
+  out->byte_sum = get_le32 (buf + 0x14);
   return BF63112_IMAGE_OK;
 }
 
@@ -290,12 +290,13 @@ size_t
 bf63112_image_header_build (const struct bf63112_image_header *header,
                             uint8_t *out, size_t out_size)
 {
-  if (header == NULL || out == NULL || out_size < 9)
+  if (header == NULL || out == NULL || out_size < BF63112_IMAGE_HEADER_SIZE)
     return 0;
+  memset (out, 0, BF63112_IMAGE_HEADER_SIZE);
   out[0] = header->status;
-  put_le32 (out + 1, header->total_bytes);
-  put_le32 (out + 5, header->byte_sum);
-  return 9;
+  put_le32 (out + 4, header->total_bytes);
+  put_le32 (out + 0x14, header->byte_sum);
+  return BF63112_IMAGE_HEADER_SIZE;
 }
 
 void

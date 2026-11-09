@@ -94,6 +94,35 @@ FRAME_MIN_SIZE = 41        # data_len == 0 -> 25 + align16(10) = 41 bytes
 #: Largest chunk the Windows driver asks for in one GET_IMG transfer.
 MAX_IMAGE_CHUNK = 0x1FCC    # 8140 bytes
 
+#: Where the answer's payload begins.  ``FUN_18001AADC`` (the answer
+#: dispatcher) calls each handler with ``frame + 0x1F`` and the length taken
+#: from ``frame + 0x1B``, so an answer uses the same offsets as a request - the
+#: framing is symmetric and the body starts after the 4-byte length field, not
+#: after the 4-byte command block.
+FRAME_OFF_BODY = FRAME_OFF_DATA
+
+#: The receive path verifies the answer's CRC-32 over ``L + 1`` bytes starting
+#: at the start byte, i.e. everything except the CRC itself (same polynomial
+#: and init as the transmit side).  ``FUN_18001AC60``.
+RX_CRC_COVERED_FROM = 0
+
+#: Hard ceiling on one reassembled answer (``FUN_18001AC60``:
+#: ``if (0x16829 < total + len) abort``), i.e. 92201 bytes.
+RX_MAX_FRAME = 0x16829
+
+#: GET_IMG phase-0 record offsets inside the answer payload, as read by
+#: ``FUN_180018DC0``: status:u8 at 0, total_bytes:u32 at +4, byte_sum:u32 at
+#: +0x14.  The driver consumes 0x18 bytes, not the 9 an earlier note assumed.
+GETIMG_OFF_STATUS = 0
+GETIMG_OFF_TOTAL = 4
+GETIMG_OFF_SUM = 0x14
+GETIMG_HEADER_SIZE = 0x18
+
+#: A template handle on the wire: ``u16`` followed by 16 opaque bytes.  The
+#: enroll ("Over") and identify handlers both copy 16 bytes from ``body + 3``
+#: and a u16 from ``body + 1``.
+TEMPLATE_HANDLE_SIZE = 18
+
 #: Per-attempt / total timeouts (ms) the Windows driver uses.  Windows-side
 #: values, *not* validated on Linux hardware; kept here so a retry policy and a
 #: driver can share one source of truth.  ``cancel`` has its own bound.
@@ -253,29 +282,50 @@ class Phase(enum.IntEnum):
 
 
 class Command(enum.IntEnum):
-    """Command bytes (descriptor+0x10 in the Windows driver)."""
+    """Command bytes.
 
-    QUERY_FIRMWARE_VER = 0xA1
-    QUERY_MODULE_SCHEME_INFORMATION = 0xA2
-    QUERY_ROOT_KEY = 0xB0
-    ENROLL_FINGERPRINT = 0xB1
-    IDENTIFY_FINGERPRINT = 0xB2
-    REMOVE_FINGERPRINT = 0xB3
-    QUERY_FINGERPRINT_COUNT = 0xB4
-    GET_IMG_DATA = 0xB5
-    DETECT_FINGERPRINT_PRESS = 0xB6
-    SLEEP = 0xC0
-    QUERY_MODULE_UID = 0xC1
-    QUERY_SENSOR_INFO = 0xC2
-    JTAG_CONTROL = 0xC3
-    RESTORE_MCU = 0xD0
-    UPDATE_FIRMWARE = 0xD1
+    These values are read straight out of the Windows driver's dispatch table
+    (``BetterlifeFingerprintDevice.dll`` 9.39.15.26, table at RVA ``0x46F00``,
+    stride ``0x20``, fields ``{opcode:u64, name:char*, handler:fn, label:char*}``)
+    and cross-checked against the seven senders that build these opcodes.
+    See ``docs/hw/fingerprint.md`` for the per-row handler addresses.
+
+    An earlier revision of this file was off by one in this table because it
+    was reconstructed from the order of the driver's trace strings; the table
+    below is the one the driver actually dispatches on.
+    """
+
+    QUERY_FIRMWARE_VER = 0xA0
+    QUERY_MODULE_SCHEME_INFORMATION = 0xA1
+    QUERY_ROOT_KEY = 0xA2
+    ENROLL_FINGERPRINT = 0xB0
+    IDENTIFY_FINGERPRINT = 0xB1
+    REMOVE_FINGERPRINT = 0xB2
+    QUERY_FINGERPRINT_COUNT = 0xB3
+    GET_IMG_DATA = 0xB4
+    DETECT_FINGERPRINT_PRESS = 0xB5
+    SLEEP = 0xB6
+    QUERY_MODULE_UID = 0xC0
+    QUERY_SENSOR_INFO = 0xC1
+    JTAG_CONTROL = 0xC2
+    RESTORE_MCU = 0xC3
+    UPDATE_FIRMWARE = 0xD0
+    #: Not present in the driver's table (it ends at 0xD0).  The constant is
+    #: kept for source compatibility only; nothing proves the firmware knows
+    #: this opcode, so a tool must never send it.
     FW_WORK_MODE_SWITCH = 0xFF
 
 
 @dataclass(frozen=True)
 class CommandInfo:
-    """One row of the recovered command table, plus our safety classification."""
+    """One row of the recovered command table, plus our safety classification.
+
+    ``answer_has_status`` says whether the answer *payload* begins with a
+    result byte (the enroll/identify/root-key handlers store ``body[0]`` as the
+    command result and read their fields from ``body[1:]``); the query handlers
+    for firmware version and sensor info parse their record from ``body[0]``.
+    ``answer_min`` is the payload length the driver demands before it parses.
+    """
 
     opcode: int
     name: str
@@ -283,57 +333,63 @@ class CommandInfo:
     read_only: bool
     destructive: bool
     multi_phase: bool = False
+    answer_has_status: bool = False
+    answer_min: int = 0
 
 
 COMMANDS: dict[Command, CommandInfo] = {
     Command.QUERY_FIRMWARE_VER: CommandInfo(
-        0xA1, "CMD_QUERY_FIRMWARE_VER",
-        "project code + 4-byte firmware version", True, False),
+        0xA0, "CMD_QUERY_FIRMWARE_VER",
+        "7-byte record: state, project hi/lo, 4-byte version", True, False,
+        False, False, 7),
     Command.QUERY_MODULE_SCHEME_INFORMATION: CommandInfo(
-        0xA2, "CMD_QUERY_MODULE_SCHEME_INFORMATION",
+        0xA1, "CMD_QUERY_MODULE_SCHEME_INFORMATION",
         "module scheme/configuration information", True, False),
     Command.QUERY_ROOT_KEY: CommandInfo(
-        0xB0, "CMD_QUERY_ROOT_KEY",
-        "chunked root-key write (Start/Ing/Over/Cancel); session layer",
-        True, False, True),
+        0xA2, "CMD_QUERY_ROOT_KEY",
+        "session handshake: 65-byte SM2 public key out, SM2/SM3 key back",
+        True, False, False, True, 0x71),
     Command.ENROLL_FINGERPRINT: CommandInfo(
-        0xB1, "CMD_ENROLL_FINGERPRINT",
-        "start/press/fini/cancel; module stores the template", False, True,
-        True),
+        0xB0, "CMD_ENROLL_FINGERPRINT",
+        "Start/Ing/Over/Cancel; module stores and matches the template",
+        False, True, True, True, 2),
     Command.IDENTIFY_FINGERPRINT: CommandInfo(
-        0xB2, "CMD_IDENTIFY_FINGERPRINT",
-        "module matches and returns handle + score", True, False, True),
+        0xB1, "CMD_IDENTIFY_FINGERPRINT",
+        "module matches and returns an 18-byte template handle", True, False,
+        True, True, 0x13),
     Command.REMOVE_FINGERPRINT: CommandInfo(
-        0xB3, "CMD_REMOVE_FINGERPRINT",
-        "delete a template on the module", False, True),
+        0xB2, "CMD_REMOVE_FINGERPRINT",
+        "delete a template on the module", False, True, True, True, 1),
     Command.QUERY_FINGERPRINT_COUNT: CommandInfo(
-        0xB4, "CMD_QUERY_FINGERPRINT_COUNT",
-        "number of templates stored on the module", True, False),
+        0xB3, "CMD_QUERY_FINGERPRINT_COUNT",
+        "number of templates stored on the module", True, False, True),
     Command.GET_IMG_DATA: CommandInfo(
-        0xB5, "CMD_GET_IMG_DATA",
-        "diagnostic 8-bit grayscale image, three phases", True, False, True),
+        0xB4, "CMD_GET_IMG_DATA",
+        "diagnostic 8-bit grayscale image, three phases", True, False, True,
+        False, 0x18),
     Command.DETECT_FINGERPRINT_PRESS: CommandInfo(
-        0xB6, "CMD_DETECT_FINGERPRINT_PRESS",
+        0xB5, "CMD_DETECT_FINGERPRINT_PRESS",
         "finger-presence poll", True, False),
     Command.SLEEP: CommandInfo(
-        0xC0, "CMD_SLEEP", "put the module to sleep", False, False),
+        0xB6, "CMD_SLEEP", "put the module to sleep", False, False),
     Command.QUERY_MODULE_UID: CommandInfo(
-        0xC1, "CMD_QUERY_MODULE_UID", "module UID", True, False),
+        0xC0, "CMD_QUERY_MODULE_UID", "module UID", True, False),
     Command.QUERY_SENSOR_INFO: CommandInfo(
-        0xC2, "CMD_QUERY_SENSOR_INFO",
-        "width, height, flags", True, False),
+        0xC1, "CMD_QUERY_SENSOR_INFO",
+        "9-byte record: four u16 + one u8 flag; width/height at +4/+6",
+        True, False, False, False, 9),
     Command.JTAG_CONTROL: CommandInfo(
-        0xC3, "CMD_JTAG_CONTROL", "vendor JTAG only - never send",
+        0xC2, "CMD_JTAG_CONTROL", "vendor JTAG only - never send",
         False, True),
     Command.RESTORE_MCU: CommandInfo(
-        0xD0, "CMD_RESTORE_MCU", "vendor MCU restore - never send",
+        0xC3, "CMD_RESTORE_MCU", "vendor MCU restore - never send",
         False, True),
     Command.UPDATE_FIRMWARE: CommandInfo(
-        0xD1, "CMD_UPDATE_FIRMWARE",
+        0xD0, "CMD_UPDATE_FIRMWARE",
         "firmware update - never send from Linux, ever", False, True),
     Command.FW_WORK_MODE_SWITCH: CommandInfo(
         0xFF, "CMD_FW_WORK_MODE_SWITCH",
-        "Boot <-> App ('SM3') mode switch; side effects unknown",
+        "not in the driver's table; side effects unknown, never send",
         False, True),
 }
 
@@ -409,16 +465,34 @@ class Frame:
         return command_block_len(self.data_len)
 
     @property
+    def body(self) -> bytes:
+        """Answer body, exactly as the driver hands it to a handler.
+
+        ``FUN_18001AADC`` passes ``frame + 0x1F`` (31) together with the u32
+        length from ``frame + 0x1B`` (27), so the body is the payload trimmed to
+        its announced length - the zero padding up to the 16-byte block boundary
+        is *not* part of it.  Which byte inside the body means what is
+        per-command: some payloads lead with a result byte, others start with
+        their record (see :class:`CommandInfo`).
+        """
+        end = FRAME_OFF_BODY + self.data_len
+        return self.raw[FRAME_OFF_BODY:end]
+
+    @property
     def body_from_status(self) -> bytes:
-        """Answer body starting at the status byte (offset 24)."""
+        """Answer body starting at the status byte (offset 24).
+
+        Kept for compatibility with older tooling; the driver itself starts the
+        body at offset 31 (:attr:`body`).
+        """
         return self.raw[FRAME_OFF_STATUS: len(self.raw) - 4]
 
     @property
     def body_from_arg(self) -> bytes:
         """Answer body starting after the 4-byte command block (offset 25).
 
-        This is the view ``oxp3-fp-probe.py`` prints; which one the module
-        really means is open point 2 in ``docs/hw/fingerprint.md``.
+        This is the view ``oxp3-fp-probe.py`` prints; the driver's own body
+        starts one step later, at :attr:`body` (offset 31).
         """
         return self.raw[FRAME_OFF_ARG: len(self.raw) - 4]
 
@@ -613,19 +687,23 @@ def scan_frames(buf: bytes | bytearray | memoryview, *,
 
 @dataclass(frozen=True)
 class ImageHeader:
-    """Phase-0 answer of ``CMD_GET_IMG_DATA``: 9 bytes.
+    """Phase-0 answer of ``CMD_GET_IMG_DATA``.
 
-    Layout (recovered): ``status:u8 | total_bytes:u32 LE | byte_sum:u32 LE``.
-    ``byte_sum`` is only ever compared as an 8-bit value (the module announces
-    a 32-bit field but the check the Windows driver performs is a running
-    8-bit sum), so :attr:`sum8_expected` exposes it masked.
+    Layout, as read by the Windows driver's image handler (``FUN_180018DC0``):
+    ``status:u8 @0 | total_bytes:u32 LE @4 | byte_sum:u32 LE @0x14``, with the
+    handler refusing a payload shorter than ``0x18`` bytes.  The gap between the
+    fields is real: the offsets are what the driver dereferences, and an earlier
+    revision of this module wrongly assumed three packed fields.
+
+    ``byte_sum`` is announced as 32-bit but checked as an 8-bit running sum, so
+    :attr:`sum8_expected` exposes it masked.
     """
 
     status: int
     total_bytes: int
     byte_sum: int
 
-    SIZE = 9
+    SIZE = GETIMG_HEADER_SIZE
 
     @classmethod
     def parse(cls, payload: bytes | bytearray | memoryview) -> "ImageHeader":
@@ -633,19 +711,193 @@ class ImageHeader:
         if len(payload) < cls.SIZE:
             raise ImageError(
                 f"image header needs {cls.SIZE}B, got {len(payload)}B")
-        status, total, byte_sum = struct.unpack_from("<BII", payload, 0)
+        status = payload[GETIMG_OFF_STATUS]
+        total = struct.unpack_from("<I", payload, GETIMG_OFF_TOTAL)[0]
+        byte_sum = struct.unpack_from("<I", payload, GETIMG_OFF_SUM)[0]
         return cls(status=status, total_bytes=total, byte_sum=byte_sum)
 
     @classmethod
     def build(cls, total_bytes: int, byte_sum: int, status: int = 0) -> bytes:
         if not 0 <= total_bytes <= 0xFFFFFFFF:
             raise ValueError("total_bytes must fit in u32")
-        return struct.pack("<BII", status & 0xFF, total_bytes,
-                           byte_sum & 0xFFFFFFFF)
+        buf = bytearray(cls.SIZE)
+        buf[GETIMG_OFF_STATUS] = status & 0xFF
+        struct.pack_into("<I", buf, GETIMG_OFF_TOTAL, total_bytes)
+        struct.pack_into("<I", buf, GETIMG_OFF_SUM, byte_sum & 0xFFFFFFFF)
+        return bytes(buf)
 
     @property
     def sum8_expected(self) -> int:
         return self.byte_sum & 0xFF
+
+
+@dataclass(frozen=True)
+class SensorInfo:
+    """Answer record of ``CMD_QUERY_SENSOR_INFO`` (0xC1).
+
+    ``FUN_180019420`` copies four u16 and one u8 out of the payload (it rejects
+    anything shorter than 9 bytes) and the image path multiplies the u16 at
+    ``+4`` by the u16 at ``+6`` to get the frame size, which identifies those
+    two fields as width and height.  The first four bytes and the trailing flag
+    are not interpreted by the driver beyond being logged.
+    """
+
+    field0: int          #: u16 @0 - meaning not established
+    field2: int          #: u16 @2 - meaning not established
+    width: int           #: u16 @4
+    height: int          #: u16 @6
+    flags: int           #: u8  @8
+
+    SIZE = 9
+
+    @classmethod
+    def parse(cls, payload: bytes | bytearray | memoryview) -> "SensorInfo":
+        payload = bytes(payload)
+        if len(payload) < cls.SIZE:
+            raise ProtocolError(
+                f"sensor info needs {cls.SIZE}B, got {len(payload)}B")
+        f0, f2, width, height, flags = struct.unpack_from("<HHHHB", payload, 0)
+        return cls(f0, f2, width, height, flags)
+
+    @classmethod
+    def build(cls, width: int, height: int, field0: int = 0, field2: int = 0,
+              flags: int = 0) -> bytes:
+        return struct.pack("<HHHHB", field0, field2, width, height, flags)
+
+    @property
+    def pixels(self) -> int:
+        return self.width * self.height
+
+
+@dataclass(frozen=True)
+class FirmwareInfo:
+    """Answer record of ``CMD_QUERY_FIRMWARE_VER`` (0xA0).
+
+    ``FUN_1800181B0`` stores ``body[0]`` as a state byte, ``body[1]``/``body[2]``
+    as a two-byte project code (it maps 0x01/0x00 to "BOE MOC" and 0x02/0x00
+    to "HUAHONG MOUSE MOC"), and ``body[3:7]`` as a 4-byte version.  It rejects
+    payloads shorter than 7 bytes.
+    """
+
+    state: int
+    project_hi: int
+    project_lo: int
+    version: int
+
+    SIZE = 7
+
+    @classmethod
+    def parse(cls, payload: bytes | bytearray | memoryview) -> "FirmwareInfo":
+        payload = bytes(payload)
+        if len(payload) < cls.SIZE:
+            raise ProtocolError(
+                f"firmware info needs {cls.SIZE}B, got {len(payload)}B")
+        state, hi, lo, version = struct.unpack_from("<BBBI", payload, 0)
+        return cls(state, hi, lo, version)
+
+    @classmethod
+    def build(cls, state: int, project_hi: int, project_lo: int,
+              version: int) -> bytes:
+        return struct.pack("<BBBI", state & 0xFF, project_hi & 0xFF,
+                           project_lo & 0xFF, version & 0xFFFFFFFF)
+
+    @property
+    def version_text(self) -> str:
+        return f"{self.version >> 16}.{self.version & 0xFFFF}"
+
+
+@dataclass(frozen=True)
+class TemplateHandle:
+    """The 18-byte template handle the module returns.
+
+    Enroll phase 2 and identify phase 0 both copy a u16 from ``body + 1`` and
+    16 opaque bytes from ``body + 3``; both handlers require the payload to be
+    longer than ``0x12`` (18) bytes so that a status byte plus this record fit.
+    The 16 opaque bytes are the module's own template identity - the host never
+    sees the template itself (match-in-sensor).
+    """
+
+    prefix: int          #: u16 @0
+    payload: bytes       #: 16 bytes @2
+
+    SIZE = TEMPLATE_HANDLE_SIZE
+
+    @classmethod
+    def parse(cls, buf: bytes | bytearray | memoryview) -> "TemplateHandle":
+        buf = bytes(buf)
+        if len(buf) < cls.SIZE:
+            raise ProtocolError(
+                f"template handle needs {cls.SIZE}B, got {len(buf)}B")
+        prefix = struct.unpack_from("<H", buf, 0)[0]
+        return cls(prefix, buf[2:cls.SIZE])
+
+    @classmethod
+    def build(cls, prefix: int, payload: bytes) -> bytes:
+        payload = bytes(payload)
+        if len(payload) != cls.SIZE - 2:
+            raise ValueError(f"handle payload must be 16 bytes, "
+                             f"got {len(payload)}")
+        return struct.pack("<H", prefix & 0xFFFF) + payload
+
+
+@dataclass(frozen=True)
+class RootKeyAnswer:
+    """Answer payload of ``CMD_QUERY_ROOT_KEY`` (0xA2), the session handshake.
+
+    Recovered from ``FUN_1800185A0`` (which rejects ``len < 0x71``) and
+    ``FUN_180007AA0``::
+
+        off  len  field
+        0    1    result code (the driver stores it as the command status)
+        1    64   device ephemeral SM2 public key, X || Y (32 + 32 bytes)
+        0x41 32   SM3 integrity tag
+        0x61 4    wrapped key length klen (u32 LE)
+        0x65 klen wrapped key material
+
+    The driver loads the point at ``+1`` into an SM2 context, multiplies it by
+    its own ephemeral private key, runs the GM/T 0003 KDF over the 64-byte
+    shared point, XORs the result with the wrapped field, and checks the SM3 tag
+    before accepting the 16-byte session key.
+
+    :meth:`parse` is a pure layout split - it performs **no** cryptography and
+    cannot tell a valid answer from a forged one.
+    """
+
+    status: int
+    public_key: bytes     #: 64 bytes, X || Y
+    tag: bytes            #: 32 bytes, SM3
+    key_len: int
+    wrapped_key: bytes
+
+    MIN_SIZE = 0x71
+
+    @classmethod
+    def parse(cls, payload: bytes | bytearray | memoryview) -> "RootKeyAnswer":
+        payload = bytes(payload)
+        if len(payload) < cls.MIN_SIZE:
+            raise ProtocolError(
+                f"root-key answer needs {cls.MIN_SIZE}B, got {len(payload)}B")
+        status = payload[0]
+        public_key = payload[1:65]
+        tag = payload[0x41:0x61]
+        key_len = struct.unpack_from("<I", payload, 0x61)[0]
+        wrapped = payload[0x65:]
+        if len(wrapped) < key_len:
+            raise ProtocolError(
+                f"root-key answer announces klen={key_len} but only "
+                f"{len(wrapped)}B follow")
+        return cls(status, public_key, tag, key_len, wrapped[:key_len])
+
+    @classmethod
+    def build(cls, public_key: bytes, tag: bytes, wrapped_key: bytes,
+              status: int = 0) -> bytes:
+        if len(public_key) != 64:
+            raise ValueError(f"public key must be 64 bytes, "
+                             f"got {len(public_key)}")
+        if len(tag) != 32:
+            raise ValueError(f"tag must be 32 bytes, got {len(tag)}")
+        return (bytes((status & 0xFF,)) + bytes(public_key) + bytes(tag) +
+                struct.pack("<I", len(wrapped_key)) + bytes(wrapped_key))
 
 
 @dataclass

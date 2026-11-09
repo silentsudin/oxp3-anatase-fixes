@@ -282,7 +282,7 @@ test_image (void)
 {
   unsigned char image[64];
   unsigned char buf[64];
-  unsigned char header_payload[9];
+  unsigned char header_payload[BF63112_IMAGE_HEADER_SIZE];
   unsigned char chunk[16];
   unsigned char chunk_sum;
   struct bf63112_image_header header;
@@ -296,15 +296,20 @@ test_image (void)
   header.total_bytes = sizeof (image);
   header.byte_sum = bf63112_sum8 (image, sizeof (image));
   CHECK_EQ_INT (bf63112_image_header_build (&header, header_payload,
-                                            sizeof (header_payload)), 9);
+                                            sizeof (header_payload)),
+                BF63112_IMAGE_HEADER_SIZE);
 
   {
     struct bf63112_image_header parsed;
-    CHECK_EQ_INT (bf63112_image_header_parse (header_payload, 9, &parsed),
+    CHECK_EQ_INT (bf63112_image_header_parse (header_payload,
+                                              BF63112_IMAGE_HEADER_SIZE,
+                                              &parsed),
                   BF63112_IMAGE_OK);
     CHECK_EQ_INT (parsed.total_bytes, sizeof (image));
     CHECK_EQ_INT (parsed.byte_sum, header.byte_sum);
-    CHECK_EQ_INT (bf63112_image_header_parse (header_payload, 8, &parsed),
+    CHECK_EQ_INT (bf63112_image_header_parse (header_payload,
+                                              BF63112_IMAGE_HEADER_SIZE - 1,
+                                              &parsed),
                   BF63112_IMAGE_ERR_HEADER);
   }
 

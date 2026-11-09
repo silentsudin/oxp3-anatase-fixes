@@ -1,4 +1,4 @@
-# RFC draft — `oxpec`: expose the EC fan curves and the real charging-bypass byte on OneXPlayer 3
+# RFC draft — `oxpec`: back the OneXPlayer 3 charging-bypass byte with the EC (and close the fan-curve question)
 
 Status: **draft, not submitted**. No account, no GitLab/GitHub permissions and no vendor support
 are available here, and nothing below has been applied to a kernel tree. The code in §6 is our own
@@ -10,12 +10,24 @@ Prepared: 2026-11-09, from the evidence in this repository. Target tree for the 
 `7.2.7-an28.fc45`). Device: ONEXPLAYER 3, DMI `ONE-NETBOOK` / `ONEXPLAYER 3`, BIOS 5.09, board
 `oxp_g1_i` in the current driver.
 
+> **Revision, 2026-11-09 (later the same day).** The EC register map is no longer the blocker: the
+> addresses and the value encodings were recovered from the app's own bootstrap and are
+> cross-checked against upstream `oxpec`. See [`oxpec-ec-addresses.md`](oxpec-ec-addresses.md) for
+> the table and the method. Two claims below were corrected in the process: (a) there is **no
+> three-table EC fan curve on this machine** — `DevsCPUFanCurve/GPUFanCurve/MidFanCurve` are ASUS
+> WMI device ids, and the “intelligent fan curve” string belongs to the Bluetooth water-cooling
+> accessory; (b) the vendor **mode 1 is the awake-only inhibit** (`0x01`) and **mode 2 is the always
+> inhibit** (`0x03`), i.e. the opposite of what §4.2 originally assumed. §5 and the sketch in §6 are
+> updated accordingly; the ask in §1 narrows to the charge path plus the already-existing fan ABI.
+
 Related local evidence (all our own prose, no vendor code):
 
 * [`docs/hw/power-fan.md`](../docs/hw/power-fan.md) — fan/EC inventory, the three curve tables, the
   PWM scaling, the existing kernel gap.
 * [`docs/hw/battery-tdp.md`](../docs/hw/battery-tdp.md) — battery/charge inventory, vendor bypass
-  semantics (mode 1 “always”, mode 2 “screen-on only”, off), the missing EC addresses.
+  semantics (off / mode 1 / mode 2) and, now, the recovered EC addresses.
+* [`upstream/oxpec-ec-addresses.md`](oxpec-ec-addresses.md) — the register map with provenance,
+  confidence and the remaining candidates.
 * [`docs/hw/gap-audit.md`](../docs/hw/gap-audit.md) — rows 2 and 5, and the §5 note about IL
   immediates.
 
@@ -23,17 +35,22 @@ Related local evidence (all our own prose, no vendor code):
 
 ## 1. The ask, in one paragraph
 
-The OXP3 EC owns an intelligent fan controller with three temperature→duty curve tables, an
-auto/manual switch and a fan-preset/lock policy, plus a charging-bypass byte with three vendor
-states (off / always / only-while-screen-on). Linux currently reaches only a single PWM duty, the
-auto/manual bit and a tachometer, and the charge limit and charge-inhibit path is either the ACPI
-`_BTP`/`_BCM` method or the existing `oxpec` `power_supply_ext` (see §3.2 — this needs to be settled
-first). We ask for: (a) a **hwmon ABI** for the EC curve tables and their auto/manual selection,
-using the existing `pwmN_auto_pointM_temp` / `_pwm` shape; (b) the **existing
-`power_supply`/`charge_behaviour` ABI** to be backed by the EC bypass byte on this board, with the
-vendor’s three states mapped onto `auto`, `inhibit-charge`, `inhibit-charge-awake`; (c) no new
-`debugfs` user-facing knobs. The blocker is not the design, it is the **EC register map**: the
-vendor field *names* are recovered, the *addresses* are not (§5).
+After the register map was recovered (§5) the ask shrinks to almost nothing, which is the honest
+outcome of this investigation:
+
+* **(a) Nothing for the fan.** The OXP3 EC does not hold vendor curve tables: it has an
+  auto/manual bit (`0x4A`), a duty byte (`0x4B`) and a 16-bit tach (`0x58`/`0x59`), and “intelligent
+  fan curve” is the EC's own closed loop. `oxpec` **already exposes all of it** as `pwm1`,
+  `pwm1_enable` and `fan1_input`. A curve has to live in userspace, where our
+  [`tools/oxp3-powerctl.py`](../tools/oxp3-powerctl.py) `fan curve` already puts it. §4.1 and the
+  fan half of §6 are kept only as a labelled design for boards that *do* have tables.
+* **(b) The charge path, mostly already done.** The bypass byte is EC `0xA4` with `0x00` off /
+  `0x01` inhibit-while-awake / `0x03` inhibit-always, and the charge cap is EC `0xA3` in percent.
+  Both are already driven through the existing `power_supply_ext` for `oxp_g1_i` in the 7.2.7 tree
+  (`charge_behaviour`, `charge_control_end_threshold`). What is missing is one byte,
+  `addrForceChargeMin` = `0xA5`, which has no ABI — and no unit we can prove.
+* **(c) No new `debugfs` user-facing knobs**, still true, and now with less pressure for any new
+  sysfs at all.
 
 ## 2. What the hardware can do (vendor evidence, names and semantics only)
 
@@ -62,7 +79,7 @@ and the UI/i18n semantics (zh-CN bundle):
 | fan presets | `qs_fan_presetting1`, `qs_fan_presetting2` | two quick presets |
 | per-profile fan | `fanSpeed` in `perf_conf.ini` (0/0/200 for Quiet/Balanced/Performance) | fixed duty, not the curve |
 | curves | `DevsCPUFanCurve`, `DevsGPUFanCurve`, `DevsMidFanCurve` | **three** tables, CPU/GPU/mid |
-| bypass | `battery_protection_bypasspowermode`, `…_effect_always`, `…_effect_when_screen_on`, `…_hint` | mode 1 applies always; mode 2 is ineffective while asleep/off; “plugged in → charging stops, device is powered, less heat” |
+| bypass | `battery_protection_bypasspowermode`, `…_effect_always`, `…_effect_when_screen_on`, `…_hint` | mode 1 = ineffective while asleep/off (`0x01`); mode 2 = always effective (`0x03`); “plugged in → charging stops, device is powered, less heat” |
 | charge cap | `battery_protection_chargelimit`, `…_hint` | stored in the EC, effective in S5 too |
 
 That is capability evidence, not a register map. We know the EC can do it; we do not know at which
@@ -100,9 +117,10 @@ open rather than asserting one.
 
 What the current ABI does not express, either way:
 
-* the vendor’s **mode 2 is “screen on”**, while `inhibit-charge-awake` is defined as “while the
-  system is awake” (not suspended). These are close but not identical. A driver that maps one to the
-  other must say so in the ABI text, and userspace (upower, our `oxp3-powerctl`) must not be misled.
+* the vendor’s **mode 1 is the awake-only inhibit**, which is what `inhibit-charge-awake` means,
+  so the ABI maps cleanly (`0x01`); **mode 2 is the always-inhibit** (`0x03`). The residual
+  difference is that the kernel’s “awake” is a system-suspend boundary, not a panel state — say so
+  in the ABI text, and userspace (upower, our `oxp3-powerctl`) must not be misled.
 * the charger tier (`addrPowerSupplyMode`; barrel / USB-C ≥100 W / DC-in / USB-C ≤65 W / ≥140 W) has
   no ABI. `power_supply` has `POWER_SUPPLY_PROP_USB_TYPE` for USB-PD, but the barrel/DC-in
   distinction has no standard property. **Do not invent one in this series**; it is a separate
@@ -115,7 +133,14 @@ What the current ABI does not express, either way:
 
 ## 4. Proposed ABI
 
-### 4.1 Fan curves — hwmon auto-point attributes
+### 4.1 Fan curves — hwmon auto-point attributes **(withdrawn, premise falsified)**
+
+> 2026-11-09: there are no vendor curve tables on this board. `DevsCPUFanCurve`/`GPUFanCurve`/
+> `MidFanCurve` are ASUS WMI device ids (`0x110024`/`0x110025`/`0x110032`), the app never sends a
+> curve over its fan IPC, and the “intelligent fan curve” string belongs to the Bluetooth
+> water-cooling accessory. What follows is kept as a design sketch for a board that does have
+> tables; do not implement it for `oxp_g1_i`. See
+> [`oxpec-ec-addresses.md`](oxpec-ec-addresses.md) §6.
 
 The standard hwmon shape for “temperature → duty” curves already exists:
 `pwmN_auto_pointM_temp` (millidegrees Celsius) and `pwmN_auto_pointM_pwm` (0–255), plus optional
@@ -154,8 +179,8 @@ Keep the established class ABI; add no new attribute name for the vendor byte:
 | vendor state | `charge_behaviour` value | note |
 |---|---|---|
 | off | `auto` | normal charging |
-| mode 1 (always) | `inhibit-charge` | charging stops while on the adapter |
-| mode 2 (screen-on only) | `inhibit-charge-awake` | approximation: kernel “awake” ≠ vendor “screen on”; document it |
+| mode 1 | `inhibit-charge-awake` | EC `0x01` = the awake bit only; ineffective while asleep/off |
+| mode 2 | `inhibit-charge` | EC `0x03` = awake bit OR the board's “always” bit(s); the OXP3 always-mask is `0x02` |
 
 `charge_control_end_threshold` continues to be the percentage cap (already present in the 7.2.7
 tree’s extension for this board). Values are clamped 0–100 in the driver and read back; policy
@@ -189,46 +214,59 @@ user control; new controls should not follow that precedent.
 
 ## 5. Recovering the EC addresses — what we tried, what is next
 
-### 5.1 What we tried, and the outcome
+### 5.1 What happened: the IL is empty, the numbers are in the app
 
-* **Ghidra on `CompatLayerCT.exe`** via the isolated wrapper:
-  `tools/ghidra-pod.sh battdp …/CompatLayerCT.exe '^(battery|addr|EC_)'` →
-  `DumpAll.java> WROTE …/decomp.txt functions=0 decompiled=0`. The PE/CLI parses (the field names
-  above come from its strings), but the bodies are CIL; Ghidra’s decompiler has no IL
-  front end, so there is nothing to read. Recorded in [`docs/hw/battery-tdp.md`](../docs/hw/battery-tdp.md) §2.1.
-* **Native neighbours**: `tools/intel/PowerPlugin.dll` is RAPL/MSR-only, `UtilPlugin.dll` and
-  `HWAPIExtDLL.dll` carry no battery/EC constants. The native EC driver object is not in the NSIS
-  payload.
-* **.NET decompiler**: not installed on this host (`ilspycmd`, `ilspy`, `monodis`, `ikdasm`,
-  `ildasm`, `dotnet`, `mono`, `dnSpy` all absent). No network install was attempted. So the IL
-  immediates remain unread.
-* **ACPI**: `DSDT`/`SSDT` are root-only here; `CONFIG_ACPI_EC_DEBUGFS` is not built on this kernel
-  and `/sys/kernel/debug` is not readable from the session. Not attempted.
+The first attempt (Ghidra via `tools/ghidra-pod.sh battdp`) decompiled **0** functions, and a proper
+.NET run explains why: `CompatLayerCT.exe` is not packed, it is **stripped**. 2829 of its 3706 method
+bodies point at one RVA whose whole content is `throw new Exception("Runtime exception")`, 189 more
+share a trivial constructor stub, and only 35 bodies are distinct (`<Module>::.cctor` and compiler
+lambdas). Metadata is intact — that is where the field and *parameter* names come from — but there is
+no `ldc.i4` to read, and no native component or decryptor to undo, so **nothing was ever hidden in the
+IL**. Reading it "properly" was the wrong plan, not an unlucky one.
 
-### 5.2 Recommended order (cheapest, least risky first)
+The numbers are one layer up. `app.asar`'s main-process bootstrap declares the per-OEM EC addresses
+as decimal locals and passes them *into* the layer over its named pipe (`/battery/initEc`,
+`/fan/init`, `/battery/initPowerSupplyModeEC`, …). The assembly only ever needs the *names*, which is
+exactly what metadata shows. Full table, offsets and method in
+[`oxpec-ec-addresses.md`](oxpec-ec-addresses.md); the short version for this patch:
 
-1. **Read the IL with a real .NET decompiler** (ILSpy CLI, dnSpy, or `ilspycmd` in a throwaway
-   container). Search for `batterySetByPassPowerMode`, `batterySetChargeLimit`, `batteryInitEc`;
-   the `EC_ADDR_*`/`EC_VALUE_*` fields are almost certainly `static readonly` bytes assigned from
-   `ldc.i4` in the type initializer. That is the whole map for the battery side. This is the
-   highest-value next step and does not touch the device.
-2. **Windows EC trace** (ports `0x62`/`0x66`, the vendor itself uses `PawnIOLib`/`inpoutx64`) while
-   toggling exactly one UI control at a time: record command/data writes, then dump EC RAM before
-   and after. This gives addresses *and* encodings, including mode 1 vs mode 2.
-3. **ACPI dump** (`acpidump -b`, `iasl -d`, grep the EC methods and the SSDTs behind the four
-   unbound WMI GUIDs from `docs/hw/gap-audit.md` §1). If the firmware has an `_Qxx`/EC method for
-   the fan or bypass, it documents the register for us.
-4. **Differential EC dump around a known value**: read the known charge cap (80 %) from the EC and
-   look for a byte holding `0x50` near the candidate `0xA3`; toggle `charge_behaviour` and see which
-   byte changes near `0xA4`. This is non-destructive and can confirm the X1-derived guess.
-5. **Only then write**: a wrong EC byte can stop charging, spin the fan or confuse the firmware; a
-   full power cycle is the usual recovery, but this must be a supervised experiment, not a probe.
+| what | EC offset | what the driver must do |
+|---|---:|---|
+| `addrFanAutomate` | `0x4A` | already in the tree (`pwm1_enable`, `0x00` auto / `0x01` manual) |
+| `addrFanSpeed` | `0x4B` | already in the tree (`pwm1`, scaled to 0…184 on this board) |
+| `fanSpeedHECAddr`/`L` | `0x58`/`0x59` | `fan1_input`, 2 bytes — upstream master already reads `0x58` for `oxp_g1_i` |
+| `addrChargeLimit` | `0xA3` | already in the tree (`charge_control_end_threshold`, percent) |
+| `addrBypassPower` | `0xA4` | already in the tree (`charge_behaviour`, `0x00`/`0x01`/`0x03`) |
+
+Everything the kernel needs for the **battery** side is therefore already implemented, and the
+remaining ask is much smaller than this draft originally assumed (`addrForceChargeMin` at `0xA5` is
+the only charge byte with no ABI). What is *not* already there is none of the three fan curves —
+because on this board they do not exist as EC tables (§6 of `oxpec-ec-addresses.md`).
+
+### 5.2 What is genuinely still open
+
+1. **`0xA5` force-charge minimum**: unit (percent floor?) — one Windows trace with the vendor slider
+   settles it (§7 of `oxpec-ec-addresses.md`).
+2. **Sensor scales** (`0x60`, `0x61`, `0x70`, `0xA0`…`0xA2`): addresses are candidate-grade, the
+   encodings are not known; a two-point comparison against the vendor UI gives the affine map.
+3. **`0x2D` “handle power” and `0xEB` “app function enable”**: written by the vendor layer, meaning
+   unknown, no ABI proposed here.
+4. **Command/data ports** (`0x66`/`0x62`): irrelevant for the OXP3 path, which selects
+   `ECAccessType::OxpWMI` rather than port I/O; only needed if someone wants a port fallback.
+5. **One real-device confirmation**: a trace (or `ec_sys` on a debug kernel) that toggling
+   `charge_behaviour` changes `0xA4` and that `0x58`/`0x59` tracks rpm. Nothing below is submitted
+   before that, but the values in the sketch are now sourced, not guessed.
+
 
 The addresses must be in the patch as named board constants with a comment naming the evidence
 (trace/IL dump), exactly like the existing X1/Apex constants. No guessed `0x??` in a submitted
 patch.
 
 ## 6. Patch sketch (our own code; **not compiled**, not a submission)
+
+> The fan-curve half of this sketch (up to the charge section) is **withdrawn** for the same reason
+> as §4.1: no tables exist on this board. The charge half is current and every value in it now has
+> a source — see [`oxpec-ec-addresses.md`](oxpec-ec-addresses.md) §1.
 
 ```c
 // SPDX-License-Identifier: GPL-2.0+
@@ -377,7 +415,10 @@ static int oxp_curve_attrs_create(struct device *hwmon)
 Charge side (same sketch; extends the existing extension rather than adding a second one):
 
 ```c
-/* UNKNOWN: values from the vendor constants, not from the field names. */
+/* Values below come from the vendor's own per-OEM bootstrap (app.asar, ONEXPLAYER 3 branch) and
+ * match the constants this driver already uses for oxp_g1_i. Provenance and offsets:
+ * upstream/oxpec-ec-addresses.md. Two values are still candidate-grade: the 0xA5 byte and its
+ * unit; do not wire it until a trace says what it means. */
 struct oxp_charge_map {
 	u8 limit_reg;
 	u8 bypass_reg;
@@ -387,11 +428,11 @@ struct oxp_charge_map {
 };
 
 static const struct oxp_charge_map oxp_g1_charge = {
-	.limit_reg		= 0xA3,	/* candidate, confirm per §3.2 */
-	.bypass_reg		= 0xA4,	/* candidate, confirm per §3.2 */
+	.limit_reg		= 0xA3,	/* vendor addrChargeLimit 0x4A3, percent 0..100 */
+	.bypass_reg		= 0xA4,	/* vendor addrBypassPower 0x4A4, bit mask */
 	.bypass_off		= 0x00,	/* EC_VALUE_BYPASS_POWER_MODE_OFF */
-	.bypass_always		= 0x03,	/* EC_VALUE_BYPASS_POWER_MODE1 */
-	.bypass_awake		= 0x01,	/* EC_VALUE_BYPASS_POWER_MODE2 */
+	.bypass_always		= 0x03,	/* EC_VALUE_BYPASS_POWER_MODE2 (awake | "off" bits) */
+	.bypass_awake		= 0x01,	/* EC_VALUE_BYPASS_POWER_MODE1 (awake bit only) */
 };
 
 static int oxp_charge_get(struct power_supply *psy,
@@ -496,11 +537,14 @@ so this is the board-specific part):
 
 ## 7. What a maintainer must verify before this is a patch
 
-1. **The EC map is real.** Addresses, table layout, point count, temperature unit, duty range and
-   the three bypass values, each with a trace/IL evidence reference. No placeholder may survive.
-2. **The `0xA3`/`0xA4` question in §3.2.** If the current 7.2.7 `oxp_g1_i` mapping already drives
-   these bytes, the patch is much smaller than this draft assumes — and the observed
-   `charge_control_end_threshold` source changes. Settle it first.
+1. **The EC map is real.** Addresses and encodings now have two independent sources each
+   ([`oxpec-ec-addresses.md`](oxpec-ec-addresses.md) §1 and §7); what is *not* settled is a
+   device-side confirmation, and the `0xA5`/sensor rows that are still candidate-grade. No
+   placeholder may survive in a submitted patch.
+2. **The `0xA3`/`0xA4` question in §3.2 is answered: yes**, the 7.2.7 `oxp_g1_i` mapping already
+   drives exactly these bytes (`OXP_X1_CHARGE_LIMIT_REG`/`_INHIBIT_REG`), which is why the observed
+   `charge_control_end_threshold` exists at all. The charge patch therefore reduces to the `0xA5`
+   question, not to a new register map.
 3. **Existing helper bug.** `read_from_ec()` returns early on `ec_read()` failure without releasing
    the global ACPI lock (and also on unlock failure); every new user inherits it. Fix that in a
    separate, first patch.

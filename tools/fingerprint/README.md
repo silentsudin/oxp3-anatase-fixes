@@ -34,31 +34,44 @@ Windows UMDF driver, no vendor code in this repo):
 * Host frame: `AA | L:u32 LE | 16x0 | 4C op phase 00 arg:u16 len:u32 data | pad16 | CRC-32`,
   `L = 20 + align16(10 + data_len)`, CRC-32/ISO-HDLC over everything before it including `0xAA`.
   A data-less query is 41 bytes with `L = 36`.
-* The opcode table `0xA1`-`0xFF` (names and roles in `fpbf63112.protocol.COMMANDS`).
-* `CMD_GET_IMG_DATA` (`0xB5`): phase 0 returns 9 bytes `status, u32 total, u32 byte_sum`;
-  phase 1 streams 8-bit pixels; acceptance needs `total == width*height` and an **8-bit running
-  sum**; the Windows driver asks for at most `0x1FCC` (8140) bytes per transfer and re-sends on
-  answer timeout (1000/5000 ms per attempt).
+* The opcode table `0xA0`-`0xD0`, read from the driver's dispatch table (RVA `0x46F00`) and
+  cross-checked against the functions that emit each byte. Names and roles in
+  `fpbf63112.protocol.COMMANDS`.
+* Answer framing: the answer is byte-for-byte the request's layout - opcode at 22, phase at 23,
+  length at 27, body at **31** - and the driver checks byte 0 for `0xAA` and verifies the same
+  CRC-32 over `L + 1` bytes on receive.
+* The 16 bytes at offset 5 are a per-frame **nonce**: zero for a plaintext command, 16 random
+  bytes (plus an SM4-encrypted command block) when the secure-frame flag is set.
+* The session layer: `0xA2` carries a 65-byte SM2 public key, the answer (>= `0x71` bytes) carries
+  the device's point + SM3 tag + wrapped 16-byte SM4 key; the driver derives it with SM2 ECDH and
+  the GM/T 0003 KDF. Nothing is hardcoded or DPAPI-backed.
+* `CMD_GET_IMG_DATA` (`0xB4`): phase 0 has `status:u8 @0`, `total:u32 @4`, `sum:u32 @0x14`
+  (>= `0x18` bytes); phase 1 streams 8-bit pixels, each chunk a full `0xAA`/CRC frame; acceptance
+  needs `total == width*height` and an **8-bit running sum**; at most `0x1FCC` (8140) bytes per
+  transfer, re-sent on answer timeout (1000/5000 ms per attempt).
+* `CMD_QUERY_SENSOR_INFO` is `0xC1`: `a:u16, b:u16, width:u16 @4, height:u16 @6, flags:u8 @8`
+  (>= 9 bytes). `CMD_QUERY_FIRMWARE_VER` is `0xA0`: `state, project hi/lo, version:u32` (>= 7 B).
 * The device is SPI-mode udev hardware (`spidev`), not USB; no driver is bound today.
 
 **Inferred** (implemented conservatively, must be confirmed on hardware):
 
-* Answer framing is the mirror of the request: `AA | L | 16-byte device header | 4C op phase
-  status | ...`. The 16-byte answer header is undecoded. Both plausible body starts are exposed
-  (`Frame.body_from_status`, `Frame.body_from_arg`) rather than picking one silently.
-* `CMD_QUERY_SENSOR_INFO` payload: `a:u16, b:u16, width:u16, height:u16, flags:u8` (from the
-  Windows handler's reads); `CMD_QUERY_FIRMWARE_VER`: `mode, project, variant, 4 version bytes`.
-* Answers may or may not echo `opcode`/`phase`; the library checks the opcode and leaves the phase
-  check optional (`Transaction(check_phase=...)`).
-* Whether GET_IMG chunks carry a *per-chunk* 8-bit sum: `docs/hw/fingerprint.md` says there is only
-  the global sum, the recovered notes mention a per-chunk check. `ImageAssembler.add(..., chunk_sum=)`
-  supports either once hardware answers; nothing assumes it.
+* Whether the module *enforces* the session for `0xB0`/`0xB1`: the vendor driver always sets the
+  secure-frame flag there, but `0xA0`/`0xA1` go out in plaintext, so plaintext framing is at least
+  understood by the device for queries. A plaintext `0xB0` start is the decisive probe.
+* The exact SM4 chaining on the wire (the transmit and receive paths derive the per-frame value
+  differently in this build). A plaintext driver does not need it.
+* Answers may or may not echo `phase`; the library checks the opcode and leaves the phase check
+  optional (`Transaction(check_phase=...)`).
+* GET_IMG has **no** extra per-chunk sum field: chunks are covered by the per-frame CRC-32 and the
+  image by the phase-0 8-bit sum. `ImageAssembler.add(..., chunk_sum=)` still accepts one if a
+  future capture shows otherwise.
 
 **Unknown / out of scope**
 
-* SM3 session / `CMD_QUERY_ROOT_KEY` (`0xB0`) - whether a plain-spoken driver is accepted at all;
-  `CMD_FW_WORK_MODE_SWITCH` (`0xFF`) semantics.
-* Enrol/identify payloads (`0xB1`, `0xB2`): template handle, score, press counter, phase timing.
+* Whether a plain-spoken driver is accepted for enrol/identify (see above); `0xFF` is not in the
+  driver's table at all and is never sent.
+* Enrol/identify result semantics (`0xB0` phase 2 / `0xB1` phase 0): the 18-byte handle and the
+  status byte are proven, the meaning of the u16 inside the handle and any score are not.
 * SPI clock, mode, bit width and the reset/IRQ GPIOs - they live in `\_SB.PC00.SPI1.FPRT._CRS`
   and are root-only on this host.
 * Whether the second ACPI node (`BF63112:01` on SPI2) is real.
@@ -146,8 +159,8 @@ check paths: the offline `stub/` shim, and `syntax-real` against a fetched v1.94
 What it implements:
 
 * `open`: opens the spidev node libfprint provides for the udev match, queries sensor geometry
-  (`0xC2`) and firmware version (`0xA1`), then completes.
-* `close`, `suspend` (`0xC0 SLEEP`), `resume` (re-query sensor info).
+  (`0xC1`) and firmware version (`0xA0`), then completes.
+* `close`, `suspend` (`0xB6 SLEEP`), `resume` (re-query sensor info).
 * A generic request state machine: build frame, write+read one `FpiSpiTransfer`, scan for the
   answer, re-send up to 3 times on timeout/bad frame (the Windows driver's resend behaviour,
   polling instead of the not-yet-available IRQ GPIO).
@@ -176,9 +189,9 @@ What a maintainer must adapt to turn this into an upstreamable driver:
 3. **IRQ**: the module raises a GPIO when an answer is ready; `pxa2xx-spi` does not expose it, so a
    real driver should request the `GpioInt` from `_CRS` (or use `fpi_device_add_timeout` polling as
    this one does - correctness still unproven without hardware).
-4. **SM3/session**: confirm whether `0xB0`/`0xFF` must precede normal commands. If yes, implement
+4. **SM3/session**: confirm whether `0xA2` must precede normal commands. If yes, implement
    the handshake before enabling enroll/verify.
-5. **Enrol/verify payloads**: decode `0xB1`/`0xB2` (handle, score, press counter) and store only the
+5. **Enrol/verify payloads**: decode `0xB0`/`0xB1` (handle, score, press counter) and store only the
    opaque handle in the print (`fpi_print_set_type (print, FPI_PRINT_RAW)`,
    `fpi_print_set_device_stored (print, TRUE)`); templates stay on the module.
 6. **spidev bufsiz**: default 4096. Queries fit; GET_IMG chunks (up to 8140 B + frame overhead)
@@ -238,7 +251,7 @@ change and is reversible. **Do not** run anything that writes firmware, JTAG or 
    sudo python3 tools/fingerprint/oxp3-fp-probe.py --speed 1000000 --mode 0 --raw-info info
    ```
 
-   The probe only sends `0xA1`, `0xA2`, `0xB4`, `0xC1`, `0xC2` and refuses the destructive opcodes
+   The probe only sends `0xA0`, `0xA1`, `0xB3`, `0xC0`, `0xC1` and refuses the destructive opcodes
    by name. A healthy answer starts with `0xAA` and reports sensor width x height. All `0xFF`/no
    answer almost always means wrong SPI mode or too high a clock. If
    `/sys/bus/spi/devices/spi-BF63112:00/statistics/bytes_tx` exists, it tells you whether the
@@ -256,9 +269,9 @@ Nothing else is modified: no packages, no config, no firmware, no boot parameter
 
 ## Safety
 
-* **No firmware writes, no JTAG, no MCU restore.** `0xD1` (UPDATE_FIRMWARE), `0xD0`
+* **No firmware writes, no JTAG, no MCU restore.** `0xD0` (UPDATE_FIRMWARE), `0xC3`
   (RESTORE_MCU), `0xC3` (JTAG) are refused by both the probe and the Python/C command tables.
-* **No template deletion.** `0xB1`/`0xB3` are not wired up; fingers enrolled in Windows stay
+* **No template deletion.** `0xB0`/`0xB2` are not wired up; fingers enrolled in Windows stay
   untouched. The driver's enrol/verify paths refuse before sending anything.
 * **No firmware/vendor binaries in this repo.** Fixtures and vectors are synthetic, generated from
   the frame rules; no vendor DLL, blob or decompiled listing is stored.

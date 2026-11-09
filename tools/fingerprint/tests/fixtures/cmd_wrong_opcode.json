@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "cmd_wrong_opcode",
   "kind": "command",
-  "description": "answer belongs to another command (0xC1 while 0xC2 is in flight): the transaction refuses it",
+  "description": "answer belongs to another command (0xC0 while 0xC1 is in flight): the transaction refuses it",
   "request": {
     "op": "QUERY_SENSOR_INFO",
     "phase": 0,
@@ -11,7 +11,7 @@
   },
   "reads": [
     {
-      "hex": "aa24000000000000000000000000000000000000004cc100000000020000000001000000008abc73ed0000000000000000000000000000000000000000000000000000000000000000"
+      "hex": "aa24000000000000000000000000000000000000004cc00000000002000000000100000000626788540000000000000000000000000000000000000000000000000000000000000000"
     }
   ],
   "expect": {

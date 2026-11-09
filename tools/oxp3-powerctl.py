@@ -844,8 +844,8 @@ def battery_status(explicit=None):
     # "when plugged in, stop charging the battery, power the device only".
     info["bypass"] = selected in BYPASS_MODES
     info["bypass_vendor_equivalent"] = {
-        "inhibit-charge": "bypass, always effective (vendor mode 1)",
-        "inhibit-charge-awake": "bypass, ineffective while asleep/off (vendor mode 2)",
+        "inhibit-charge": "bypass, always effective (vendor mode 2, EC 0xA4=0x03)",
+        "inhibit-charge-awake": "bypass, ineffective while asleep/off (vendor mode 1, EC 0xA4=0x01)",
         "auto": "normal charging (vendor 'normal power supply')",
     }.get(selected)
     if info["capabilities"]["charge_behaviour"] == "absent":
@@ -903,8 +903,8 @@ def set_charge_threshold(value, *, battery=None, dry_run=False):
             f"{target} does not exist",
             path=target,
             hint=("this kernel/EC does not expose a charge limit; ACPI _BTP is missing. "
-                  "oxpec would need a charge-limit attribute backed by the EC byte "
-                  "behind the vendor's EC_ADDR_CHARGE_LIMIT (address unknown)"))
+                  "oxpec would need a charge-limit attribute backed by EC 0xA3 "
+                  "(the vendor's EC_ADDR_CHARGE_LIMIT; see upstream/oxpec-ec-addresses.md)"))
     if value is not None and not 0 <= value <= 100:
         raise ControlError(f"charge limit {value} out of range", hint="use 50-100, or 'off'")
     if value is not None and not 50 <= value <= 100:
@@ -950,7 +950,7 @@ def set_charge_bypass(on, *, battery=None, mode=None, dry_run=False):
             f"{target} does not exist", path=target,
             hint=("this kernel/EC exposes no charge-inhibit mode, so the vendor bypass "
                   "is not reachable. It needs ACPI _BCM bits or an oxpec attribute over "
-                  "the EC byte behind the vendor's EC_ADDR_BYPASS_POWER (address unknown)"))
+                  "EC 0xA4 (the vendor's EC_ADDR_BYPASS_POWER, 0x00/0x01/0x03)"))
     current, available = parse_charge_behaviour(read_text(target))
     wanted = "auto" if not on else (mode or BYPASS_ON_DEFAULT)
     if on and wanted not in BYPASS_MODES:
@@ -1233,6 +1233,136 @@ def print_status(status):
 # --------------------------------------------------------------------------- #
 # commands
 # --------------------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# ec: the recovered vendor register map, and what this kernel exposes
+# --------------------------------------------------------------------------- #
+# Recovered 2026-11-09 from OneXConsole's own per-OEM bootstrap (the managed
+# CompatLayerCT.exe is stripped, so the numbers are arguments the Electron
+# layer passes *into* it, not IL immediates). Every row with an independent
+# implementation in upstream oxpec.c was checked against it; see
+# upstream/oxpec-ec-addresses.md for provenance, offsets and confidence.
+#
+# The vendor writes an EC address as 0x400 + <ACPI-EC offset>; `ec` below is
+# the offset the EC actually sees.
+EC_MAP = (
+    # what, ec offset, vendor value, vendor field, encoding, confidence, linux
+    ("fan mode", "0x4A", "0x44A", "addrFanAutomate", "0x00 auto / 0x01 manual",
+     "confirmed", "hwmon pwm1_enable"),
+    ("fan duty", "0x4B", "0x44B", "addrFanSpeed", "0-184 raw (max 184 here)",
+     "confirmed", "hwmon pwm1 (driver scales 0-255)"),
+    ("fan tach H", "0x58", "0x458", "fanSpeedHECAddr", "rpm high byte",
+     "confirmed", "hwmon fan1_input"),
+    ("fan tach L", "0x59", "0x459", "fanSpeedLECAddr", "rpm low byte",
+     "confirmed", "hwmon fan1_input"),
+    ("charge limit", "0xA3", "0x4A3", "addrChargeLimit", "percent 0-100",
+     "confirmed", "charge_control_end_threshold"),
+    ("bypass power", "0xA4", "0x4A4", "addrBypassPower",
+     "0x00 off / 0x01 awake / 0x03 always", "confirmed", "charge_behaviour"),
+    ("charge floor", "0xA5", "0x4A5", "addrForceChargeMin",
+     "percent (unit unproven)", "candidate", "-"),
+    ("battery temp", "0xA0", "0x4A0", "addrBatteryTemp", "degC (scale unproven)",
+     "candidate", "-"),
+    ("charge current H", "0xA1", "0x4A1", "addrBatteryChargeCurrentH",
+     "16-bit high (unit unproven)", "candidate", "-"),
+    ("charge current L", "0xA2", "0x4A2", "addrBatteryChargeCurrentL",
+     "16-bit low (unit unproven)", "candidate", "-"),
+    ("board sensor 1", "0x60", "0x460", "addrBoardSensor1", "vendor scale (unknown)",
+     "candidate", "-"),
+    ("board sensor 2", "0x61", "0x461", "addrBoardSensor2", "vendor scale (unknown)",
+     "candidate", "-"),
+    ("cpu temp (EC)", "0x70", "0x470", "addrCpuTemp", "degC (scale unproven)",
+     "candidate", "-"),
+    ("power supply mode", "0xE3", "0x4E3", "addrPowerSupplyMode",
+     "1 battery / 2 TypeC>=100W / 4 DC-in / 8 TypeC<=65W", "candidate", "-"),
+    ("app function en", "0xEB", "0x4EB", "appFunENECAddr", "vendor takeover flag",
+     "candidate", "-"),
+    ("handle power", "0x2D", "0x42D", "addrHandlePower", "0x01 on / 0x00 off",
+     "candidate", "-"),
+)
+
+# Raw EC windows this kernel would have to provide before the tool could ever
+# touch a register itself. Both are debugfs interfaces and neither is built on
+# the stock Anatase kernel; the supported path is the driver's own attributes.
+EC_WINDOW_CANDIDATES = (
+    "/sys/kernel/debug/ec/ec0/io",       # CONFIG_ACPI_EC_DEBUGFS
+    "/sys/devices/virtual/misc/ec_sys/io",  # ec_sys module
+)
+
+EC_WRITE_REFUSAL = (
+    "oxp3-powerctl never pokes EC RAM directly: the addresses above come from "
+    "vendor code and have not been confirmed against this device. Use the driver "
+    "attributes (`battery limit`, `battery bypass`, `fan speed`), which write the "
+    "same registers through oxpec/acpi_ec with the kernel's locking."
+)
+
+
+def ec_interfaces():
+    """Report the EC-facing interfaces that exist, without writing anything."""
+    info = {"raw_ec_window": None, "fan": {}, "battery": {}, "warnings": []}
+    fan = find_fan()
+    if fan:
+        info["fan"] = {"path": fan.path, "name": fan.name}
+        info["fan"]["pwm1"] = probe_state(fan.pwm)
+        info["fan"]["pwm1_enable"] = probe_state(fan.pwm_enable)
+        info["fan"]["fan1_input"] = probe_state(fan.fan_input)
+    else:
+        info["warnings"].append("no oxp_ec fan hwmon node (oxpec not bound?)")
+    battery = find_battery()
+    if battery:
+        info["battery"] = {"path": battery}
+        for name in ("charge_control_end_threshold", "charge_behaviour"):
+            info["battery"][name] = probe_state(os.path.join(battery, name))
+    else:
+        info["warnings"].append("no battery device")
+    for candidate in EC_WINDOW_CANDIDATES:
+        state = probe_state(candidate)
+        if state != "absent":
+            info["raw_ec_window"] = {"path": candidate, "state": state}
+            break
+    if info["raw_ec_window"] is None:
+        info["warnings"].append(
+            "no raw EC window (CONFIG_ACPI_EC_DEBUGFS/ec_sys absent); the vendor "
+            "map is informational only on this kernel")
+    return info
+
+
+def cmd_ec(args):
+    if args.ec_action == "map":
+        rows = [dict(zip(("what", "ec_offset", "vendor_value", "vendor_field",
+                          "encoding", "confidence", "linux"), row)) for row in EC_MAP]
+        if args.json:
+            print(json.dumps({"ok": True, "registers": rows}, indent=2, sort_keys=True))
+            return 0
+        print(f"{'what':18s} {'ec':5s} {'vendor':7s} {'confidence':10s} "
+              f"{'encoding':44s} linux")
+        for row in rows:
+            print(f"{row['what']:18s} {row['ec_offset']:5s} {row['vendor_value']:7s} "
+                  f"{row['confidence']:10s} {row['encoding']:44s} {row['linux']}")
+        print("\nprovenance: upstream/oxpec-ec-addresses.md "
+              "(vendor app.asar + upstream oxpec.c cross-check)")
+        return 0
+    if args.ec_action == "probe":
+        info = ec_interfaces()
+        if args.json:
+            print(json.dumps(info, indent=2, sort_keys=True))
+        else:
+            print("EC-facing interfaces")
+            for name, state in (info.get("fan") or {}).items():
+                if name != "path":
+                    print(f"  fan {name:26s} {state}")
+            for name, state in (info.get("battery") or {}).items():
+                if name != "path":
+                    print(f"  battery {name:22s} {state}")
+            window = info.get("raw_ec_window")
+            print("  raw EC window            " +
+                  (f"{window['path']} ({window['state']})" if window else "absent"))
+            for warning in info["warnings"]:
+                print(f"  warning: {warning}")
+        return 0 if (info.get("fan") or info.get("battery")) else 2
+    raise ControlError("refusing to write EC RAM directly",
+                       hint=EC_WRITE_REFUSAL)
+
 
 def cmd_status(args):
     status = collect_status()
@@ -1853,8 +1983,8 @@ def build_parser():
                          help="charge inhibit: stop charging while on the adapter")
     bp.add_argument("bypass_action", choices=("on", "off", "status"))
     bp.add_argument("--mode", choices=BYPASS_MODES, default=None,
-                    help="bypass variant: inhibit-charge (always, vendor mode 1) or "
-                         "inhibit-charge-awake (ineffective asleep/off, vendor mode 2)")
+                    help="bypass variant: inhibit-charge (always = vendor mode 2) or "
+                         "inhibit-charge-awake (ineffective asleep/off = vendor mode 1)")
     bp.add_argument("--save", action="store_true", help="persist for the boot/resume units")
     bp.add_argument("--dry-run", action="store_true")
     bp.add_argument("--json", action="store_true")
@@ -1874,6 +2004,11 @@ def build_parser():
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_fan)
+
+    p = sub.add_parser("ec", help="recovered EC register map and EC-facing interfaces")
+    p.add_argument("ec_action", choices=("map", "probe", "write"))
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_ec)
 
     p = sub.add_parser("snapshot", help="print (or --save) the current limits as a rollback baseline")
     p.add_argument("--save", action="store_true")

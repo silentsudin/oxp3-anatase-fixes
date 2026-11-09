@@ -19,8 +19,8 @@ class TestTransaction(unittest.TestCase):
         sent = tx.start()
         self.assertEqual(tx.state, P.TransactionState.AWAITING_ANSWER)
         self.assertEqual(tx.attempts, 1)
-        self.assertEqual(sent, P.build_frame(0xC2, 0, 0, b""))
-        self.assertEqual(P.parse_frame(sent).opcode, 0xC2)
+        self.assertEqual(sent, P.build_frame(0xC1, 0, 0, b""))
+        self.assertEqual(P.parse_frame(sent).opcode, 0xC1)
 
     def test_start_twice_fails(self):
         tx = P.Transaction(int(P.Command.QUERY_SENSOR_INFO))
@@ -72,7 +72,7 @@ class TestTransaction(unittest.TestCase):
     def test_rejects_wrong_magic(self):
         tx = P.Transaction(int(P.Command.QUERY_SENSOR_INFO))
         tx.start()
-        raw = bytearray(P.build_frame(0xC2))
+        raw = bytearray(P.build_frame(0xC1))
         raw[21] = 0x00
         import struct
         struct.pack_into("<I", raw, len(raw) - 4, P.crc32(bytes(raw[:-4])))
@@ -85,24 +85,24 @@ class TestTransaction(unittest.TestCase):
         tx = P.Transaction(int(P.Command.QUERY_SENSOR_INFO))
         tx.start()
         with self.assertRaises(P.ResponseMismatchError):
-            tx.handle_frame(P.parse_frame(P.build_frame(0xC1)))
+            tx.handle_frame(P.parse_frame(P.build_frame(0xC2)))
 
     def test_phase_check_is_optional(self):
         tx = P.Transaction(int(P.Command.GET_IMG_DATA), phase=1)
         tx.start()
         # answers may not echo the phase; default is lenient
-        tx.handle_frame(P.parse_frame(P.build_frame(0xB5, 0)))
+        tx.handle_frame(P.parse_frame(P.build_frame(0xB4, 0)))
         self.assertEqual(tx.state, P.TransactionState.SUCCESS)
 
         tx = P.Transaction(int(P.Command.GET_IMG_DATA), phase=1, check_phase=True)
         tx.start()
         with self.assertRaises(P.ResponseMismatchError):
-            tx.handle_frame(P.parse_frame(P.build_frame(0xB5, 0)))
+            tx.handle_frame(P.parse_frame(P.build_frame(0xB4, 0)))
 
     def test_frame_in_wrong_state(self):
         tx = P.Transaction(int(P.Command.QUERY_SENSOR_INFO))
         with self.assertRaises(P.SessionError):
-            tx.handle_frame(P.parse_frame(P.build_frame(0xC2)))
+            tx.handle_frame(P.parse_frame(P.build_frame(0xC1)))
         tx.start()
         tx.handle_frame(response_to(tx))
         with self.assertRaises(P.SessionError):
@@ -148,21 +148,25 @@ class TestTransaction(unittest.TestCase):
 
 class TestCommandTable(unittest.TestCase):
     def test_opcodes_match_recovered_table(self):
-        self.assertEqual(int(P.Command.QUERY_FIRMWARE_VER), 0xA1)
-        self.assertEqual(int(P.Command.QUERY_MODULE_SCHEME_INFORMATION), 0xA2)
-        self.assertEqual(int(P.Command.QUERY_ROOT_KEY), 0xB0)
-        self.assertEqual(int(P.Command.ENROLL_FINGERPRINT), 0xB1)
-        self.assertEqual(int(P.Command.IDENTIFY_FINGERPRINT), 0xB2)
-        self.assertEqual(int(P.Command.REMOVE_FINGERPRINT), 0xB3)
-        self.assertEqual(int(P.Command.QUERY_FINGERPRINT_COUNT), 0xB4)
-        self.assertEqual(int(P.Command.GET_IMG_DATA), 0xB5)
-        self.assertEqual(int(P.Command.DETECT_FINGERPRINT_PRESS), 0xB6)
-        self.assertEqual(int(P.Command.SLEEP), 0xC0)
-        self.assertEqual(int(P.Command.QUERY_MODULE_UID), 0xC1)
-        self.assertEqual(int(P.Command.QUERY_SENSOR_INFO), 0xC2)
-        self.assertEqual(int(P.Command.JTAG_CONTROL), 0xC3)
-        self.assertEqual(int(P.Command.RESTORE_MCU), 0xD0)
-        self.assertEqual(int(P.Command.UPDATE_FIRMWARE), 0xD1)
+        # Values taken from the driver's dispatch table at RVA 0x46F00 (see
+        # docs/hw/fingerprint.md); each is cross-checked against the function
+        # that builds it and the handler the table binds to it.
+        self.assertEqual(int(P.Command.QUERY_FIRMWARE_VER), 0xA0)
+        self.assertEqual(int(P.Command.QUERY_MODULE_SCHEME_INFORMATION), 0xA1)
+        self.assertEqual(int(P.Command.QUERY_ROOT_KEY), 0xA2)
+        self.assertEqual(int(P.Command.ENROLL_FINGERPRINT), 0xB0)
+        self.assertEqual(int(P.Command.IDENTIFY_FINGERPRINT), 0xB1)
+        self.assertEqual(int(P.Command.REMOVE_FINGERPRINT), 0xB2)
+        self.assertEqual(int(P.Command.QUERY_FINGERPRINT_COUNT), 0xB3)
+        self.assertEqual(int(P.Command.GET_IMG_DATA), 0xB4)
+        self.assertEqual(int(P.Command.DETECT_FINGERPRINT_PRESS), 0xB5)
+        self.assertEqual(int(P.Command.SLEEP), 0xB6)
+        self.assertEqual(int(P.Command.QUERY_MODULE_UID), 0xC0)
+        self.assertEqual(int(P.Command.QUERY_SENSOR_INFO), 0xC1)
+        self.assertEqual(int(P.Command.JTAG_CONTROL), 0xC2)
+        self.assertEqual(int(P.Command.RESTORE_MCU), 0xC3)
+        self.assertEqual(int(P.Command.UPDATE_FIRMWARE), 0xD0)
+        # Not in the driver's table; kept for source compatibility only.
         self.assertEqual(int(P.Command.FW_WORK_MODE_SWITCH), 0xFF)
 
     def test_safety_classes(self):
@@ -178,7 +182,7 @@ class TestCommandTable(unittest.TestCase):
         self.assertNotIn(P.Command.UPDATE_FIRMWARE, P.READ_ONLY_COMMANDS)
 
     def test_lookup(self):
-        self.assertEqual(P.command_name(0xC2), "CMD_QUERY_SENSOR_INFO")
+        self.assertEqual(P.command_name(0xC1), "CMD_QUERY_SENSOR_INFO")
         self.assertIsNone(P.command_info(0x00))
         self.assertEqual(P.command_name(0x00), "op 0x00")
         info = P.COMMANDS[P.Command.GET_IMG_DATA]

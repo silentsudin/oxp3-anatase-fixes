@@ -93,7 +93,7 @@ def command_fixtures() -> list[dict]:
         "request": {"op": "QUERY_SENSOR_INFO", "phase": 0, "arg": 0,
                     "data_hex": ""},
         "reads": [
-            {"hex": NOISE + frame_hex(0xC2, data=info_payload),
+            {"hex": NOISE + frame_hex(0xC1, data=info_payload),
              "note": "preamble junk, then the answer"},
             {"hex": ZERO_PAD, "note": "trailing padding only"},
         ],
@@ -108,7 +108,7 @@ def command_fixtures() -> list[dict]:
         "description": "CMD_QUERY_FIRMWARE_VER answer, 7-byte payload",
         "request": {"op": "QUERY_FIRMWARE_VER", "phase": 0, "arg": 0,
                     "data_hex": ""},
-        "reads": [read(frame_hex(0xA1, data=fw_payload))],
+        "reads": [read(frame_hex(0xA0, data=fw_payload))],
         "expect": {"outcome": "success", "attempts": 1,
                    "payload_hex": fw_payload.hex()},
     })
@@ -121,13 +121,13 @@ def command_fixtures() -> list[dict]:
                        "the answer: the transaction must re-send and succeed",
         "request": {"op": "QUERY_MODULE_UID", "phase": 0, "arg": 0,
                     "data_hex": ""},
-        "reads": [junk(), read(frame_hex(0xC1, data=bytes(range(1, 9))))],
+        "reads": [junk(), read(frame_hex(0xC0, data=bytes(range(1, 9))))],
         "expect": {"outcome": "success", "attempts": 2,
                    "payload_hex": bytes(range(1, 9)).hex()},
     })
 
-    bad = corrupt(frame_hex(0xB4, data=b"\x02\x00\x00\x00"))
-    good = frame_hex(0xB4, data=b"\x02\x00\x00\x00")
+    bad = corrupt(frame_hex(0xB3, data=b"\x02\x00\x00\x00"))
+    good = frame_hex(0xB3, data=b"\x02\x00\x00\x00")
     fixtures.append({
         "schema": 1,
         "name": "cmd_bad_crc_then_ok",
@@ -160,8 +160,8 @@ def command_fixtures() -> list[dict]:
                        "complete answer",
         "request": {"op": "QUERY_SENSOR_INFO", "phase": 0, "arg": 0,
                     "data_hex": ""},
-        "reads": [{"hex": frame_hex(0xC2, data=info_payload)[:50]},
-                  read(frame_hex(0xC2, data=info_payload))],
+        "reads": [{"hex": frame_hex(0xC1, data=info_payload)[:50]},
+                  read(frame_hex(0xC1, data=info_payload))],
         "expect": {"outcome": "success", "attempts": 2,
                    "payload_hex": info_payload.hex()},
     })
@@ -182,11 +182,11 @@ def command_fixtures() -> list[dict]:
         "schema": 1,
         "name": "cmd_wrong_opcode",
         "kind": "command",
-        "description": "answer belongs to another command (0xC1 while 0xC2 is "
+        "description": "answer belongs to another command (0xC0 while 0xC1 is "
                        "in flight): the transaction refuses it",
         "request": {"op": "QUERY_SENSOR_INFO", "phase": 0, "arg": 0,
                     "data_hex": ""},
-        "reads": [read(frame_hex(0xC1, data=b"\x00\x01"))],
+        "reads": [read(frame_hex(0xC0, data=b"\x00\x01"))],
         "expect": {"outcome": "mismatch", "attempts": 1, "payload_hex": ""},
     })
 
@@ -201,11 +201,11 @@ def image_fixtures() -> list[dict]:
     img = image_8x8()
     total = len(img)
     checksum = P.sum8(img)
-    header_ok = frame_hex(0xB5, phase=0, data=P.ImageHeader.build(total, checksum))
-    header_bad_sum = frame_hex(0xB5, phase=0,
+    header_ok = frame_hex(0xB4, phase=0, data=P.ImageHeader.build(total, checksum))
+    header_bad_sum = frame_hex(0xB4, phase=0,
                                data=P.ImageHeader.build(total, checksum ^ 0x01))
     chunks = [img[i:i + 16] for i in range(0, total, 16)]
-    chunk_frames = [frame_hex(0xB5, phase=1, data=c) for c in chunks]
+    chunk_frames = [frame_hex(0xB4, phase=1, data=c) for c in chunks]
 
     fixtures = []
 
@@ -262,7 +262,7 @@ def image_fixtures() -> list[dict]:
     })
 
     big = bytes((i * 7) % 256 for i in range(144))
-    big_header = frame_hex(0xB5, phase=0,
+    big_header = frame_hex(0xB4, phase=0,
                            data=P.ImageHeader.build(len(big), P.sum8(big)))
     fixtures.append({
         "schema": 1,
@@ -272,7 +272,7 @@ def image_fixtures() -> list[dict]:
                        "refuses it (the Windows driver's own ceiling is 8140)",
         "chunk_size": 144,
         "max_chunk": 128,
-        "reads": [read(big_header), read(frame_hex(0xB5, phase=1, data=big))],
+        "reads": [read(big_header), read(frame_hex(0xB4, phase=1, data=big))],
         "expect": {"outcome": "error", "error": "ChunkTooLargeError",
                    "received": 0, "total": 144},
     })
@@ -286,18 +286,18 @@ def image_fixtures() -> list[dict]:
 
 def frame_vectors() -> list[dict]:
     specs = [
-        ("fw_query_empty", 0xA1, 0, 0x0000, 0, b""),
-        ("sensor_info_arg", 0xC2, 0, 0x1234, 0, b""),
-        ("getimg_aligned6", 0xB5, 1, 0x0001, 0, bytes(range(1, 7))),
-        ("getimg_pad7", 0xB5, 1, 0x0002, 0, bytes(range(1, 8))),
+        ("fw_query_empty", 0xA0, 0, 0x0000, 0, b""),
+        ("sensor_info_arg", 0xC1, 0, 0x1234, 0, b""),
+        ("getimg_aligned6", 0xB4, 1, 0x0001, 0, bytes(range(1, 7))),
+        ("getimg_pad7", 0xB4, 1, 0x0002, 0, bytes(range(1, 8))),
         ("enroll_data16", 0xB1, 0, 0x0000, 0, bytes(range(16))),
         ("enroll_phase2_data17", 0xB1, 2, 0x1234, 0, bytes(range(17))),
-        ("getimg_data32", 0xB5, 1, 0x0000, 0, bytes(range(32))),
-        ("image_header_reply", 0xB5, 0, 0x0000, 0,
+        ("getimg_data32", 0xB4, 1, 0x0000, 0, bytes(range(32))),
+        ("image_header_reply", 0xB4, 0, 0x0000, 0,
          P.ImageHeader.build(64, P.sum8(image_8x8()))),
-        ("status_reply_data9", 0xC2, 0, 0x0000, 0x05,
+        ("status_reply_data9", 0xC1, 0, 0x0000, 0x05,
          bytes([0, 1, 2, 208, 0, 80, 0, 3, 0])),
-        ("bulk255", 0xB5, 1, 0x0000, 0, bytes(range(255))),
+        ("bulk255", 0xB4, 1, 0x0000, 0, bytes(range(255))),
     ]
     out = []
     for name, op, phase, arg, status, data in specs:

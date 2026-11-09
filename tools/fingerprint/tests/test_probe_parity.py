@@ -74,11 +74,11 @@ class TestProbeParity(unittest.TestCase):
         self.assertEqual(set(self.probe.DESTRUCTIVE),
                          {int(c) for c in P.DESTRUCTIVE_COMMANDS})
         self.assertEqual(self.probe.DESTRUCTIVE, {
-            0xB1: "ENROLL",
-            0xB3: "REMOVE",
-            0xC3: "JTAG",
-            0xD0: "RESTORE_MCU",
-            0xD1: "UPDATE_FIRMWARE",
+            0xB0: "ENROLL",
+            0xB2: "REMOVE",
+            0xC2: "JTAG",
+            0xC3: "RESTORE_MCU",
+            0xD0: "UPDATE_FIRMWARE",
             0xFF: "FW_WORK_MODE_SWITCH",
         })
 

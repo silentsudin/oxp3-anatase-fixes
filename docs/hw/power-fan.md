@@ -28,13 +28,14 @@ root, the `sudo` lines below are the exact commands, and the first real write te
 2. Today both zones read PL1 35 W (τ 27.98 s), MSR PL2 37 W, MMIO PL2 52 W, PL4 122 W — not one of the
    vendor presets (the 35 W sync in this repo is PL1-only). `oxp3-powerctl profile {quiet,balanced,performance}`
    writes all three limits to both zones and verifies the readback.
-3. **The fan is controllable, but only crudely.** `hwmon6` (`oxp_ec`) gives `fan1_input`, `pwm1`
-   (0–255, scaled by the driver to the EC's 0–184 on this board) and `pwm1_enable` (0 full / 1 manual /
-   2 EC auto). Manual PWM requires `tt_toggle=1`, which hhd already sets. The vendor's three EC fan
-   **curves** (`DevsCPUFanCurve`, `DevsGPUFanCurve`, `DevsMidFanCurve`) and the `addrFanAutomate` /
-   `addrFanSpeed` fields have **no Linux interface**; a userspace curve daemon can approximate an
-   intelligent curve, and exposing the real EC curves needs a small `oxpec` extension (EC offsets
-   unknown, §5.4).
+3. **The fan is controllable, and the "missing EC curves" turned out not to exist.**
+   `hwmon6` (`oxp_ec`) gives `fan1_input`, `pwm1` (0–255, scaled by the driver to the EC's 0–184 on
+   this board) and `pwm1_enable` (0 full / 1 manual / 2 EC auto). Manual PWM requires `tt_toggle=1`,
+   which hhd already sets. The vendor's `addrFanAutomate`/`addrFanSpeed` are **exactly** the two
+   registers this driver already writes (EC `0x4A`/`0x4B`), and its `Devs*FanCurve` fields are ASUS
+   WMI device ids with no meaning here — the OXP3 EC runs its own closed loop and holds no table
+   (§2.3, §5.4). So the only sane place for a curve is userspace, which is what `fan curve` does;
+   nothing is missing from the driver for the fan.
 4. `acpi_fan`'s `fan1_input` returns `EIO` and `TFN1`'s `cur_state` returns `EIO` — both are known
    cosmetic/firmware issues, not the fan (use `oxp_ec`).
 
@@ -126,16 +127,37 @@ addrCpuTemp, addrBoardSensor1/2, addrBypassPower, addrPowerSupplyMode
 ```
 
 and the UI strings `cooling_runmode_intelli` ("intelligent fan curve"), `cooling_runmode_fixspeed`,
-`qs_fan_presetting1/2`, `qs_fan_lock`. That is: an auto/fixed mode switch, a fan-speed register and
-**three** curve tables (CPU, GPU, mid) in EC RAM, plus a fan "lock".
+`qs_fan_presetting1/2`, `qs_fan_lock`.
 
-Linux's `oxpec` driver (visible in the module build tree,
-`drivers/platform/x86/oxpec.c`) only exposes the *speed* half of that: for `ONEXPLAYER 3` the DMI
-table maps to board `oxp_g1_i`, which uses EC `0x76` (fan tach, 2 bytes), `0x4A` (mode: `0x00` auto /
-`0x01` manual) and `0x4B` (duty, driver-scaled from 0–255 to 0–184). There is no attribute for the
-curve tables, no per-partition (CPU/GPU/mid) control and no preset/lock API. hhd only writes
-`tt_toggle` (`hhd/device/oxp/__init__.py`) — it has no powercap or TDP path on this model (grep of
-`/usr/lib/python3.15/site-packages/hhd` finds no `powercap`/`intel-rapl` use).
+**Update 2026-11-09: the addresses are no longer unknown, and three of the claims above were wrong.**
+The numbers are not IL immediates — they are decimal arguments the Electron layer passes *into*
+`CompatLayerCT.exe`, which the earlier Ghidra run could not see because that assembly is stripped,
+not packed (2829 of 3706 bodies are one `throw` stub). Recovered map, provenance and confidence:
+[`upstream/oxpec-ec-addresses.md`](../../upstream/oxpec-ec-addresses.md). What it says about the fan:
+
+| vendor field | vendor value | EC offset | this driver |
+|---|---:|---:|---|
+| `addrFanAutomate` | `0x44A` | `0x4A` | `pwm1_enable` (`0x00` auto / `0x01` manual) |
+| `addrFanSpeed` | `0x44B` | `0x4B` | `pwm1`, raw 0–184 (`FAN_MAX_SPEED_VALUE` = 184 on this board) |
+| `fanSpeedHECAddr`/`LECAddr` | `0x458`/`0x459` | `0x58`/`0x59` | `fan1_input`, 16-bit |
+| `EC_ADDR_APP_FUN_EN` | `0x4EB` | `0xEB` | — (vendor takeover flag; meaning unproven) |
+
+So the earlier "three curve tables in EC RAM" reading does not survive: `DevsCPUFanCurve`,
+`DevsGPUFanCurve` and `DevsMidFanCurve` are `CompatLayerCT.AsusACPI` **WMI device ids** (literals
+`0x110024`, `0x110025`, `0x110032`, with `DevsCPUFan`/`DevsGPUFan` at `0x110022`/`0x110023`), the app
+never sends a curve over its fan IPC (only `/fan/init`, `/fan/automate`, `/fan/setFanSpeed`,
+`/fan/getFanSpeed`), and `cooling_runmode_intelli` belongs to the Bluetooth water-cooling accessory
+(`CoolingSystemHelper`, `cooling_runStatus_pump_abnormal`). The EC's automatic mode **is** the
+vendor's intelligent curve.
+
+Tach register caveat: the `0x76` in the previous revision of this section is what older `oxpec`
+trees used. Upstream master reads `OXP_2_SENSOR_FAN_REG` = **`0x58`** (2 bytes) for `oxp_g1_i`, which
+is exactly what the vendor uses, so `0x58`/`0x59` is the register to trust; see
+[`upstream/oxpec-ec-addresses.md`](../../upstream/oxpec-ec-addresses.md) §7 for the one measurement
+that would settle which register the running module actually reads.
+
+hhd only writes `tt_toggle` (`hhd/device/oxp/__init__.py`) — it has no powercap or TDP path on this
+model (grep of `/usr/lib/python3.15/site-packages/hhd` finds no `powercap`/`intel-rapl` use).
 
 ### 2.4 The one unproven number: the τ unit
 
@@ -163,6 +185,24 @@ Then run the §8.3 stress test with each: with the 56 ms window, package power s
 immediately and PL2 never shows up in `/run/rapl-power/package-0`; with a multi-second window it should
 ride PL2 for seconds first. Keep the one that matches the vendor's intent (bursts allowed, average at
 PL1) — that is the whole practical difference.
+
+### 2.5 Cross-check: vendor numbers versus upstream `oxpec.c`
+
+The recovered map is only worth anything if an independent implementation agrees. Upstream
+`drivers/platform/x86/oxpec.c` (master, fetched 2026-11-09) does, register for register:
+
+| what | vendor (from the app) | upstream `oxpec` | verdict |
+|---|---|---|---|
+| fan mode | `0x4A`, `0x00` auto / `0x01` manual | `OXP_SENSOR_PWM_ENABLE_REG 0x4A`, `PWM_MODE_AUTO 0`/`PWM_MODE_MANUAL 1` | identical |
+| fan duty | `0x4B`, max **184** | `OXP_SENSOR_PWM_REG 0x4B`, `oxp_g1_i` scales 0–255 → 0–184 | identical |
+| fan tach | `0x58`/`0x59`, 16-bit | `OXP_2_SENSOR_FAN_REG 0x58`, 2 bytes, for `oxp_2`/`oxp_x1`/`oxp_g1_i` | identical (and the old `0x76` note was stale) |
+| charge cap | `0xA3`, percent | `OXP_X1_CHARGE_LIMIT_REG 0xA3` (`oxp_g1_i` takes the default branch) | identical |
+| charge inhibit | `0xA4`, `0x00`/`0x01`/`0x03` | `OXP_X1_CHARGE_INHIBIT_REG 0xA4`, masks `AWAKE 0x01`/`OFF 0x02`/`ALWAYS 0x03`; set: auto→`0`, awake→`0x01`, always→`0x03` | identical |
+| turbo/app function | `0xEB` | `OXP_2_TURBO_SWITCH_REG 0xEB` | same byte, different name (vendor calls it "app function enable") |
+
+Five of six are byte-identical *and* semantically identical, which is what lets the remaining
+candidates (battery/sensor block, `0xA5`, `0xE3`) be stated with a straight face: the vendor's
+address space really is `0x400 + <ACPI-EC offset>`.
 
 ## 3. Profiles
 
@@ -199,6 +239,8 @@ oxp3-powerctl fan manual [PWM]
 oxp3-powerctl fan speed PWM               # 0-255, forces manual mode
 oxp3-powerctl fan curve [--file F] [--interval S] [--steps N] [--once]
                         [--sensor PATH] [--hysteresis N] [--no-restore] [--dry-run] [--json]
+oxp3-powerctl ec map                      # recovered vendor EC register map (read-only)
+oxp3-powerctl ec probe                    # which EC-facing interfaces exist (read-only)
 oxp3-powerctl snapshot [--save]           # print/save the current limits as a rollback baseline
 oxp3-powerctl restore-baseline [--dry-run]
 oxp3-powerctl restore [--dry-run]         # what the units run
@@ -262,9 +304,10 @@ Caveats:
 
 ### 5.2 What is not reachable
 
-- The three EC **curve tables** (`DevsCPUFanCurve/GPUFanCurve/MidFanCurve`), the auto/fixed switch
-  (`addrFanAutomate`), the fan "lock" and the per-partition fans: no sysfs attribute, no ACPI method,
-  no hwmon channel. `oxpec` only has the three attributes above.
+- ~~The three EC curve tables~~ — they do not exist on this machine (§2.3, §2.5): `Devs*FanCurve`
+  are ASUS WMI ids and the EC's automatic mode *is* the vendor's curve. Nothing is missing here.
+- The per-partition fans, the fan "lock"/preset and `EC_ADDR_APP_FUN_EN` (`0xEB`) have no interface,
+  but also no known meaning on this board yet — they are candidates, not gaps.
 - The EC's own temperature/board sensors (`addrCpuTemp`, `addrBoardSensor1/2`) — not exposed either.
 - Direct EC RAM from userspace: `ec_sys` is **not built** in this kernel (`modinfo ec_sys` → not
   found, `/sys/module/ec_sys` absent), and `/sys/kernel/debug` is root-only so the ACPI EC debugfs
@@ -293,20 +336,17 @@ To expose the vendor fan behaviour in `oxpec` (upstream `drivers/platform/x86/ox
 order of effort:
 
 1. **`fan1_target`/`pwm1` already exist** — nothing to do.
-2. **EC curve tables**: add three binary/RW attributes (`fan_curve_cpu`, `fan_curve_gpu`, `fan_curve_mid`)
-   plus a mode attribute, writing the EC through the driver's existing `write_to_ec()`/`read_from_ec()`
-   helpers. The **EC offsets and the register layout are unknown**: `CompatLayerCT.exe` gives the field
-   *names*, not the addresses (the native EC driver object is not in the NSIS payload). Needed first:
-   - a Windows-side EC trace (RWEverything/`inpoutx64` port 0x62/0x66 trace), or the kernel's ACPI EC
-     debugfs interface (`CONFIG_ACPI_EC_DEBUGFS`) on a debug kernel, or
-   - an ACPI `_Qxx`/DSDT read on the Windows side (the EC methods may live in an SSDT behind the
-     unbound WMI GUIDs — see gap-audit open points).
-3. **Per-partition fans / fan lock / board sensors**: same EC-address problem; a driver change only
-   after the map is known.
+2. ~~**EC curve tables**~~ — **withdrawn**: there are no curve tables to expose (§2.3, §2.5). The
+   vendor's own fan control is the two registers `oxpec` already drives.
+3. **Board sensors / battery telemetry** (`0x60`, `0x61`, `0x70`, `0xA0`–`0xA2`) and the charge
+   floor (`0xA5`): addresses are known (§2.3 table, candidate grade) but the **scales are not**, and
+   for `0xA5` neither is the meaning. A two-point comparison against the vendor UI, or one trace,
+   is the cheap next step; only then is a `tempN_input`/`charge_control_start_threshold` patch
+   justifiable.
 4. **`tt_toggle`-style prerequisites** are already handled.
 
-Because the offsets are the blocker, this repo ships the userspace curve emulation instead of a
-speculative driver patch, and this document records the gap rather than guessing registers.
+Because the EC keeps no curve, this repo ships the userspace curve emulation instead of a
+speculative driver patch — and that is now the *correct* design, not a workaround.
 
 ## 6. systemd units and interaction with the existing stack
 
@@ -482,8 +522,11 @@ systemctl cat oxp3-power-profile.service | grep -E 'After|ReadWritePaths'
    [battery-tdp.md](battery-tdp.md) §4 (`tools/oxp3-adaptivetdp.py`). It uses CPU load because this
    `xe` exposes no `gpu_busy_percent`, and the charger-tier (`powersupplymode_mode1/2/4/8`) input is
    still not exposed (only `ADP1.online`).
-8. **EC fan curve offsets** are the blocker for real curve control (§5.4); needs a Windows-side EC trace
-   or an SSDT dump behind the unbound WMI GUIDs.
+8. ~~**EC fan curve offsets** are the blocker for real curve control~~ — **closed 2026-11-09**: there
+   are no EC curve tables on this board and the fan registers were recovered
+   ([`upstream/oxpec-ec-addresses.md`](../../upstream/oxpec-ec-addresses.md)). What is left is the
+   `0xA5` charge floor and the sensor scales (§2.3, §5.4), which need one trace or a two-point
+   comparison against the vendor UI.
 9. **Wiring into the main installer:** `files/` and `tools/` are added here, but `oxp3-fixes.sh`'s
    `install_extras()` was deliberately not touched while other work is in flight; adding the three
    units + `oxp3-powerctl` there (and a README row) is the one remaining integration step.

@@ -601,7 +601,7 @@ components:
     state: partial
     group: hardware
     headline: false
-    summary: "A manual PWM fan curve works through pwm1; the EC's own fan curves are not exposed by any Linux interface."
+    summary: "A manual PWM fan curve works through pwm1. The EC keeps no fan-curve table on this board (recovered 2026-11-09: its auto/manual, duty and tach registers are exactly what oxpec already drives), so userspace is the only place a curve can live."
     implementation:
       - tools/oxp3-powerctl.py
       - files/oxp3-fan-curve.service
@@ -623,7 +623,8 @@ components:
     caveats:
       - "SIGTERM restores EC auto mode"
       - "the acpi_fan EIO in the fan node is a known cosmetic bug"
-      - "EC autonomous curves need kernel work; only manual PWM is reachable"
+      - "there is no vendor EC curve table to expose: Devs*FanCurve are ASUS WMI device ids; see upstream/oxpec-ec-addresses.md"
+      - "the EC tach is 0x58/0x59 (upstream oxpec, OXP_2_SENSOR_FAN_REG); older notes said 0x76"
     last_validated:
       date: 2026-11-09
       evidence: "docs/QA.md row 44 (curve picks pwm 124 at 61 C in a dry run); docs/hw/power-fan.md EC findings"
@@ -633,7 +634,7 @@ components:
     state: partial
     group: hardware
     headline: false
-    summary: "Charge limit and charge-inhibit ('bypass' approximation) are reachable; the EC bypass byte and charger tier are not exposed."
+    summary: "Charge limit and charge-inhibit ('bypass') are reachable through the driver's EC bytes, now identified: 0xA3 percent cap and 0xA4 bit mask (0x00/0x01/0x03). The charger tier (0xE3) and the charge floor (0xA5) have addresses but no ABI and no proven units."
     implementation:
       - tools/oxp3-powerctl.py
     doc: docs/hw/battery-tdp.md
@@ -652,7 +653,8 @@ components:
       - power
     caveats:
       - "the EC keeps the last saved limit until it is changed again"
-      - "bypass is charge-inhibit, not the vendor analog path"
+      - "bypass is charge-inhibit (EC 0xA4), the same byte and values the vendor writes; whether the EC also isolates the pack from the rail is unproven"
+      - "addresses: upstream/oxpec-ec-addresses.md; mode 1 (0x01) is awake-only, mode 2 (0x03) is always"
     last_validated:
       date: 2026-11-09
       evidence: "docs/QA.md row 44 (limit 80, behaviour auto on the QA host); docs/hw/battery-tdp.md"

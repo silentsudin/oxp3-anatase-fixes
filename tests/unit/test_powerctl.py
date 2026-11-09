@@ -551,7 +551,8 @@ class BatteryStatusTest(BatteryFixture):
         support.make_battery(self.tree, behaviour="[inhibit-charge] auto")
         info = pc.battery_status()
         self.assertTrue(info["bypass"])
-        self.assertIn("vendor mode 1", info["bypass_vendor_equivalent"])
+        self.assertIn("vendor mode 2", info["bypass_vendor_equivalent"])
+        self.assertIn("0xA4=0x03", info["bypass_vendor_equivalent"])
 
     def test_absent_charge_behaviour_warns(self):
         self.tree.path("power_supply/BAT0/charge_behaviour").unlink()
@@ -770,6 +771,122 @@ class StateTest(PowercapCase):
         data = json.loads(out)
         self.assertIn("profile balanced", data["restored"])
         self.assertTrue(any("limits PL1" in r for r in data["restored"]))
+
+
+class EcMapTest(unittest.TestCase):
+    """The recovered vendor register map is data, so it gets a data test.
+
+    The confirmed offsets are cross-checked against upstream oxpec.c's own
+    constants: if someone edits EC_MAP, one of these has to be re-derived from
+    upstream/oxpec-ec-addresses.md, not tweaked by feel.
+    """
+
+    # drivers/platform/x86/oxpec.c (master, 2026-11-09)
+    OXPEC_PWM_ENABLE = 0x4A      # OXP_SENSOR_PWM_ENABLE_REG
+    OXPEC_PWM = 0x4B             # OXP_SENSOR_PWM_REG
+    OXPEC_FAN = 0x58             # OXP_2_SENSOR_FAN_REG (oxp_g1_i)
+    OXPEC_CHARGE_LIMIT = 0xA3    # OXP_X1_CHARGE_LIMIT_REG
+    OXPEC_CHARGE_INHIBIT = 0xA4  # OXP_X1_CHARGE_INHIBIT_REG
+
+    def row(self, what):
+        for entry in pc.EC_MAP:
+            if entry[0] == what:
+                return entry
+        self.fail(f"EC_MAP lost the {what!r} row")
+
+    def test_confirmed_rows_match_upstream_oxpec(self):
+        self.assertEqual(int(self.row("fan mode")[1], 16), self.OXPEC_PWM_ENABLE)
+        self.assertEqual(int(self.row("fan duty")[1], 16), self.OXPEC_PWM)
+        self.assertEqual(int(self.row("fan tach H")[1], 16), self.OXPEC_FAN)
+        self.assertEqual(int(self.row("charge limit")[1], 16), self.OXPEC_CHARGE_LIMIT)
+        self.assertEqual(int(self.row("bypass power")[1], 16), self.OXPEC_CHARGE_INHIBIT)
+
+    def test_offsets_are_unique_and_in_the_0x400_space(self):
+        offsets = [row[1] for row in pc.EC_MAP]
+        self.assertEqual(len(offsets), len(set(offsets)), "duplicate EC offset in EC_MAP")
+        for entry in pc.EC_MAP:
+            vendor = int(entry[2], 16)
+            self.assertEqual(vendor - 0x400, int(entry[1], 16),
+                             f"{entry[0]}: vendor value is not 0x400 + offset")
+            self.assertIn(entry[5], ("confirmed", "candidate"))
+
+    def test_only_the_charge_and_fan_core_is_confirmed(self):
+        confirmed = {row[0] for row in pc.EC_MAP if row[5] == "confirmed"}
+        self.assertEqual(confirmed, {"fan mode", "fan duty", "fan tach H",
+                                     "fan tach L", "charge limit", "bypass power"})
+
+    def test_bypass_encoding_is_the_bit_mask(self):
+        encoding = self.row("bypass power")[4]
+        self.assertIn("0x00", encoding)
+        self.assertIn("0x01", encoding)
+        self.assertIn("0x03", encoding)
+
+    def test_map_cli_json(self):
+        rc, out, _ = run_main(["ec", "map", "--json"])
+        self.assertEqual(rc, 0)
+        data = json.loads(out)
+        self.assertTrue(data["ok"])
+        fields = {row["vendor_field"] for row in data["registers"]}
+        self.assertIn("addrBypassPower", fields)
+        self.assertIn("addrChargeLimit", fields)
+
+    def test_map_cli_text_mentions_provenance(self):
+        rc, out, _ = run_main(["ec", "map"])
+        self.assertEqual(rc, 0)
+        self.assertIn("0xA4", out)
+        self.assertIn("upstream/oxpec-ec-addresses.md", out)
+
+
+class EcProbeTest(unittest.TestCase):
+    """`ec probe` must describe the interfaces and never claim a write path."""
+
+    def setUp(self):
+        self.tree = support.TmpTree()
+        self.addCleanup(self.tree.cleanup)
+        self.hwmon = str(self.tree.path("hwmon"))
+        self.supply = str(self.tree.path("power_supply/BAT*"))
+        for name, value in (("HWMON", self.hwmon), ("BATTERY_GLOB", self.supply)):
+            patcher = mock.patch.object(pc, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_probe_without_interfaces_is_partial(self):
+        rc, out, err = run_main(["ec", "probe"])
+        self.assertEqual(rc, 2)
+        self.assertIn("absent", out)
+        self.assertIn("no oxp_ec fan hwmon node", out)
+
+    def test_probe_reports_states_from_a_simulated_sysfs(self):
+        node = support.make_fan(self.tree, directory="hwmon/hwmon6")
+        # A real fan1_input is 0444; the synthetic tree is owned by the test
+        # user, so the mode is what has to carry the classification.
+        os.chmod(node / "fan1_input", 0o444)
+        support.make_battery(self.tree, end_threshold=80,
+                             behaviour="[auto] inhibit-charge inhibit-charge-awake")
+        rc, out, _ = run_main(["ec", "probe", "--json"])
+        self.assertEqual(rc, 0, out)
+        info = json.loads(out)
+        self.assertEqual(info["fan"]["pwm1"], "writable")
+        self.assertEqual(info["fan"]["fan1_input"], "read-only")
+        self.assertEqual(info["battery"]["charge_control_end_threshold"], "writable")
+        self.assertIsNone(info["raw_ec_window"])
+
+    def test_probe_finds_a_simulated_raw_ec_window(self):
+        support.make_fan(self.tree, directory="hwmon/hwmon6")
+        window = self.tree.write("ec/ec0/io", "00" * 256)
+        with mock.patch.object(pc, "EC_WINDOW_CANDIDATES", (str(window),)):
+            rc, out, _ = run_main(["ec", "probe", "--json"])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(json.loads(out)["raw_ec_window"]["path"], str(window))
+
+    def test_write_is_refused_even_with_a_window(self):
+        window = self.tree.write("ec/ec0/io", "00" * 256)
+        with mock.patch.object(pc, "EC_WINDOW_CANDIDATES", (str(window),)), \
+             mock.patch.object(pc, "check_root", lambda *a, **k: None):
+            rc, out, err = run_main(["ec", "write"])
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn("refusing to write EC RAM directly", err)
+        self.assertEqual(window.read_text(), "00" * 256)  # untouched
 
 
 if __name__ == "__main__":

@@ -65,24 +65,29 @@ enum bf63112_phase
   BF63112_PHASE_CANCEL = 3,
 };
 
-/*: The recovered opcode table (descriptor+0x10 in the Windows driver). */
+/*: The opcode table, read from the Windows driver's dispatch table (RVA
+ *  0x46F00, stride 0x20).  An earlier revision of this header was shifted by
+ *  one because it was reconstructed from the order of the driver's trace
+ *  strings rather than from the table the driver dispatches on. */
 enum bf63112_opcode
 {
-  BF63112_OP_QUERY_FIRMWARE_VER = 0xA1,
-  BF63112_OP_QUERY_MODULE_SCHEME_INFORMATION = 0xA2,
-  BF63112_OP_QUERY_ROOT_KEY = 0xB0,
-  BF63112_OP_ENROLL_FINGERPRINT = 0xB1,
-  BF63112_OP_IDENTIFY_FINGERPRINT = 0xB2,
-  BF63112_OP_REMOVE_FINGERPRINT = 0xB3,
-  BF63112_OP_QUERY_FINGERPRINT_COUNT = 0xB4,
-  BF63112_OP_GET_IMG_DATA = 0xB5,
-  BF63112_OP_DETECT_FINGERPRINT_PRESS = 0xB6,
-  BF63112_OP_SLEEP = 0xC0,
-  BF63112_OP_QUERY_MODULE_UID = 0xC1,
-  BF63112_OP_QUERY_SENSOR_INFO = 0xC2,
-  BF63112_OP_JTAG_CONTROL = 0xC3,
-  BF63112_OP_RESTORE_MCU = 0xD0,
-  BF63112_OP_UPDATE_FIRMWARE = 0xD1,
+  BF63112_OP_QUERY_FIRMWARE_VER = 0xA0,
+  BF63112_OP_QUERY_MODULE_SCHEME_INFORMATION = 0xA1,
+  BF63112_OP_QUERY_ROOT_KEY = 0xA2,
+  BF63112_OP_ENROLL_FINGERPRINT = 0xB0,
+  BF63112_OP_IDENTIFY_FINGERPRINT = 0xB1,
+  BF63112_OP_REMOVE_FINGERPRINT = 0xB2,
+  BF63112_OP_QUERY_FINGERPRINT_COUNT = 0xB3,
+  BF63112_OP_GET_IMG_DATA = 0xB4,
+  BF63112_OP_DETECT_FINGERPRINT_PRESS = 0xB5,
+  BF63112_OP_SLEEP = 0xB6,
+  BF63112_OP_QUERY_MODULE_UID = 0xC0,
+  BF63112_OP_QUERY_SENSOR_INFO = 0xC1,
+  BF63112_OP_JTAG_CONTROL = 0xC2,
+  BF63112_OP_RESTORE_MCU = 0xC3,
+  BF63112_OP_UPDATE_FIRMWARE = 0xD0,
+  /*: Not in the driver's table (it ends at 0xD0); kept for source
+   *  compatibility, never sent. */
   BF63112_OP_FW_WORK_MODE_SWITCH = 0xFF,
 };
 
@@ -170,17 +175,21 @@ bf63112_scan_frame (const uint8_t *buf, size_t len,
 
 /* ---- GET_IMG_DATA ------------------------------------------------------- */
 
+/*: Bytes the phase-0 payload must carry: the Windows driver reads a u32 at +4
+ *  and another at +0x14, so the record is 0x18 bytes, not 9. */
+#define BF63112_IMAGE_HEADER_SIZE 0x18
+
 struct bf63112_image_header
 {
-  uint8_t  status;
-  uint32_t total_bytes;
-  uint32_t byte_sum;            /*: only the low 8 bits are checked */
+  uint8_t  status;              /*: @0 */
+  uint32_t total_bytes;         /*: @4  */
+  uint32_t byte_sum;            /*: @0x14, only the low 8 bits are checked */
 };
 
 enum bf63112_image_result
 {
   BF63112_IMAGE_OK = 0,
-  BF63112_IMAGE_ERR_HEADER,     /*: payload shorter than 9 bytes */
+  BF63112_IMAGE_ERR_HEADER,     /*: payload shorter than 0x18 bytes */
   BF63112_IMAGE_ERR_STATE,      /*: assembler misused */
   BF63112_IMAGE_ERR_OVERSIZE,   /*: chunk above max_chunk */
   BF63112_IMAGE_ERR_OVERRUN,    /*: chunk would pass total_bytes */
@@ -189,12 +198,12 @@ enum bf63112_image_result
   BF63112_IMAGE_ERR_CHUNK_SUM,  /*: optional per-chunk sum mismatch */
 };
 
-/*! Parse the 9-byte phase-0 payload: status, total:u32, byte_sum:u32. */
+/*! Parse the 0x18-byte phase-0 payload: status:u8 @0, total:u32 @4, byte_sum:u32 @0x14. */
 enum bf63112_image_result
 bf63112_image_header_parse (const uint8_t *buf, size_t len,
                             struct bf63112_image_header *out);
 
-/*! Serialise a phase-0 payload into @out (at least 9 bytes). */
+/*! Serialise a phase-0 payload into @out (at least 0x18 bytes). */
 size_t bf63112_image_header_build (const struct bf63112_image_header *header,
                                    uint8_t *out, size_t out_size);
 

@@ -81,31 +81,36 @@ the SPI access is indirect and shows up as `(*guard_dispatch_icall)(...)`.
 **Match-in-sensor.** The command names are the module's own vocabulary; the
 host never sees a template:
 
-| opcode | command | notes |
+| opcode | command | answer |
 |---|---|---|
-| `0xA1` | `CMD_QUERY_FIRMWARE_VER` | response carries project code + 4-byte version |
-| `0xA2` | `CMD_QUERY_MODULE_SCHEME_INFORMATION` | |
-| `0xB0` | `CMD_QUERY_ROOT_KEY` | chunked write path (Start/Ing/Over/Cancel) |
-| `0xB1` | `CMD_ENROLL_FINGERPRINT` | start / press / fini / cancel |
-| `0xB2` | `CMD_IDENTIFY_FINGERPRINT` | module matches, returns handle + score |
-| `0xB3` | `CMD_REMOVE_FINGERPRINT` | |
-| `0xB4` | `CMD_QUERY_FINGERPRINT_COUNT` | |
-| `0xB5` | `CMD_GET_IMG_DATA` | only for diagnostics; 8-bit grayscale, w*h |
-| `0xB6` | `CMD_DETECT_FINGERPRINT_PRESS` | |
-| `0xC0` | `CMD_SLEEP` | |
-| `0xC1` | `CMD_QUERY_MODULE_UID` | |
-| `0xC2` | `CMD_QUERY_SENSOR_INFO` | returns width, height, flags |
-| `0xC3` | `CMD_JTAG_CONTROL` | vendor only |
-| `0xD0` | `CMD_RESTORE_MCU` | vendor only |
-| `0xD1` | `CMD_UPDATE_FIRMWARE` | **never run this** |
-| `0xFF` | `CMD_FW_WORK_MODE_SWITCH` | Boot vs App ("SM3" mode) |
+| `0xA0` | `CMD_QUERY_FIRMWARE_VER` | 7 B: state, project hi/lo, 4-byte version |
+| `0xA1` | `CMD_QUERY_MODULE_SCHEME_INFORMATION` | scheme table |
+| `0xA2` | `CMD_QUERY_ROOT_KEY` | ≥113 B: session handshake (SM2/SM3) |
+| `0xB0` | `CMD_ENROLL_FINGERPRINT` | Start / Ing / Over / Cancel |
+| `0xB1` | `CMD_IDENTIFY_FINGERPRINT` | Start / Cancel; 18-byte handle |
+| `0xB2` | `CMD_REMOVE_FINGERPRINT` | |
+| `0xB3` | `CMD_QUERY_FINGERPRINT_COUNT` | u32 count |
+| `0xB4` | `CMD_GET_IMG_DATA` | 3 phases, 0x1FCC-byte chunks |
+| `0xB5` | `CMD_DETECT_FINGERPRINT_PRESS` | |
+| `0xB6` | `CMD_SLEEP` | |
+| `0xC0` | `CMD_QUERY_MODULE_UID` | |
+| `0xC1` | `CMD_QUERY_SENSOR_INFO` | 9 B: 4×u16 + flags |
+| `0xC2` | `CMD_JTAG_CONTROL` | vendor only |
+| `0xC3` | `CMD_RESTORE_MCU` | vendor only |
+| `0xD0` | `CMD_UPDATE_FIRMWARE` | **never run this** |
+
+> **Correction (2026-11-09).** This table used to be shifted by one (it had
+> `0xA1` = firmware version, `0xB0` = root key, …) because it was reconstructed
+> from the *order* of the driver's trace strings. The values above come from the
+> driver's actual dispatch table at RVA `0x46F00` and are cross-checked against
+> both the functions that emit each byte and the handlers the table binds to
+> each row - see [Driver reverse-engineering](#driver-reverse-engineering-2026-11-09).
 
 The driver also carries a project table ("BOE MOC", "HUAHONG MOUSE MOC",
-"DYW MOH", "NATION TEST", "NATIONALCHIP") and the hash names **SM3, MD5,
-SHA-1** - the module's challenge/response and template protection are
-crypto-heavy and undocumented. Treat template handling as out of scope for a
-first driver: enrol storage can stay on the module, the host only needs the
-handle.
+"DYW MOH", "NATION TEST", "NATIONALCHIP") keyed by the firmware answer's
+project bytes, and the hash names **SM3, MD5, SHA-1**. Treat template handling
+as out of scope for a first driver: enrol storage stays on the module, the host
+only needs the handle.
 
 ### Frame format (recovered, byte-exact)
 
@@ -131,28 +136,41 @@ end-4 4    CRC-32 (reflected 0xEDB88320, init 0xFFFFFFFF, final XOR)
 command block. A datum-only query (`data_len = 0`) is therefore a 41-byte
 frame with `L = 36`. The CRC covers everything before it, including `0xAA`.
 
-Device -> host: the answer comes back in the same shape (the handlers receive
-a body whose first byte is status/parameter, i.e. the 4-byte `4C op phase
-status` block is stripped before the handler sees it). The 16 reserved bytes
-are the device's answer header; their contents were not fully decoded.
+Device -> host: the answer comes back in the **same** shape. The driver's
+answer dispatcher reads the opcode at offset 22, the phase at 23, the payload
+length at 27 and hands the handler `frame + 0x1F` with that length, so the
+answer body starts at offset 31 exactly like a request payload. The receive
+path also checks byte 0 for `0xAA` and verifies the same CRC-32 over `L + 1`
+bytes (everything before the CRC), so an answer is *not* unchecked.
+
+The 16 bytes at offset 5 are the per-frame crypto nonce, not a fixed reserved
+area: a request fills them with zeros for a plaintext command and with 16
+random bytes (plus SM4-encrypted command block) for a secure one. See
+[Driver reverse-engineering](#driver-reverse-engineering-2026-11-09).
 
 ### Image transfer (for reference; a normal driver does not need it)
 
-`CMD_GET_IMG_DATA` runs in three phases: phase 0 returns 9 bytes
-(`status`, `u32 total_bytes`, `u32 byte_sum`); phase 1 streams chunks that the
-driver appends and counts (chunk counter `u16`); phase 2 cancels. Acceptance
-checks are `total_bytes == width * height` and an **8-bit running sum** of the
-image equal to the announced `byte_sum` - no per-chunk CRC. The driver requests
-at most `0x1FCC` (8140) bytes per chunk and uses 1000/5000 ms per-attempt
-timeouts (2000 ms for cancel) with 2030/8000/10010 ms totals.
+`CMD_GET_IMG_DATA` runs in three phases: phase 0 returns a record with
+`status:u8` at 0, `total_bytes:u32` at 4 and `byte_sum:u32` at 0x14 (the driver
+consumes 0x18 bytes); phase 1 streams chunks that the driver appends and counts
+(the chunk request's `arg:u16` is the running offset, the request's `len` is
+`0x1FCC`); phase 2 cancels. Acceptance checks are `total_bytes == width * height`
+and an **8-bit running sum** of the image equal to the announced `byte_sum`.
+Each chunk is a complete `0xAA` frame and therefore carries the normal CRC-32;
+there is no *additional* per-chunk sum. Per-attempt timeouts are 1000 ms
+(2000 ms for cancel) with 2030/10010 ms totals.
 
 ### Timing / interrupts
 
 After sending a frame the driver resets an event, sends, then
-`WaitForSingleObject`s on it: the module signals "answer ready" on a **GPIO
-interrupt**, and the driver re-sends the frame if the wait expires. A Linux
-driver must therefore request that GPIO itself - `spi-intel`/`pxa2xx` will not
-do it - which is exactly why the ACPI `_CRS` matters (see open points).
+`WaitForSingleObject`s on it and re-sends the frame if the wait expires. The
+completion is event-driven; the event is set from the driver's completion path
+(several `SetEvent` sites, one per transfer state), and the INF's
+`settings\ConnectInterrupt=1` plus the ACPI `GpioInt` resource are the static
+evidence that the signal arrives as a GPIO interrupt. A Linux driver must
+request that GPIO itself - `spi-intel`/`pxa2xx` will not do it - which is
+exactly why the ACPI `_CRS` matters (see open points). Which edge/level and
+whether the line is shared is **not** provable statically.
 
 ### Firmware in the driver package
 
@@ -161,6 +179,118 @@ are N32G4FR images (`SP = 0x2001D538`, reset `0x0800A1AD` -> flash at
 `0x08000000`), `0x95` is a different MCU (`reset 0x1001A405`), `0x8F` is 39 KiB
 of something else. These are vendor firmware and are **not** copied into this
 repo; nothing here writes firmware.
+
+## Driver reverse-engineering (2026-11-09)
+
+Static analysis of the shipped package only: no vendor code is reproduced here,
+no firmware or DLL is in this repo, and nothing below was executed. Method:
+`tools/ghidra-pod.sh` (private headless Ghidra project) dumping all 805 functions
+of `BetterlifeFingerprintDevice.dll`, plus targeted byte searches for constants.
+Addresses are RVAs of that DLL; `1800xxxxx` = `0x180000000 + RVA`.
+
+### What the package actually is
+
+| file (X64) | role | evidence |
+|---|---|---|
+| `BetterlifeFingerprintDevice.inf` | UMDF **2.15** function driver, no `.sys` | `UmdfLibraryVersion=2.15.0`, `ServiceBinary=%12%\UMDF\...`, `AddService=WUDFRd` |
+| `BetterlifeFingerprintDevice.dll` | the UMDF driver: SPB transport, framing, crypto, command state machines | 7 sections, WPP tracing, imports only `ntdll/KERNEL32/ADVAPI32/WppRecorderUM` |
+| `BetterlifeEngineAdapter.dll` | WBDI engine adapter (matching policy) | INF `EngineAdapterBinary` |
+| `BetterlifeSensorAdapter.dll` | WBDI sensor adapter (capture) | INF `SensorAdapterBinary` |
+| `BetterlifeStorageAdapter.dll` | WBDI storage adapter (template DB) | INF `StorageAdapterBinary`; also carries SM2/SM3 constants |
+| `betterlifefingerprintdevice.cat` | signature catalogue | DER PKCS#7 |
+
+The INF binds `USB\VID_347D&PID_0302/0304` via WinUSB and `ACPI\BF63112`,
+`ACPI\BF61100`, `ACPI\BF63100` as SPB devices; it registers WinBio configuration
+`{FD2B9BF2-F4AC-4ADB-82D4-E4661C439A40}` with database format
+`82BD732E-4C65-4B4C-A6A6-9954769D32FF`, `BiometricType=0x8` (fingerprint). Its
+registry keys are only `settings\ConnectInterrupt=1` and `settings\AdapterInfo=0`
+plus power/idle policy - **there is no SPI clock, mode, bit width or GPIO number
+anywhere in the package**. Those come from the ACPI `_CRS` of \_SB.PC00.SPI1.FPRT, so
+the open point below is unchanged and still needs root on this host.
+
+The driver never imports a crypto DLL: SM2/SM3/SM4 are statically linked from
+**GmSSL** (path strings `...\encrypt\gmssl\sm2_alg.c`, and the SM2 curve table
+exists in the image). That is the "SM3 layer".
+
+### Transport (proven)
+
+| fact | provenance |
+|---|---|
+| one `SPB` write per frame; target handle at device-context `+0x118`; 200 ms transfer timeout (constant `-2000000` in 100 ns units) | `FUN_18001B6E4` |
+| frame built from a descriptor: `+0x00` 16-byte nonce, `+0x10` opcode, `+0x11` phase, `+0x12` arg:u16, `+0x14` len:u32, `+0x18` data ptr, `+0x20` wait flag, `+0x24` secure-frame flag, `+0x2c` per-attempt ms, `+0x30` total ms | `FUN_1800028F8` (block builder), `FUN_180004358` (send/wait) |
+| CRC-32 (reflected `0xEDB88320`) over everything before the CRC; table at `0x180046030` | `FUN_180004358` |
+| retry loop: `ResetEvent`, send, `WaitForSingleObject(event, +0x2c)`, re-send until `+0x30` elapses | `FUN_180004358` |
+| receive: requires byte 0 `== 0xAA`, reads `L` from `+1`, waits for `5 + L` bytes, CRC-32 over `L+1` bytes with a second table at `0x180047120`, reassembly cap `0x16829` B, 2000 ms reassembly gap timeout | `FUN_18001AC60` |
+| answer dispatch: opcode `answer+0x16`, phase `+0x17`, length `+0x1B`, body `answer+0x1F` | `FUN_18001AADC` |
+| command table at `0x46F00`, stride `0x20`, fields `{opcode:u64, name:char*, handler:fn, label:char*}` | table dump + `FUN_18001AADC` |
+
+Per-command timeouts in the descriptor: 1000/2030 ms for ordinary queries,
+5000/10010 ms for the GET_IMG data phase, 2000/4016 ms for the vendor restore.
+
+### Session / root-key layer (proven enough to describe)
+
+The layer exists and is **not** a fixed key or a DPAPI blob:
+
+1. At open the driver runs `0xA0` (fw version) -> `0xA1` (scheme) ->
+   **key generation** -> `0xA2` (root key) -> `0xC0` (UID) -> `0xC1` (sensor
+   info) (`FUN_180019764`).
+2. `FUN_180007C28` generates an **SM2 key pair per open** (random scalar in
+   `[1, n-1]`, public point = scalar·G) into a 96-byte blob tagged `0x04` at
+   device-context `+0x16A78`; the private scalar sits at `+0x16AB9`.
+3. `FUN_180001A3C` sends `0xA2` with a **65-byte** payload from that blob
+   (`1 tag + 64 bytes of the public point`).
+4. The answer handler `FUN_1800185A0` requires **≥ 0x71 bytes** and parses:
+   `status:u8 | device public point 64 B | SM3 tag 32 B | klen:u32 |
+   wrapped key`, i.e. the concrete offsets are `+0 / +1 / +0x41 / +0x61 / +0x65`
+   relative to the body.
+5. `FUN_180007AA0` loads the device point, multiplies by the driver's private
+   scalar, runs the GM/T 0003 KDF over the 64-byte shared point, XORs the
+   wrapped field, verifies the SM3 tag, and stores the resulting **16-byte key
+   at device-context `+0x16A58`**.
+
+So the session key is an ephemeral ECDH result; there is no static secret to
+extract, and the only long-lived key material is inside the MCU. Nothing here
+is needed to *parse* traffic, but the vendor driver sets the secure-frame flag
+on `0xA2` and on every enrol/identify command, so a Linux driver that speaks
+plaintext may be refused for those opcodes. That is a hardware question, not a
+static one (see below).
+
+### The frame cipher (partial)
+
+`FUN_18000CE30` is the **SM4** key schedule: it consumes the 16-byte key
+big-endian, XORs `FK` (`0xA3B1BAC6 0x56AA3350 0x677D9197 0xB27022DC`, stored
+byte-swapped at `0x46690`) and iterates 32 rounds with the `CK` table at
+`0x466A0`; the S-box is the standard SM4 S-box at `0x38550`. `FUN_18000B620`
+applies one block, `FUN_18000BFD0` loads an IV.
+
+When the secure flag is set the sender randomises the 16-byte header, transforms
+the command block with SM4 in 16-byte blocks, and the receiver mirrors it,
+using the received header as the per-frame value. The **exact key/IV derivation
+is asymmetric** between the transmit and receive paths in this build (the
+sender re-keys from the transformed header, the receiver sets it as IV), so it
+is recorded as "SM4 over the command block, header = per-frame nonce" and not
+claimed further. A plaintext driver does not need it.
+
+### Answer layouts (per command)
+
+| command | handler | body layout (offsets inside the payload) |
+|---|---|---|
+| `0xA0` fw version | `0x1800181B0` | `+0` state:u8, `+1`/`+2` project, `+3` version:u32; min 7 |
+| `0xA1` scheme | `0x1800183B0` | scheme table, no status byte |
+| `0xA2` root key | `0x1800185A0` | `+0` status, `+1` point 64 B, `+0x41` tag 32 B, `+0x61` klen, `+0x65` wrapped; min `0x71` |
+| `0xB0` enrol | `0x180018730` | phase 0: `+0` status, `+1` byte; phase 1: empty = ack; phase 2 ("Over"): `+0` status, `+1` u16, `+3` 16-byte handle; min 19 |
+| `0xB1` identify | `0x1800189A0` | phase 0: `+0` status, `+1` u16, `+3` 16-byte handle; min 19 |
+| `0xC1` sensor info | `0x180019420` | `+0` u16, `+2` u16, `+4` **width**, `+6` **height**, `+8` flags:u8; min 9 |
+| `0xB4` get image | `0x180018DC0` | phase 0: `+0` status, `+4` total:u32, `+0x14` sum:u32, min `0x18`; chunks requested with arg = running offset, max `0x1FCC` |
+
+The template "handle" is 18 bytes: a `u16` plus 16 opaque bytes; the host never
+sees the template. Width/height are confirmed by the image path multiplying the
+u16 at `+4` by the u16 at `+6` and comparing with the announced total.
+
+**GET_IMG chunks do carry integrity**, contrary to an earlier note: each chunk is
+a full `0xAA` frame, so it is covered by the per-frame CRC-32, and the whole
+image is checked against the 8-bit sum from phase 0. There is no additional
+per-chunk sum field.
 
 ## Verdict
 
@@ -174,18 +304,23 @@ repo; nothing here writes firmware.
 * **Blocked by, in order:**
   1. **No driver exists** and the vendor publishes nothing - a BF63112 driver
      has to be written from scratch (see `tools/fingerprint/libfprint-bf63112.c`).
-  2. **SPI bus parameters unknown** - clock and mode are in the ACPI `_DSD`
-     (or fixed by the vendor driver); wrong values return `0xFF` forever.
-     Root required to read them.
-  3. **Reset/interrupt GPIOs unknown** - they are `GpioIo`/`GpioInt` entries in
+  2. **SPI bus parameters unknown** - not in the driver package (checked: the INF
+     carries no clock/mode/GPIO), so they are in the ACPI `_CRS`/`_DSD`. Root
+     required to read them; wrong values return `0xFF` forever.
+  3. **Reset/interrupt GPIOs unknown** - `GpioIo`/`GpioInt` entries in
      `\_SB.PC00.SPI1.FPRT._CRS`; without an IRQ the driver can only poll.
-  4. **Answer framing partly decoded** - enough to see status and payload for
-     queries, not enough to guarantee the enrol/identify state machines.
-  5. **Crypto/session layer** (SM3/root-key) undocumented - a first driver
-     should avoid it and rely on module-side templates only.
+  4. **The module may insist on the session key for enrol/identify** - the
+     vendor driver always establishes it at open and sets the secure-frame flag
+     on `0xA2`/`0xB0`/`0xB1`. Whether the firmware *rejects* plaintext enrol is
+     a live-hardware question (see next steps).
+  5. **Enrol/identify payload semantics are only structurally known** - the
+     handle (18 B) and the status byte are proven, the meaning of the u16 inside
+     the handle and any score are not, because the driver hands results to WBDI
+     rather than parsing them further.
 
-Cheapest useful next step is not code: it is step 1 below, reading the ACPI
-resources with root, because without the clock/GPIO numbers even a perfect
+The answer framing, command map and session design are no longer blockers: they
+are decoded above. Cheapest useful next step is still step 1 below, reading the
+ACPI resources with root, because without the clock/GPIO numbers even a perfect
 driver cannot start.
 
 ## Artifacts in this repo
@@ -194,7 +329,7 @@ driver cannot start.
 |---|---|
 | `tools/fingerprint/oxp3-fp-probe.py` | read-only userspace handshake: binds to `spidev`, builds the exact 41-byte query frame, sends the read-only opcodes (`fw`, `scheme`, `uid`, `info`, `count`), hexdumps the answer, refuses destructive opcodes. Stdlib only. |
 | `tools/fingerprint/fpbf63112/` | protocol library (stdlib only): frame build/parse, CRC-32, offset arithmetic, command table, GET_IMG reassembly, retry state machine |
-| `tools/fingerprint/tests/` | 85 unittest tests incl. fuzz/property round-trips and synthetic device transcripts; shared frame vectors for the C implementation |
+| `tools/fingerprint/tests/` | 111 unittest tests incl. fuzz/property round-trips, synthetic device transcripts and `test_driver_derived.py` (layouts recovered from the driver, synthetic vectors); shared frame vectors for the C implementation |
 | `tools/fingerprint/bf63112_proto.h/.c` | dependency-free C11 protocol core shared with the driver |
 | `tools/fingerprint/libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; enrol/verify/identify refuse with `NOT_SUPPORTED` until the payloads are decoded. Syntax-checked (`-Wall -Wextra -Werror`) against libfprint v1.94.9 headers; see `tools/fingerprint/README.md` |
 | `tools/fingerprint/README.md` | proven vs inferred vs unknown, test commands, privileged probe steps, upstreaming path |
@@ -286,18 +421,24 @@ its previous state.
 
 ## Open points
 
-1. **SPI clock, mode, bit width and the reset/IRQ GPIOs** - in
+Status after the driver RE: items 2 and 4 below are now answered statically;
+what is left needs the hardware.
+
+1. **SPI clock, mode, bit width and the reset/IRQ GPIOs** - not in the driver
+   package (the INF only has `ConnectInterrupt=1`), so they are in
    `\_SB.PC00.SPI1.FPRT._CRS`/`_DSD`; root-only on this host, so not read here.
    Without them the probe can only guess (defaults used: mode 0, 1 MHz).
-2. **Device -> host answer framing** - the 16-byte header the host sends as
-   zeros is where the module answers; its field layout is only partly decoded.
-   One `--raw-info` run on real hardware would settle it.
-3. **Enrol/identify state machines** - the opcodes and phases are known, the
-   per-phase payloads (template handles, scores, timeouts, the `SM3` mode
-   switch) are not. This is the bulk of a real driver.
-4. **Session/crypto layer** (`CMD_QUERY_ROOT_KEY`, SM3/MD5/SHA-1): unknown
-   whether a plain-spoken driver is accepted at all or whether the module
-   insists on a key exchange first. Sending `0xB0` read-only would answer that.
+2. ~~Answer framing~~ - **closed.** Answer = same layout as a request: `0xAA`,
+   `L`, 16-byte nonce, `4C`, opcode@22, phase@23, len@27, body@31; CRC-32 is
+   verified by the driver on receive.
+3. **Whether the module enforces the session** - the vendor driver always runs
+   `0xA0 -> 0xA1 -> 0xA2 -> 0xC0 -> 0xC1` at open and marks `0xA2`/`0xB0`/`0xB1`
+   as secure frames. A plaintext `0xB0` (enrol start) is the cheapest probe: a
+   status byte other than 0 or a `0xAA` answer with an error body means the
+   module wants the handshake first.
+4. ~~Session design~~ - **closed.** SM2 ECDH with a per-open ephemeral driver
+   key, GM/T 0003 KDF over the shared point, SM3 tag; derives a 16-byte SM4 key.
+   What stays open is only the exact SM4 chaining on the wire.
 5. **`BF63112:01` on SPI2** - present in ACPI, no controller instanced. Either
    an unpopulated second source or a phantom node; harmless, but a driver
    should match `BF63112:00`-style enumeration rather than assume one device.
@@ -305,5 +446,40 @@ its previous state.
    parity-tested against the protocol library), first execution is the bring-up
    itself; expect to tune `--speed`/`--mode`/`--wait-ms`.
 7. **The driver has never talked to the sensor either** - it compiles against
-   libfprint 1.94, but its answer parsing, retry timing and the sensor-info
-   field offsets all need one run on real hardware to confirm.
+   libfprint 1.94; its sensor-info and firmware offsets now match the vendor
+   handler, but the retry timing and the real answers still need one hardware
+   run. Enrol/identify stay `NOT_SUPPORTED` on purpose.
+
+### Exact next steps for a maintainer (scope + probe)
+
+All of these are privileged and read-only except the last, and none is run by
+this repo.
+
+1. **ACPI resources** (`sudo`, no state change):
+
+   ```bash
+   sudo cat /sys/firmware/acpi/tables/DSDT > /tmp/dsdt.aml
+   iasl -d /tmp/dsdt.aml && grep -n -A40 'FPRT' /tmp/dsdt.dsl
+   ```
+
+   Record `SpiSerialBus (..., SpiMode, SpiBitWidth, ConnectionSpeed, ...)` and
+   the `GpioInt`/`GpioIo` `PinIndex` values. Those four numbers are the only
+   missing init data for a driver.
+
+2. **Bind `spidev` and run the read-only probe** (see "Bringing it up by hand"),
+   then `info`, `fw`, `uid`, `count`. This settles the geometry, the firmware
+   version and the count, and proves the CRC/answer assumptions on real bytes.
+   `bytes_tx` in the SPI device statistics confirms transfers happened even when
+   the answer is garbage.
+
+3. **Session probe** (`0xA2`), only if step 2 answers: send the 65-byte payload
+   the vendor driver sends (tag `0x04` + a throwaway SM2 point) and confirm the
+   ≥113-byte answer shape. A single attempt is harmless - it is a key exchange,
+   not a write - but it does require an SM2 implementation to be useful.
+
+4. **Enrol probe** (`0xB0`, phase 0, 1-byte payload): the decisive test for
+   whether plaintext enrol is accepted. Expect a status byte; no template is
+   created by a phase-0 start, and it can be abandoned without a cancel.
+
+Do **not** send `0xC2` (JTAG), `0xC3` (restore MCU) or `0xD0` (firmware
+update): all three are in the driver's table as vendor-only operations.

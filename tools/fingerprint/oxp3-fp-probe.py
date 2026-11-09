@@ -84,17 +84,19 @@ SOF = 0xAA          # first byte of every host frame
 CMD_MAGIC = 0x4C    # first byte of the command block
 HDR_RESERVED = 16   # zero bytes between the length field and the command block
 
-# opcode byte = descriptor+0x10 in the Windows driver.  Only the read-only
+# opcode byte = descriptor+0x10 in the Windows driver.  Values come from the
+# driver's dispatch table (RVA 0x46F00 in BetterlifeFingerprintDevice.dll
+# 9.39.15.26), not from the order of its trace strings.  Only the read-only
 # commands are wired up; the whole table is in docs/hw/fingerprint.md.
 OPS = {
-    "fw":     (0xA1, "CMD_QUERY_FIRMWARE_VER"),
-    "scheme": (0xA2, "CMD_QUERY_MODULE_SCHEME_INFORMATION"),
-    "count":  (0xB4, "CMD_QUERY_FINGERPRINT_COUNT"),
-    "uid":    (0xC1, "CMD_QUERY_MODULE_UID"),
-    "info":   (0xC2, "CMD_QUERY_SENSOR_INFO"),
+    "fw":     (0xA0, "CMD_QUERY_FIRMWARE_VER"),
+    "scheme": (0xA1, "CMD_QUERY_MODULE_SCHEME_INFORMATION"),
+    "count":  (0xB3, "CMD_QUERY_FINGERPRINT_COUNT"),
+    "uid":    (0xC0, "CMD_QUERY_MODULE_UID"),
+    "info":   (0xC1, "CMD_QUERY_SENSOR_INFO"),
 }
-DESTRUCTIVE = {0xB1: "ENROLL", 0xB3: "REMOVE", 0xC3: "JTAG", 0xD0: "RESTORE_MCU",
-               0xD1: "UPDATE_FIRMWARE", 0xFF: "FW_WORK_MODE_SWITCH"}
+DESTRUCTIVE = {0xB0: "ENROLL", 0xB2: "REMOVE", 0xC2: "JTAG", 0xC3: "RESTORE_MCU",
+               0xD0: "UPDATE_FIRMWARE", 0xFF: "FW_WORK_MODE_SWITCH"}
 
 
 def build_frame(opcode, phase=0, arg=0, data=b""):
