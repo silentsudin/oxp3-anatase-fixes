@@ -208,7 +208,7 @@ except for where the bodies are defined.
 * **Licence/provenance.** No repository-wide licence is asserted yet; choosing one is the owner's
   decision. [PROVENANCE.md](PROVENANCE.md) records the no-vendor-code guarantee, the per-category
   policy and the evidence, and `tools/apply-license.py` applies the choice to the whole tree in one
-  reviewable commit (respecting the fingerprint subtree's existing `LGPL-2.1-or-later`). Patches
+  reviewable commit. Patches
   keep their upstream licences and are out of scope. Run `--check` before and after the change.
 
 ## 8. Addendum: undo state (2026-11-09, rollback round)

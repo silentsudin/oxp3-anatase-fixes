@@ -14,17 +14,17 @@ REPO_TEST = tools/repo-test.sh
 help:
 	@printf '%s\n' \
 		'make test            - every offline fast check (no network, no builds; default run)' \
-		'make test-full       - test + fingerprint C/Decky builds + libfprint syntax check' \
+		'make test-full       - test + the Decky builds' \
 		'make verify          - post-reboot hardware acceptance harness (read-only, no root)' \
 		'make preflight       - read-only install-prerequisite verdict (docs/PREFLIGHT.md)' \
 		'make health          - one read-only verdict: ready to install, working/failing, what is left' \
-		'make acceptance      - seven goal items judged from evidence (offline+device, read-only)' \
+		'make acceptance      - six goal items judged from evidence (offline+device, read-only)' \
 		'make decky           - build, smoke-test and package the Decky plugin (offline)' \
 		'make install-dry-run - print every hardware-installer command, change nothing' \
 		'make units           - verify systemd units, udev rules and hwdb files' \
 		'make unit            - offline Python unit suite (tests/unit, no root, no hardware)' \
 		'make test-integration - opt-in end-to-end oxp3-voltap test on virtual uinput devices' \
-		'make clean           - remove our build output (Decky node_modules/dist/build, C build)'
+		'make clean           - remove our build output (Decky node_modules/dist/build)'
 
 test:
 	$(REPO_TEST) --fast
@@ -68,5 +68,4 @@ clean:
 	rm -rf -- tools/decky-oxp3-status/node_modules
 	rm -rf -- tools/decky-oxp3-status/dist
 	rm -rf -- tools/decky-oxp3-status/build
-	rm -rf -- tools/fingerprint/build
 	find tools tests -type d -name __pycache__ -prune -exec rm -rf -- {} +

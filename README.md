@@ -14,7 +14,7 @@ working / what is left" from preflight + verify + the firstrun checklist + statu
 non-`PASS` rows with their fix and the next 1-3 commands. `--json` for machines, `--quiet` for one
 line, `--full` to pass `--full` to verify; details in [docs/HEALTH.md](docs/HEALTH.md).
 
-**Judge the goal, not the memory:** [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) has the seven-item
+**Judge the goal, not the memory:** [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) has the six-item
 acceptance table (implementation, proof, manual step, verdict) and
 `tools/oxp3-acceptance.sh` reproduces it from `docs/hw/components.yaml` plus the live verifier,
 health and repo-test evidence. It never calls an item device-proven from offline evidence alone;
@@ -32,12 +32,11 @@ health and repo-test evidence. It never calls an item device-proven from offline
 | rapl-power | working | CPU/GPU power for the overlay without opening the RAPL counters to users; also publishes dram and psys so the SAGV/memory-frequency effect is measurable without root. | /usr/local/libexec plus a system unit, installed by the driver installer (`./oxp3-fixes-fast.sh install`) |
 | sched_ext (scx_cosmos) | awaiting-install | scx_cosmos measured +4.8% Cyberpunk average and +5.7% FPS/W over EEVDF with GravityMark unchanged; the gaming-scheduler unit is installed by the fast installer. | installed and enabled by the fast installer when scx_cosmos is present, with an EEVDF fallback (`./oxp3-fixes-fast.sh install`) |
 | SAGV / memory frequency | blocked | No Linux control exists: Windows pins the SAGV/QCLK-GV point through an MCHBAR register pair, while Linux only has the boot-time xe.enable_sagv switch, which can only disable. | nothing is installed; the probe is read-only and needs no root |
-| Fingerprint reader | partial | Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library, an offline-tested SPI transport/_CRS parser and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver. | nothing is installed; tools/fingerprint/ holds the probe and the compile-checked skeleton |
 | Decky status plugin | working | A Decky Loader plugin and a headless CLI over one backend, showing live Mesa, XMX, sched_ext and hardware-fix status in the Steam Quick Access Menu. | a deterministic plugin zip (built offline, or an existing one verified against the recorded sha256) installed into the root-owned Decky plugins directory, with the previous copy backed up (`sudo tools/oxp3-hw-install.sh --decky`) |
 <!-- END GENERATED: readme-summary -->
 
 Hardware fixes (volume rocker, home button/LEDs, body RGB, suspend policy, speaker EQ, Bluetooth,
-power/fan/battery, display, fingerprint) have their own generated state matrix in
+power/fan/battery, display) have their own generated state matrix in
 [docs/hw/README.md](docs/hw/README.md); `tools/oxp3-hw-install.sh` installs them.
 
 You keep booting the stock Anatase kernel; only the modules above are replaced. Kernel
@@ -455,8 +454,7 @@ does not assert one (until a `LICENSE` exists, default copyright applies). The p
 is already in force: only our own code, documentation and derived data are tracked, with no vendor
 binaries, firmware blobs or decompiled listings; vendor files are downloaded at build/install time
 and pinned by SHA-256. [docs/PROVENANCE.md](docs/PROVENANCE.md) records the policy, the audit and
-the evidence, and `tools/apply-license.py` applies the chosen licence (including the existing
-`LGPL-2.1-or-later` fingerprint subtree) in one reviewable commit.
+the evidence, and `tools/apply-license.py` applies the chosen licence in one reviewable commit.
 
 ## Updating the patches
 

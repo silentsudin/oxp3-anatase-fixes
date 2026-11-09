@@ -3,8 +3,7 @@
 #
 #   tools/repo-test.sh                 fast checks only: no network, no builds
 #   tools/repo-test.sh --fast          same as the default
-#   tools/repo-test.sh --full          adds the C/Decky builds and the
-#                                      libfprint syntax check
+#   tools/repo-test.sh --full          adds the Decky builds
 #   tools/repo-test.sh --json          machine-readable result on stdout
 #   tools/repo-test.sh --list          list every suite and exit
 #   tools/repo-test.sh --only GLOB     run only suites whose name matches GLOB
@@ -19,17 +18,14 @@
 #
 # What "fast" means
 #   * no network access, no package installation, no container pull;
-#   * no build: the Decky bundle, the C tests and the fingerprint syntax check
-#     are full-only;
+#   * no build: the Decky bundle is full-only;
 #   * no writes outside the cache/log directory: Python bytecode goes to the
-#     log dir, unit/hwdb scratch trees go to the log dir or $TMPDIR, and the
-#     fixture-drift check compares generated data in memory instead of
-#     rewriting the checked-in fixtures.
+#     log dir, and unit/hwdb scratch trees go to the log dir or $TMPDIR.
 #   Full mode may write ignored build output inside the checkout
-#   (tools/fingerprint/build, tools/decky-oxp3-status/{dist,build}) and reuses
-#   the existing node_modules when present. It still never installs host
-#   packages and never runs a network action unless OXP3_REPO_TEST_NETWORK=1
-#   is set (the libfprint check is the only network-dependent suite).
+#   (tools/decky-oxp3-status/{dist,build}) and reuses the existing node_modules
+#   when present. It still never installs host packages and never runs a
+#   network action unless OXP3_REPO_TEST_NETWORK=1 is set (no suite currently
+#   needs the network).
 #
 # Every suite's stdout+stderr is captured to
 #   ${OXP3_REPO_TEST_LOG_DIR:-${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test}/<utc-run>/
@@ -38,7 +34,7 @@
 # Environment overrides:
 #   XDG_CACHE_HOME            cache base when set (default /tmp)
 #   OXP3_REPO_TEST_LOG_DIR    exact log base directory (default as above)
-#   OXP3_REPO_TEST_NETWORK=1  allow the network-dependent suite (fp-libfprint)
+#   OXP3_REPO_TEST_NETWORK=1  allow network-dependent suites (none today)
 #   TMPDIR                    scratch space for hwdb verification
 #
 # Suite names are stable and are what --only matches against. See
@@ -113,28 +109,6 @@ skip() { printf 'SKIP: %s\n' "$*"; exit 77; }
 
 need() { have "$1" || skip "missing required tool: $1"; }
 
-# Local podman image that already carries gcc+make (no pull, no dnf install).
-local_build_image() {
-    have podman || return 1
-    podman image exists localhost/oxp3-fixes-build:f45 >/dev/null 2>&1 || return 1
-    printf '%s' localhost/oxp3-fixes-build:f45
-}
-
-# Host C toolchain, or the local container image, or a SKIP.
-c_toolchain() {
-    if have make && { have cc || have gcc || have clang; }; then
-        printf 'host'
-        return 0
-    fi
-    local img
-    img=$(local_build_image) || true
-    if [ -n "$img" ]; then
-        printf 'podman:%s' "$img"
-        return 0
-    fi
-    return 1
-}
-
 # ------------------------------------------------------------------ suites
 # Each suite is a function; the runner exports it and runs it in a child bash
 # with a timeout. Return 0 = PASS, 77 = SKIP, anything else = FAIL.
@@ -182,132 +156,6 @@ suite_python_compile() {
     done
     printf 'compiled %d Python files (bytecode cache: %s)\n' "$n" "$cache"
     [ "$bad" -eq 0 ]
-}
-
-suite_fp_python() {
-    need python3
-    cd "$REPO" || exit 1
-    python3 -m unittest discover -s tools/fingerprint/tests -q &&
-    python3 -m unittest discover -s tests/fingerprint -q
-}
-
-# Session crypto vectors + a 4 KiB benchmark, no device, no root.
-suite_fp_crypto() {
-    need python3
-    cd "$REPO" || exit 1
-    python3 tools/fingerprint/oxp3-fp-probe.py --crypto-selftest
-}
-
-suite_fp_fixtures() {
-    need python3
-    cd "$REPO" || exit 1
-    # test_generated_data.py regenerates every fixture/vector in memory and
-    # compares it with the checked-in copy; no file in the checkout is written.
-    python3 -m unittest discover -s tools/fingerprint/tests \
-        -p 'test_generated_data.py' -q
-}
-
-suite_fp_c_tests() {
-    cd "$REPO" || exit 1
-    local tool
-    tool=$(c_toolchain) || skip "no C compiler and no local podman build image"
-    case $tool in
-        host)
-            tools/fingerprint/tests/run-c-tests.sh ;;
-        podman:*)
-            PODMAN_IMAGE=${tool#podman:} tools/fingerprint/tests/run-c-tests.sh ;;
-    esac
-}
-
-suite_fp_syntax() {
-    cd "$REPO" || exit 1
-    local tool img
-    tool=$(c_toolchain) || skip "no C compiler and no local podman build image"
-    case $tool in
-        host)
-            make -C tools/fingerprint syntax
-            if [ -f /usr/include/openssl/evp.h ]; then
-                make -C tools/fingerprint session-syntax
-            else
-                echo "session-syntax: skipped (no openssl-devel on the host)"
-            fi ;;
-        podman:*)
-            img=${tool#podman:}
-            podman run --rm --security-opt label=disable \
-                -v "$REPO":/w:z -w /w/tools/fingerprint "$img" sh -c \
-                'make syntax; \
-                 if [ -f /usr/include/openssl/evp.h ]; then \
-                     make session-syntax; \
-                 else echo "session-syntax: skipped (no openssl-devel in image)"; fi' ;;
-    esac
-}
-
-suite_fp_libfprint() {
-    cd "$REPO" || exit 1
-    local src=${LIBFPRINT_SRC:-/tmp/libfprint-1.94.9}
-    [ -f "$src/libfprint/fpi-device.h" ] \
-        || skip "no libfprint v1.94.9 source tree at $src (see check-libfprint.sh)"
-    if have make && { have cc || have gcc || have clang; } \
-        && pkg-config --exists glib-2.0 gio-2.0 gusb 2>/dev/null; then
-        tools/fingerprint/tests/check-libfprint.sh
-        return
-    fi
-    local img
-    img=$(local_build_image) || true
-    [ -n "$img" ] || skip "no host GLib/GUsb devel and no local podman build image"
-    # The local image has no GLib/GUsb devel packages, so check-libfprint.sh
-    # dnf-installs them inside the container: that is network traffic.
-    [ "${OXP3_REPO_TEST_NETWORK:-0}" = 1 ] \
-        || skip "container fallback needs dnf/network; set OXP3_REPO_TEST_NETWORK=1 to allow it"
-    PODMAN_IMAGE=$img tools/fingerprint/tests/check-libfprint.sh
-}
-
-# The BF63112 root runbook, offline half: the script's own selftest plus the
-# scenario driver, which builds fake /sys trees with --fixture-init and runs the
-# real script against them (no root, no /sys, no spidev, no sensor).
-suite_fp_session() {
-    local s=$REPO/tools/fingerprint/oxp3-fp-session.sh
-    [ -x "$s" ] || skip "tools/fingerprint/oxp3-fp-session.sh is missing"
-    [ -x "$REPO/tests/fingerprint-session/run.sh" ] \
-        || skip "tests/fingerprint-session/run.sh is missing"
-    need python3
-    need mkfifo
-    cd "$REPO" || exit 1
-    "$s" --selftest
-    "$REPO/tests/fingerprint-session/run.sh"
-}
-
-# The BF63112 root runbook, live half: the same script's read-only plan
-# against the real /sys. It binds nothing (plan mode), reads the DSDT and
-# reports; a host without the sensor is a SKIP, not a failure.
-suite_fp_session_root() {
-    local s=$REPO/tools/fingerprint/oxp3-fp-session.sh
-    [ -x "$s" ] || skip "tools/fingerprint/oxp3-fp-session.sh is missing"
-    [ "$(id -u)" -eq 0 ] \
-        || skip "needs root (reads /sys/firmware/acpi/tables/DSDT, 0400 root); the offline half is suite fp-session"
-    [ -r /sys/firmware/acpi/tables/DSDT ] || skip "no readable ACPI DSDT on this host"
-    cd "$REPO" || exit 1
-    local out=$LOGDIR/fp-session-plan.txt rc=0
-    "$s" --dry-run >"$out" 2>&1 || rc=$?
-    cat "$out"
-    if [ "$rc" -ne 0 ]; then
-        grep -q 'ACPI device .* is not present' "$out" \
-            && skip "no BF63112 ACPI device on this host"
-        grep -q 'cannot read the DSDT' "$out" && skip "the DSDT is not readable here"
-        grep -q 'no usable FPRT _CRS' "$out" \
-            && skip "the FPRT _CRS could not be located in this DSDT (see the plan output)"
-        printf 'FAIL --dry-run exited %d\n' "$rc"
-        exit 1
-    fi
-    grep -q 'Plan (every mutation is listed' "$out" \
-        || { printf 'FAIL the plan section is missing\n'; exit 1; }
-    grep -q 'driver_override' "$out" \
-        || { printf 'FAIL the plan does not name driver_override\n'; exit 1; }
-    grep -q 'Copy/paste sequence' "$out" \
-        || { printf 'FAIL the copy/paste sequence is missing\n'; exit 1; }
-    [ ! -e "$REPO/docs/state/fp-session-$(date -u +%Y%m%d)*" ] \
-        || { printf 'FAIL the plan run wrote a transcript\n'; exit 1; }
-    printf 'plan ok: read-only, no mutation, no transcript\n'
 }
 
 suite_decky_build() {
@@ -814,22 +662,22 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 assert data.get("schema") == 1, data.get("schema")
 assert data.get("tool") == "oxp3-acceptance", data.get("tool")
 items = data.get("items")
-assert isinstance(items, list) and len(items) == 7, items
+assert isinstance(items, list) and len(items) == 6, items
 vocab = data.get("verdict_vocabulary") or []
 assert vocab == [
     "implemented-and-proven-offline", "awaiting-install",
     "awaiting-hardware", "blocked", "not-a-gap",
 ], vocab
 counts = data.get("counts") or {}
-assert counts.get("items") == 7, counts
-assert sum((counts.get("by_verdict") or {}).values()) == 7, counts
+assert counts.get("items") == 6, counts
+assert sum((counts.get("by_verdict") or {}).values()) == 6, counts
 for item in items:
     assert item["verdict"] in vocab, item
     assert isinstance(item["complete"], bool), item
     # The core promise: no item may be complete without its device evidence.
     if item["complete"]:
         assert item["device"]["complete"] or item["verdict"] == "not-a-gap", item
-print("live JSON schema ok; 7 items; closed verdict vocabulary; no offline-only completion")
+print("live JSON schema ok; 6 items; closed verdict vocabulary; no offline-only completion")
 PY
 
     # Render the text report from the bundle the JSON run already collected, so
@@ -840,13 +688,13 @@ PY
         0|1) ;;
         *) printf 'FAIL acceptance text run exited %s\n' "$trc"; return 1 ;;
     esac
-    [ "$(grep -c '^\[' "$text")" -eq 7 ] \
-        || { printf 'FAIL acceptance text does not list 7 items\n'; return 1; }
-    grep -q '^== summary: 7 items' "$text" \
+    [ "$(grep -c '^\[' "$text")" -eq 6 ] \
+        || { printf 'FAIL acceptance text does not list 6 items\n'; return 1; }
+    grep -q '^== summary: 6 items' "$text" \
         || { printf 'FAIL acceptance text has no summary line\n'; return 1; }
     grep -q 'offline claim only' "$text" \
         || { printf 'FAIL acceptance text lost the offline-only statement\n'; return 1; }
-    printf 'selftest ok; live JSON schema ok; 7-item text report ok\n'
+    printf 'selftest ok; live JSON schema ok; 6-item text report ok\n'
 }
 
 # The sleep-cycle harness: offline analyser fixtures plus the read-only plan
@@ -922,30 +770,6 @@ def_suite shell-syntax fast fast 60 0 \
 def_suite python-compile fast fast 120 0 \
     "py_compile every tracked .py plus the extensionless oxp3-voltap" \
     "PYTHONPYCACHEPREFIX=<logs>/pycache python3 -m py_compile <files>"
-def_suite fp-python fast fast 120 0 \
-    "fingerprint protocol + SPI/ACPI + AML/_CRS + session crypto Python unittest suite (388 tests)" \
-    "python3 -m unittest discover -s tools/fingerprint/tests -q"
-def_suite fp-crypto fast fast 120 0 \
-    "session crypto (SM2/SM3/SM4/KDF) against published vectors + benchmark" \
-    "python3 tools/fingerprint/oxp3-fp-probe.py --crypto-selftest"
-def_suite fp-fixtures fast fast 120 0 \
-    "fingerprint fixture/vector drift, regenerated in memory" \
-    "python3 -m unittest discover -s tools/fingerprint/tests -p test_generated_data.py -q"
-def_suite fp-c-tests full fast 300 0 \
-    "fingerprint C protocol tests (host cc or local podman image)" \
-    "tools/fingerprint/tests/run-c-tests.sh"
-def_suite fp-syntax full fast 180 0 \
-    "compile-check the libfprint driver (plain + BF63112_ENABLE_SESSION) and the OpenSSL session module" \
-    "make -C tools/fingerprint syntax session-syntax (or the same in the local podman image)"
-def_suite fp-libfprint full slow-network 900 1 \
-    "compile-check the driver against a real libfprint v1.94.9 tree" \
-    "tools/fingerprint/tests/check-libfprint.sh"
-def_suite fp-session fast fast 300 0 \
-    "BF63112 root runbook offline: script selftest + fake-/sys scenarios (bind, rollback, SIGINT, resume)" \
-    "tools/fingerprint/oxp3-fp-session.sh --selftest && tests/fingerprint-session/run.sh"
-def_suite fp-session-root fast fast 120 0 \
-    "BF63112 root runbook live plan: --dry-run against the real /sys (SKIP without root or the device)" \
-    "tools/fingerprint/oxp3-fp-session.sh --dry-run"
 def_suite decky-build full fast 600 0 \
     "Decky plugin: typecheck, rollup, smoke test, backend selftest" \
     "cd tools/decky-oxp3-status && ./build.sh --offline (or --no-install)"
@@ -1084,7 +908,7 @@ if [ "$LIST" -eq 1 ]; then
     done
     printf '\n%d suite(s) selected: %d run in --fast, %d in --full.\n' \
         "$full_n" "$fast_n" "$full_n"
-    printf 'Network-dependent suites run only with --full OXP3_REPO_TEST_NETWORK=1.\n'
+    printf 'Network-dependent suites (none today) run only with --full OXP3_REPO_TEST_NETWORK=1.\n'
     exit 0
 fi
 
@@ -1098,7 +922,7 @@ mkdir -p -- "$LOGDIR" 2>/dev/null || die "cannot create log directory: $LOGDIR"
 # exported one at a time by the runner.
 export REPO LOGDIR MODE
 export OXP3_REPO_TEST_NETWORK="${OXP3_REPO_TEST_NETWORK:-0}"
-export -f have skip need local_build_image c_toolchain
+export -f have skip need
 
 if ! have timeout; then
     die "the 'timeout' command (GNU coreutils) is required"

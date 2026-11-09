@@ -59,7 +59,7 @@ points at the cause.
 | state | meaning | effect |
 |---|---|---|
 | `OK` | prerequisite satisfied | component can install |
-| `WARN` | a degraded path the inline installers already handle (no user bus → unit starts at next login; missing logind drop-in → `--sleep` creates it), a diagnostics-only tool (`kreadconfig6`, `flatpak`, `btmgmt`), an optional device (`spidev`), or a half-install a re-run completes | component still installs; the installer prints it and continues |
+| `WARN` | a degraded path the inline installers already handle (no user bus → unit starts at next login; missing logind drop-in → `--sleep` creates it), a diagnostics-only tool (`kreadconfig6`, `flatpak`, `btmgmt`), or a half-install a re-run completes | component still installs; the installer prints it and continues |
 | `FAIL` | a true blocker: a required tool/directory/device is absent, systemd is too old, a kernel option is off, or two implementations of one feature are active | the installer aborts; that component is listed as **skipped** |
 
 Verdict:
@@ -72,11 +72,11 @@ Verdict:
 
 A component is *blocked* when a `FAIL` check applies to it (explicitly, or a universal
 `*` blocker such as a missing systemd). A universal *warning* (for example a missing
-`spidev` that only the future fingerprint work needs) never degrades every component.
+diagnostics-only tool) never degrades every component.
 
 ## 3. Check inventory and remediation
 
-`tools/oxp3-preflight.sh` declares 71 checks in eight groups. The id is stable and is
+`tools/oxp3-preflight.sh` declares 72 checks in eight groups. The id is stable and is
 what `--json` reports.
 
 ### core
@@ -144,7 +144,6 @@ what `--json` reports.
 | `dev.input-events` | `/dev/input/event*` (WARN: only the LEGACY daemon reads event nodes; the hhd plugin needs none) | check `CONFIG_INPUT_EVDEV` and udev |
 | `dev.uinput` | `/dev/uinput` (FAIL for home button) | `sudo modprobe uinput`; enable `CONFIG_INPUT_UINPUT` |
 | `dev.uinput-legacy` | `/dev/uinput` for the legacy `oxp3-voltap` shim (WARN; the plugin needs none) | `sudo modprobe uinput` |
-| `dev.spidev` | `/dev/spidev*` (WARN; future fingerprint work) | informational |
 | `dev.rapl` | `intel-rapl:<n>` zones (FAIL for power) | check `CONFIG_INTEL_RAPL` / BIOS |
 | `dev.hwmon-oxp` | `oxp-platform` hwmon (WARN; fan curve is opt-in) | check the `oxp_ec` driver |
 | `dev.battery` | a charge-limit interface (WARN) | battery care is optional |
@@ -218,20 +217,17 @@ what `--json` reports.
 ## 6. Recorded state on this host (2026-11-09)
 
 See [`docs/state/preflight-2026-11-09.txt`](state/preflight-2026-11-09.txt). Summary:
-**SAFE, 0 blockers, 5 warnings**; 66 OK. The warnings are the honest stock state:
+**SAFE, 0 blockers, 2 warnings**; 70 OK. The warnings are the honest stock state:
 
 * `core.root` — the snapshot was taken as the user, not root.
-* `dir.logind-conf-d` — the drop-in directory does not exist yet (`--sleep` creates it).
-* `dev.spidev` — the fingerprint reader's SPI device is not bound; nothing installs it.
-* `state.bluetooth` — the two firmware files are present but the dracut drop-in is not
-  (`2/3`): the driver stack shipped the blobs, the initramfs step never ran.
-* `state.bt-initramfs` — this boot logged `Failed to load Intel firmware file`, the
-  documented stale-initramfs defect.
+* `state.sleep` — half-install: 7 of the 8 sleep artefacts are present, the
+  `49-oxp3-suspend.rules` polkit drop-in is missing (a `--sleep` re-run completes it).
 
 It also reports hhd 4.1.12 active (volume keyboard + RGB plugin), 25 input event nodes,
 `/dev/uinput`, `/dev/hidraw4` as the vendor collection, systemd 262, RAPL both zones,
-and that `volume/leds/rgb/sleep/power` are not installed while `imu` and `audio` are
-(their two artefacts are the only hardware-fix files this host already has).
+and per-component readiness: `volume/leds/rgb/sleep/bluetooth/power/imu/decky` are
+installed (degraded, mostly because this run is unprivileged), `audio` is ready, and
+`sleep` is the only half-install (7/8 artefacts).
 
 ## 7. Open points
 
@@ -240,8 +236,3 @@ and that `volume/leds/rgb/sleep/power` are not installed while `imu` and `audio`
   `--strict` is the release gate if you want a non-root run to fail.
 * The hhd grab state needs root (`/proc/<pid>/fdinfo`); an unprivileged run reports it
   as unknown instead of guessing.
-* `state.bluetooth` counts the two firmware blobs as part of the installer's output even
-  when a driver-stack package put them there. The detail names the missing dracut
-  drop-in, and `state.bt-initramfs` is the row that proves the boot-time effect.
-* The fingerprint path is only the `dev.spidev` warning today: nothing is installed, so
-  a missing SPI device cannot block an install.

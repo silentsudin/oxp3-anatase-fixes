@@ -1,5 +1,5 @@
 #!/bin/sh
-# oxp3-acceptance - judge the seven goal items from evidence, not memory.
+# oxp3-acceptance - judge the six goal items from evidence, not memory.
 #
 #   tools/oxp3-acceptance.sh                 evaluate now, human report (read-only)
 #   tools/oxp3-acceptance.sh --json          machine report (schema 1)

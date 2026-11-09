@@ -80,7 +80,7 @@ drifted. The summary/caveat fields carry the nuance.
 | state | use it when | examples in this repo |
 |---|---|---|
 | `working` | the implementation is complete and validated by recorded evidence; no known functional gap | Mesa, gamescope, audio EQ, display HDR, power envelope |
-| `partial` | something useful works and is validated, but a documented part of the goal is missing | XeSS XMX (driver patches parked), fan (EC curves not exposed), battery (EC bypass byte not exposed), fingerprint (enrol/verify unimplemented) |
+| `partial` | something useful works and is validated, but a documented part of the goal is missing | XeSS XMX (driver patches parked), fan (EC curves not exposed), battery (EC bypass byte not exposed) |
 | `blocked` | progress needs upstream/kernel/vendor work; nothing can be installed that closes the gap | SAGV (no Linux interface at all) |
 | `not-a-gap` | the investigation showed there is no gap on this unit | IMU (works out of the box), camera (no camera hardware) |
 | `awaiting-install` | the code is finished and offline-validated; the remaining step is installing it and running the verify check on the device | volume keys, LEDs, RGB, suspend policy, Bluetooth firmware, adaptive TDP, sched_ext |
@@ -231,9 +231,8 @@ in `docs/hw/README.md`, `docs/INSTALL-HW.md` and `README.md` before the markers 
 | 6 | root column mixed scope words: "yes (install)", "yes (udev rule)", "only for the Gamemode flag", "later (driver)", "no to measure; yes to refresh rapl-power", "n/a" | normalised to `yes`/`no`/`partial`/`n/a`; the nuance moved into caveats, and the root requirement was split with the component split (`sagv`: no, `rapl-power`: yes) |
 | 7 | `README.md` had one aggregate **extras** row (volume, speakers, TDP, suspend, GPU power, wake policy) | removed as an aggregate: those facts now live in the individual hardware entries. A hand-written pointer sentence after the generated table sends readers to `docs/hw/README.md`, and the registry is linked from it |
 | 8 | `README.md` did not list sched_ext or the Decky plugin | added as headline components (`sched_ext`, `decky`): both are our fixes, and the Decky plugin reports sched_ext, Mesa and XMX live, so they belong in the same registry |
-| 9 | the verification matrix was per-command (`journalctl ... | grep grabbed`, `cat /sys/...`) | replaced by the stable `tools/oxp3-verify.sh` check ids with a short expected result, plus explicit `cmd:` rows where no check exists (SAGV probe, camera ACPI status, the two fingerprint suites). The two whole-system rows are kept as `global_checks` |
-| 10 | `tools/fingerprint/oxp3-fp-probe.py` was cited as an install/verification entry | the probe needs spidev and root and never ran against the sensor; verification uses the two offline suites instead (172 Python tests at the audit, 324 C checks) |
-| 11 | `docs/INSTALL-HW.md` had a "install state (all)" / "full repo matrix" pair at the top of the matrix | kept verbatim in meaning as `global_checks` (install status, `oxp3-verify.sh`, `oxp3-status.sh`, harness self-test) |
+| 9 | the verification matrix was per-command (`journalctl ... | grep grabbed`, `cat /sys/...`) | replaced by the stable `tools/oxp3-verify.sh` check ids with a short expected result, plus explicit `cmd:` rows where no check exists (SAGV probe, camera ACPI status). The two whole-system rows are kept as `global_checks` |
+| 10 | `docs/INSTALL-HW.md` had a "install state (all)" / "full repo matrix" pair at the top of the matrix | kept verbatim in meaning as `global_checks` (install status, `oxp3-verify.sh`, `oxp3-status.sh`, harness self-test) |
 
 Nothing in these blocks was executed on the host: all validation is offline. The root-only checks
 remain device-side acceptance steps, now named by check id.

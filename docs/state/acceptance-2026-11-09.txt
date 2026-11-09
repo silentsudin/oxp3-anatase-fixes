@@ -1,11 +1,11 @@
 oxp3-acceptance 1.0.0  mode=default  kernel=7.2.7-an28.fc45.x86_64  root=no
-sources: verify=ok(72 checks: 41 pass/4 fail/26 skip)  health=ok(6/19 install steps)  repo-test=ok(10/11 suites pass)
+sources: verify=ok(81 checks: 64 pass/5 fail/11 skip)  health=ok(15/19 install steps)  repo-test=ok(8/9 suites pass)
 verdicts: implemented-and-proven-offline | awaiting-install | awaiting-hardware | blocked | not-a-gap
 
 [awaiting-install] 1. Sticky volume buttons
         state(cited): volume=awaiting-install   docs: docs/hw/volume-buttons.md
-        why: install step(s) still open: hw-install=todo; manual acceptance pending: volume.hold
-        implemented: tools/oxp3-voltap; files/84-oxp3-volume-keys.hwdb; tools/lib/install-common.sh
+        why: install step(s) still open: hw-install=partial; manual acceptance pending: volume.hold
+        implemented: tools/hhd-oxp3-voltap; tools/oxp3-voltap; files/84-oxp3-volume-keys.hwdb; tools/lib/install-common.sh
         install entry: sudo tools/oxp3-hw-install.sh --volume
         offline proof: unit=PASS, verify-selftest=PASS, voltap-integration=NOT-RUN (optional)
         device proof: 0/3 required checks PASS (vol.unit=SKIP, vol.grab=SKIP, vol.hold=MISSING)
@@ -13,28 +13,27 @@ verdicts: implemented-and-proven-offline | awaiting-install | awaiting-hardware 
           - a synthetic hold must yield exactly one step, not a ramp: sudo tools/oxp3-verify.sh --full   # vol.hold
         done when: vol.unit, vol.grab and vol.hold PASS after a real install; one physical hold steps once; the opt-in integration suite is green.
 
-[awaiting-install] 2. Home button and top RGB LEDs
+[awaiting-hardware] 2. Home button and top RGB LEDs
         state(cited): leds=awaiting-install, rgb=awaiting-install   docs: docs/hw/home-button-leds.md, docs/hw/rgb-coverage.md
-        why: install step(s) still open: udev-rules=todo, homebtn-unit=todo, rgb-config=todo; manual acceptance pending: leds.press, leds.write
+        why: device check(s) pending: homebtn.press, led.write; manual acceptance pending: leds.press, leds.write
         implemented: tools/oxp3_hid.py; tools/oxp3-led.py; tools/oxp3-homebtn.py; tools/oxp3-hid.rules; tools/oxp3-homebtn.service; tools/oxp3-rgbd.py
         install entry: sudo tools/oxp3-hw-install.sh --leds
         offline proof: led-selftest=PASS, hid-selftest=PASS, unit=PASS, verify-selftest=PASS
-        device proof: 0/7 required checks PASS (hid.rule=SKIP, hid.access=SKIP, homebtn.unit=SKIP, homebtn.mapping=SKIP, homebtn.press=SKIP, led.write=MISSING, rgbd.unit=SKIP)
+        device proof: 5/7 required checks PASS (hid.rule=PASS, hid.access=PASS, homebtn.unit=PASS, homebtn.mapping=PASS, homebtn.press=SKIP, led.write=MISSING, rgbd.unit=PASS)
         still needs the device:
           - press the home button once so the daemon decodes a real press: journalctl --user -b -u oxp3-homebtn --no-pager | tail
           - one solid frame must be accepted by the top strip: sudo tools/oxp3-verify.sh --full   # led.write
         done when: all leds/rgb checks PASS on the device, including one accepted LED frame and one decoded home-button press.
 
-[awaiting-install] 3. Sleep efficiency
+[blocked] 3. Sleep efficiency
         state(cited): sleep=awaiting-install   docs: docs/hw/sleep-power.md
-        why: install step(s) still open: sleep-policy=todo, logind-restart=unknown, sleep-units=todo; manual acceptance pending: sleep.good-cycle, sleep.suspend
-        implemented: files/oxp3-sleep-wakeup; files/oxp3-sleep-wakeup.service; files/oxp3-sleep-pre.service; files/oxp3-sleep-log.service; files/99-oxp3-sleep-wakeup.rules; files/logind-oxp3.conf
+        why: live required evidence failed: sleep.sdcard, sleep.aspm; manual acceptance pending: sleep.good-cycle
+        implemented: files/oxp3-sleep-wakeup; files/oxp3-sleep-wakeup.service; files/oxp3-sleep-pre.service; files/oxp3-sleep-log.service; files/oxp3-lowpower.service; files/oxp3-sleep-lowpower-pre.service
         install entry: sudo tools/oxp3-hw-install.sh --sleep
         offline proof: sleep-cycles=SKIP, unit=PASS, verify-selftest=PASS
-        device proof: 1/5 required checks PASS (sleep.mem=PASS, sleep.units=SKIP, sleep.wakeup=SKIP, sleep.trigger=SKIP, sleep.stats=UNKNOWN)
+        device proof: 5/5 required checks PASS (sleep.mem=PASS, sleep.units=PASS, sleep.wakeup=PASS, sleep.trigger=PASS, sleep.stats=PASS)
         still needs the device:
           - one real cycle run on battery must print verdict GOOD (drain < 1 %/h, no unexpected wake source): sudo tools/sleep-cycle-test.sh --cycles 3
-          - one rtcwake s2idle cycle with suspend_stats/success incremented: sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes
         done when: sleep.trigger PASS plus one clean sleep-cycle-test run with a GOOD verdict (or sleep.suspend PASS with success>0).
 
 [implemented-and-proven-offline] 4. Speaker audio (Harman APO)
@@ -47,50 +46,37 @@ verdicts: implemented-and-proven-offline | awaiting-install | awaiting-hardware 
           - listen to a known track on the internal speakers once with the EQ sink loaded (and toggle eq-off.sh to hear the difference): tools/audio/eq-on.sh && tools/audio/eq-off.sh
         done when: the EQ sink is the default and loaded, the model matches, and one owner listening check is recorded (the model cannot hear the drivers).
 
-[awaiting-hardware] 5. Fingerprint reader
-        state(cited): fingerprint=partial   docs: docs/hw/fingerprint.md
-        why: no automated device check covers this item; manual acceptance pending: fingerprint.transcript
-        implemented: tools/fingerprint
-        registry gap (fingerprint, partial): Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library, an offline-tested SPI transport/_CRS pa
-        offline proof: fp-python=PASS, fp-crypto=PASS, fp-c-tests=NOT-RUN (optional), fp-session=NOT-RUN (optional)
-        device proof: 0/0 required checks PASS
-        still needs the device:
-          - one guided root session against the sensor, with a transcript (probe.ran and restore.verified) handed back: sudo tools/fingerprint/oxp3-fp-session.sh
-        done when: one fingerprint transcript with probe.ran and restore.verified; the driver/enrol gap stays recorded as partial, not claimed.
-
-[awaiting-install] 6. Decky status plugin
+[blocked] 5. Decky status plugin
         state(cited): decky=working   docs: docs/decky-plugin.md
-        why: install step(s) still open: decky-plugin=todo; manual acceptance pending: decky.qam
-        implemented: tools/decky-oxp3-status; tools/oxp3-status.sh
-        install entry: tools/decky-oxp3-status/build.sh --offline
+        why: live required evidence failed: decky.status; manual acceptance pending: decky.qam
+        implemented: tools/decky-oxp3-status; tools/decky-oxp3-status/artifact.sha256; tools/lib/decky_plugin.py; tools/oxp3-status.sh
+        install entry: sudo tools/oxp3-hw-install.sh --decky
         offline proof: decky-selftest=PASS, decky-cli=PASS, decky-build=NOT-RUN (optional), decky-package=NOT-RUN (optional)
-        device proof: 1/3 required checks PASS (decky.dir=SKIP, decky.backend=SKIP, decky.status=PASS)
+        device proof: 2/3 required checks PASS (decky.dir=PASS, decky.backend=PASS, decky.status=FAIL)
         still needs the device:
           - open the Quick Access Menu in a real Decky session and confirm the OXP3 panel loads and refreshes: journalctl -b -u plugin_loader.service --no-pager | tail
         done when: decky.dir/backend/status PASS and the plugin is seen loaded in a real Decky session (QAM panel visible, Refresh works).
 
-[blocked] 7. Wider hardware/compatibility audit and further gaps
+[blocked] 6. Wider hardware/compatibility audit and further gaps
         state(cited): gamescope=working, mesa=working, xess-xmx=partial, mangohud=working, kernel-modules=working, firmware=working, rapl-power=working, sched-ext=awaiting-install, bluetooth=awaiting-install, power=working, fan=partial, battery=partial, adaptive-tdp=awaiting-install, sagv=blocked, display=working, imu=not-a-gap, camera=not-a-gap, daemons=awaiting-install   docs: docs/hw/hdr-vibrance.md, docs/BEST-CONFIG.md, docs/xess-xmx.md, docs/WORKING-BUILD-2026-11-08.md, docs/hw/sagv.md, docs/cpu-sched.md, docs/hw/bluetooth.md, docs/hw/power-fan.md, docs/hw/battery-tdp.md, docs/hw/camera-imu.md, docs/DAEMONS.md
-        why: components.yaml marks sagv blocked; live evidence FAIL: bt.journal, bt.controller, bt.diag
+        why: components.yaml marks sagv blocked; live evidence FAIL: gfx.mesa, gfx.working
         implemented: patches/gamescope; oxp3-fixes-fast.sh; oxp3-fixes.sh; patches/mesa; patches/xess-26.3; patches/xess-main
         registry gap (xess-xmx, partial): XeSS SR/FG on the Arc XMX units instead of DP4a for native Steam and Heroic; the shim, ControlLib and compiler install, but the driver CM patches are 
         registry gap (fan, partial): A manual PWM fan curve works through pwm1. The EC keeps no fan-curve table on this board (recovered 2026-11-09: its auto/manual, duty and tach registe
         install entry: ./oxp3-fixes-fast.sh install
         offline proof: triage=PASS, verify-selftest=PASS, unit=PASS, gen-docs=NOT-RUN (optional)
-        device proof: 9/11 required checks PASS (gfx.mesa=PASS, gfx.working=PASS, gfx.xe=PASS, pwr.zones=PASS, pwr.pl1=PASS, bat.threshold=PASS, dsp.panel=PASS, dsp.hdr=PASS, bt.files=PASS, bt.journal=FAIL, bt.controller=FAIL)
+        device proof: 9/11 required checks PASS (gfx.mesa=FAIL, gfx.working=FAIL, gfx.xe=PASS, pwr.zones=PASS, pwr.pl1=PASS, bat.threshold=PASS, dsp.panel=PASS, dsp.hdr=PASS, bt.files=PASS, bt.journal=PASS, bt.controller=PASS)
         done when: every registry gap is either closed (Bluetooth controller, opt-in scheduler, power profile) or explicitly accepted as upstream work (SAGV); no component is blocked without a written reason.
 
-== summary: 7 items | 0 complete | implemented-and-proven-offline 1 | awaiting-install 4 | awaiting-hardware 1 | blocked 1
-== offline evidence green for 6/7 items (implementation + required offline suites)
-== device/manual acceptance complete for 0/7 items
+== summary: 6 items | 0 complete | implemented-and-proven-offline 1 | awaiting-install 1 | awaiting-hardware 1 | blocked 3
+== offline evidence green for 5/6 items (implementation + required offline suites)
+== device/manual acceptance complete for 0/6 items
 == what remains (manual/device acceptance):
    volume       volume.hold              sudo tools/oxp3-verify.sh --full   # vol.hold
    leds         leds.press               journalctl --user -b -u oxp3-homebtn --no-pager | tail
    leds         leds.write               sudo tools/oxp3-verify.sh --full   # led.write
    sleep        sleep.good-cycle         sudo tools/sleep-cycle-test.sh --cycles 3
-   sleep        sleep.suspend            sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes
    audio        audio.listen             tools/audio/eq-on.sh && tools/audio/eq-off.sh
-   fingerprint  fingerprint.transcript   sudo tools/fingerprint/oxp3-fp-session.sh
    decky        decky.qam                journalctl -b -u plugin_loader.service --no-pager | tail
-== failing live checks: bt.controller, bt.diag, bt.journal, inst.backups
+== failing live checks: decky.status, gfx.mesa, gfx.working, sleep.aspm, sleep.sdcard
 == no item is called device-proven by this tool; 'implemented-and-proven-offline' is an offline claim only.

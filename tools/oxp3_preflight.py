@@ -1080,17 +1080,6 @@ def check_devices(ctx: Context) -> List[Check]:
             "neither /dev/uinput nor an event node", ("volume",),
         ))
 
-    spidev = ctx.glob("/dev/spidev*")
-    if spidev:
-        out.append(ok("dev.spidev", "dev", "SPI device",
-                      " ".join(os.path.basename(p) for p in spidev[:3])))
-    else:
-        out.append(warn(
-            "dev.spidev", "dev", "SPI device", "no /dev/spidev* node",
-            "informational: the fingerprint reader needs spidev + root, but "
-            "nothing is installed for it yet (docs/hw/fingerprint.md)",
-        ))
-
     rapl = [p for p in ctx.glob("/sys/class/powercap/intel-rapl:*")
             if re.search(r"intel-rapl:*[0-9]+$", p)]
     if rapl:

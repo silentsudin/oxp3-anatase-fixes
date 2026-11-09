@@ -19,10 +19,10 @@ cd /var/home/holzr/git/linux_scratch/oxp3-anatase-fixes
 
 tools/repo-test.sh                 # same as --fast; no network, no builds
 tools/repo-test.sh --fast
-tools/repo-test.sh --full          # adds the C/Decky builds and libfprint syntax
+tools/repo-test.sh --full          # adds the Decky build and package checks
 tools/repo-test.sh --list          # inventory: mode, tier, timeout, description
 tools/repo-test.sh --json          # machine-readable result
-tools/repo-test.sh --only 'fp-*'   # only matching suites (repeatable glob)
+tools/repo-test.sh --only 'decky-*' # only matching suites (repeatable glob)
 tools/repo-test.sh --integration   # opt-in integration suites (real daemons + uinput/uhid)
 
 make test                          # == tools/repo-test.sh --fast
@@ -39,30 +39,29 @@ failing command and its log path.
 Recorded on this host (2026-11-09, no root):
 
 ```
-== 40 suite(s): 31 pass, 0 fail, 9 skip -> exit 0      # --fast, ≈ 114 s (2026-11-09)
+== 34 suite(s): 28 pass, 0 fail, 6 skip -> exit 0      # --fast, ≈ 115 s (2026-11-09)
 ```
 
 The inventory is the runner's, not a number copied here: `tools/repo-test.sh --list` prints the
-current **40 suites**, of which **35** run in `--fast` and all 40 in `--full`, with each suite's
-mode, tier and timeout. `--full` was not re-run in this round; it is expected to add the five
-full-only rows and keep the three explained skips (§9).
+current **34 suites**, of which **32** run in `--fast` and all 34 in `--full`, with each suite's
+mode, tier and timeout. `--full` adds the two full-only rows and keeps the explained skips (§9).
 
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 31 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 36 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 32 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 34 | Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
-`--full` still never installs host packages. The one network-dependent suite
-(`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
-suite is reported as `SKIP` with the exact reason.
+`--full` still never installs host packages. No suite needs the network today;
+the `OXP3_REPO_TEST_NETWORK=1` gate stays in the runner for a future
+network-dependent suite, which would then report `SKIP` with the exact reason.
 
 Features that don't fit a mode:
 
 ```sh
 tools/repo-test.sh --full --json > result.json
-tools/repo-test.sh --fast --only 'decky-*' --only 'fp-*'   # OR of globs
+tools/repo-test.sh --fast --only 'decky-*' --only 'verify-*' # OR of globs
 ```
 
 Suite names are the identifiers in the table below. `--only` matches the name
@@ -79,14 +78,6 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 |---|---|---|---|---|---|
 | `shell-syntax` | fast | fast | 60 s | `bash`, `sh`, `git` | – |
 | `python-compile` | fast | fast | 120 s | `python3`, `git` | bytecode to `<log>/pycache` |
-| `fp-python` | fast | fast | 120 s | `python3` | – |
-| `fp-crypto` | fast | fast | 120 s | `python3` | – |
-| `fp-fixtures` | fast | fast | 120 s | `python3` | – (regenerated and compared in memory) |
-| `fp-c-tests` | full | fast | 300 s | host `cc`+`make`, or local `localhost/oxp3-fixes-build:f45` | `tools/fingerprint/build/` |
-| `fp-syntax` | full | fast | 180 s | same C toolchain | `tools/fingerprint/build/` |
-| `fp-libfprint` | full | slow/network | 900 s | libfprint v1.94.9 tree + GLib/GUsb devel, or podman + network | – (syntax only) |
-| `fp-session` | fast | fast | 300 s | `python3`, `bash`, `mkfifo` | – (fake `/sys` trees under `$TMPDIR`) |
-| `fp-session-root` | fast | fast | 120 s | root + the BF63112 device (otherwise SKIP) | – (`--dry-run` only) |
 | `decky-build` | full | fast | 600 s | `node`, `npm`, `python3` | `node_modules/`, `dist/`, `build/` |
 | `decky-package` | full | fast | 120 s | `python3`, `dist/index.js` | `build/*.zip` |
 | `decky-install` | fast | fast | 120 s | `bash`, `python3`, a built plugin zip (otherwise SKIP) | private `$TMPDIR` |
@@ -134,9 +125,7 @@ Areas and what is actually proven:
   shebang (`bash` first, then `sh`, so `#!/usr/bin/env sh` is covered).
 * **Python** — `py_compile` on every tracked `.py` plus the extensionless
   `tools/oxp3-voltap/oxp3-voltap`; bytecode goes to the log dir, never the
-  checkout. Then the 388-test fingerprint protocol + SPI/ACPI suite and the fixture/vector
-  drift check (the latter imports the generator and compares in memory, so the
-  checked-in fixtures are not rewritten).
+  checkout.
 * **volume daemon end to end** — opt-in `voltap-integration`
   (`tests/integration/volume/`): creates ephemeral uinput devices, drives the
   real `oxp3-voltap` process through tap / three-tap / 3 s hold / bounce /
@@ -155,11 +144,6 @@ Areas and what is actually proven:
   reconnect by identity. Tools are pinned with `--device` so a real
   `1a86:fe00` interface is never opened; root is needed and the suite skips
   with the exact command otherwise (see [VALIDATION.md](VALIDATION.md)).
-* **fingerprint C** — the independent C implementation is compiled with
-  `-std=gnu11 -Wall -Wextra -Werror` and run against the same 10 vectors
-  (324 checks). `fp-syntax` compiles the libfprint driver against our clearly
-  marked offline stub headers. `fp-libfprint` is the authoritative check
-  against a real libfprint tree and is therefore the only network-gated suite.
 * **Decky** — `build.sh` (typecheck, rollup, headless render smoke, backend
   `--selftest`), `package.py` run twice (the zip must be byte-identical), and
   the CLI's `--json` output must parse as JSON. The Decky CLI's live exit code
@@ -222,9 +206,9 @@ Measured per suite in the recorded `--fast` run (wall clock, this host):
 
 | tier | definition | suites here |
 |---|---|---|
-| fast | a few seconds (< 5 s target; the timeout is the real bound) | the slowest are `python-compile` ≈ 7.9 s on a cold bytecode cache (26 Python processes), `unit` ≈ 4.8 s, `unit-verify` ≈ 1.3 s (17 units) and `decky-selftest`/`status-selftest` ≈ 1.2 s; the total `--fast` run is ≈ 58 s, including the medium suites |
+| fast | a few seconds (< 5 s target; the timeout is the real bound) | the slowest are `audio-eq-isolation` ≈ 27.8 s, `python-compile` ≈ 7.7 s on a cold bytecode cache, `unit` ≈ 6.9 s, `unit-verify` ≈ 1.6 s (17 units) and `decky-selftest`/`status-selftest` ≈ 1.2 s; the total `--fast` run is ≈ 115 s, including the medium suites |
 | medium | 5–60 s | `firstrun` ≈ 13.5 s (it runs `oxp3-verify` twice; timeout stays 120 s), `health` ≈ 7.7 s (one live verify), `cli-contracts` ≈ 6.7 s (all `--help`/flag probes) and `gen-docs` ≈ 4.9 s (it runs the unit discovery for the HANDOVER block); a cold `npm ci` or a first container `dnf install` would also land here |
-| slow / network | > 60 s or requires the network | `fp-libfprint` only (skipped by default; with `OXP3_REPO_TEST_NETWORK=1` the container fallback installs `glib2-devel libgusb-devel` first) |
+| slow / network | > 60 s or requires the network | none today; the tier exists for a future network-dependent suite |
 
 The tier is documentation in `--list`; the timeout is what actually bounds a
 run. A timeout is a `FAIL` (`timeout after Ns`), not a skip.
@@ -266,10 +250,10 @@ suite with its command, reason (`exit N` / `timeout after Ns`) and log path:
 
 ```
 Failing suites (command and log):
-  fp-python
-    command: python3 -m unittest discover -s tools/fingerprint/tests -q
+  unit
+    command: python3 -m unittest discover -s tests/unit -q
     reason:  exit 1
-    log:     /tmp/oxp3-repo-test/.../fp-python.log
+    log:     /tmp/oxp3-repo-test/.../unit.log
 ```
 
 Skip reasons come from the suite itself (exit 77) and are shown in the table
@@ -280,12 +264,9 @@ Skip reasons come from the suite itself (exit 77) and are shown in the table
 `--fast` was written so it can run on a read-only checkout:
 
 * no `sudo`/`root` is used by the runner or any fast suite;
-* no command in the fast set contacts the network (the only network suite is
-  `fp-libfprint`, full-only and gated);
+* no command in the fast set contacts the network, and no suite needs it today;
 * Python is run with `PYTHONDONTWRITEBYTECODE=1`; the explicit `py_compile`
   suite redirects bytecode with `PYTHONPYCACHEPREFIX` into the log dir;
-* the fixture-drift check regenerates in memory, so `tools/fingerprint/tests/`
-  is not touched;
 * unit-verify stubs are written under the log dir, hwdb compilation uses a
   private `mktemp -d` root, and `oxp3-verify`/`status` self-tests use their own
   private temp directories;
@@ -299,8 +280,8 @@ new untracked files).
 ## 7. Adding a suite
 
 1. Write a function in `tools/repo-test.sh` named `suite_<name>` where `<name>`
-   is the public suite name with `-` replaced by `_` (e.g. `suite_fp_python`
-   for `fp-python`). Return 0 for pass, 77 for skip, anything else for fail.
+   is the public suite name with `-` replaced by `_` (e.g. `suite_decky_build`
+   for `decky-build`). Return 0 for pass, 77 for skip, anything else for fail.
    Use the helpers:
    * `need TOOL` — skip when a required tool is missing;
    * `skip "reason"` — explicit skip; the reason reaches the table and JSON;
@@ -336,33 +317,29 @@ What a container needs to run the whole suite without skips:
 | always | `bash coreutils git python3 sed findutils grep` | runner, syntax, Python suite |
 | units/udev | `systemd` (`systemd-analyze`, `udevadm`, `systemd-hwdb`) | unit/udev/hwdb suites; without them those suites SKIP |
 | lint | `ShellCheck` | `shellcheck` suite (optional) |
-| C | `gcc make` | `fp-c-tests`, `fp-syntax`; without them the runner uses a local podman image or SKIPs |
-| real libfprint | `glib2-devel libgusb-devel pkg-config` + a `v1.94.9` checkout at `$LIBFPRINT_SRC` (default `/tmp/libfprint-1.94.9`) | `fp-libfprint`; otherwise network-gated SKIP |
 | Decky | `nodejs npm` + a warm npm cache (`npm ci --offline`) | `decky-build`; a cold cache is an explicit SKIP, not a failure |
-| rootless build fallback | `podman` + an image with `gcc make` (`localhost/oxp3-fixes-build:f45`) | C suites when the CI image itself has no compiler |
 
 Two container recipes were exercised for this round (both exit 0 on `--fast`):
 
 ```sh
 # root container: units/udev and the installer dry-run SKIP (no systemd, no
-# unprivileged user); 15 pass / 10 skip
+# unprivileged user)
 podman run --rm --security-opt label=disable \
   -v "$PWD":/w:z -w /w localhost/oxp3-fixes-build:f45 ./tools/repo-test.sh --fast
 
 # non-root container: same, but the installer dry-run also runs
-# (16 pass / 9 skip)
 podman run --rm --userns=keep-id -u "$(id -u):$(id -g)" -e HOME=/tmp \
   --security-opt label=disable \
   -v "$PWD":/w:z -w /w localhost/oxp3-fixes-build:f45 ./tools/repo-test.sh --fast
 ```
 
-A native CI runner with `gcc`, `node`, `systemd` and `shellcheck` installed can
+A native CI runner with `node`, `systemd` and `shellcheck` installed can
 run `make test-full` without podman. In a minimal container, expect the honest
 SKIPs above; add the packages to remove them.
 
 What cannot move into a generic CI container: the live acceptance checks in
-[VALIDATION.md](VALIDATION.md) (real suspend, RAPL writes, hidraw, fingerprint
-SPI, Bluetooth controller), and the root-only installer paths. Those stay a
+[VALIDATION.md](VALIDATION.md) (real suspend, RAPL writes, hidraw,
+Bluetooth controller), and the root-only installer paths. Those stay a
 device-side step; the repository checks here are a regression net, not a
 substitute for them.
 
@@ -371,9 +348,6 @@ CI job sketch:
 ```sh
 tools/repo-test.sh --fast --json > fast.json     # gate: exit 0
 tools/repo-test.sh --full --json > full.json     # gate: exit 0 (skips counted)
-
-# Optional, only in a job that has the source tree and network:
-OXP3_REPO_TEST_NETWORK=1 tools/repo-test.sh --full --only fp-libfprint --json
 ```
 
 ## 9. Recorded results (2026-11-09)
@@ -383,19 +357,20 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 | run | result |
 |---|---|
-| `tools/repo-test.sh --fast` | 36 rows: **29 pass, 0 fail, 7 skip**, exit 0, ≈ 88 s (`audio-eq-isolation` 28.1 s, `firstrun` 13.8 s, `health` 8.0 s, `cli-contracts` 6.7 s, `gen-docs` 5.2 s) |
+| `tools/repo-test.sh --fast` | 34 rows: **28 pass, 0 fail, 6 skip**, exit 0, ≈ 115 s (`audio-eq-isolation` 27.8 s, `acceptance` 18.8 s, `firstrun` 16.0 s, `health` 8.8 s, `python-compile` 7.7 s, `cli-contracts` 7.6 s) |
 | `tools/repo-test.sh --only cli-contracts` | 1 row: 1 pass, exit 0, ≈ 6.7 s (`--only` selects only the matching suite) |
-| `tools/repo-test.sh --list` | 36 suites; 31 run in `--fast`, 36 in `--full` |
+| `tools/repo-test.sh --list` | 34 suites; 32 run in `--fast`, 34 in `--full` |
 | `tools/repo-test.sh --integration` | 2 rows: 1 pass, 1 skip, exit 0, ≈ 9.9 s (real volume daemon + ephemeral uinput devices PASS; `hid-integration` SKIPs without root on this host, with the `sudo tests/integration/hid/run.sh` hint) |
-| `python3 -m unittest discover -s tests/unit -q` | `Ran 682 tests ... OK (skipped=1)`, ≈ 4.9 s |
+| `python3 -m unittest discover -s tests/unit -q` | `Ran 956 tests ... OK (skipped=1)`, ≈ 6.3 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
-| deliberately broken copy in `/tmp`, `--only fp-python` (earlier round) | 1 fail, exit 1, failing command + log path printed |
+| deliberately broken copy in `/tmp`, `--only unit` (earlier round) | 1 fail, exit 1, failing command + log path printed |
 | root container `--fast` (earlier round) | 15 pass / 0 fail / 10 skip, exit 0 |
 | non-root container `--fast` (earlier round) | 16 pass / 0 fail / 9 skip, exit 0 |
 
-The seven fast-mode skips are the five full-only suites, `shellcheck` and the opt-in
-`voltap-integration` suite; they are enumerated in the table on every run, not implied. `--full` was not re-run
-in this round. The authoritative current numbers are `tools/repo-test.sh --list`
+The six fast-mode skips are the two full-only suites (`decky-build`, `decky-package`),
+`shellcheck`, the two opt-in integration suites and `sleep-cycles` (it needs root and an
+explicit owner decision); they are enumerated in the table on every run, not implied.
+`--full` was not re-run in this round. The authoritative current numbers are `tools/repo-test.sh --list`
 and the generated `handover-state` block in [HANDOVER.md](HANDOVER.md), not any
 count copied into this document.
 
@@ -413,13 +388,6 @@ count copied into this document.
   clean` all expand correctly. On the host, use `tools/repo-test.sh` directly.
 * **`shellcheck` is absent**, so the lint suite is always a SKIP here. Install
   `ShellCheck` to make it meaningful; no automatic install is attempted.
-* **Compiler is absent on the host**, so the C suites use the local podman
-  image. A CI image with `gcc make` should run them natively to avoid the
-  container path.
-* **`fp-libfprint` is the only network-dependent suite.** The v1.94.9 tree is
-  present at `/tmp/libfprint-1.94.9`, but host GLib/GUsb headers are not, so the
-  container fallback would `dnf install` them; that is why the default is SKIP
-  and `OXP3_REPO_TEST_NETWORK=1` is opt-in.
 * **The Decky plugin uses npm, not pnpm.** The task's "pnpm" is not a
   dependency of this repository; `decky-build` checks `node`/`npm` and a warm
   npm cache.
@@ -429,8 +397,6 @@ count copied into this document.
 * **`installer-dry-run` needs an unprivileged target user** (the installer's
   own precondition). Root containers without `SUDO_USER`/`--user` SKIP; run the
   container as a normal user to exercise it.
-* **`fp-libfprint` timeout is 900 s** because the first container run may
-  install packages. Every other timeout is ≤ 600 s; a timeout is a FAIL.
 * **The runner requires GNU `timeout` and `date +%s%N`.** Both are in
   coreutils; a busybox CI image would need them added.
 * **Logs accumulate.** There is no automatic rotation; the path is printed on
@@ -452,7 +418,6 @@ outside `repo-test.sh` (they depend on this unit's hardware or on a built tree):
 tools/oxp3-flatpak-xmx.sh status --json      # sandbox-visible shim/ICD state
 tools/oxp3-voltap/oxp3-voltap check          # which input device the daemon would grab
 tools/display/oxp3-icc.py --out /tmp/p.icc && tools/display/oxp3-icc.py --check /tmp/p.icc
-tools/fingerprint/oxp3-fp-probe.py --crypto-selftest   # SM2/SM3/SM4 vectors, no device
 tools/oxp3-rollback.sh verify --json         # unbacked in-place edits, read-only
 ```
 

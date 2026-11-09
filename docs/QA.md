@@ -1,8 +1,7 @@
 # Repository QA — offline checks and evidence snapshot
 
 Date: **2026-11-09** (Europe/London; commands run 01:32–01:41 UTC).
-Repo revision at start: **4dc7366** (`fingerprint: tested protocol library + compile-checked libfprint
-driver; decky: deterministic build`), author `silentsudin`.
+Repo revision at start: **4dc7366**, author `silentsudin`.
 Update (licensing round, same day, unprivileged): added [PROVENANCE.md](PROVENANCE.md),
 `tools/apply-license.py` and `tools/provenance-audit.py`; validated the licence application on a
 `/tmp` copy only. No licence was applied to this checkout.
@@ -67,10 +66,10 @@ paths are fixed and covered by behavioural tests.
 2. `tools/oxp3-hw-install.sh --unknown`: exited 1 although its header says 2 = usage. Fixed; test added.
 3. `tools/oxp3-verify.sh` status consumer: cache/exit-code bugs above, demonstrated with a forced
    `overall=fail` backend (before: SKIP/UNKNOWN; after: FAIL/PASS). Fixed; 5 behavioural tests added.
-4. Stale docs that contradicted behaviour: the `repo-test` suite count, the fingerprint test count,
-   the verify assertion/check counts and the unit-test count had all drifted, as had the `--list`
-   "95 checks" string and the `firstrun` timing tier; `components.yaml`'s fingerprint expect was
-   regenerated into `INSTALL-HW.md`. `gen-docs --check` is clean.
+4. Stale docs that contradicted behaviour: the `repo-test` suite count, the verify assertion/check
+   counts and the unit-test count had all drifted, as had the `--list` "95 checks" string and the
+   `firstrun` timing tier; the generated `install-verify` block was refreshed. `gen-docs --check`
+   is clean.
 
 ### Health of the repository as a whole
 
@@ -80,9 +79,8 @@ paths are fixed and covered by behavioural tests.
   sources in the `handover-state` block.
 * **Slow:** `tools/repo-test.sh --fast` is ≈ 58 s (the `cli-contracts` and `gen-docs` suites added
   since this audit account for ~12 s of that); the dominant fast-mode suite is still `firstrun`
-  (≈ 13.5 s, runs verify twice). No individual tool is slow; `--full` still needs a warm npm cache
-  and the podman image.
-* **Noisy:** the default `oxp3-verify` prints 72 rows, preflight 71, and status 28 indicators. The
+  (≈ 13.5 s, runs verify twice). No individual tool is slow; `--full` still needs a warm npm cache.
+* **Noisy:** the default `oxp3-verify` prints 72 rows, preflight 72, and status 28 indicators. The
   signal (4 fails / 5 warns) is buried; triage is the only tool that ranks it.
 * **Should be one command but is three:** install readiness, live health and the remaining checklist
   are `preflight`, `verify` and `firstrun`/`triage`. `repo-test` covers only the offline layer.
@@ -107,56 +105,50 @@ paths are fixed and covered by behavioural tests.
 | 1 | shell syntax | `bash -n` on every bash script (25) | loop over tracked files whose shebang is bash, `bash -n "$f"` | **PASS** | 25/25, no output. Scripts in `files/` included even though the task asks for `tools/`+root. |
 | 2 | shell syntax | `sh -n` on every POSIX-sh script (8) | same loop, `sh -n "$f"` | **PASS** | 8/8, no output. |
 | 3 | Python | `py_compile` on every `.py` plus `tools/oxp3-voltap/oxp3-voltap` | `PYTHONPYCACHEPREFIX=/tmp/qa-pyc python3 -m py_compile <file>` | **PASS** | 26/26. `PYTHONPYCACHEPREFIX` kept `__pycache__` out of the checkout. |
-| 4 | fingerprint | Python protocol suite | `python3 -m unittest discover -s tools/fingerprint/tests -v` | **PASS** | `Ran 85 tests ... OK`, 0.021 s. |
-| 5 | fingerprint | C protocol suite | `tools/fingerprint/tests/run-c-tests.sh` | **PASS** | No host compiler → podman fallback, image `localhost/oxp3-fixes-build:f45`; `ok: 324 checks, 10 vectors`. |
-| 6 | fingerprint | fixture/vector drift | `python3 tools/fingerprint/tests/generate_fixtures.py && git diff --exit-code -- tools/fingerprint/tests` | **PASS** | Regenerated 15 files; `git diff` empty, working tree unchanged. `test_generated_data.py` also enforces this in-memory. |
-| 7 | fingerprint | driver vs real libfprint 1.94.9 | `tools/fingerprint/tests/check-libfprint.sh` (with `/tmp/libfprint-1.94.9` = `v1.94.9`) | **PASS** | Podman fallback installed `glib2-devel libgusb-devel` in the ephemeral container; `syntax-real: OK ... -Wall -Wextra -Werror`. |
-| 8 | fingerprint | driver vs offline stub headers | `podman run ... make syntax` | **PASS** | `syntax: OK (stub headers, not libfprint)`. |
-| 9 | Decky | offline dependency install + typecheck + bundle | `cd tools/decky-oxp3-status && ./build.sh --offline` | **PASS** | `npm ci --offline` (registry not contacted, 134 packages from cache), `tsc --noEmit`, rollup. |
-| 10 | Decky | headless load/render smoke | `npm run smoke` (inside `build.sh`) | **PASS** | `dist/index.js loaded and rendered (483 bytes of markup, api handshake ok)`. |
-| 11 | Decky | backend self-test | `python3 main.py --selftest` (inside `build.sh`) | **PASS** | `selftest: 60 checks passed (synthetic /sys, /proc, /run, HOME)`. |
-| 12 | Decky | package + determinism | `python3 package.py` twice (`--offline` then `--no-install`) | **PASS** | `build/oxp3-status-1.0.0.zip`, 33,843 bytes, sha256 `896ccee7…70eaa` both times — matches `docs/decky-plugin.md`. |
-| 13 | systemd | all system units | `systemd-analyze verify` on copies with `ExecStart`/`ExecStop` stubbed to `/bin/true` | **PASS** | 14/14. Stubbing is necessary only because `/usr/local/libexec/*` exists after install; without it verify fails exactly with `Command /usr/local/libexec/oxp3-powerctl is not executable`. Three units whose binaries already exist (`oxp3-audio-resume@test`, `oxp3-gaming-sched`, `oxp3-rapl-pp1`) were also verified unstubbed and passed, including `%i` expansion. |
-| 14 | systemd | all user units (`graphical-session.target`) | `systemd-analyze --user verify` on stubbed copies | **PASS** | 3/3: `oxp3-audio-route`, `oxp3-homebtn`, `oxp3-rgbd`. |
-| 15 | udev | every `.rules` file | `udevadm verify <file>` | **PASS** | 2 files (`files/99-oxp3-sleep-wakeup.rules`, `tools/oxp3-hid.rules`): Success 1, Fail 0 each. |
-| 16 | udev | volume hwdb compilation | `systemd-hwdb --root=<tmp> --strict update` after copying each file to `<tmp>/etc/udev/hwdb.d/` | **PASS** | 2/2; non-empty `hwdb.bin` produced, strict mode, no diagnostics. |
-| 17 | lint | `shellcheck` | `command -v shellcheck` | **SKIP** | Not installed on the host; no network install attempted. `bash -n` is the only shell lint available. |
-| 18 | hygiene | tracked vendor binaries/firmware | `git ls-files` + magic-byte scan (`ELF`, `MZ`, `PK`, PNG, `%PDF`) + extension scan | **PASS** | 0 binaries. Largest tracked file is a 126,183-byte text patch; no `.dll/.exe/.sys/.bin/.sfi/.ddc/.rpm/.zip`. All 253 files tracked at the time were text. |
-| 19 | hygiene | tracked build artifacts | `git ls-files` path scan for `node_modules/`, `dist/`, `build/`, `__pycache__`, `*.pyc`, `*.zip`, `*.o`, `*.so` | **PASS** | 0 tracked. `node_modules/` (50 MB), `dist/`, `build/` and `tools/fingerprint/build/test_proto` exist locally but are untracked/ignored. |
-| 20 | hygiene | `.gitignore` coverage | `git check-ignore` on probe paths, then re-check | **PASS (fixed)** | Before: nested Decky `dist/build/node_modules` ignored, but a root `foo.zip`/`foo.pyc` was not. Added generic `dist/`, `build/`, `node_modules/`, `*.zip`, `*.pyc`, `*.pyo` to `.gitignore`; all probes now ignored. |
-| 21 | hygiene | large files | `git ls-files` sizes | **PASS** | Max 126,183 B; no file > 128 KiB, no LFS pointers. |
-| 22 | hygiene | secrets/tokens/keys | `git grep -nEI` for AWS/GitHub/Slack tokens, `BEGIN … PRIVATE KEY`, `password\|secret\|api_key = "…"`, `sk-…`; plus credential-in-URL/curl-auth scan | **PASS** | 0 matches across all tracked text, including docs, scripts and fixtures. |
-| 23 | hygiene | licence headers / top-level licence | first 8 lines of every tracked source-like file; then `tools/apply-license.py --check …` | **DECISION PENDING (ready to apply)** | No `LICENSE`/`COPYING` and **60 of 71** source-like files had no `SPDX-License-Identifier` at the audit revision; the fingerprint subtree (12 files) already declares `LGPL-2.1-or-later`. No licence is asserted by this repository: [PROVENANCE.md](PROVENANCE.md) records the provenance guarantee and `tools/apply-license.py` applies the owner's choice in one reviewable commit. Its scope covers every hand-written source (81 files at HEAD, including the Java helpers, the `.fx` shader and the extensionless scripts) and exempts only the generated `tools/fingerprint/tests/vectors.h`. The command is `tools/apply-license.py --write --spdx <id> [--except …]`; see [Decisions pending](#decisions-pending-not-failures). |
-| 24 | hygiene | line endings / executable bits | `git grep -Il $'\r'`; compare shebang to `git ls-files -s` mode | **PASS** | No CRLF. Every shebang file is `100755` except `files/oxp3-audio-route`, `files/oxp3-tdp-sync`, `files/oxp3-xpad-sleep` (100644; the installers use `install -m 0755`, so installed behaviour is unaffected) and `main.py`/`package.py` (invoked via `python3`). |
-| 25 | docs | relative Markdown links | local link parser over all tracked `.md` plus `docs/QA.md` | **PASS** | 87 relative links, 0 missing. |
-| 26 | docs | repo paths cited in docs | token scan for `tools/…`, `files/…`, `docs/…`, `patches/…`; existence check | **PASS (fixed)** | 120 unique paths. One genuine broken in-repo reference: README cited `docs/BEYOND-PARITY.md`, which is not in this repo; corrected to “out-of-tree `BEYOND-PARITY` notes” (no fabricated content). Remaining hits are shorthand (`files/oxp3-sleep-*`), vendor payload paths (`tools/intel/...`) or an external project’s `docs/debugging.md`. |
-| 27 | docs | recorded counts/hashes still true | compare docs to live runs | **PASS** | 85 tests, 324 C checks/10 vectors, 60 Decky checks, 33,843 B / `896ccee7…` all match `docs/decky-plugin.md`, `tools/fingerprint/README.md` and `docs/hw/fingerprint.md`; libfprint tree is `v1.94.9`. |
-| 28 | docs | privilege claims vs tools | review of “no root/unprivileged” statements | **PASS** | No tool that needs root is described as unprivileged: `oxp3-voltap selftest` is shown with `sudo`; installer/Bluetooth/reload paths say sudo; `--status`, `--dry-run`, `--check`, `status` and the non-root selftests were exercised without root. |
-| 29 | status | machine-readable status | `tools/oxp3-status.sh --json` | **PASS** | Exit 0, valid JSON, schema 1, `overall: warn`, counts `ok=23 warn=5 fail=0 unknown=0`. Saved redacted to `docs/state/oxp3-status-2026-11-09.json`. |
-| 30 | status | synthetic self-test | `tools/oxp3-status.sh --selftest` | **PASS** | `selftest: 60 checks passed`. |
-| 31 | status | strict mode | `tools/oxp3-status.sh --strict` | **PASS (expected exit 2)** | Exit 2 because the live system has 5 warn rows (XMX trace absent, scheduler not loaded, gaming-sched unit not installed, Flatpak Steam env). Correct `--strict` behaviour. |
-| 32 | state | host snapshot without root | `bash state-snapshot.sh` | **PASS** | Exit 0, no stderr; 81 lines captured to `docs/state/snapshot-2026-11-09.txt` (kernel, RAPL, driver hashes, scheduler, packages, fix state, BT files, battery, suspend). |
-| 33 | state | recorded working build | `tools/check-working.sh` | **PASS** | 7/7 `OK`, “state matches the recorded working build” (host/runtime driver prefixes, expat, PL1 35 W, patched `xe.ko`, Heroic GameMode off). |
-| 34 | installer | read-only status | `tools/oxp3-hw-install.sh --status` | **PASS** | Exit 0; honest “nothing installed” matrix plus live PL1/PL2/PL4, battery, BT file count, IMU blacklist. |
-| 35 | installer | full dry-run | `tools/oxp3-hw-install.sh --dry-run --all` | **PASS** | Exit 0; 29 `[dry-run]`/`[root-prefix]` lines, no write attempted (no root). |
-| 36 | installer | simulated install/idempotency/uninstall | `mkdir -p /tmp/oxp3-sim && tools/oxp3-hw-install.sh --root /tmp/oxp3-sim --sleep --leds --rgb --imu --audio` (twice, then `--uninstall`) | **PASS** | 13 files created under the prefix; second run byte-identical file list; uninstall removed all units/rules/scripts/EQ and kept `~/.config/oxp3-rgb.toml` as designed. |
-| 37 | tool | volume daemon self-test | `tools/oxp3-voltap/oxp3-voltap selftest` | **SKIP** | Exits 1 with `selftest needs root (/dev/uinput)`; the documented command is `sudo … selftest`. Not run privileged. |
-| 38 | tool | RGB encoder self-test | `tools/oxp3-led.py selftest` | **PASS** | 9/9 encoder frames match captured frames (brightness/preset/solid/breath/off). |
-| 39 | tool | HID encoder self-test | `tools/oxp3_hid.py` | **PASS** | 9/9 frames (the script has no CLI; it always runs the self-test). |
-| 40 | tool | RGB keeper config + state | `tools/oxp3-rgbd.py --config tools/oxp3-rgbd.toml.example --check` | **PASS** | 5 zones, 10 frames, `brightness=high`; no config at `~/.config` is an environment state, not a code failure (`--check` exits 1 there). |
-| 41 | tool | RGB keeper dry-run | `tools/oxp3-rgbd.py --config tools/oxp3-rgbd.toml.example --once --dry-run` | **PASS** | Prints 10 64-byte frames, writes nothing. |
-| 42 | tool | IMU self-test | `tools/oxp3-imu.py selftest` | **PASS** | 16 `[OK]`, `RESULT: PASS (0 warning(s))`; BMI260 at ~99 Hz, HHD gyro path live. |
-| 43 | tool | adaptive TDP one decision | `tools/oxp3-adaptivetdp.py --once --dry-run --json` | **PASS** | Exit 0, one JSON decision (`custom → quiet`, `applied=false`); the non-root `/var/log` warning is expected and non-fatal. |
-| 44 | tool | power control read-only | `tools/oxp3-powerctl.py status --json`; `battery status`; `profile performance --dry-run`; `fan curve --once --dry-run` | **PASS** | Both RAPL zones and all limits read; battery limit 80, behaviour `auto`; dry-run prints both-zone write order; curve picks pwm 124 at 61 °C; no writes. |
-| 45 | tool | SAGV exposure | `tools/oxp3-sagv.sh status` | **PASS** | Exit 0; reports display v30, `enable_sagv` 0400, no point interface, MCHBAR unreadable, RAPL domains. |
-| 46 | tool | SAGV interface probe | `tools/oxp3-sagv.sh probe` | **PASS (expected exit 3)** | Exit 3 by design: “nothing writable”; the scan and root commands are the product. |
-| 47 | tool | Bluetooth firmware diagnosis | `tools/oxp3-bt-firmware.sh --check` | **PASS (expected exit 1)** | Both files present and pinned-hash verified; exit 1 because *this boot* logged `Failed to load Intel firmware file … (-2)`, i.e. the running initramfs predates the files. `docs/INSTALL-HW.md` expected-output row corrected. |
-| 48 | tool | Bluetooth dry-run | `tools/oxp3-bt-firmware.sh --dry-run` | **PASS** | Exit 0; exact privileged plan printed. It **downloads** the two upstream files to the cache to verify hashes (network), so it is not a fully offline check even though it makes no system write. |
-| 49 | tool | suspend audit | `tools/sleep-power-measure.sh audit` | **PASS** | Exit 0; `[s2idle] deep`, no suspend attempts this boot (success 0), wake-source table shown. Root residency/blockers not available. |
-| 50 | tool | speaker EQ model | `tools/audio/eq_response.py` | **PASS** | 8 bands, pre-gain −8.0 dB, max −1.6 dB, min −15.0 dB — matches `docs/INSTALL-HW.md`. |
-| 51 | tool | display status | `tools/display/display-mode.sh status` | **PASS** | Reads eDP-1: 1920×1200@144, HDR off, WCG off, 10-bit, VRR never. Read-only. |
-| 52 | tool | vibrance status | `tools/display/vibrance.sh status` | **PASS** | Shader present (4,758 B), gamescope shader installed, vkBasalt absent; no writes. |
-| 53 | tool | fingerprint probe CLI | `tools/fingerprint/oxp3-fp-probe.py --help` | **PASS** | Usage renders; probe itself needs `spidev` + root and was not run (no hardware access). |
+| 4 | Decky | offline dependency install + typecheck + bundle | `cd tools/decky-oxp3-status && ./build.sh --offline` | **PASS** | `npm ci --offline` (registry not contacted, 134 packages from cache), `tsc --noEmit`, rollup. |
+| 5 | Decky | headless load/render smoke | `npm run smoke` (inside `build.sh`) | **PASS** | `dist/index.js loaded and rendered (483 bytes of markup, api handshake ok)`. |
+| 6 | Decky | backend self-test | `python3 main.py --selftest` (inside `build.sh`) | **PASS** | `selftest: 60 checks passed (synthetic /sys, /proc, /run, HOME)`. |
+| 7 | Decky | package + determinism | `python3 package.py` twice (`--offline` then `--no-install`) | **PASS** | `build/oxp3-status-1.0.0.zip`, 33,843 bytes, sha256 `896ccee7…70eaa` both times — matches `docs/decky-plugin.md`. |
+| 8 | systemd | all system units | `systemd-analyze verify` on copies with `ExecStart`/`ExecStop` stubbed to `/bin/true` | **PASS** | 14/14. Stubbing is necessary only because `/usr/local/libexec/*` exists after install; without it verify fails exactly with `Command /usr/local/libexec/oxp3-powerctl is not executable`. Three units whose binaries already exist (`oxp3-audio-resume@test`, `oxp3-gaming-sched`, `oxp3-rapl-pp1`) were also verified unstubbed and passed, including `%i` expansion. |
+| 9 | systemd | all user units (`graphical-session.target`) | `systemd-analyze --user verify` on stubbed copies | **PASS** | 3/3: `oxp3-audio-route`, `oxp3-homebtn`, `oxp3-rgbd`. |
+| 10 | udev | every `.rules` file | `udevadm verify <file>` | **PASS** | 2 files (`files/99-oxp3-sleep-wakeup.rules`, `tools/oxp3-hid.rules`): Success 1, Fail 0 each. |
+| 11 | udev | volume hwdb compilation | `systemd-hwdb --root=<tmp> --strict update` after copying each file to `<tmp>/etc/udev/hwdb.d/` | **PASS** | 2/2; non-empty `hwdb.bin` produced, strict mode, no diagnostics. |
+| 12 | lint | `shellcheck` | `command -v shellcheck` | **SKIP** | Not installed on the host; no network install attempted. `bash -n` is the only shell lint available. |
+| 13 | hygiene | tracked vendor binaries/firmware | `git ls-files` + magic-byte scan (`ELF`, `MZ`, `PK`, PNG, `%PDF`) + extension scan | **PASS** | 0 binaries. Largest tracked file is a 126,183-byte text patch; no `.dll/.exe/.sys/.bin/.sfi/.ddc/.rpm/.zip`. All 253 files tracked at the time were text. |
+| 14 | hygiene | tracked build artifacts | `git ls-files` path scan for `node_modules/`, `dist/`, `build/`, `__pycache__`, `*.pyc`, `*.zip`, `*.o`, `*.so` | **PASS** | 0 tracked. `node_modules/` (50 MB), `dist/` and `build/` exist locally but are untracked/ignored. |
+| 15 | hygiene | `.gitignore` coverage | `git check-ignore` on probe paths, then re-check | **PASS (fixed)** | Before: nested Decky `dist/build/node_modules` ignored, but a root `foo.zip`/`foo.pyc` was not. Added generic `dist/`, `build/`, `node_modules/`, `*.zip`, `*.pyc`, `*.pyo` to `.gitignore`; all probes now ignored. |
+| 16 | hygiene | large files | `git ls-files` sizes | **PASS** | Max 126,183 B; no file > 128 KiB, no LFS pointers. |
+| 17 | hygiene | secrets/tokens/keys | `git grep -nEI` for AWS/GitHub/Slack tokens, `BEGIN … PRIVATE KEY`, `password\|secret\|api_key = "…"`, `sk-…`; plus credential-in-URL/curl-auth scan | **PASS** | 0 matches across all tracked text, including docs, scripts and fixtures. |
+| 18 | hygiene | licence headers / top-level licence | first 8 lines of every tracked source-like file; then `tools/apply-license.py --check …` | **DECISION PENDING (ready to apply)** | No `LICENSE`/`COPYING` and **no** in-scope source file carries an `SPDX-License-Identifier`. No licence is asserted by this repository: [PROVENANCE.md](PROVENANCE.md) records the provenance guarantee and `tools/apply-license.py` applies the owner's choice in one reviewable commit. Its scope covers every hand-written source (139 files at this revision, including the Java helpers, the `.fx` shader and the extensionless scripts); no generated file is exempt. The command is `tools/apply-license.py --write --spdx <id>`; see [Decisions pending](#decisions-pending-not-failures). |
+| 19 | hygiene | line endings / executable bits | `git grep -Il $'\r'`; compare shebang to `git ls-files -s` mode | **PASS** | No CRLF. Every shebang file is `100755` except `files/oxp3-audio-route`, `files/oxp3-tdp-sync`, `files/oxp3-xpad-sleep` (100644; the installers use `install -m 0755`, so installed behaviour is unaffected) and `main.py`/`package.py` (invoked via `python3`). |
+| 20 | docs | relative Markdown links | local link parser over all tracked `.md` plus `docs/QA.md` | **PASS** | 87 relative links, 0 missing. |
+| 21 | docs | repo paths cited in docs | token scan for `tools/…`, `files/…`, `docs/…`, `patches/…`; existence check | **PASS (fixed)** | 120 unique paths. One genuine broken in-repo reference: README cited `docs/BEYOND-PARITY.md`, which is not in this repo; corrected to “out-of-tree `BEYOND-PARITY` notes” (no fabricated content). Remaining hits are shorthand (`files/oxp3-sleep-*`), vendor payload paths (`tools/intel/...`) or an external project’s `docs/debugging.md`. |
+| 22 | docs | recorded counts/hashes still true | compare docs to live runs | **PASS** | 60 Decky checks and 33,843 B / `896ccee7…` match `docs/decky-plugin.md`. |
+| 23 | docs | privilege claims vs tools | review of “no root/unprivileged” statements | **PASS** | No tool that needs root is described as unprivileged: `oxp3-voltap selftest` is shown with `sudo`; installer/Bluetooth/reload paths say sudo; `--status`, `--dry-run`, `--check`, `status` and the non-root selftests were exercised without root. |
+| 24 | status | machine-readable status | `tools/oxp3-status.sh --json` | **PASS** | Exit 0, valid JSON, schema 1, `overall: warn`, counts `ok=23 warn=5 fail=0 unknown=0`. Saved redacted to `docs/state/oxp3-status-2026-11-09.json`. |
+| 25 | status | synthetic self-test | `tools/oxp3-status.sh --selftest` | **PASS** | `selftest: 60 checks passed`. |
+| 26 | status | strict mode | `tools/oxp3-status.sh --strict` | **PASS (expected exit 2)** | Exit 2 because the live system has 5 warn rows (XMX trace absent, scheduler not loaded, gaming-sched unit not installed, Flatpak Steam env). Correct `--strict` behaviour. |
+| 27 | state | host snapshot without root | `bash state-snapshot.sh` | **PASS** | Exit 0, no stderr; 81 lines captured to `docs/state/snapshot-2026-11-09.txt` (kernel, RAPL, driver hashes, scheduler, packages, fix state, BT files, battery, suspend). |
+| 28 | state | recorded working build | `tools/check-working.sh` | **PASS** | 7/7 `OK`, “state matches the recorded working build” (host/runtime driver prefixes, expat, PL1 35 W, patched `xe.ko`, Heroic GameMode off). |
+| 29 | installer | read-only status | `tools/oxp3-hw-install.sh --status` | **PASS** | Exit 0; honest “nothing installed” matrix plus live PL1/PL2/PL4, battery, BT file count, IMU blacklist. |
+| 30 | installer | full dry-run | `tools/oxp3-hw-install.sh --dry-run --all` | **PASS** | Exit 0; 29 `[dry-run]`/`[root-prefix]` lines, no write attempted (no root). |
+| 31 | installer | simulated install/idempotency/uninstall | `mkdir -p /tmp/oxp3-sim && tools/oxp3-hw-install.sh --root /tmp/oxp3-sim --sleep --leds --rgb --imu --audio` (twice, then `--uninstall`) | **PASS** | 13 files created under the prefix; second run byte-identical file list; uninstall removed all units/rules/scripts/EQ and kept `~/.config/oxp3-rgb.toml` as designed. |
+| 32 | tool | volume daemon self-test | `tools/oxp3-voltap/oxp3-voltap selftest` | **SKIP** | Exits 1 with `selftest needs root (/dev/uinput)`; the documented command is `sudo … selftest`. Not run privileged. |
+| 33 | tool | RGB encoder self-test | `tools/oxp3-led.py selftest` | **PASS** | 9/9 encoder frames match captured frames (brightness/preset/solid/breath/off). |
+| 34 | tool | HID encoder self-test | `tools/oxp3_hid.py` | **PASS** | 9/9 frames (the script has no CLI; it always runs the self-test). |
+| 35 | tool | RGB keeper config + state | `tools/oxp3-rgbd.py --config tools/oxp3-rgbd.toml.example --check` | **PASS** | 5 zones, 10 frames, `brightness=high`; no config at `~/.config` is an environment state, not a code failure (`--check` exits 1 there). |
+| 36 | tool | RGB keeper dry-run | `tools/oxp3-rgbd.py --config tools/oxp3-rgbd.toml.example --once --dry-run` | **PASS** | Prints 10 64-byte frames, writes nothing. |
+| 37 | tool | IMU self-test | `tools/oxp3-imu.py selftest` | **PASS** | 16 `[OK]`, `RESULT: PASS (0 warning(s))`; BMI260 at ~99 Hz, HHD gyro path live. |
+| 38 | tool | adaptive TDP one decision | `tools/oxp3-adaptivetdp.py --once --dry-run --json` | **PASS** | Exit 0, one JSON decision (`custom → quiet`, `applied=false`); the non-root `/var/log` warning is expected and non-fatal. |
+| 39 | tool | power control read-only | `tools/oxp3-powerctl.py status --json`; `battery status`; `profile performance --dry-run`; `fan curve --once --dry-run` | **PASS** | Both RAPL zones and all limits read; battery limit 80, behaviour `auto`; dry-run prints both-zone write order; curve picks pwm 124 at 61 °C; no writes. |
+| 40 | tool | SAGV exposure | `tools/oxp3-sagv.sh status` | **PASS** | Exit 0; reports display v30, `enable_sagv` 0400, no point interface, MCHBAR unreadable, RAPL domains. |
+| 41 | tool | SAGV interface probe | `tools/oxp3-sagv.sh probe` | **PASS (expected exit 3)** | Exit 3 by design: “nothing writable”; the scan and root commands are the product. |
+| 42 | tool | Bluetooth firmware diagnosis | `tools/oxp3-bt-firmware.sh --check` | **PASS (expected exit 1)** | Both files present and pinned-hash verified; exit 1 because *this boot* logged `Failed to load Intel firmware file … (-2)`, i.e. the running initramfs predates the files. `docs/INSTALL-HW.md` expected-output row corrected. |
+| 43 | tool | Bluetooth dry-run | `tools/oxp3-bt-firmware.sh --dry-run` | **PASS** | Exit 0; exact privileged plan printed. It **downloads** the two upstream files to the cache to verify hashes (network), so it is not a fully offline check even though it makes no system write. |
+| 44 | tool | suspend audit | `tools/sleep-power-measure.sh audit` | **PASS** | Exit 0; `[s2idle] deep`, no suspend attempts this boot (success 0), wake-source table shown. Root residency/blockers not available. |
+| 45 | tool | speaker EQ model | `tools/audio/eq_response.py` | **PASS** | 8 bands, pre-gain −8.0 dB, max −1.6 dB, min −15.0 dB — matches `docs/INSTALL-HW.md`. |
+| 46 | tool | display status | `tools/display/display-mode.sh status` | **PASS** | Reads eDP-1: 1920×1200@144, HDR off, WCG off, 10-bit, VRR never. Read-only. |
+| 47 | tool | vibrance status | `tools/display/vibrance.sh status` | **PASS** | Shader present (4,758 B), gamescope shader installed, vkBasalt absent; no writes. |
 
 ## Decisions pending (not failures)
 
@@ -166,23 +158,21 @@ paths are fixed and covered by behavioural tests.
    copy (no real-tree write): [PROVENANCE.md](PROVENANCE.md) records the no-vendor-code guarantee,
    the per-category policy, the audit evidence and the contributor rules; `tools/apply-license.py`
    writes `LICENSE` plus one `SPDX-License-Identifier` line per source file, preserving shebangs and
-   module docstrings. The fingerprint subtree keeps its existing `LGPL-2.1-or-later` via `--except`.
-   Run one of:
+   module docstrings. Run one of:
 
    ```sh
-   tools/apply-license.py --write --spdx MIT --holder "silentsudin" --except 'tools/fingerprint/**=LGPL-2.1-or-later'
+   tools/apply-license.py --write --spdx MIT --holder "silentsudin"
    tools/apply-license.py --write --spdx LGPL-2.1-or-later --holder "silentsudin"
    ```
 
    then `--check` with the same arguments (idempotent), review `git diff`, and commit. Patches keep
    their upstream licences and are out of scope. Copy validation: MIT+exception wrote 70 headers and
    `LICENSE`, both `--check` runs exited 0 with an unchanged tree, byte-diff showed only the added
-   SPDX lines, shebang/docstring positions were preserved, all 85 fingerprint tests passed and the
-   fixture-drift check stayed clean. Until the owner decides, default copyright applies and reuse
+   SPDX lines and shebang/docstring positions were preserved. Until the owner decides, default copyright applies and reuse
    terms are ambiguous even though every file is our own work.
 2. **Root-only checks intentionally not executed.** RAPL writes/readback, `oxp3-fan-curve` manual PWM,
-   real suspend (`sleep-power-measure.sh suspend`), `oxp3-voltap selftest`, `spidev` bind + fingerprint
-   probe, Bluetooth module reload and the real installer are all unverified here by the no-sudo rule.
+   real suspend (`sleep-power-measure.sh suspend`), `oxp3-voltap selftest`, Bluetooth module reload
+   and the real installer are all unverified here by the no-sudo rule.
    They remain the device-side acceptance step; the commands are in `docs/INSTALL-HW.md` and the
    per-topic documents.
 
@@ -227,14 +217,10 @@ paths are fixed and covered by behavioural tests.
 * **`--dry-run` is not always offline.** `oxp3-bt-firmware.sh --dry-run` downloads the upstream files
   to verify the pinned hashes. That is defensible (the hashes are the point) but should be stated;
   “dry-run” currently implies “no network” to most readers.
-* **Fingerprint suite is strong but hardware-free.** 85 Python + 324 C checks and two compile modes
-  are a good regression net; the remaining risk is entirely the never-run SPI path. Keep the synthetic
-  vectors authoritative and do not let a hardware tweak bypass the fixture-drift test.
 * **Decky build is in good shape.** Offline `npm ci`, typecheck, smoke, 60-check selftest and a
   byte-identical, documented artifact make this the most reproducible part of the repo.
-* **Local build artefacts.** `node_modules/` (~50 MB), `dist/`, `build/` and
-  `tools/fingerprint/build/test_proto` are present but ignored; no tracked binary. A `git clean -Xdn`
-  review before a release is still worthwhile.
+* **Local build artefacts.** `node_modules/` (~50 MB), `dist/` and `build/` are present but ignored;
+  no tracked binary. A `git clean -Xdn` review before a release is still worthwhile.
 
 ## How to re-run
 
@@ -245,14 +231,13 @@ per-suite timeout, captured logs and a compact PASS/FAIL/SKIP table. It needs no
 root, no network and (in `--fast`) no build:
 
 ```sh
-tools/repo-test.sh --fast   # default: shell/Python syntax, fingerprint Python
-                            # + fixture drift, Decky selftest/CLI, verify
-                            # fixtures, installer status/dry-run, units/udev/hwdb
-tools/repo-test.sh --full   # adds the fingerprint C/stub-syntax builds and the
-                            # Decky build + package-determinism check
+tools/repo-test.sh --fast   # default: shell/Python syntax, Decky selftest/CLI,
+                            # verify fixtures, installer status/dry-run,
+                            # units/udev/hwdb
+tools/repo-test.sh --full   # adds the Decky build + package-determinism check
 tools/repo-test.sh --list   # suite inventory, mode, tier, timeout
 tools/repo-test.sh --json   # machine-readable result
-tools/repo-test.sh --only 'fp-*'   # one suite family (repeatable)
+tools/repo-test.sh --only 'decky-*'   # one suite family (repeatable)
 
 make test                   # == tools/repo-test.sh --fast
 make test-full              # == tools/repo-test.sh --full
@@ -260,11 +245,11 @@ make test-full              # == tools/repo-test.sh --full
 
 Logs and `summary.txt` go to `${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/<utc-run>/`;
 the failing command and its log path are printed when something fails. Missing
-optional tools (a C compiler/container image, `shellcheck`, a warm npm cache,
-network) are reported as `SKIP` with a reason, never as a pass. The inventory is
+optional tools (`shellcheck`, a warm npm cache, network) are reported as `SKIP` with a
+reason, never as a pass. The inventory is
 not copied here: `tools/repo-test.sh --list` prints the current count and the
-`--fast` subset (36 suites, 31 in `--fast` at the time of writing, including the
-`unit`, `gen-docs` and `cli-contracts` suites added after the snapshot above).
+`--fast` subset (34 suites, 32 in `--fast` at this revision, including the `unit`,
+`gen-docs` and `cli-contracts` suites added after the snapshot above).
 [TESTING.md](TESTING.md) §9 records the last run; the generated `handover-state`
 block in [HANDOVER.md](HANDOVER.md) is the current count.
 
@@ -301,14 +286,7 @@ PYTHONPYCACHEPREFIX=/tmp/qa-pyc sh -c \
   'git ls-files "*.py" | while read -r f; do python3 -m py_compile "$f" || echo "FAIL $f"; done;
    python3 -m py_compile tools/oxp3-voltap/oxp3-voltap'
 
-# 2. fingerprint
-python3 -m unittest discover -s tools/fingerprint/tests -v
-tools/fingerprint/tests/run-c-tests.sh
-python3 tools/fingerprint/tests/generate_fixtures.py
-git diff --exit-code -- tools/fingerprint/tests     # drift check
-tools/fingerprint/tests/check-libfprint.sh          # needs /tmp/libfprint-1.94.9 (v1.94.9)
-
-# 3. Decky (offline; warm npm cache). `--no-install` reuses node_modules.
+# 2. Decky (offline; warm npm cache). `--no-install` reuses node_modules.
 (cd tools/decky-oxp3-status && ./build.sh --offline)
 (cd tools/decky-oxp3-status && sha256sum build/oxp3-status-1.0.0.zip)
 
@@ -362,8 +340,6 @@ git grep -nEI 'AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|-----BEGIN ([A-Z]+ )?PRIVAT
 ```
 
 The host has no `shellcheck`; install it (`rpm-ostree install ShellCheck`) to add
-`shellcheck -x` over every `.sh` before release. The C suites need either host `gcc`/`make` or
-podman with `localhost/oxp3-fixes-build:f45`; `check-libfprint.sh` additionally needs a
-`v1.94.9` source tree at `/tmp/libfprint-1.94.9` (it falls back to podman, which installs GLib/GUsb
-development packages into the ephemeral container).
+`shellcheck -x` over every `.sh` before release. The Decky suites need `node`/`npm` and a warm npm
+cache; no suite needs a C compiler or a container image.
 

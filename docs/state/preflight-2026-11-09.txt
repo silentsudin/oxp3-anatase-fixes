@@ -4,14 +4,13 @@ oxp3-preflight 1.0.0  repo=/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes 
        fix: sudo tools/oxp3-hw-install.sh <components>   (the installer re-runs this check as root)
 [OK  ] core     core.user              holzr (uid 1000, home /var/home/holzr)
 [OK  ] core     core.repo-path         /var/home/holzr/git/linux_scratch/oxp3-anatase-fixes (no whitespace)
-[OK  ] core     core.repo              10 required files present
+[OK  ] core     core.repo              15 required files present
 [OK  ] core     core.sudo              sudo available
 [OK  ] dir      dir.system-units       /etc/systemd/system
 [OK  ] dir      dir.udev-rules         /etc/udev/rules.d
 [OK  ] dir      dir.udev-hwdb          /etc/udev/hwdb.d
 [OK  ] dir      dir.polkit-rules       /etc/polkit-1/rules.d
-[WARN] dir      dir.logind-conf-d      /etc/systemd/logind.conf.d is missing
-       fix: create it: sudo install -d -m 0755 /etc/systemd/logind.conf.d   (the installer would create it, but a pre-created directory keeps the half-install surface small)
+[OK  ] dir      dir.logind-conf-d      /etc/systemd/logind.conf.d
 [OK  ] dir      dir.local-libexec      /usr/local/libexec
 [OK  ] dir      dir.dracut-conf-d      /etc/dracut.conf.d
 [OK  ] dir      dir.modprobe-d         /etc/modprobe.d
@@ -39,13 +38,11 @@ oxp3-preflight 1.0.0  repo=/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes 
 [OK  ] tool     tool.btmgmt            btmgmt present
 [OK  ] tool     tool.flatpak           flatpak present
 [OK  ] tool     tool.modprobe          modprobe present
-[OK  ] tool     tool.polkit-agent      147061 /usr/libexec/kf6/polkit-kde-authentication-agent-1
+[OK  ] tool     tool.polkit-agent      5796 /usr/libexec/kf6/polkit-kde-authentication-agent-1
 [OK  ] dev      dev.hidraw             7 node(s): hidraw0 hidraw1 hidraw2 hidraw3 hidraw4
-[OK  ] dev      dev.vendor-hid         /dev/hidraw4 (1a86:fe00, usage page 0xFF00); root-only until 90-oxp3-hid.rules
+[OK  ] dev      dev.vendor-hid         /dev/hidraw4 (1a86:fe00, usage page 0xFF00)
 [OK  ] dev      dev.input-events       25 node(s)
 [OK  ] dev      dev.uinput             /dev/uinput present
-[WARN] dev      dev.spidev             no /dev/spidev* node
-       fix: informational: the fingerprint reader needs spidev + root, but nothing is installed for it yet (docs/hw/fingerprint.md)
 [OK  ] dev      dev.rapl               2 zone(s)
 [OK  ] dev      dev.hwmon-oxp          oxp-platform hwmon present
 [OK  ] dev      dev.battery            1 charge-limit interface(s)
@@ -53,42 +50,42 @@ oxp3-preflight 1.0.0  repo=/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes 
 [OK  ] kernel   kernel.config          /usr/lib/modules/7.2.7-an28.fc45.x86_64/config
 [OK  ] kernel   kernel.hidraw          CONFIG_HIDRAW=y
 [OK  ] kernel   kernel.uinput          CONFIG_INPUT_UINPUT=m
+[OK  ] kernel   kernel.uinput-legacy   CONFIG_INPUT_UINPUT=m
 [OK  ] kernel   kernel.rapl            CONFIG_INTEL_RAPL=m, CONFIG_INTEL_RAPL_CORE=m
 [OK  ] kernel   kernel.bmi260          CONFIG_BMI260=m
 [OK  ] kernel   kernel.btintel         CONFIG_BT_INTEL_PCIE=m
-[OK  ] state    state.volume           not installed (0/4 artefacts)
-[OK  ] state    state.leds             not installed (0/2 artefacts)
-[OK  ] state    state.rgb              not installed (0/3 artefacts)
-[OK  ] state    state.sleep            not installed (0/8 artefacts)
-[WARN] state    state.bluetooth        half-install: 2/3 artefacts; missing 60-oxp3-bt-firmware.conf
-       fix: re-run the installer to converge: sudo tools/oxp3-hw-install.sh --bluetooth
-[OK  ] state    state.power            not installed (0/3 artefacts)
+[OK  ] state    state.volume           installed (5/5 artefacts)
+[OK  ] state    state.leds             installed (2/2 artefacts)
+[OK  ] state    state.rgb              installed (3/3 artefacts)
+[WARN] state    state.sleep            half-install: 7/8 artefacts; missing 49-oxp3-suspend.rules
+       fix: re-run the installer to converge: sudo tools/oxp3-hw-install.sh --sleep
+[OK  ] state    state.bluetooth        installed (3/3 artefacts)
+[OK  ] state    state.power            installed (3/3 artefacts)
 [OK  ] state    state.imu              installed (1/1 artefacts)
 [OK  ] state    state.audio            installed (1/1 artefacts)
-[WARN] state    state.bt-initramfs     firmware present (2/2) but /etc/dracut.conf.d/60-oxp3-bt-firmware.conf is missing; this boot's initramfs predates it (kernel logged a firmware load failure)
-       fix: sudo tools/oxp3-bt-firmware.sh   # writes the drop-in, then reboot
+[OK  ] state    state.decky            installed (2/2 artefacts)
+[OK  ] state    state.bt-initramfs     firmware + dracut drop-in present, no load failure this boot
 [OK  ] state    state.ostree-staged    no staged deployment
 [OK  ] conflict conflict.hhd           active 4.1.12+git.154.geca609b0f54a (volume keyboard, RGB plugin, grab state unknown without root)
 [OK  ] conflict conflict.hhd-version   4.1.12+git.154.geca609b0f54a (>= 4.1.12)
-[OK  ] conflict conflict.volume-path   no volume implementation installed yet
-[OK  ] conflict conflict.logind        no conflicting policy (power key default: compiled default)
+[OK  ] conflict conflict.volume-path   hhd plugin installed (supported path)
+[OK  ] conflict conflict.logind        no conflicting policy (power key default: suspend)
 [OK  ] conflict conflict.polkit        no existing /etc/polkit-1/rules.d/49-oxp3-suspend.rules
 [OK  ] conflict conflict.flatpak       no override, environment.d or user unit points at another checkout
 [OK  ] conflict conflict.stale-units   no installed oxp3 user unit points at another checkout
 [OK  ] conflict conflict.rapl-rule     no 70-*rapl.rules present
 
 == components (install readiness)
-   volume    degraded not installed
-   leds      degraded not installed
-   rgb       degraded not installed
-   sleep     degraded not installed
-   bluetooth degraded half-install 2/3
-   power     degraded not installed
+   volume    degraded installed
+   leds      degraded installed
+   rgb       degraded installed
+   sleep     degraded half-install 7/8
+   bluetooth degraded installed
+   power     degraded installed
    imu       degraded installed
    audio     ready    installed
+   decky     degraded installed
 
-== verdict: SAFE - an install would complete; 0 blocker(s), 5 warning(s)
-   warnings: core.root dir.logind-conf-d dev.spidev state.bluetooth state.bt-initramfs
+== verdict: SAFE - an install would complete; 0 blocker(s), 2 warning(s)
+   warnings: core.root state.sleep
    warnings are degraded paths the installers already handle; --strict exits 1 while any remain
-
-# recorded by tools/oxp3-preflight.sh on 2026-11-09 as user holzr (not root); exit code 0

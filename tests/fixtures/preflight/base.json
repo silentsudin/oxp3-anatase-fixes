@@ -82,7 +82,6 @@
     "/dev/hidraw0": "",
     "/dev/hidraw4": "",
     "/dev/input/event4": "",
-    "/dev/spidev0.0": "",
     "/run/user/1000/bus": "",
     "/home/tester/.cache/oxp3-bt-firmware/ibt-00a0-0291-iml.sfi": "iml",
     "/home/tester/.cache/oxp3-bt-firmware/ibt-00a0-0291-pci.sfi": "pci",

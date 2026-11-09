@@ -6,7 +6,7 @@ this host.  Each one pins one aggregation behaviour that has already gone wrong 
 this project or would silently mislead the acceptance report:
 
   all-green         every component working, every check passing, sign-offs recorded
-                    -> all seven items complete, no missing evidence
+                    -> all six items complete, no missing evidence
   awaiting-install  the real components.yaml states; device checks SKIP because the
                     install steps are still open -> awaiting-install, never "proven"
   blocked           one registry-blocked component (SAGV) plus failing Bluetooth
@@ -34,7 +34,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import oxp3_acceptance as ACC  # noqa: E402
 
 DEFAULT_SUITES = sorted(set(ACC.DEFAULT_SUITES) | {
-    "voltap-integration", "audio-eq-isolation", "fp-c-tests", "fp-session",
+    "voltap-integration", "audio-eq-isolation",
     "decky-build", "decky-package", "gen-docs",
 })
 
@@ -174,7 +174,6 @@ def bundle(components, sources, artifacts=None, mode="default"):
         "files": files_all_present(components),
         "artifacts": artifacts or {
             "sleep_cycles_good": {"found": False, "path": "", "detail": "synthetic"},
-            "fingerprint_transcript": {"found": False, "path": "", "detail": "synthetic"},
             "signoffs": {},
         },
         "sources": sources,
@@ -197,8 +196,6 @@ def all_green(components):
     artifacts = {
         "sleep_cycles_good": {"found": True, "path": "docs/state/sleep-cycles-synthetic/report.json",
                               "detail": "synthetic GOOD report"},
-        "fingerprint_transcript": {"found": True, "path": "docs/state/fp-session-synthetic/summary.json",
-                                   "detail": "synthetic verified transcript"},
         "signoffs": {
             "audio.listen": {"by": "synthetic", "date": "2026-11-09", "note": "fixture"},
             "decky.qam": {"by": "synthetic", "date": "2026-11-09", "note": "fixture"},
@@ -206,8 +203,8 @@ def all_green(components):
     }
     return bundle(green, sources, artifacts), {
         "verdicts": {spec["id"]: "implemented-and-proven-offline" for spec in ACC.ITEM_SPECS},
-        "complete": 7,
-        "automated_complete": 7,
+        "complete": 6,
+        "automated_complete": 6,
         "exit_code": 0,
     }
 
@@ -237,7 +234,6 @@ def awaiting_install(components):
             "leds": "awaiting-install",
             "sleep": "awaiting-install",
             "audio": "implemented-and-proven-offline",
-            "fingerprint": "awaiting-hardware",
             "decky": "awaiting-install",
             "audit": "blocked",
         },
@@ -261,13 +257,12 @@ def blocked(components):
     }
     artifacts = {
         "sleep_cycles_good": {"found": False, "path": "", "detail": "synthetic"},
-        "fingerprint_transcript": {"found": False, "path": "", "detail": "synthetic"},
         "signoffs": {},
     }
     return bundle(components, sources, artifacts), {
         "verdicts": {"audit": "blocked"},
         # volume and the LEDs are fully proven by their passing device checks;
-        # sleep/audio/fingerprint/Decky keep a manual acceptance gate.
+        # sleep/audio/Decky keep a manual acceptance gate.
         "complete": 2,
         "exit_code": 1,
         "no_device_claim": True,
@@ -289,7 +284,6 @@ def missing_evidence(components):
             "leds": "awaiting-hardware",
             "sleep": "awaiting-hardware",
             "audio": "awaiting-hardware",
-            "fingerprint": "awaiting-hardware",
             "decky": "awaiting-hardware",
             "audit": "blocked",
         },

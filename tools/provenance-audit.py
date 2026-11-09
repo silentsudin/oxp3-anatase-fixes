@@ -130,16 +130,13 @@ def classify(rel: str, root: Path) -> str:
     if rel.startswith("tests/"):
         return "a" if rel == "tests/verify/run.sh" else "c"
     if rel.startswith("tools/"):
-        if rel.startswith("tools/fingerprint/tests/"):
-            if rel.endswith(("vectors.h", "vectors.json")) or "/fixtures/" in rel:
-                return "c"
         if rel in {"tools/audio/oxp3-speaker-eq.conf",
                    "tools/oxp3-rgbd.toml.example"}:
             return "c"
         if (path.suffix in CODE_SUFFIXES or name in {"Makefile", "Containerfile"}
                 or first_line(path).startswith("#!")):
             return "a"
-        if name in {"build.sh", "install.sh", "check-libfprint.sh", "run-c-tests.sh"}:
+        if name in {"build.sh", "install.sh"}:
             return "a"
         return "c"
     if rel.startswith("files/"):

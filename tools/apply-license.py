@@ -26,28 +26,24 @@ In scope: ``*.py *.sh *.c *.h *.java *.ts *.tsx *.js *.mjs *.fx``, both
 ``Makefile`` files, and extensionless scripts whose first line is a shebang
 (``files/oxp3-audio-route``, ``tools/oxp3-voltap/oxp3-voltap``, ...).
 Out of scope: documentation, units/rules/hwdb/conf/toml/json data, and
-generated files (``tools/fingerprint/tests/vectors.h`` is emitted by
-``generate_fixtures.py`` and must stay byte-identical to its generator output;
-``--check`` reports it as exempt rather than missing).
+generated files, which are owned by their generator and must stay
+byte-identical to its output (``--check`` reports them as exempt rather than
+missing).
 
 Usage
 -----
     # dry run: exit 1 and list what would change; nothing is written
-    tools/apply-license.py --check --spdx MIT \\
-        --except 'tools/fingerprint/**=LGPL-2.1-or-later'
+    tools/apply-license.py --check --spdx MIT
 
-    # apply MIT everywhere except the fingerprint subtree (whose existing
-    # headers and libfprint-compatible code are LGPL-2.1-or-later)
-    tools/apply-license.py --write --spdx MIT --holder "Your Name" \\
-        --except 'tools/fingerprint/**=LGPL-2.1-or-later'
+    # apply MIT everywhere
+    tools/apply-license.py --write --spdx MIT --holder "Your Name"
 
     # offline: supply long licence texts instead of fetching them
     tools/apply-license.py --write --spdx LGPL-2.1-or-later \\
         --license-file /path/to/lgpl-2.1.txt
 
     # review the exact scope, then run --check twice (it is idempotent)
-    tools/apply-license.py --list-scope --spdx MIT \\
-        --except 'tools/fingerprint/**=LGPL-2.1-or-later'
+    tools/apply-license.py --list-scope --spdx MIT
 
 Exit codes: 0 = clean (check) / applied (write); 1 = work left, missing headers
 or a conflicting SPDX id; 2 = usage error, unsupported licence id, or required
@@ -138,8 +134,8 @@ STYLE_BY_SUFFIX = {
 STYLE_BY_NAME = {"Makefile": "hash"}
 
 # Generated files are owned by their generator; a hand-written header here
-# would be erased on the next regeneration and fail the fixture-drift check.
-GENERATED = ("tools/fingerprint/tests/vectors.h",)
+# would be erased on the next regeneration.
+GENERATED = ()
 
 SPDX_RE = re.compile(r"SPDX-License-Identifier:\s*([A-Za-z0-9.+-]+)")
 CODING_RE = re.compile(r"^#.*coding[:=]\s*[-\w.]+")
@@ -378,7 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="copyright year for MIT (default: current year)")
     parser.add_argument("--except", dest="exceptions", action="append", default=[], metavar="GLOB=SPDX",
                         help="per-path licence override, repeatable, e.g. "
-                             "'tools/fingerprint/**=LGPL-2.1-or-later'")
+                             "'patches/**=GPL-2.0-only'")
     parser.add_argument("--license-file", metavar="PATH",
                         help="canonical text for the primary id instead of fetching it")
     parser.add_argument("--exception-license-file", action="append", default=[],

@@ -56,8 +56,6 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 # Library, fixture and build subtrees that contain no standalone CLI.
 EXCLUDE_PREFIXES = (
     "tools/lib/",
-    "tools/fingerprint/tests/",
-    "tools/fingerprint/fpbf63112/",
     "tools/decky-oxp3-status/node_modules/",
     "tools/decky-oxp3-status/dist/",
     "tools/decky-oxp3-status/build/",
@@ -460,8 +458,6 @@ def selftest():
                 "\"$@\"\n")
     check("excludes a game launcher", classify_tool_text("tools/z.sh", launcher) is None)
     check("excludes a sourced library", not is_candidate_path("tools/lib/install-common.sh"))
-    check("excludes the fingerprint fixture tree",
-          not is_candidate_path("tools/fingerprint/tests/run-c-tests.sh"))
 
     py_help = "#!/usr/bin/env python3\nimport argparse\nif __name__ == '__main__':\n    pass\n"
     check("classifies an argparse python CLI",

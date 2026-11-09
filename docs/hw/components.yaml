@@ -855,31 +855,6 @@ components:
       date: 2026-11-09
       evidence: "docs/hw/camera-imu.md ACPI dump: every OVTI/INT3472 _STA=0, no IPU7 function"
 
-  - id: fingerprint
-    title: Fingerprint reader
-    state: partial
-    group: hardware
-    headline: true
-    summary: "Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library, an offline-tested SPI transport/_CRS parser and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver."
-    implementation:
-      - tools/fingerprint
-    doc: docs/hw/fingerprint.md
-    root_required: partial
-    install:
-      summary: "nothing is installed; tools/fingerprint/ holds the probe and the compile-checked skeleton"
-    verify:
-      - command: "python3 -m unittest discover -s tools/fingerprint/tests"
-        expect: "Ran 388 tests ... OK"
-      - command: "tools/fingerprint/tests/run-c-tests.sh"
-        expect: "ok: 324 checks, 10 vectors (podman fallback when no host compiler)"
-    dependencies: []
-    caveats:
-      - "never run against the sensor; every runtime claim is marked inferred or unknown"
-      - "the probe needs spidev bound and root, and the driver needs libfprint's internal API"
-    last_validated:
-      date: 2026-11-09
-      evidence: "2026-11-09: 388 Python tests OK (incl. SPI transport and _CRS parser), 324 C checks/10 vectors, session crypto OK; syntax-real OK against libfprint v1.94.9"
-
   # -------------------------------------------------------------------------
   # Diagnostics
   # -------------------------------------------------------------------------

@@ -17,7 +17,7 @@ What is asserted, in order of importance:
   * "implemented-and-proven-offline" is an offline claim, and the report never
     calls it proven on the device (the words are asserted absent);
   * a missing source degrades to a named evidence gap, never to a silent pass;
-  * the JSON contract (schema, seven items, closed verdict vocabulary) and the
+  * the JSON contract (schema, six items, closed verdict vocabulary) and the
     text report shape are stable.
 
 No host state, root, network or hardware is touched; the live CLI is exercised
@@ -73,8 +73,8 @@ class FixtureSetTest(unittest.TestCase):
 class AggregationTest(unittest.TestCase):
     def test_all_green_is_complete(self):
         report = report_for("all-green")
-        self.assertEqual(report["counts"]["complete"], 7)
-        self.assertEqual(report["counts"]["automated_complete"], 7)
+        self.assertEqual(report["counts"]["complete"], 6)
+        self.assertEqual(report["counts"]["automated_complete"], 6)
         self.assertEqual(report["exit_code"], 0)
         self.assertEqual(report["missing_evidence"], [])
         for item in report["items"]:
@@ -128,13 +128,13 @@ class AggregationTest(unittest.TestCase):
     def test_offline_suite_failure_blocks_that_item(self):
         bundle = fixture("awaiting-install")
         for suite in bundle["sources"]["repo_test"]["data"]["suites"]:
-            if suite["name"] == "fp-python":
+            if suite["name"] == "eq-model":
                 suite["state"] = "fail"
                 suite["reason"] = "synthetic failure"
         report = acceptance.evaluate(bundle)
-        finger = item_by_id(report, "fingerprint")
-        self.assertEqual(finger["verdict"], "blocked")
-        self.assertIn("fp-python", finger["reason"])
+        audio = item_by_id(report, "audio")
+        self.assertEqual(audio["verdict"], "blocked")
+        self.assertIn("eq-model", audio["reason"])
 
     def test_device_check_failure_blocks(self):
         bundle = fixture("all-green")
@@ -157,12 +157,9 @@ class AggregationTest(unittest.TestCase):
         report = acceptance.evaluate(bundle)
         for item in report["items"]:
             with self.subTest(item=item["id"]):
-                # The fingerprint item has no check ids at all; its evidence is
-                # the transcript artefact, so it is judged separately below.
-                if item["id"] != "fingerprint":
-                    self.assertNotEqual(item["verdict"],
-                                        "implemented-and-proven-offline")
-                    self.assertFalse(item["complete"])
+                self.assertNotEqual(item["verdict"],
+                                    "implemented-and-proven-offline")
+                self.assertFalse(item["complete"])
         self.assertEqual(item_by_id(report, "volume")["verdict"], "awaiting-hardware")
 
     def test_signoffs_and_artifacts_are_the_only_manual_gate(self):
@@ -173,7 +170,7 @@ class AggregationTest(unittest.TestCase):
                          "implemented-and-proven-offline")
         self.assertFalse(item_by_id(report, "audio")["complete"])
         self.assertFalse(item_by_id(report, "decky")["complete"])
-        self.assertEqual(report["counts"]["complete"], 5)
+        self.assertEqual(report["counts"]["complete"], 4)
         # The GOOD-cycle report is the sleep acceptance gate, not its only
         # device proof: with sleep.stats passing the verdict stays at the
         # offline rung but the item is no longer complete.
@@ -204,10 +201,9 @@ class TextReportTest(unittest.TestCase):
         for spec in acceptance.ITEM_SPECS:
             with self.subTest(item=spec["id"]):
                 self.assertIn(spec["title"], text)
-        self.assertIn("== summary: 7 items", text)
+        self.assertIn("== summary: 6 items", text)
         self.assertIn("== what remains", text)
         self.assertIn("sudo tools/sleep-cycle-test.sh --cycles 3", text)
-        self.assertIn("sudo tools/fingerprint/oxp3-fp-session.sh", text)
 
     def test_text_never_claims_device_proof_for_offline_evidence(self):
         text = acceptance.render_text(report_for("missing-evidence"))
@@ -260,14 +256,14 @@ class CliContractTest(unittest.TestCase):
         self.assertIn(proc.returncode, (0, 1), proc.stderr)
         data = json.loads(proc.stdout)
         self.assertEqual(data["schema"], 1)
-        self.assertEqual(len(data["items"]), 7)
+        self.assertEqual(len(data["items"]), 6)
         self.assertIn("awaiting-install",
                       [item["verdict"] for item in data["items"]])
 
     def test_evidence_bundle_text_round_trip(self):
         proc = self.run_tool("--evidence", str(FIXTURES / "all-green.json"))
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("== summary: 7 items | 7 complete", proc.stdout)
+        self.assertIn("== summary: 6 items | 6 complete", proc.stdout)
 
 
 if __name__ == "__main__":

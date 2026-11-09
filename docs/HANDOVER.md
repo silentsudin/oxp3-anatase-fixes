@@ -32,7 +32,7 @@ executed for this document.
 
 Then: `tools/repo-test.sh --fast` (offline; `--list` prints its inventory), `tools/oxp3-preflight.sh`
 (read-only, before any install) and `tools/oxp3-verify.sh` (read-only).
-For "are the seven goal items done?", read [`ACCEPTANCE.md`](ACCEPTANCE.md) and run
+For "are the six goal items done?", read [`ACCEPTANCE.md`](ACCEPTANCE.md) and run
 `tools/oxp3-acceptance.sh` (`--json` for machines): it derives each item's verdict from
 `hw/components.yaml` plus the verify/health/repo-test evidence and names the exact device step that
 is still missing. It never turns offline evidence into a device-proven claim.
@@ -77,23 +77,23 @@ unit-test run. Change the source, then `tools/gen-docs.py --write`; never edit t
 State roll-up and the volatile counts this page used to re-type. Every value below is
 computed by `tools/gen-docs.py` from the named source; **do not hand-edit this block**.
 
-**26 components**: **10** `working`, **5** `partial`, **1** `blocked`, **2** `not-a-gap`, **8** `awaiting-install`.
+**25 components**: **10** `working`, **4** `partial`, **1** `blocked`, **2** `not-a-gap`, **8** `awaiting-install`.
 Counted from the `state:` field of each component in `docs/hw/components.yaml`.
 
 | state | components (doc link) |
 |---|---|
 | `working` (10) | gamescope ([hdr-vibrance](hw/hdr-vibrance.md)), mesa ([BEST-CONFIG](BEST-CONFIG.md)), mangohud ([BEST-CONFIG](BEST-CONFIG.md)), kernel-modules ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), firmware ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), rapl-power ([sagv](hw/sagv.md)), audio ([audio-harman-apo](hw/audio-harman-apo.md)), power ([power-fan](hw/power-fan.md)), display ([hdr-vibrance](hw/hdr-vibrance.md)), decky ([decky-plugin](decky-plugin.md)) |
-| `partial` (5) | xess-xmx ([xess-xmx](xess-xmx.md)), audio-mic ([audio-microphone](hw/audio-microphone.md)), fan ([power-fan](hw/power-fan.md)), battery ([battery-tdp](hw/battery-tdp.md)), fingerprint ([fingerprint](hw/fingerprint.md)) |
+| `partial` (4) | xess-xmx ([xess-xmx](xess-xmx.md)), audio-mic ([audio-microphone](hw/audio-microphone.md)), fan ([power-fan](hw/power-fan.md)), battery ([battery-tdp](hw/battery-tdp.md)) |
 | `blocked` (1) | sagv ([sagv](hw/sagv.md)) |
 | `not-a-gap` (2) | imu ([camera-imu](hw/camera-imu.md)), camera ([camera-imu](hw/camera-imu.md)) |
 | `awaiting-install` (8) | sched-ext ([cpu-sched](cpu-sched.md)), volume ([volume-buttons](hw/volume-buttons.md)), leds ([home-button-leds](hw/home-button-leds.md)), rgb ([rgb-coverage](hw/rgb-coverage.md)), daemons ([DAEMONS](DAEMONS.md)), sleep ([sleep-power](hw/sleep-power.md)), bluetooth ([bluetooth](hw/bluetooth.md)), adaptive-tdp ([battery-tdp](hw/battery-tdp.md)) |
-| **total** (26) | every component in the data file; add a component there, not here |
+| **total** (25) | every component in the data file; add a component there, not here |
 
 | volatile fact | value | how this number was obtained |
 |---|---|---|
 | checks declared by `tools/oxp3-verify.sh` | **88** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
-| suites in `tools/repo-test.sh` | **42** (**37** in `--fast`, **42** in `--full`) | parsed from the `def_suite` registrations and their mode column |
-| tests in `tests/unit` | **960** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
+| suites in `tools/repo-test.sh` | **34** (**32** in `--fast`, **34** in `--full`) | parsed from the `def_suite` registrations and their mode column |
+| tests in `tests/unit` | **956** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
 <!-- END GENERATED: handover-state -->
 
 The full matrix with summaries, implementation paths, install entrypoints, verify ids and caveats is
@@ -132,8 +132,8 @@ so the kernel logged `Failed to load Intel firmware file …(-2)`; `bt.diag` rep
 ([`hw/bluetooth.md`](hw/bluetooth.md), `docs/state/verify-default-2026-11-09.txt`).
 
 **Not yet executed on this host** (device-side acceptance, deliberately outside the no-sudo rule):
-`vol.hold`, `led.write`, `sleep.suspend`, `sleep.measure`, `fan.savemode`, the fingerprint probe, and
-any real suspend since the policy was written ([`VALIDATION.md` §9](VALIDATION.md)).
+`vol.hold`, `led.write`, `sleep.suspend`, `sleep.measure`, `fan.savemode`, and any real
+suspend since the policy was written ([`VALIDATION.md` §9](VALIDATION.md)).
 
 ## 3. Evidence trail — which doc holds the proof, which test proves the claim
 
@@ -153,7 +153,6 @@ behaves. Both are needed; neither substitutes for the other.
 | display HDR / ICC / vibrance | [`hw/hdr-vibrance.md`](hw/hdr-vibrance.md): EDID/PQ/BT.2020, gamescope flags | `dsp.*`; `tests/unit/test_edid.py`, `test_icc.py`; `gamewrap` suite |
 | SAGV | [`hw/sagv.md`](hw/sagv.md): MCHBAR pair `0x5DA0/0x5DA4=0x80000122`, busy bit, `enable_sagv` semantics | `tools/oxp3-sagv.sh status`/`probe` (probe exits 3 by design) |
 | camera / IMU | [`hw/camera-imu.md`](hw/camera-imu.md): PCI/USB/ACPI inventory (`_STA=0` everywhere for camera), IIO 100 Hz BMI260 | `imu.selftest`, `imu.iio`; camera = the `grep …/OVTI*/status` command row |
-| fingerprint | [`hw/fingerprint.md`](hw/fingerprint.md) + [`tools/fingerprint/README.md`](../tools/fingerprint/README.md): BF63112 SPI frame/CRC/image/retry | its Python suite (`python3 -m unittest discover -s tools/fingerprint/tests -q` prints the count), 324 C checks / 10 vectors, libfprint v1.94.9 syntax check; **no hardware transcript** |
 | XeSS XMX | [`xess-xmx.md`](xess-xmx.md): CM patch series, IGC 2.10.10, binary comparison, `-doubleGRF` root cause | `gfx.xmx.*` (driver prefix `4b1d55ea` matches the live `~/.cache/oxp3-fixes/xmx-driver` build; `trace` SKIPs by design) |
 | Mesa / gamescope / kernel / firmware / MangoHud | [`WORKING-BUILD-2026-11-08.md`](WORKING-BUILD-2026-11-08.md), [`BEST-CONFIG.md`](BEST-CONFIG.md), [`xess-xmx.md`](xess-xmx.md), `patches/**` | `gfx.mesa`, `gfx.working` (`tools/check-working.sh` 7/7), `gfx.xe`, `inst.paths` |
 | sched_ext | [`cpu-sched.md`](cpu-sched.md) + [`cpu-sched-results.csv`](cpu-sched-results.csv) (round-3 numbers) | `sched.*` (unit not installed here, so `SKIP`/warn) |
@@ -246,17 +245,14 @@ the outputs under `docs/state/` and update the matching `last_validated` in `com
 sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes   # sleep.suspend, vol.hold, led.write, fan.savemode
 sudo tools/sleep-power-measure.sh suspend -w 600                       # bag-drain %/h; run on battery
 sudo tools/oxp3-voltap/oxp3-voltap selftest                            # a hold = one step, not a ramp
-# fingerprint probe: read-only queries, manual only, needs spidev bound + root; steps in docs/hw/fingerprint.md
-python3 -m unittest discover -s tools/fingerprint/tests                # offline, already green; prints its own count
-tools/fingerprint/tests/run-c-tests.sh                                 # 324 checks / 10 vectors (podman fallback)
 ```
 
 **A3 — make the two decisions the repo cannot make for you.** Both are prepared, not applied.
 
 ```sh
-# licence: pick A (permissive tools + LGPL fingerprint subtree) or B (one copyleft id); see PROVENANCE.md §7
-tools/apply-license.py --check --spdx MIT --except 'tools/fingerprint/**=LGPL-2.1-or-later'
-tools/apply-license.py --write --spdx MIT --holder "silentsudin" --except 'tools/fingerprint/**=LGPL-2.1-or-later'
+# licence: pick A (permissive tools/docs) or B (one copyleft id); see PROVENANCE.md §7
+tools/apply-license.py --check --spdx MIT
+tools/apply-license.py --write --spdx MIT --holder "silentsudin"
 git diff --stat && tools/repo-test.sh --fast
 # upstream: nothing has been submitted; three drafts, each lists the evidence still missing —
 #   docs/upstream/README.md (+ upstream/*.md). Submitting means editing the status line there.
@@ -272,9 +268,8 @@ git diff --stat && tools/repo-test.sh --fast
 | 4 | Fix the two stale texts still visible: the Decky/status hint `"Flatpak Steam is not supported by the XMX project"` (`tools/decky-oxp3-status/main.py:1654`) contradicts [`hw/flatpak-xmx.md`](hw/flatpak-xmx.md); annotate `hw/gap-audit.md` §1 as superseded on the Bluetooth row | XS | none | stops new sessions re-learning the corrected facts |
 | 5 | Flatpak Steam end-to-end trace (needs one Proton prefix + one launch with `XESS_LOG=1`); decide native-only otherwise | M | low (user-space, `$HOME` only) | closes the last XMX open item; `gfx.xmx.trace`, `flatpak.steam_env` |
 | 6 | Port the CM series to whatever Mesa the installer pins and re-verify `gfx.xmx.driver` (`4b1d55ea` is pinned today) | M | medium (driver rebuild + re-measure) | XMX stops being `partial` in the registry sense |
-| 7 | Fingerprint: get a hardware transcript, then finish the libfprint driver (match-in-sensor, host stores a handle) | L | medium-high (hardware, root, SPI) | the only genuinely unimplemented hardware feature |
-| 8 | SAGV: send the `intel_pmdemand` draft when the point→frequency mapping is measured | L-XL | high (kernel work, needs root reboots) | the one `blocked` component |
-| 9 | Re-assert the driver stack after the next Anatase update, twice if the kernel changed | S | low | keeps `working` components working ([`INSTALL-HW.md` §2.4](INSTALL-HW.md)) |
+| 7 | SAGV: send the `intel_pmdemand` draft when the point→frequency mapping is measured | L-XL | high (kernel work, needs root reboots) | the one `blocked` component |
+| 8 | Re-assert the driver stack after the next Anatase update, twice if the kernel changed | S | low | keeps `working` components working ([`INSTALL-HW.md` §2.4](INSTALL-HW.md)) |
 
 ## 7. How to work in this repo
 

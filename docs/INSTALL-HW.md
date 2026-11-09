@@ -261,7 +261,6 @@ Start with the whole-system checks; then the per-component rows.
 | Display HDR / vibrance / colour | user-scope status/HDR/ICC/vibrance and per-game launch composition; the Gamemode flag is the only privileged part |
 | IMU / gyro | nothing to install; --imu only writes the modprobe snippet that keeps BMI260 bound |
 | Camera / IPU7 | nothing; not applicable to this unit |
-| Fingerprint reader | nothing is installed; tools/fingerprint/ holds the probe and the compile-checked skeleton |
 
 Manual install steps, opt-out flags, uninstall and per-component rollback are in sections 2, 3, 6 and 7 below; the machine-readable form is [`docs/hw/REGISTRY.md`](hw/REGISTRY.md).
 
@@ -338,8 +337,6 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | IMU / gyro | not-a-gap | `imu.selftest` | RESULT: PASS (0 warning(s)) - IMU usable, gyro exposed to Steam | no |
 | IMU / gyro | not-a-gap | `imu.iio` | the ACPI-id/label device is selected, not the i2c in_anglvel_x_raw fallback | no |
 | Camera / IPU7 | not-a-gap | cmd: `grep -H . /sys/bus/acpi/devices/OVTI*/status /sys/bus/acpi/devices/INT3472*/status` | 0 on every listed device (camera function disabled / absent) | no |
-| Fingerprint reader | partial | cmd: `python3 -m unittest discover -s tools/fingerprint/tests` | Ran 388 tests ... OK | no |
-| Fingerprint reader | partial | cmd: `tools/fingerprint/tests/run-c-tests.sh` | ok: 324 checks, 10 vectors (podman fallback when no host compiler) | no |
 
 Verify rows with a backticked id are checks in `tools/oxp3-verify.sh` (`--json` for machines, `--full` for the invasive ones); `cmd:` rows are direct read-only commands. Every component below is installed through `tools/oxp3-hw-install.sh` unless its row in [`docs/hw/REGISTRY.md`](hw/REGISTRY.md) says otherwise.
 <!-- END GENERATED: install-verify -->

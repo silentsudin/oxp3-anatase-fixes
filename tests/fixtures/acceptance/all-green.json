@@ -336,8 +336,9 @@
       "state": "working",
       "group": "hardware",
       "headline": false,
-      "summary": "A hold on the rocker ramps instead of stepping: our daemon prefers hhd's virtual volume keyboard, falls back to the free physical AT keyboard, degrades observably on EBUSY, and keeps a force-release hwdb as defence in depth.",
+      "summary": "A hold on the rocker ramps instead of stepping. The supported fix is an hhd plugin that normalises taps inside hhd's producer path and never opens or grabs a device; the legacy daemon only takes a free physical AT keyboard and otherwise observes (exit 4), and a force-release hwdb stays as defence in depth.",
       "implementation": [
+        "tools/hhd-oxp3-voltap",
         "tools/oxp3-voltap",
         "files/84-oxp3-volume-keys.hwdb",
         "tools/lib/install-common.sh"
@@ -345,25 +346,38 @@
       "doc": "docs/hw/volume-buttons.md",
       "root_required": "yes",
       "install": {
-        "summary": "the standalone daemon (orchestrator --volume) or the hhd patch applied by oxp3-fixes.sh",
+        "summary": "the hhd plugin (orchestrator --volume, default) plus the force-release hwdb; the legacy oxp3-voltap daemon only with --volume-daemon",
         "entrypoint": "sudo tools/oxp3-hw-install.sh --volume",
         "steps": [
-          "alternative: sudo tools/oxp3-voltap/install.sh install --hwdb",
-          "never combine the two: both normalise the same key"
+          "then: sudo systemctl restart hhd (imports the plugin; drops 28DE:12FF for a few seconds)",
+          "legacy alternative: sudo tools/oxp3-hw-install.sh --volume-daemon",
+          "the plugin replaces the hhd tap policy per producer; the daemon only observes while hhd runs"
         ]
       },
       "verify": [
         {
+          "id": "hhd.unit",
+          "expect": "hhd is installed and active"
+        },
+        {
+          "id": "hhd.busy",
+          "expect": "no unrecovered EBUSY/disconnect episode in this boot's hhd journal"
+        },
+        {
+          "id": "hhd.grab",
+          "expect": "no process of ours holds an fd or EVIOCGRAB on an hhd event device"
+        },
+        {
           "id": "vol.unit",
-          "expect": "oxp3-voltap is active (running)"
+          "expect": "oxp3-voltap active, or installed-but-disabled on purpose (plugin path)"
         },
         {
           "id": "vol.grab",
-          "expect": "this boot's journal has grabbed /dev/input/eventN"
+          "expect": "a non-hhd device is grabbed, or the documented OBSERVE line (hhd owns the path)"
         },
         {
           "id": "vol.topology",
-          "expect": "the daemon would grab the hhd virtual volume keyboard, or a free physical fallback, and says why"
+          "expect": "the free physical AT keyboard, or protected/observe (exit 4); never hhd's device"
         },
         {
           "id": "vol.holder",
@@ -381,13 +395,13 @@
       ],
       "dependencies": [],
       "caveats": [
-        "do not combine with the hhd volume patch from oxp3-fixes.sh install",
-        "the standing alternative is the hhd patch, which is why the doc says pick one",
-        "device discovery is by name/phys/capabilities plus /proc/*/fdinfo holders, never by eventN; exit 2 = no candidate, 3 = every grab refused"
+        "never grab what hhd owns (docs/DAEMONS.md section 0); the plugin opens no device",
+        "device discovery is by name/phys/capabilities plus /proc/*/fdinfo holders, never by eventN; exit 2 = no candidate, 3 = every grab refused, 4 = hhd-protected observe",
+        "a plugin change needs `systemctl restart hhd`, which drops the emulated Steam controller for a few seconds"
       ],
       "last_validated": {
         "date": "2026-11-09",
-        "evidence": "tools/oxp3-voltap selftest and capture evidence in docs/hw/volume-buttons.md; not installed on the QA host (docs/QA.md row 34)"
+        "evidence": "plugin entry point + install/uninstall round trip and 29 offline plugin tests; daemon topology tests in tests/unit/test_voltap.py and tests/integration/volume/test_voltap_integration.py; hardware press still pending (docs/hw/volume-buttons.md, docs/VALIDATION.md)"
       }
     },
     {
@@ -569,15 +583,19 @@
         "files/oxp3-sleep-wakeup.service",
         "files/oxp3-sleep-pre.service",
         "files/oxp3-sleep-log.service",
+        "files/oxp3-lowpower.service",
+        "files/oxp3-sleep-lowpower-pre.service",
+        "files/oxp3-sleep-lowpower-post.service",
         "files/99-oxp3-sleep-wakeup.rules",
         "files/logind-oxp3.conf",
         "files/49-oxp3-suspend.rules",
-        "tools/sleep-power-measure.sh"
+        "tools/sleep-power-measure.sh",
+        "tools/oxp3_lowpower.py"
       ],
       "doc": "docs/hw/sleep-power.md",
       "root_required": "yes",
       "install": {
-        "summary": "three units, the wake-source rule, the logind/polkit trigger policy and the measurement tool",
+        "summary": "five units, the wake-source rule, the logind/polkit trigger policy, the reversible low-power policy and the measurement tool",
         "entrypoint": "sudo tools/oxp3-hw-install.sh --sleep"
       },
       "verify": [
@@ -603,7 +621,26 @@
         },
         {
           "id": "sleep.stats",
-          "expect": "success > 0 and last_hw_sleep > 0 (a real suspend)"
+          "expect": "the counter tuple (success/fail/last_hw_sleep/total_hw_sleep/max_hw_sleep); PASS on a completed cycle, FAIL on a failed attempt or an abort, UNKNOWN (never PASS/FAIL) when success=0 meets a non-zero hardware-sleep number - max_hw_sleep is a counter ceiling, not a duration"
+        },
+        {
+          "id": "sleep.mmcwake",
+          "expect": "no armed mmc wakeup bit; the measured mmc0 is a virtual source (no device link, wakeup_count=0) and is parked with the SD host"
+        },
+        {
+          "id": "sleep.sdcard",
+          "expect": "the SD host is bound while awake and parked only across suspend; a leftover park (unbound, or state says unbound) fails, because the reader would be dead"
+        },
+        {
+          "id": "sleep.aspm",
+          "expect": "pcie_aspm.policy selects powersave (the storage link is allowed to idle)"
+        },
+        {
+          "id": "sleep.nvmeacpi"
+        },
+        {
+          "id": "sleep.nvme",
+          "expect": "nvme_core.default_ps_max_latency_us > 0 and force_apst != Y, so APST is not disabled"
         },
         {
           "id": "sleep.measure",
@@ -683,6 +720,45 @@
       "last_validated": {
         "date": "2026-11-09",
         "evidence": "docs/QA.md row 50 (8 bands, max -1.6 dB, min -15.0 dB); model reproduction in docs/hw/audio-harman-apo.md"
+      }
+    },
+    {
+      "id": "audio-mic",
+      "title": "Internal microphone (ALC245 digital mic)",
+      "state": "working",
+      "group": "hardware",
+      "headline": false,
+      "summary": "The internal mic is the ALC245's fixed digital-mic pin 0x12, not a PCH DMIC: Linux already routes it to the capture ADC, but the shipped UCM profile gates its only source on the external Mic Jack, so an opt-in machine profile exposes it as an always-available Internal Microphone.",
+      "implementation": [
+        "tools/audio/mic_diag.py",
+        "tools/audio/internal-mic.sh",
+        "files/ucm2"
+      ],
+      "doc": "docs/hw/audio-microphone.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "an opt-in UCM2 machine profile plus three include overrides under /usr/share/alsa/ucm2; no shipped file is edited",
+        "entrypoint": "sudo tools/audio/internal-mic.sh install",
+        "steps": [
+          "then, as the desktop user: systemctl --user restart pipewire wireplumber",
+          "undo: sudo tools/audio/internal-mic.sh undo"
+        ]
+      },
+      "verify": [
+        {
+          "id": "aud.mic",
+          "expect": "the ALC245 pin 0x12 path is exposed as an always-available capture source (SKIP while the opt-in profile is not installed)"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "the harness never captures audio (no arecord/pw-record against the hardware); the owner records one clip",
+        "the codec keeps its own auto-mic switching, so a plugged headset still selects the 0x19 mic on the same PCM",
+        "not wired into the audio installer: a wrong UCM profile must never be able to touch speaker routing"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "live codec#0 widget tree (pin 0x12 -> mixer 0x23 input 4 -> ADC 0x08), amixer controls, pactl source ports and the UCM2 lookup; capture not run, see docs/hw/audio-microphone.md"
       }
     },
     {
@@ -1078,41 +1154,6 @@
       }
     },
     {
-      "id": "fingerprint",
-      "title": "Fingerprint reader",
-      "state": "working",
-      "group": "hardware",
-      "headline": true,
-      "summary": "Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library, an offline-tested SPI transport/_CRS parser and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver.",
-      "implementation": [
-        "tools/fingerprint"
-      ],
-      "doc": "docs/hw/fingerprint.md",
-      "root_required": "partial",
-      "install": {
-        "summary": "nothing is installed; tools/fingerprint/ holds the probe and the compile-checked skeleton"
-      },
-      "verify": [
-        {
-          "command": "python3 -m unittest discover -s tools/fingerprint/tests",
-          "expect": "Ran 289 tests ... OK"
-        },
-        {
-          "command": "tools/fingerprint/tests/run-c-tests.sh",
-          "expect": "ok: 324 checks, 10 vectors (podman fallback when no host compiler)"
-        }
-      ],
-      "dependencies": [],
-      "caveats": [
-        "never run against the sensor; every runtime claim is marked inferred or unknown",
-        "the probe needs spidev bound and root, and the driver needs libfprint's internal API"
-      ],
-      "last_validated": {
-        "date": "2026-11-09",
-        "evidence": "2026-11-09: 289 Python tests OK (incl. SPI transport and _CRS parser), 324 C checks/10 vectors, session crypto OK; syntax-real OK against libfprint v1.94.9"
-      }
-    },
-    {
       "id": "decky",
       "title": "Decky status plugin",
       "state": "working",
@@ -1121,22 +1162,31 @@
       "summary": "A Decky Loader plugin and a headless CLI over one backend, showing live Mesa, XMX, sched_ext and hardware-fix status in the Steam Quick Access Menu.",
       "implementation": [
         "tools/decky-oxp3-status",
+        "tools/decky-oxp3-status/artifact.sha256",
+        "tools/lib/decky_plugin.py",
         "tools/oxp3-status.sh"
       ],
       "doc": "docs/decky-plugin.md",
-      "root_required": "no",
+      "root_required": "yes",
       "install": {
-        "summary": "offline build + typecheck + bundle, then copy the packaged plugin into the Decky homebrew plugins directory",
-        "entrypoint": "tools/decky-oxp3-status/build.sh --offline"
+        "summary": "a deterministic plugin zip (built offline, or an existing one verified against the recorded sha256) installed into the root-owned Decky plugins directory, with the previous copy backed up",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --decky",
+        "steps": [
+          "add --restart-plugin-loader to restart plugin_loader.service now; otherwise the exact command is printed"
+        ]
       },
       "verify": [
         {
           "id": "decky.dir",
-          "expect": "the plugin directory has plugin.json, main.py and dist/"
+          "expect": "plugin.json has the expected name/author/version/api_version, and main.py and dist/index.js are present"
         },
         {
           "id": "decky.backend",
           "expect": "the backend imports in the plugin directory"
+        },
+        {
+          "id": "decky.loaded",
+          "expect": "this boot's plugin_loader journal has a load line for oxp3-status, or UNKNOWN when the journal is unreadable"
         },
         {
           "id": "decky.status",
@@ -1146,11 +1196,13 @@
       "dependencies": [],
       "caveats": [
         "read-only and offline by design; a missing component reports SKIP/warn",
-        "the panel and tools/oxp3-status.sh share main.py, so they cannot drift"
+        "the panel and tools/oxp3-status.sh share main.py, so they cannot drift",
+        "the plugin directory is root-owned (Decky's loader runs as root) and plugin_loader.service must restart to pick up a new plugin or a changed main.py",
+        "replaced copies are backed up under ~/.local/state/oxp3-fixes/decky-backups; a directory without the .oxp3-managed marker is refused unless it is a recognisable copy of this plugin, which is backed up before it is replaced"
       ],
       "last_validated": {
         "date": "2026-11-09",
-        "evidence": "docs/QA.md rows 9-12: offline npm ci, tsc, smoke, 60-check selftest, byte-identical 33,843 B zip"
+        "evidence": "tests/unit/test_decky_plugin.py (43 unit tests) and tests/integration/decky/run.sh (43 --root assertions: install, backup on reinstall, uninstall, missing artifact, bad sha256, foreign directory); build.sh reproduces the 43,395 B zip sha256 be58c260; docs/QA.md rows 9-12 for the earlier build"
       }
     }
   ],
@@ -1172,10 +1224,6 @@
     "tests/unit/test_eq_measure.py": true,
     "docs/audio-validation.md": true,
     "tools/audio/test-isolation.sh": true,
-    "tools/fingerprint/tests": true,
-    "tools/fingerprint/oxp3-fp-session.sh": true,
-    "docs/hw/fingerprint.md": true,
-    "docs/hw/fingerprint-session.md": true,
     "tools/decky-oxp3-status": true,
     "docs/decky-plugin.md": true,
     "docs/hw/gap-audit.md": true,
@@ -1196,6 +1244,7 @@
     "files/oxp3-gaming-sched.service": true,
     "tools/cpu-sched-test.sh": true,
     "docs/cpu-sched-results.csv": true,
+    "tools/hhd-oxp3-voltap": true,
     "tools/oxp3-voltap": true,
     "files/84-oxp3-volume-keys.hwdb": true,
     "tools/oxp3_hid.py": true,
@@ -1211,14 +1260,21 @@
     "files/oxp3-sleep-wakeup.service": true,
     "files/oxp3-sleep-pre.service": true,
     "files/oxp3-sleep-log.service": true,
+    "files/oxp3-lowpower.service": true,
+    "files/oxp3-sleep-lowpower-pre.service": true,
+    "files/oxp3-sleep-lowpower-post.service": true,
     "files/99-oxp3-sleep-wakeup.rules": true,
     "files/logind-oxp3.conf": true,
     "files/49-oxp3-suspend.rules": true,
     "tools/sleep-power-measure.sh": true,
+    "tools/oxp3_lowpower.py": true,
     "tools/audio": true,
     "files/52-oxp3-speakers.conf": true,
     "files/oxp3-audio-route.service": true,
     "files/oxp3-audio-resume@.service": true,
+    "tools/audio/mic_diag.py": true,
+    "tools/audio/internal-mic.sh": true,
+    "files/ucm2": true,
     "tools/oxp3-bt-firmware.sh": true,
     "tools/oxp3-powerctl.py": true,
     "tools/oxp3-power-install.sh": true,
@@ -1238,7 +1294,8 @@
     "tools/oxp3-gamewrap.toml.example": true,
     "tools/oxp3-imu.py": true,
     "files/oxp3-bmi160.conf": true,
-    "tools/fingerprint": true,
+    "tools/decky-oxp3-status/artifact.sha256": true,
+    "tools/lib/decky_plugin.py": true,
     "tools/oxp3-status.sh": true
   },
   "artifacts": {
@@ -1246,11 +1303,6 @@
       "found": true,
       "path": "docs/state/sleep-cycles-synthetic/report.json",
       "detail": "synthetic GOOD report"
-    },
-    "fingerprint_transcript": {
-      "found": true,
-      "path": "docs/state/fp-session-synthetic/summary.json",
-      "detail": "synthetic verified transcript"
     },
     "signoffs": {
       "audio.listen": {
@@ -1284,8 +1336,8 @@
         "root": false,
         "kernel": "synthetic",
         "counts": {
-          "total": 76,
-          "pass": 76,
+          "total": 86,
+          "pass": 86,
           "fail": 0,
           "skip": 0,
           "unknown": 0
@@ -1413,6 +1465,33 @@
             "id": "sched.unit",
             "group": "synthetic",
             "title": "sched.unit",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
+            "id": "hhd.unit",
+            "group": "synthetic",
+            "title": "hhd.unit",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
+            "id": "hhd.busy",
+            "group": "synthetic",
+            "title": "hhd.busy",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
+            "id": "hhd.grab",
+            "group": "synthetic",
+            "title": "hhd.grab",
             "state": "pass",
             "summary": "synthetic pass",
             "detail": "",
@@ -1671,6 +1750,51 @@
             "remediation": "synthetic fixture"
           },
           {
+            "id": "sleep.mmcwake",
+            "group": "synthetic",
+            "title": "sleep.mmcwake",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
+            "id": "sleep.sdcard",
+            "group": "synthetic",
+            "title": "sleep.sdcard",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
+            "id": "sleep.aspm",
+            "group": "synthetic",
+            "title": "sleep.aspm",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
+            "id": "sleep.nvmeacpi",
+            "group": "synthetic",
+            "title": "sleep.nvmeacpi",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
+            "id": "sleep.nvme",
+            "group": "synthetic",
+            "title": "sleep.nvme",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
             "id": "sleep.measure",
             "group": "synthetic",
             "title": "sleep.measure",
@@ -1737,6 +1861,15 @@
             "id": "aud.activate",
             "group": "synthetic",
             "title": "aud.activate",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
+            "id": "aud.mic",
+            "group": "synthetic",
+            "title": "aud.mic",
             "state": "pass",
             "summary": "synthetic pass",
             "detail": "",
@@ -1968,6 +2101,15 @@
             "remediation": "synthetic fixture"
           },
           {
+            "id": "decky.loaded",
+            "group": "synthetic",
+            "title": "decky.loaded",
+            "state": "pass",
+            "summary": "synthetic pass",
+            "detail": "",
+            "remediation": "synthetic fixture"
+          },
+          {
             "id": "decky.status",
             "group": "synthetic",
             "title": "decky.status",
@@ -2022,8 +2164,8 @@
         "repo": "/synthetic",
         "log_dir": "/tmp",
         "counts": {
-          "total": 18,
-          "pass": 18,
+          "total": 14,
+          "pass": 14,
           "fail": 0,
           "skip": 0
         },
@@ -2086,46 +2228,6 @@
             "state": "pass",
             "duration_ms": 5,
             "command": "synthetic eq-model",
-            "log": "/dev/null",
-            "reason": ""
-          },
-          {
-            "name": "fp-c-tests",
-            "mode": "fast",
-            "tier": "fast",
-            "state": "pass",
-            "duration_ms": 5,
-            "command": "synthetic fp-c-tests",
-            "log": "/dev/null",
-            "reason": ""
-          },
-          {
-            "name": "fp-crypto",
-            "mode": "fast",
-            "tier": "fast",
-            "state": "pass",
-            "duration_ms": 5,
-            "command": "synthetic fp-crypto",
-            "log": "/dev/null",
-            "reason": ""
-          },
-          {
-            "name": "fp-python",
-            "mode": "fast",
-            "tier": "fast",
-            "state": "pass",
-            "duration_ms": 5,
-            "command": "synthetic fp-python",
-            "log": "/dev/null",
-            "reason": ""
-          },
-          {
-            "name": "fp-session",
-            "mode": "fast",
-            "tier": "fast",
-            "state": "pass",
-            "duration_ms": 5,
-            "command": "synthetic fp-session",
             "log": "/dev/null",
             "reason": ""
           },
@@ -2228,12 +2330,11 @@
       "leds": "implemented-and-proven-offline",
       "sleep": "implemented-and-proven-offline",
       "audio": "implemented-and-proven-offline",
-      "fingerprint": "implemented-and-proven-offline",
       "decky": "implemented-and-proven-offline",
       "audit": "implemented-and-proven-offline"
     },
-    "complete": 7,
-    "automated_complete": 7,
+    "complete": 6,
+    "automated_complete": 6,
     "exit_code": 0
   }
 }

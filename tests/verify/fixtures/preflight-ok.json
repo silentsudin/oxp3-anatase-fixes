@@ -6,7 +6,7 @@
   "verdict": "safe",
   "counts": {"total": 71, "ok": 66, "warn": 5, "fail": 0},
   "skipped_components": [],
-  "warning_ids": ["core.root", "dev.spidev"],
+  "warning_ids": ["core.root"],
   "components": {"volume": {"state": "degraded", "blockers": [], "warnings": ["core.root"]}},
   "checks": []
 }

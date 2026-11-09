@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""oxp3-acceptance - evaluate the seven goal items from evidence, not memory.
+"""oxp3-acceptance - evaluate the six goal items from evidence, not memory.
 
-The sleep/volume/LED/fingerprint/Decky work is spread over a component registry,
-a verifier, a repository test runner, unit/C/integration suites and a handful of
+The sleep/volume/LED/Decky work is spread over a component registry,
+a verifier, a repository test runner, the unit/integration suites and a handful of
 device-only runs.  "Are we done?" should not depend on remembering which of them
 was green last time.  This tool answers exactly that question:
 
@@ -33,7 +33,7 @@ The verdict is the *furthest evidence stage reached*, not a promise:
   * ``awaiting-install`` means an install step is still open, so no device
     check can pass yet.
   * ``awaiting-hardware`` means the code is in place but the missing proof
-    needs the device (a real press, a real suspend, a fingerprint transcript).
+    needs the device (a real press, a real suspend).
   * ``blocked`` means a component is blocked in the registry or a live required
     check FAILs; ``not-a-gap`` is used only when components.yaml says the
     investigation found no gap.
@@ -85,7 +85,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = REPO / "tests" / "fixtures" / "acceptance"
 SIGN_OFF_FILE = REPO / "docs" / "state" / "acceptance-signoffs.json"
 
-# The seven goal items.  Only the *item* facts live here; the component state,
+# The six goal items.  Only the *item* facts live here; the component state,
 # implementation paths, doc link and verify ids are read from components.yaml.
 ITEM_SPECS = (
     {
@@ -260,41 +260,6 @@ ITEM_SPECS = (
                      "owner listening check is recorded (the model cannot hear the drivers).",
     },
     {
-        "id": "fingerprint",
-        "title": "Fingerprint reader",
-        "components": ["fingerprint"],
-        "install_steps": [],
-        "required_checks": [],
-        "offline_suites": ["fp-python", "fp-crypto"],
-        "optional_suites": ["fp-c-tests", "fp-session"],
-        "offline_files": [
-            "tools/fingerprint/tests",
-            "tools/fingerprint/oxp3-fp-session.sh",
-            "docs/hw/fingerprint.md",
-            "docs/hw/fingerprint-session.md",
-        ],
-        "manual": [
-            {
-                "id": "fingerprint.transcript",
-                "phase": "acceptance",
-                "step": "one guided root session against the sensor, with a transcript "
-                        "(probe.ran and restore.verified) handed back",
-                "command": "sudo tools/fingerprint/oxp3-fp-session.sh",
-                "satisfied_by_artifact": "fingerprint_transcript",
-            },
-            {
-                "id": "fingerprint.enrol",
-                "phase": "acceptance",
-                "step": "enrol/verify and a kernel driver remain unimplemented "
-                        "(components.yaml state: partial) - out of scope for this transcript",
-                "command": "docs/hw/fingerprint.md",
-                "optional": True,
-            },
-        ],
-        "done_when": "one fingerprint transcript with probe.ran and restore.verified; "
-                     "the driver/enrol gap stays recorded as partial, not claimed.",
-    },
-    {
         "id": "decky",
         "title": "Decky status plugin",
         "components": ["decky"],
@@ -391,12 +356,12 @@ ITEM_SPECS = (
 SHARED_SUITES = {"unit", "verify-selftest"}
 
 DEFAULT_SUITES = [
-    "unit", "verify-selftest", "triage", "fp-python", "fp-crypto",
+    "unit", "verify-selftest", "triage",
     "decky-selftest", "decky-cli", "led-selftest", "hid-selftest",
     "eq-model", "sleep-cycles",
 ]
 FULL_SUITES = DEFAULT_SUITES + [
-    "fp-c-tests", "fp-session", "decky-build", "decky-package",
+    "decky-build", "decky-package",
     "audio-eq-isolation", "gen-docs",
 ]
 SOURCE_TIMEOUT = {"verify": 120, "health": 60, "repo_test": 420, "gen_docs": 180}
@@ -493,10 +458,9 @@ def load_components(repo=REPO):
 
 
 def _artifact_scan(repo=REPO):
-    """Detect the two filesystem evidence artefacts and the optional sign-offs."""
+    """Detect the filesystem evidence artefact and the optional sign-offs."""
     artifacts = {
         "sleep_cycles_good": {"found": False, "path": "", "detail": "no measured GOOD report"},
-        "fingerprint_transcript": {"found": False, "path": "", "detail": "no session summary"},
         "signoffs": {},
     }
     state = pathlib.Path(repo) / "docs" / "state"
@@ -513,20 +477,6 @@ def _artifact_scan(repo=REPO):
                 "found": True,
                 "path": str(report.relative_to(repo)),
                 "detail": "verdict GOOD, %d valid cycle(s)" % valid,
-            }
-            break
-    for summary in sorted(state.glob("fp-session-*/summary.json")):
-        try:
-            data = json.loads(summary.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        probe = data.get("probe") or {}
-        restore = data.get("restore") or {}
-        if probe.get("ran") and restore.get("verified"):
-            artifacts["fingerprint_transcript"] = {
-                "found": True,
-                "path": str(summary.relative_to(repo)),
-                "detail": "probe.ran and restore.verified",
             }
             break
     sign = pathlib.Path(repo) / "docs" / "state" / "acceptance-signoffs.json"
@@ -1201,11 +1151,11 @@ def selftest(fixtures=FIXTURES):
         expect = fixture.get("expect") or {}
         checks = [
             ("schema", report.get("schema") == SCHEMA),
-            ("items", len(report.get("items") or []) == 7),
+            ("items", len(report.get("items") or []) == len(ITEM_SPECS)),
             ("verdict vocabulary",
              all(item["verdict"] in VERDICTS for item in report["items"])),
             ("counts sum",
-             sum(report["counts"]["by_verdict"].values()) == 7),
+             sum(report["counts"]["by_verdict"].values()) == len(ITEM_SPECS)),
         ]
         for item_id, wanted in (expect.get("verdicts") or {}).items():
             found = next((item["verdict"] for item in report["items"]
@@ -1257,7 +1207,7 @@ def _dump(path, data):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="Evaluate the seven goal items from live/offline evidence.",
+        description="Evaluate the six goal items from live/offline evidence.",
         add_help=True,
     )
     parser.add_argument("--json", action="store_true", help="machine report (schema 1)")

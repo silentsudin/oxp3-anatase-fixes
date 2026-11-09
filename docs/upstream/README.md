@@ -6,13 +6,12 @@ access — and nothing here has been posted, merged or mailed. These files are o
 own patch sketches, written so a human with the right accounts can review, finish and submit them.
 They contain no vendor code, decompiled listings, DLLs or firmware.
 
-All three are **drafts**, not patches:
+Both are **drafts**, not patches:
 
 | draft | subsystem | the ask | evidence still missing |
 |---|---|---|---|
 | [`oxpec-fan-bypass-request.md`](../../upstream/oxpec-fan-bypass-request.md) | `platform/x86` (`oxpec`) | expose the EC fan curves as hwmon `pwmN_auto_pointM_{temp,pwm}` on this board and back `charge_behaviour` (`auto` / `inhibit-charge` / `inhibit-charge-awake`) with the EC bypass byte; no debugfs user knobs | the EC register map (addresses, table layout, point count, units, the three bypass values) — Ghidra cannot decompile the CIL assembly and no .NET decompiler is installed here |
 | [`intel-pmdemand-sagv-request.md`](../../upstream/intel-pmdemand-sagv-request.md) | DRM (`intel_pmdemand`, shared by `xe`/i915 display) | a read-only debugfs `sagv_state` plus a root-only, development `sagv_force_point` that pins `QCLK_GV_INDEX` and selects the matching `QCLK_GV_BW`, clamped to the mode’s display bandwidth; no MCHBAR pokes, no new uAPI | whether the PM DEMAND index field actually pins anything on display version 30, and the point-number → frequency mapping; the A/B power delta was not measured (no root/reboots here) |
-| [`libfprint-bf63112-plan.md`](../../upstream/libfprint-bf63112-plan.md) | libfprint | a standalone `drivers/bf63112.c` (+ small protocol core) for the Betterlife BF63112 SPI sensor, with meson/tests/docs; match-in-sensor, host stores only the module handle | the driver has never run against the sensor: ACPI `_CRS` SPI clock/mode/GPIOs are root-only, the answer header and SM3/enrol/identify payloads are undecoded, and no hardware transcript exists |
 
 ## What is already solid
 
@@ -25,9 +24,6 @@ All three are **drafts**, not patches:
   0x80000122`, busy bit 31 ≤ 10 ms, `+0x5918`), the vendor profile values (Quiet 3 / Balanced 0 /
   Performance 4; AutoSAGV 80/90 % at 10 s), and the 7.2.7 source showing `qclk_gv_index = 0` with
   the firmware-choice comment and the dead `icl_pcode_restrict_qgv_points()` path for ≥ 14.
-* **C** is backed by a recovered frame/CRC/image/retry protocol, 172 Python tests (audit count), 324 C checks on
-  10 shared vectors, and a driver that syntax-checks against libfprint v1.94.9 headers (all
-  re-verified on 2026-11-09). It is explicitly not hardware-validated.
 
 ## Rules used for these drafts
 
