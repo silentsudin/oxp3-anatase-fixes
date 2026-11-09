@@ -1,0 +1,4 @@
+Starting Handheld Daemon...
+Opening virtual device 'Handheld Daemon Volume Keyboard'.
+ERROR    OSError: [Errno 16] Device or resource busy
+ERROR    Assuming controllers disconnected, restarting after 3s.

@@ -57,11 +57,15 @@ cmd_install() {
     cat <<EOF
 
 verify:
-  systemctl status oxp3-voltap            # active (running), no grab errors
-  journalctl -u oxp3-voltap -b -f         # 'grabbed /dev/input/eventN (... role=hhd-virtual ...)'
+  systemctl status oxp3-voltap            # active (running); normally OBSERVE
+  journalctl -u oxp3-voltap -b -f         # 'grabbed /dev/input/eventN (... role=at-kbd ...)'
+                                          # or 'OBSERVE: hhd owns the volume path'
   oxp3-voltap status                      # JSON-backed choice/reason (no root)
-  press volume up 3x: one step each, no ramp; hold it: it steps once per press
-  stop it again:  sudo systemctl stop oxp3-voltap && press -> the bug is back
+
+This daemon is the LEGACY path. With hhd installed, the supported volume fix is
+the hhd plugin (tools/hhd-oxp3-voltap): it normalises taps inside hhd and never
+opens or grabs a device. This daemon refuses hhd's own virtual keyboard by
+default (VOLTAP_ALLOW_HHD_GRAB=0) and only grabs a free physical AT keyboard.
 EOF
 }
 

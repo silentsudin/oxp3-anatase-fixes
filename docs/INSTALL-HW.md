@@ -37,7 +37,7 @@ Why a separate entry point:
 
 | component | implementation | scope | survives an Anatase update |
 |---|---|---|---|
-| volume | `tools/oxp3-voltap/install.sh` (daemon + hwdb) | root (`/usr/local`, `/etc`) | yes |
+| volume | `tools/hhd-oxp3-voltap/install.sh` (**hhd plugin**, supported) + force-release hwdb; `--volume-daemon` uses the legacy `tools/oxp3-voltap/install.sh` daemon | root (`/usr/local`, `/etc`) | yes |
 | LEDs / home button | orchestrator + `tools/oxp3-hid.rules`, `tools/oxp3-homebtn.service` | root rule + user unit | rule: yes, unit: yes |
 | sleep | orchestrator + `files/oxp3-sleep-*` | root (`/etc`, `/usr/local`) | yes |
 | Bluetooth | `tools/oxp3-bt-firmware.sh` | root (`/usr/lib/firmware/updates`) | files no, dracut conf yes |
@@ -98,9 +98,12 @@ tools/oxp3-hw-install.sh --status
 tools/oxp3-status.sh
 ```
 
-`--volume` and `--bluetooth` are omitted above on purpose: `oxp3-fixes-fast.sh` already installs the
-hhd volume-rocker patch and layers the Bluetooth firmware package. The `oxp3-voltap` daemon is the
-*alternative* to the hhd patch ([volume-buttons.md](hw/volume-buttons.md)), not an addition to it.
+`--volume` and `--bluetooth` are omitted above on purpose: `oxp3-fixes-fast.sh` installs the hhd
+volume-rocker patch and layers the Bluetooth firmware package. The supported volume path is the
+**hhd plugin** (`--volume`, the default), which replaces the hhd patch's tap policy at runtime; the
+legacy `--volume-daemon` daemon is an *alternative* to the plugin, not an addition to it. A plugin
+change needs `sudo systemctl restart hhd`, which drops the emulated Steam controller for a few
+seconds ([volume-buttons.md](hw/volume-buttons.md), [DAEMONS.md §0](DAEMONS.md)).
 
 ### 2.2 Hardware fixes only (no driver stack)
 
@@ -111,8 +114,8 @@ sudo tools/oxp3-hw-install.sh --dry-run --all    # review the exact commands fir
 sudo tools/oxp3-hw-install.sh --all              # volume sleep bluetooth power imu leds rgb audio decky
 ```
 
-`--all` includes the `oxp3-voltap` volume daemon, the standalone Bluetooth-firmware script and the
-Decky status plugin.
+`--all` includes the hhd volume plugin (the supported volume path), the standalone
+Bluetooth-firmware script and the Decky status plugin.
 
 ### 2.3 Optional policy steps (not applied by `--all`)
 
@@ -174,7 +177,7 @@ Every flag is repeatable and idempotent.
 
 | flag | installs | remove with |
 |---|---|---|
-| `--volume` | `oxp3-voltap` daemon, `/etc/oxp3-voltap.conf`, unit, force-release hwdb | `--uninstall --volume` |
+| `--volume` | the **hhd plugin** (`/usr/local/lib/python3.15/site-packages/oxp3_hhd_voltap` + dist-info) and the force-release hwdb; after install `sudo systemctl restart hhd` (drops 28DE:12FF for a few seconds). `--volume-daemon` installs the legacy `oxp3-voltap` daemon + `/etc/oxp3-voltap.conf` + unit instead | `--uninstall --volume` |
 | `--leds` | `90-oxp3-hid.rules`, user unit `oxp3-homebtn.service` | `--uninstall --leds` |
 | `--sleep` | `oxp3-sleep-wakeup/pre/log` units + `/usr/local/libexec/oxp3-sleep-*` + `99-oxp3-sleep-wakeup.rules` + the trigger policy (`/etc/systemd/logind.conf.d/60-oxp3-sleep.conf`, `/etc/polkit-1/rules.d/49-oxp3-suspend.rules`); after installing, `sudo systemctl restart systemd-logind` (or reboot) so logind reads the drop-in | `--uninstall --sleep` |
 | `--bluetooth` | upstream firmware in `/usr/lib/firmware/updates/intel`, dracut `install_items`, controller reload | `--uninstall --bluetooth` |
@@ -191,9 +194,11 @@ default `SUDO_USER`), `--bt-persist=items|omit|none`, `--bt-with-ddc`, `--bt-no-
 plugin zip, verified against the recorded sha256), `--restart-plugin-loader` (restart
 `plugin_loader.service` after `--decky`; never automatic, and only when the unit exists).
 
-Known interaction: **do not run `--volume` together with the hhd volume-rocker patch** that
-`oxp3-fixes*.sh install` applies — both normalise the same key. Pick one; the orchestrator's
-`--volume` is the standalone path, the hhd patch is the driver-installer path.
+Known interaction: the hhd plugins must be loaded one way only. The plugin **replaces** the hhd
+volume-tap policy per producer instance, so an already-applied `oxp3-fixes*.sh` hhd patch is
+harmless; but do not also run the legacy daemon (`--volume-daemon`) while the plugin is installed -
+the daemon would only observe (exit 4), so it adds nothing. `--uninstall --volume` removes the
+plugin and any leftover legacy daemon together.
 
 ## 4. What gets written where
 
@@ -261,9 +266,12 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 
 | Component | State | Verify | Expected | Root |
 |---|---|---|---|---|
-| Volume keys | awaiting-install | `vol.unit` | oxp3-voltap is active (running) | no |
-| Volume keys | awaiting-install | `vol.grab` | this boot's journal has grabbed /dev/input/eventN | no |
-| Volume keys | awaiting-install | `vol.topology` | the daemon would grab the hhd virtual volume keyboard, or a free physical fallback, and says why | no |
+| Volume keys | awaiting-install | `hhd.unit` | hhd is installed and active | no |
+| Volume keys | awaiting-install | `hhd.busy` | no unrecovered EBUSY/disconnect episode in this boot's hhd journal | no |
+| Volume keys | awaiting-install | `hhd.grab` | no process of ours holds an fd or EVIOCGRAB on an hhd event device | no |
+| Volume keys | awaiting-install | `vol.unit` | oxp3-voltap active, or installed-but-disabled on purpose (plugin path) | no |
+| Volume keys | awaiting-install | `vol.grab` | a non-hhd device is grabbed, or the documented OBSERVE line (hhd owns the path) | no |
+| Volume keys | awaiting-install | `vol.topology` | the free physical AT keyboard, or protected/observe (exit 4); never hhd's device | no |
 | Volume keys | awaiting-install | `vol.holder` | the physical AT keyboard is held only by hhd (or by nobody); SKIP without root | no |
 | Volume keys | awaiting-install | `vol.hwdb` | the force-release entry exists and hwdb.bin is newer | no |
 | Volume keys | awaiting-install | `vol.hold` | a hold yields exactly one step, not a ramp | yes |
@@ -375,7 +383,7 @@ an initramfs that already carries the firmware, manual EC limits) is in
 
 | component | rollback |
 |---|---|
-| volume | `sudo tools/oxp3-voltap/install.sh uninstall; sudo rm -f /etc/oxp3-voltap.conf; sudo systemd-hwdb update; sudo udevadm trigger --subsystem-match=input --action=change` |
+| volume | plugin: `sudo tools/hhd-oxp3-voltap/install.sh uninstall; sudo systemctl restart hhd` (removes exactly the package + dist-info). Legacy daemon: `sudo tools/oxp3-voltap/install.sh uninstall; sudo rm -f /etc/oxp3-voltap.conf`. Both: `sudo tools/oxp3-hw-install.sh --uninstall --volume`. Finish with `sudo systemd-hwdb update; sudo udevadm trigger --subsystem-match=input --action=change` |
 | LEDs / home button | `systemctl --user disable --now oxp3-homebtn; rm ~/.config/systemd/user/oxp3-homebtn.service; sudo rm -f /etc/udev/rules.d/90-oxp3-hid.rules; sudo udevadm control --reload-rules` (keep the rule if RGB uses it) |
 | RGB | `systemctl --user disable --now oxp3-rgbd; rm ~/.config/systemd/user/oxp3-rgbd.service ~/.config/oxp3-rgb.toml; sudo rm -f /etc/udev/rules.d/90-oxp3-hid.rules; sudo udevadm control --reload-rules` |
 | sleep | `sudo tools/oxp3-hw-install.sh --uninstall --sleep` (or: `sudo systemctl disable --now oxp3-sleep-wakeup oxp3-sleep-pre oxp3-sleep-log; sudo rm -f /etc/systemd/system/oxp3-sleep-*.service /usr/local/libexec/oxp3-sleep-* /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules /etc/systemd/logind.conf.d/60-oxp3-sleep.conf /etc/polkit-1/rules.d/49-oxp3-suspend.rules; sudo systemctl daemon-reload; sudo udevadm control --reload-rules; sudo systemctl restart systemd-logind`) — wake-up defaults return after a reboot |

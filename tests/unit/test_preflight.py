@@ -127,8 +127,9 @@ class ProbeTest(unittest.TestCase):
     def test_component_state_counts(self):
         ctx = context_for("conflicting-daemon")
         present, total, missing = PF.component_state(ctx, "volume")
-        self.assertEqual((present, total), (2, 4))
-        self.assertEqual(len(missing), 2)
+        # 5 artefacts now: the hhd plugin (supported path) + the 4 legacy daemon ones.
+        self.assertEqual((present, total), (2, 5))
+        self.assertEqual(len(missing), 3)
 
     def test_verdict_safe_degraded_and_unsafe(self):
         okc = [PF.ok("a", "x", "t")]

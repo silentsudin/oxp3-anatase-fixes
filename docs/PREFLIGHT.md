@@ -38,7 +38,8 @@ checklist:
 | source | derived prerequisite |
 |---|---|
 | `tools/oxp3-hw-install.sh` | root for every component except `--audio`; a non-root owner for the user units; a checkout path without whitespace; `install(1)`, `systemctl`, `udevadm`, `runuser`; the target directories |
-| `tools/oxp3-voltap/install.sh`, `tools/oxp3-voltap` | `python3` + `evdev`, `systemd-hwdb`, `/dev/input/event*`, `/dev/uinput` |
+| `tools/hhd-oxp3-voltap/install.sh` (supported) | `python3`, `/usr/local` writable, hhd >= 4.1.12, the hhd plugin directory; **no `/dev/uinput`, no `/dev/input/event*`, no `evdev`** |
+| `tools/oxp3-voltap/install.sh`, `tools/oxp3-voltap` (legacy) | `python3` + `evdev`, `systemd-hwdb`, `/dev/input/event*`, `/dev/uinput` |
 | `tools/oxp3-homebtn.py`, `tools/oxp3-rgbd.py` | the 1a86:fe00 vendor hidraw node, `/dev/uinput` (home button), `tomllib`/Python 3.11+ (RGB), a user manager bus |
 | `files/logind-oxp3.conf`, `files/49-oxp3-suspend.rules` | `/etc/systemd/logind.conf.d`, `/etc/polkit-1/rules.d`, a polkit agent for non-local callers, no conflicting `Handle*` policy |
 | `tools/oxp3-bt-firmware.sh`, `tools/oxp3-power-install.sh` | `dracut` or `rpm-ostree`, curl/wget (or a warm cache), RAPL zones, `oxp-platform` hwmon |
@@ -46,7 +47,7 @@ checklist:
 | `files/*.service`, `tools/*.service` | systemd >= 247 (`ProtectProc=invisible`), user units, `Restart=` in `[Service]` |
 | `tools/oxp3-flatpak-xmx.sh`, `tools/lib/install-common.sh` | `flatpak`, and no override/env/user-unit pointing at an older checkout |
 | `files/oxp3-bmi160.conf` | `CONFIG_BMI260` (Anatase custom) and `/etc/modprobe.d` |
-| the hhd volume patches (`patches/hhd/`) | hhd >= 4.1.12, and **not** both the hhd patch and `oxp3-voltap` |
+| the hhd volume patches (`patches/hhd/`) | hhd >= 4.1.12; the plugin supersedes the patch's tap policy, and the legacy daemon only observes while hhd runs |
 
 Kernel options are read from `/boot/config-*` when present and from
 `/usr/lib/modules/<release>/config` (the Anatase path) otherwise. If neither is
@@ -140,8 +141,9 @@ what `--json` reports.
 |---|---|---|
 | `dev.hidraw` | `/dev/hidraw*` exists (WARN) | check `lsusb -d 1a86:fe00`; the rule applies when it appears |
 | `dev.vendor-hid` | the 1a86:fe00 node with **no input child** and usage page 0xFF00 | same; the daemons wait |
-| `dev.input-events` | `/dev/input/event*` (FAIL: the volume daemon has nothing to grab) | check `CONFIG_INPUT_EVDEV` and udev |
-| `dev.uinput` | `/dev/uinput` (FAIL for volume + home button) | `sudo modprobe uinput`; enable `CONFIG_INPUT_UINPUT` |
+| `dev.input-events` | `/dev/input/event*` (WARN: only the LEGACY daemon reads event nodes; the hhd plugin needs none) | check `CONFIG_INPUT_EVDEV` and udev |
+| `dev.uinput` | `/dev/uinput` (FAIL for home button) | `sudo modprobe uinput`; enable `CONFIG_INPUT_UINPUT` |
+| `dev.uinput-legacy` | `/dev/uinput` for the legacy `oxp3-voltap` shim (WARN; the plugin needs none) | `sudo modprobe uinput` |
 | `dev.spidev` | `/dev/spidev*` (WARN; future fingerprint work) | informational |
 | `dev.rapl` | `intel-rapl:<n>` zones (FAIL for power) | check `CONFIG_INTEL_RAPL` / BIOS |
 | `dev.hwmon-oxp` | `oxp-platform` hwmon (WARN; fan curve is opt-in) | check the `oxp_ec` driver |
@@ -154,7 +156,8 @@ what `--json` reports.
 |---|---|---|
 | `kernel.config` | a readable config (WARN if absent) | install `kernel-core` or mount `/boot` |
 | `kernel.hidraw` | `CONFIG_HIDRAW` (FAIL for LEDs/RGB) | enable it in the kernel |
-| `kernel.uinput` | `CONFIG_INPUT_UINPUT` (FAIL for volume/home button) | enable it |
+| `kernel.uinput` | `CONFIG_INPUT_UINPUT` (FAIL for home button) | enable it |
+| `kernel.uinput-legacy` | `CONFIG_INPUT_UINPUT` for the legacy daemon (WARN) | enable it only if you use `--volume-daemon` |
 | `kernel.rapl` | `CONFIG_INTEL_RAPL` + `_CORE` (FAIL for power) | enable them |
 | `kernel.bmi260` | `CONFIG_BMI260` (WARN; Anatase custom) | use the Anatase kernel |
 | `kernel.sched-ext` | `CONFIG_SCHED_CLASS_EXT` (WARN) | enable it |
@@ -164,7 +167,7 @@ what `--json` reports.
 
 | check | verifies | fix |
 |---|---|---|
-| `state.volume` | 4 artefacts: 0 = not installed, all = installed, between = half | `sudo tools/oxp3-hw-install.sh --volume` |
+| `state.volume` | 5 artefacts: hhd plugin (supported) + the 4 legacy daemon files; 0 = not installed, all = installed, between = half (a daemon-only host is "half", so re-running `--volume` installs the plugin) | `sudo tools/oxp3-hw-install.sh --volume` |
 | `state.leds` | udev rule + user unit | `--leds` |
 | `state.rgb` | rule + config + user unit | `--rgb` |
 | `state.sleep` | 8 units/rules/drop-ins | `--sleep` |
@@ -182,7 +185,7 @@ what `--json` reports.
 |---|---|---|
 | `conflict.hhd` | hhd active, version and what it owns (volume keyboard, RGB plugin, grab state) | `sudo systemctl enable --now hhd`, or use the standalone path |
 | `conflict.hhd-version` | hhd >= 4.1.12 | update hhd or use `oxp3-voltap` |
-| `conflict.volume-path` | **both** the hhd patch and `oxp3-voltap` installed (FAIL) | pick one: `sudo tools/oxp3-voltap/install.sh uninstall` **or** remove the hhd patch |
+| `conflict.volume-path` | what is installed: plugin (supported; OK, also with an applied hhd patch), legacy daemon only (OK), or both the hhd patch and the legacy daemon (WARN - with hhd running the daemon only observes) | prefer `sudo tools/oxp3-hw-install.sh --volume` (plugin); remove whichever implementation you do not use |
 | `conflict.logind` | another logind drop-in already sets `Handle*`, or ours is overridden | keep one policy, then `sudo systemctl restart systemd-logind` |
 | `conflict.polkit` | `49-oxp3-suspend.rules` exists with different content | `sudo diff -u files/49-oxp3-suspend.rules /etc/polkit-1/rules.d/49-oxp3-suspend.rules` |
 | `conflict.flatpak` | a Flatpak override/env/user unit references another checkout | re-run the installers from this checkout |

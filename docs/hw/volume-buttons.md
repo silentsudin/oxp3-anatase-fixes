@@ -1,9 +1,12 @@
 # ONEXPLAYER 3 volume rocker: stuck keys on Linux
 
-Status: root cause localised; the userspace daemon now discovers the correct
-topology around hhd (virtual volume keyboard first, physical AT keyboard only
-as a free fallback) and degrades observably when every grab is refused. One
-hardware measurement still open (needs root, see [Open points](#open-points)).
+Status: root cause localised and the design corrected after a real outage.
+The supported fix is an **hhd plugin** (`tools/hhd-oxp3-voltap`) that
+normalises taps *inside* hhd and never opens or grabs a device. The standalone
+daemon remains as a legacy path: by default it never touches an hhd-owned device
+and only takes a free physical AT keyboard, otherwise it stays in observable
+observe mode (exit 4). One hardware measurement still open (needs root, see
+[Open points](#open-points)).
 Owner: silentsudin. Host: Anatase 20261026.3, kernel 7.2.7-an28, hhd 4.1.12.
 
 ## Symptom
@@ -20,7 +23,7 @@ investigates.
 | node | id | name | phys | why it matters |
 |---|---|---|---|---|
 | `event4` | bus 11, `0001:0001` | `AT Translated Set 2 keyboard` | `isa0060/serio0/input0` | the EC's keyboard interface; **carries the rocker** (`KEY=…` word1 has bits 114/115), has `EV_REP`; role `at-kbd`, grabbed by hhd, our fallback only when free |
-| `event23` | bus 3, `0001:0001` | `Handheld Daemon Volume Keyboard` | `phys-hhd-vbtn` | hhd's uinput device; only keys 114/115, no `EV_REP`; **the only place the desktop sees the rocker while hhd runs**; role `hhd-virtual`, our preferred grab |
+| `event23` | bus 3, `0001:0001` | `Handheld Daemon Volume Keyboard` | `phys-hhd-vbtn` | hhd's uinput device; only keys 114/115, no `EV_REP`; **the only place the desktop sees the rocker while hhd runs**; role `hhd-virtual` - hhd's own device, **never grabbed by us** (a second EVIOCGRAB made hhd drop the controller; see [The outage](#the-outage-never-grab-an-hhd-device)) |
 | `event5` | bus 3, `1997:2433` | `  mini keyboard` | `usb-0000:00:14.0-4/input0` | separate USB HID keyboard, also has 114/115 + `EV_REP`; not the rocker (fails the tests below) |
 | `event11` | bus 3, `1a86:fe00` | `HID 1a86:fe00 Consumer Control` | `usb-0000:00:14.0-5/input1` | gamepad's consumer interface, 114/115, **no `EV_REP`**; not grabbed by hhd, not the rocker |
 | `event9` | `1a86:fe00` | `HID 1a86:fe00` | `usb…-5:1.0` | hhd grabs this one with a `KEY_O` capability filter (turbo button), not volume |
@@ -127,7 +130,7 @@ press/release timing of the rocker. The command is in
   restart windows and in `controller_mode.mode = disabled`, where the raw AT
   keyboard feeds the desktop again.
 
-## Topology: which device voltap grabs
+## Topology: which device the daemon may grab
 
 `tools/oxp3-voltap` never hardcodes an `eventN`. It reads
 `/proc/bus/input/devices` plus `/sys/class/input` and classifies candidates by
@@ -136,96 +139,106 @@ name, `phys` and capabilities, then checks `/proc/*/fdinfo` for an existing
 
 | role | identified by | score | use |
 |---|---|---|---|
-| `hhd-virtual` | name `Handheld Daemon Volume Keyboard` or phys `hhd-vbtn` | 100 | **preferred** whenever present |
-| `at-kbd` | name `AT Translated Set 2 keyboard` or phys `isa0060/serio0` or bus `i8042` | 60 | fallback only when no hhd virtual device is selectable and nothing holds it |
+| `hhd-virtual` | name `Handheld Daemon Volume Keyboard` or phys `hhd-vbtn` | 100 | **never grabbed by default**; last resort only with `--allow-hhd-grab` |
+| `at-kbd` | name `AT Translated Set 2 keyboard` or phys `isa0060/serio0` or bus `i8042` | 60 | default: grabbed only when it is free (hhd stopped/disabled) |
 | `volume-only` | volume keys, no `EV_REP`, no REL/ABS (e.g. a consumer control) | 40 | not auto-selected; explicit `--device` only |
 | `other` | everything else | 10 | never auto-selected |
 | `never` | our own shim (`OXP3 volume tap shim`) or hhd's controller | 0 | never grabbed |
 
-Why this order is mandatory: hhd opens the AT keyboard with `grab=True` and
-holds the **only** allowed grab on it. A second `EVIOCGRAB` returns `EBUSY`, so
-grabbing the physical keyboard while hhd runs cannot work. hhd's uinput volume
-keyboard is the same key pair after hhd's translation, is not grabbed by hhd,
-and can be grabbed by us.
+### The outage: never grab an hhd device
+
+On 2026-11-09 the previous default (hhd's virtual volume keyboard first) took an
+`EVIOCGRAB` on `event23`. hhd's own OXP keyboard producer
+(`hhd/device/oxp/base.py`, `OxpAtKbd`, `VID:PID 0001:0001`, no name filter)
+matches that uinput device too, so hhd's own `grab()` then failed with
+`OSError: [Errno 16] Device or resource busy`. hhd logged
+`Assuming controllers disconnected, restarting after 3s`, dropped its virtual
+devices and the emulated Steam controller (`28DE:12FF`) disappeared, so
+Gamemode had no controller. The immediate remedy was
+`sudo systemctl disable --now oxp3-voltap && sudo systemctl restart hhd`.
+
+Two rules follow, and they are not negotiable:
+
+1. **A tool of ours never grabs (or opens) a device hhd owns.** hhd's uinput
+   volume keyboard is part of hhd, not a spare copy of the rocker.
+2. The normalisation belongs **inside hhd's event flow** - the plugin
+   `tools/hhd-oxp3-voltap` - not in a second reader of the same device.
 
 ### A. hhd is running (the normal topology on this unit)
 
 ```
 physical rocker -> EC -> i8042/atkbd -> event4  (EVIOCGRAB by hhd)
                                          |
-                                         +-> hhd multiplexer -> uinput
-                                               "Handheld Daemon Volume Keyboard"
-                                               event23, phys-hhd-vbtn
-                                                   |
-                                                   +-> voltap grabs event23
-                                                       -> OXP3 volume tap shim
-                                                          -> GNOME / Steam
+                                         +-> hhd multiplexer -> OxpAtKbd[volume-tap filter]
+                                               (the plugin, in-process)
+                                               -> uinput "Handheld Daemon Volume Keyboard"
+                                               -> event23 -> GNOME / Steam
 ```
 
-What changes when hhd is in the path:
-
-* `event23` advertises only `EV_KEY` 114/115 and **no `EV_REP`**
-  (`EV=0x200003`); hhd discards `value == 2` itself
-  (`hhd/controller/physical/evdev.py`: `elif e.value == 0 or e.value == 1`).
-  There is therefore normally no repeat pattern to suppress on this device.
-* The physical kernel repeat pattern (`value == 2` at 33 ms on `event4`) never
-  reaches us; hhd consumes it. If a future hhd forwards `value == 2`, the
-  `Tapper` drops it exactly as it does on the physical device, so tap
-  suppression is unchanged. `--diagnose` reports repeats separately for both
-  devices so this can be re-measured after an hhd update.
-* The hwdb force-release makes atkbd emit press+release in the same batch; hhd
-  then forwards only the release (its press was collapsed), which the `Tapper`
-  turns into one tap (`orphan_tap`). That is why the hhd source patch is not
-  required for the rocker to work.
+* The plugin wraps hhd's OXP keyboard producer and normalises the translated
+  `key_volumeup`/`key_volumedown` buttons there. It opens no event node, takes
+  no `EVIOCGRAB` and creates no uinput device.
+* The legacy daemon, if installed, sees `event4` held by hhd (root's holder
+  scan) and refuses `event23` by rule: it logs one
+  `OBSERVE: hhd owns the volume path ...` line, writes JSON status
+  `state=degraded-hhd-protected`, returns exit code **4** with `--once`, and
+  attempts no grab at all.
+* If hhd does not run, or `controller_mode.mode = disabled`, `event4` is free:
+  the daemon grabs it and proxies the whole keyboard through its shim (see B).
 
 ### B. hhd is not running, restarted, or `controller_mode.mode = disabled`
 
 hhd's uinput device disappears with the process (and is not created at all in
-disabled mode), so nothing grabs the AT keyboard. `voltap` then selects
+disabled mode), so nothing grabs the AT keyboard. The daemon then selects
 `event4` as the physical fallback, grabs it, and proxies **all** keys through
-its shim (not just volume), advertising `EV_REP` there so typing keeps its
-key repeat. This is a full keyboard proxy by design; the alternative would be
+its shim (not just volume), advertising `EV_REP` there so typing keeps its key
+repeat. This is a full keyboard proxy by design; the alternative would be
 losing the built-in keyboard.
 
-When hhd restarts, `event23` disappears and reappears: the daemon logs
-`device lost:`, releases any held keys, and re-grabs the recreated device on the
-next rescan (`reconnect #N:`).
+When hhd restarts, `event4` becomes held again; the daemon drops it, logs the
+loss, and stays in observe mode while hhd owns the path.
 
-### C. Every grab is refused
+### C. No device may be taken
 
-If all ordered candidates are held (`EBUSY`) or unreadable, the daemon does not
-exit silently and does not spin: it logs one `DEGRADED:` line, writes the JSON
-status file (`/run/oxp3-voltap/status.json`, `state=degraded-busy`,
-`exit_code=3`), and retries every `VOLTAP_RESCAN_S` seconds. `--once` returns
-the documented exit code immediately; `--degrade-exit-after N` makes the daemon
-exit with it after N seconds (leave it at 0 in the unit so systemd does not
-restart-loop).
+* **hhd running (normal):** observe mode: one `OBSERVE:` line, status
+  `degraded-hhd-protected`, exit code **4**, no grab. This is the expected
+  state of the legacy daemon on this unit.
+* **A grab is refused (EBUSY/EACCES):** one `DEGRADED:` line, status
+  `degraded-busy`/`degraded-error`, exit code **3**, retry every
+  `VOLTAP_RESCAN_S`.
+* **No candidate at all:** `degraded-empty`, exit code **2**.
+
+`--once` returns the documented code immediately; `--degrade-exit-after N` makes
+the daemon exit with it after N seconds (leave it at 0 in the unit so systemd
+does not restart-loop).
 
 ## Fix
 
-Three layers, all ours, no vendor code, no kernel module, no `/usr` patching:
+The supported design has one layer now, with the kernel hwdb as defence in
+depth; no vendor code, no kernel module, no `/usr` patching:
 
-1. **Kernel: force-release the volume scancodes** —
+1. **hhd plugin (supported): `tools/hhd-oxp3-voltap`.** A distribution
+   registered in the `hhd.plugins` entry-point group. At `open()` it
+   defensively wraps hhd's OXP keyboard producer
+   (`hhd.device.oxp.base.OxpAtKbd.produce`) and runs the tap state machine on
+   `key_volumeup`/`key_volumedown` only: one clean tap per physical press,
+   minimum hold, bounce gap, duplicate/orphan/late-release handling, bounded
+   synthetic release. If the hhd API shape differs it logs and no-ops; if the
+   filter raises it logs once, restores hhd's own handling and passes hhd's
+   events through. It never opens, reads or grabs an event device.
+   API study with file/line references: [`hhd-plugin.md`](hhd-plugin.md).
+2. **Kernel: force-release the volume scancodes** -
    `tools/oxp3-voltap/84-oxp3-volume-keys-taps.hwdb` keeps the old
    `0xae/0xb0` pair and adds `0xa1/0xb2` (the pair atkbd actually maps to
-   volume). Harmless if the EC uses only one of them. This is the primitive that
-   makes a second press possible at all, because hhd cannot emit a press for a
-   key that is still logically down. **This layer stays even with the daemon**:
-   it is defence in depth and the only thing that recovers the second press
-   during a `voltap` restart or grab-conflict window.
-2. **Discovery: pick the only grabbable copy of the rocker** — prefer hhd's
-   virtual volume keyboard, fall back to a *free* physical AT keyboard, and
-   record every candidate's role, score, holder and decision. `check`,
-   `explain`/`--probe`, `diagnose` and `status` expose that decision without
-   root for the static parts.
-3. **Userspace: `tools/oxp3-voltap`** — a python3-evdev daemon that grabs the
-   chosen device (`EVIOCGRAB`), drops every `value == 2` for volume keys,
-   drops duplicate presses and contact bounce, emits exactly one 30 ms down/up
-   pair per press through its own uinput device, force-releases anything that
-   somehow stays down, turns a *release without a press* into one tap,
-   re-attaches when hhd recreates its device, releases all keys on SIGTERM, and
-   reports a documented degraded state when it cannot grab. The daemon source
-   is `tools/oxp3-voltap/oxp3-voltap`; the hwdb file is separate.
+   volume). Harmless if the EC uses only one of them. This is what makes a
+   second press possible at all; it is installed by both the plugin and the
+   daemon component.
+3. **Legacy daemon (opt-in, `--volume-daemon`): `tools/oxp3-voltap`.** Same
+   state machine in front of a device, but with the corrected topology: never
+   hhd's device; the free physical AT keyboard only; otherwise observable
+   observe mode (exit 4). It refuses `event23` even when explicitly configured
+   unless `--allow-hhd-grab` is given - and that flag exists only for a
+   deliberate experiment, never for the supported install.
 
 ### Exit codes and status
 
@@ -234,33 +247,46 @@ Three layers, all ours, no vendor code, no kernel module, no `/usr` patching:
 | 0 | grabbed (or `check`: a candidate would be grabbed) |
 | 1 | usage error / missing root for `run`/`probe`/`diagnose`/`selftest` |
 | 2 | no volume event device candidate (`degraded-empty`) |
-| 3 | every candidate refused (`degraded-busy` / `degraded-error`) |
+| 3 | every candidate was attempted and refused (`degraded-busy` / `degraded-error`) |
+| 4 | hhd owns the volume path and grabbing its device is forbidden; nothing opened or grabbed (`degraded-hhd-protected`, observe mode) |
 
 `oxp3-voltap status` prints the daemon's last decision, holders, state and
 counter snapshot from the JSON file; `oxp3-voltap check --kv` prints the same
-choice as stable `KEY=value` lines for the verification harness.
+choice as stable `KEY=value` lines (`ALLOW_HHD_GRAB`, `HHD_PROTECTED`,
+`OBSERVE`, ...) for the verification harness.
 
 ### Expected journal lines
 
-Topology A — hhd running (the normal case):
+Plugin path (the supported one) - the plugin's own hhd log lines, no
+`oxp3-voltap` unit at all:
 
 ```
-oxp3-voltap: grabbed /dev/input/event23 ('Handheld Daemon Volume Keyboard' phys='phys-hhd-vbtn' role=hhd-virtual id=0001:0001)
-oxp3-voltap: created 'OXP3 volume tap shim' at /dev/input/eventNN with 2 key codes
+vltp  INFO     oxp3-voltap: installed the volume-tap filter on
+               hhd.device.oxp.base.OxpAtKbd.produce (hold=60 ms, gap=60 ms,
+               max_hold=500 ms); no input device is opened or grabbed by this plugin.
 ```
 
-Topology B — physical fallback (hhd stopped or controller mode disabled):
+No-op when the hhd shape is unknown:
+
+```
+vltp  WARNING  oxp3-voltap: no-op, this HHD build does not expose the OXP
+               keyboard producer we know how to hook (...). Volume buttons are
+               left exactly as HHD handles them.
+```
+
+Legacy daemon, hhd running (the expected state):
+
+```
+oxp3-voltap: OBSERVE: hhd owns the volume path; not opening or grabbing its device
+             (status=degraded-hhd-protected exit=4). The supported path is the hhd
+             plugin (tools/hhd-oxp3-voltap); see docs/DAEMONS.md. Retrying in 1s.
+```
+
+Legacy daemon, hhd stopped (physical fallback):
 
 ```
 oxp3-voltap: grabbed /dev/input/event4 ('AT Translated Set 2 keyboard' phys='isa0060/serio0/input0' role=at-kbd id=0001:0001)
 oxp3-voltap: created 'OXP3 volume tap shim' at /dev/input/eventNN with <N> key codes and EV_REP (physical keyboard fallback)
-```
-
-hhd restart / device recreation:
-
-```
-oxp3-voltap: device lost: /dev/input/event23 disappeared; releasing its keys and dropping it; retrying in 1s
-oxp3-voltap: reconnect #2: grabbed /dev/input/event23 ('Handheld Daemon Volume Keyboard' phys='phys-hhd-vbtn' role=hhd-virtual id=0001:0001)
 ```
 
 Grab refused (documented degraded state, not silence):
@@ -269,54 +295,47 @@ Grab refused (documented degraded state, not silence):
 oxp3-voltap: DEGRADED: every candidate is held or refused (EBUSY): /dev/input/event4: [Errno 16] Device or resource busy; status=degraded-busy exit=3; retrying in 1s
 ```
 
-No candidate at all:
-
-```
-oxp3-voltap: DEGRADED: no volume event device candidate (status=degraded-empty exit=2); retrying in 1s
-```
-
-The verification harness `vol.grab` check matches the stable prefix
-`grabbed /dev/input/event`; both topologies therefore pass it.
+The verification harness `vol.grab` check accepts a grab of a non-hhd device
+**or** the `OBSERVE: hhd owns the volume path` line; it fails on any grab of
+hhd's device.
 
 ## Install (root; these are the exact commands)
 
-```bash
-cd /var/home/holzr/git/linux_scratch/oxp3-anatase-fixes
-sudo tools/oxp3-voltap/install.sh install --hwdb
-# installs /usr/local/libexec/oxp3-voltap, /etc/oxp3-voltap.conf,
-# /etc/systemd/system/oxp3-voltap.service,
-# /etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb; enables + starts the unit
-```
-
-Equivalent manual form:
-
-```bash
-sudo install -d -m 0755 /usr/local/libexec
-sudo install -m 0755 tools/oxp3-voltap/oxp3-voltap /usr/local/libexec/
-sudo install -m 0644 tools/oxp3-voltap/oxp3-voltap.conf /etc/
-sudo install -m 0644 tools/oxp3-voltap/oxp3-voltap.service /etc/systemd/system/
-sudo install -m 0644 tools/oxp3-voltap/84-oxp3-volume-keys-taps.hwdb /etc/udev/hwdb.d/
-sudo systemd-hwdb update
-sudo udevadm trigger --subsystem-match=input --action=change
-sudo systemctl daemon-reload
-sudo systemctl enable --now oxp3-voltap.service
-```
-
-Optional: once the daemon works, the hhd source patch can go (the hwdb must
-stay — it is what delivers the second and later presses).  There is no
-"uninstall-extras" subcommand; the two patches are reverted directly, newest
-first, then hhd is restarted (its `__pycache__` must go too):
+Supported path - the hhd plugin (`/usr/local` is `/var/usrlocal` on Anatase, so
+it survives rpm-ostree updates):
 
 ```bash
 cd /var/home/holzr/git/linux_scratch/oxp3-anatase-fixes
-sudo git -C /usr/lib/python3.15/site-packages apply -R -p1 < patches/hhd/0002-oxp-volume-rocker-taps-in-controller-mode.patch
-sudo git -C /usr/lib/python3.15/site-packages apply -R -p1 < patches/hhd/0001-oxp-volume-rocker-taps.patch
-sudo find /usr/lib/python3.15/site-packages/hhd/device/oxp -name __pycache__ -prune -exec rm -rf {} +
-sudo systemctl restart hhd.service
+sudo tools/hhd-oxp3-voltap/install.sh install
+sudo systemctl restart hhd      # imports the plugin; drops 28DE:12FF for a few seconds
 ```
 
-If you prefer the kernel-module form over hwdb (applies to every atkbd, no
-per-device match, needs a reboot):
+That installs exactly two directories and nothing else:
+
+```
+/usr/local/lib/python3.15/site-packages/oxp3_hhd_voltap/
+/usr/local/lib/python3.15/site-packages/oxp3_hhd_voltap-0.1.0.dist-info/
+```
+
+Uninstall removes exactly those (`sudo tools/hhd-oxp3-voltap/install.sh uninstall`)
+and then needs `sudo systemctl restart hhd` to unload the code from the running
+daemon. Through the orchestrator: `sudo tools/oxp3-hw-install.sh --volume`
+(plugin, default) and `--uninstall --volume`.
+
+Legacy daemon (only if you deliberately do not want the plugin):
+
+```bash
+sudo tools/oxp3-hw-install.sh --volume-daemon
+# equivalent: sudo tools/oxp3-voltap/install.sh install --hwdb
+```
+
+It installs `/usr/local/libexec/oxp3-voltap`, `/etc/oxp3-voltap.conf`,
+`/etc/systemd/system/oxp3-voltap.service` and the hwdb file, then enables and
+starts the unit. With hhd running it will sit in observe mode (exit 4): that is
+the correct, safe behaviour, not an error.
+
+The hwdb can also be applied as a kernel-module option instead (applies to
+every atkbd, no per-device match, needs a reboot):
 
 ```bash
 echo 'options atkbd forced_release_keys=0xa1,0xb2,0xae,0xb0' | sudo tee /etc/modprobe.d/oxp3-atkbd.conf
@@ -326,57 +345,66 @@ sudo systemctl reboot
 ## Validation
 
 ```bash
-# 1. Which device would be grabbed, why, and who holds the physical one.
+# 1. Supported path: is the plugin installed and is hhd healthy?
+tools/hhd-oxp3-voltap/install.sh status     # files + entry point, read-only
+tools/hhd-oxp3-voltap/install.sh check      # can this hhd build be hooked?
+systemctl status hhd
+journalctl -u hhd -b --no-pager | tail -40
+#    expected: hhd active; after the restart that loads the plugin, one
+#    "oxp3-voltap: installed the volume-tap filter ..." line and no
+#    "Device or resource busy" / "Assuming controllers disconnected".
+#    Press: 3 quick taps -> 3 mixer steps; hold -> no runaway.
+
+# 2. Read-only invariant checks for both paths (tools/oxp3-verify.sh):
+tools/oxp3-verify.sh | grep -E 'hhd\.|vol\.'
+#    hhd.unit   hhd active
+#    hhd.busy   no EBUSY/disconnect since the last successful init
+#    hhd.grab   no process of ours holds an fd or EVIOCGRAB on an hhd device
+#    vol.unit / vol.topology / vol.holder / vol.grab   the daemon's decision:
+#               with hhd running and the daemon installed it is
+#               "observe: hhd owns the volume path" (or the unit is disabled
+#               on purpose); it must never show a grab of event23.
+
+# 3. Legacy daemon only: which device would be grabbed, why, who holds event4.
 #    Read-only; no root needed (holder lines are complete only as root).
 tools/oxp3-voltap/oxp3-voltap check
 tools/oxp3-voltap/oxp3-voltap explain          # same with per-candidate detail
 tools/oxp3-voltap/oxp3-voltap check --kv       # stable lines for scripts
-#    expected with hhd active: TOPO=hhd-virtual, SEL=/dev/input/event23,
-#    HHD_RUNNING=1, ATKBD_HELD=6752 (as root), PREDICTED_EXIT=0.
-#    With hhd stopped: TOPO=physical, SEL=/dev/input/event4.
+#    expected with hhd active: TOPO=none, SEL=, HHD_PROTECTED=1, OBSERVE=1,
+#    PREDICTED_EXIT=4 (as root: ATKBD_HELD=<hhd pid>). With hhd stopped:
+#    TOPO=physical, SEL=/dev/input/event4, PREDICTED_EXIT=0.
+#    --allow-hhd-grab changes that to TOPO=hhd-virtual only when asked.
 
-# 2. Watch both streams while pressing the rocker, then read the verdict.
-#    Read-only (does not grab); root needed to open event4/event23.
+# 4. Legacy daemon: watch the streams (read-only, no grab; root for event4/23).
 sudo tools/oxp3-voltap/oxp3-voltap diagnose --duration 8
-#    expected with hhd active: events only on event23, VERDICT grab
-#    /dev/input/event23 (hhd-virtual). With hhd stopped: events on event4 and
-#    VERDICT grab event4 (physical fallback). It also reports value=2 counts
-#    per device, which is how "does the virtual device repeat?" is re-measured.
+#    expected with hhd active: events on event23, and the verdict says do NOT
+#    grab it; use the plugin. With hhd stopped: events on event4 and the
+#    verdict recommends the physical fallback.
 
-# 3. Which device really carries the rocker, and what the EC sends.
+# 5. Which device really carries the rocker, and what the EC sends.
 #    This needs the device free: stop hhd (or set controller_mode.mode =
-#    disabled), then read event4; with hhd running, hhd owns event4 and the
-#    probe sees nothing. Press the rocker a few times, Ctrl-C.
+#    disabled), then read event4. Press the rocker a few times, Ctrl-C.
 sudo systemctl stop hhd
 sudo /usr/local/libexec/oxp3-voltap probe --device /dev/input/event4 --stuck-ms 400
 #    expected with the hwdb active: one press + one release per tap, no value=2,
 #    "longest press" a few ms. Without force-release: press but no release
 #    ("VERDICT missing release events"), or value=2 ("kernel/client repeat").
-sudo systemctl start hhd
+sudo systemctl start hhd        # drops the controller for a few seconds
 
-# 4. uinput plumbing only (creates the shim, emits two taps).
-sudo /usr/local/libexec/oxp3-voltap selftest
-#    the mixer must move exactly two steps, and the journal must show the device.
-
-# 5. End to end.
-systemctl status oxp3-voltap
+# 6. Legacy daemon: observe mode (the expected state with hhd running) and the
+#    physical fallback.
+sudo /usr/local/libexec/oxp3-voltap run --once ; echo "exit=$?"
+#    expected with hhd running: OBSERVE line and exit=4, no grab.
 journalctl -u oxp3-voltap -b --no-pager
-#    expect one of the two grabbed lines above, then: 3 quick taps -> 3 steps;
-#    hold 2 s -> one step per press, no runaway.
-#    Then exercise both fallbacks:
-#      sudo systemctl stop hhd      -> expect "device lost:", then a
-#                                      "reconnect #N: grabbed /dev/input/event4"
-#                                      (physical fallback, keyboard keeps typing)
-#      sudo systemctl start hhd     -> expect "device lost:", then a reconnect
-#                                      to the recreated event23 within ~1 s
-#      sudo systemctl stop hhd; systemctl stop oxp3-voltap; start a second
-#      check --once as root while event4 is held by something else -> exit 3
-#      and the DEGRADED line, never silence.
+#    with hhd stopped: "grabbed /dev/input/event4 (... role=at-kbd ...)" and
+#    "created 'OXP3 volume tap shim' ... EV_REP"; 3 taps -> 3 steps, typing
+#    keeps its repeat. Holding a key never ramps. Starting hhd again makes the
+#    daemon drop event4 and log OBSERVE.
 
-# 6. Counters/status (set VOLTAP_STATS=10 in /etc/oxp3-voltap.conf, restart):
+# 7. Counters/status (legacy daemon; set VOLTAP_STATS=10, restart):
 #    press/repeat/duplicate/bounce/orphan_tap/late_release tell you which
 #    mechanism was actually live on your unit. `oxp3-voltap status` prints the
-#    last decision without root.
+#    last decision without root, including observe/protected state.
 ```
 
 ## Integration test: the daemon against a virtual device (proven end-to-end)
@@ -422,9 +450,11 @@ Observed on Anatase (2026-11-09, kernel 7.2.7-an28; 37 assertions, ~18 s):
 | duplicate/repeat/repeated-release storm | exactly one pair (the input core coalesces duplicate presses and up-releases before the daemon sees them) |
 | release with the key already down, daemon attached afterwards (`orphan_tap`) | exactly one pair; counters `orphan_tap=1` |
 | release arriving after the synthetic timeout (`late_release`) | dropped; no second tap; counters `late_release=1` |
-| HHD-shaped device present (sandbox name, our `1209:7657` id) | grabbed with `role=hhd-virtual`, taps forwarded |
-| preferred device removed | `device lost:`, fallback grabs the AT-shaped device `role=at-kbd`, shim recreated with `EV_REP`, taps forwarded |
-| the test itself holds `EVIOCGRAB` first (complete holder scan) | `DEGRADED: every candidate is held or refused (EBUSY)`, status `degraded-busy`, exit 3 |
+| HHD-shaped + AT-shaped present, AT free | AT-shaped device grabbed `role=at-kbd`; the hhd-shaped device is `refused`, never grabbed |
+| outage topology: the test holds `EVIOCGRAB` on the AT-shaped device (hhd owns it) | `OBSERVE: hhd owns the volume path`, status `degraded-hhd-protected`, exit 4, **no grab and no fd** on the hhd-shaped device |
+| same, retrying daemon | the OBSERVE line appears once across several rescans |
+| `--allow-hhd-grab` while the AT device is held | hhd-shaped device grabbed as the explicit last resort (`decision=last-resort`) |
+| AT-shaped device held without an hhd device | `DEGRADED: every candidate is held or refused (EBUSY)`, status `degraded-busy`, exit 3 |
 
 Hermeticity: every node is created by the test (or by the daemon under test)
 and checked by name + `phys` + `vendor:product`; the automatic-topology phase
@@ -435,42 +465,55 @@ and a `-integration-test` `phys`; the real hhd device is never opened. Teardown
 SIGTERMs the daemon, closes every uinput device, verifies the nodes and the
 shim are gone, and asserts no test process survived.
 
-Two daemon fixes came out of this test:
+Three rules came out of this harness:
 
-1. `run` no longer refuses categorically when euid != 0. With an input-group
+1. `run` does not refuse categorically when euid != 0. With an input-group
    membership or a logind uaccess ACL the daemon can read its device and write
-   `/dev/uinput`; the real refusal (EACCES/EBUSY) is now reported from the
-   open/grab path as the documented degraded state, which is both testable and
-   more informative. The system unit still runs as root.
+   `/dev/uinput`; the real refusal (EACCES/EBUSY) is reported from the
+   open/grab path as the documented degraded state.
 2. Automatic discovery with a *complete* holder scan used to report
    `degraded-empty`/exit 2 when every candidate was visibly held, because the
-   attempt order was empty - contradicting the documented
-   `degraded-busy`/exit 3. `GrabFSM.refused_held()` now produces the busy state
-   from the holder list (unit-tested, and exercised by the last row above).
+   attempt order was empty; `GrabFSM.refused_held()` now produces the
+   documented `degraded-busy`/exit 3.
+3. **An hhd-owned device is never a default candidate.** The harness now proves
+   the outage topology explicitly: hhd-shaped present + AT held means observe
+   mode, exit 4, no fd and no grab on hhd's device; only the explicit
+   `--allow-hhd-grab` can select it, and then only as `last-resort`.
 
 ## Risks and rollback
 
-* **Risk: volume keys stop completely** (e.g. hhd disabled, no virtual device,
-  physical device unreadable). The daemon logs `DEGRADED:` with exit code 2/3
-  and keeps retrying; the desktop then gets the raw rocker again (the bug, not
-  a loss of function).
-* **Risk: physical fallback steals the keyboard.** Grabbing the AT keyboard is
-  safe only because we proxy every key through the shim (with `EV_REP`). If the
-  shim cannot be created the daemon refuses to keep the grab and retries; if
-  you prefer never to proxy, set `VOLTAP_ALLOW_PHYSICAL=0`.
+* **The regression this document exists for:** grabbing hhd's own virtual
+  volume keyboard drops the emulated Steam controller. The daemon now refuses
+  it by default (exit 4/observe) and `tools/oxp3-verify.sh` fails if any
+  process of ours holds an hhd-* event device or if this boot's hhd journal
+  shows the EBUSY/disconnect signature without a later successful init.
+* **Risk: the plugin no-ops after an hhd update.** That is deliberate: a
+  changed `OxpAtKbd` shape logs a warning and leaves hhd's own handling in
+  place. Check with `tools/hhd-oxp3-voltap/install.sh check`; reinstall after
+  adapting the hook if upstream changes. The controller is never at risk.
+* **Risk: the legacy daemon cannot normalise while hhd runs** (observe mode).
+  That is intended: use the plugin. The daemon only takes the free AT keyboard,
+  and then it proxies every key through its shim (with `EV_REP`); if the shim
+  cannot be created it releases the grab and retries. Set
+  `VOLTAP_ALLOW_PHYSICAL=0` to forbid the physical fallback entirely.
 * **Risk: hhd changes its virtual device name/phys.** Discovery fails to
-  classify it; `check` then reports `physical` or `none`. Override with
-  `VOLTAP_HHD_NAME`/`VOLTAP_HHD_PHYS` or `VOLTAP_DEVICES` (no code change).
-* **Risk: hwdb `!` removes the "hold to ramp".** That is the intent (one step
-  per press). Revert `84-oxp3-volume-keys-taps.hwdb` if you prefer ramping.
-* **Risk: hard dependency on python3-evdev** (already pulled in by hhd;
-  `rpm -q python3-evdev`).
-* **Rollback, daemon only:** `sudo tools/oxp3-voltap/install.sh uninstall`
+  classify it; the daemon then reports `physical`/`none`. Override with
+  `VOLTAP_HHD_NAME`/`VOLTAP_HHD_PHYS`; never work around it by grabbing hhd's
+  device.
+* **Risk: hwdb `!` removes "hold to ramp".** That is the intent (one step per
+  press). Revert `84-oxp3-volume-keys-taps.hwdb` if you prefer ramping.
+* **Risk: hard dependency on python3-evdev** for the daemon (already pulled in
+  by hhd; `rpm -q python3-evdev`). The plugin needs no extra dependency.
+* **Rollback, plugin (supported):**
+  `sudo tools/hhd-oxp3-voltap/install.sh uninstall && sudo systemctl restart hhd`
+  removes exactly the package and dist-info directories; nothing else is
+  installed. The restart drops the controller for a few seconds.
+* **Rollback, legacy daemon:** `sudo tools/oxp3-voltap/install.sh uninstall`
   (stops and disables the unit, removes binary/unit/hwdb, keeps
-  `/etc/oxp3-voltap.conf`).
+  `/etc/oxp3-voltap.conf`). `sudo tools/oxp3-hw-install.sh --uninstall --volume`
+  removes both paths.
 * **Rollback, everything:** the commands above plus
-  `sudo rm /etc/oxp3-voltap.conf`; the hhd patches are reverted by
-  `./oxp3-fixes.sh uninstall`.
+  `sudo rm /etc/oxp3-voltap.conf`. See [`docs/ROLLBACK.md`](../ROLLBACK.md).
 * **No host state is touched by this repo copy:** installing is a root action
   documented here, never executed by the build scripts.
 
@@ -481,17 +524,24 @@ Two daemon fixes came out of this test:
    force-released meanwhile, so the fix does not depend on the answer.
 2. **Whether Windows ramps on hold** identically. The vendor app is out of the
    path (evidence 7), so the comparison is OS-vs-OS; not measured.
-3. **hhd upstream**: `hhd-dev/hhd#342` describes the same lost release. If hhd
-   ever emits a proper pair itself, the shim becomes redundant and can be
-   stopped without changing anything else. If hhd ever starts grabbing its own
-   uinput device, `voltap` will see it in `/proc/*/fdinfo` and report
-   `degraded-busy` instead of failing silently.
-4. **Physical-fallback repeat proxying** is now exercised end to end by
-   `tests/integration/volume/` against an AT-shaped virtual device: the daemon
-   grabs it after the preferred device disappears, recreates the shim with
-   `EV_REP`, and taps still produce one pair. It is still not measured on the
-   real `event4` with a real keyboard (needs root and hhd stopped); validation
-   step 5 remains the on-hardware check.
+3. **hhd upstream**: `hhd-dev/hhd#342` describes the same lost release. The
+   installed hhd carries the in-tree `OxpAtKbd` tap policy (our patches), and
+   the plugin replaces it with the richer state machine (hold/gap/max_hold/
+   orphan). If hhd upstream grows a general input filter, the shim can move
+   there and this plugin becomes a thin wrapper. The plugin is registered as an
+   `hhd.plugins` entry point, so upstream can adopt or replace it without any
+   device-grabbing code.
+4. **Physical-fallback repeat proxying** is exercised end to end by
+   `tests/integration/volume/` against an AT-shaped virtual device: with no hhd
+   device present the daemon grabs it, creates the shim with `EV_REP`, and taps
+   still produce one pair. It is still not measured on the real `event4` with a
+   real keyboard (needs root and hhd stopped); validation step 5 remains the
+   on-hardware check.
 5. **Diagnose verdict** is based on a single N-second window with no presses
    unless the operator presses during it; it deliberately falls back to the
-   static preference instead of guessing.
+   static decision instead of guessing.
+6. **Plugin tap feel on hardware.** The plugin's minimum hold is 60 ms (hhd's
+   own tap constant) and the state machine is unit-tested and exercised through
+   the fake-`OxpAtKbd` hooks, but the final "does one press always equal one
+   mixer step with hhd 4.1.12" measurement needs the owner: install, restart
+   hhd, press/hold the rocker, and compare against the daemon's numbers.

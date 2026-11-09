@@ -13,14 +13,12 @@
     }
   },
   "expect": {
-    "verdict": "unsafe",
-    "safe": false,
-    "exit": 1,
+    "verdict": "safe",
+    "safe": true,
+    "exit": 0,
     "statuses": {
-      "conflict.volume-path": "FAIL"
+      "conflict.volume-path": "WARN"
     },
-    "skipped": [
-      "volume"
-    ]
+    "skipped": []
   }
 }

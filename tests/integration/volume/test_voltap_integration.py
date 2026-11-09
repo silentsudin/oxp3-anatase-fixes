@@ -26,10 +26,13 @@ Hermeticity and safety rules
   and its identity is checked (name + phys + vendor:product) before use.
 * The HHD-shaped stand-in deliberately reuses only the *name string* of hhd's
   virtual keyboard ("Handheld Daemon Volume Keyboard") so the daemon's
-  documented preference can be exercised without hhd and without hardware.  It
-  has our own vendor/product (0x1209:0x7657) and a "-integration-test" phys;
-  the real hhd device is never opened.  This is a sandbox test only: nothing
-  shipped uses that name except the discovery regex.
+  documented *protection* rule can be exercised without hhd and without
+  hardware: the hhd-shaped node must never be grabbed by default, only with
+  --allow-hhd-grab, and when it is the only rocker path the daemon must enter
+  observable degraded/observe mode (exit 4) without opening it.  It has our own
+  vendor/product (0x1209:0x7657) and a "-integration-test" phys; the real hhd
+  device is never opened.  This is a sandbox test only: nothing shipped uses
+  that name except the discovery regex.
 * The automatic-topology scenarios pass synthetic --proc-root/--sys-root
   trees, so the host's real devices are invisible to discovery.  The trees list
   the real /dev/input/eventN paths of the ephemeral devices created here.
@@ -488,6 +491,21 @@ def add_fake_holder(proc_root: pathlib.Path, dev, grab_fd):
     link.symlink_to(dev.path)
 
 
+def wait_status(path: pathlib.Path, timeout: float = 10.0):
+    """Read the daemon's JSON status once it has been written for this scan."""
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                last = exc
+        time.sleep(0.05)
+    raise Failure(f"daemon did not write a readable status to {path} "
+                  f"within {timeout:g}s ({last})")
+
+
 # --------------------------------------------------------------------------
 # scenarios
 # --------------------------------------------------------------------------
@@ -636,7 +654,7 @@ def run_orphan_scenarios(tmp: pathlib.Path, source, daemon_module):
                  if path != source.path]
         check("orphan run never grabbed a real device", not stray,
               f"only {source.path} was grabbed")
-        data = json.loads(status.read_text(encoding="utf-8"))
+        data = wait_status(status)
         counters = data["counters"]
         check("orphan counters prove both branches",
               counters["orphan_tap"] >= 1 and counters["late_release"] >= 1,
@@ -699,7 +717,7 @@ def group_a(tmp: pathlib.Path, daemon_module):
         check("no degraded state", "DEGRADED" not in log,
               "no DEGRADED line in the explicit-device run")
 
-        data = json.loads(status.read_text(encoding="utf-8"))
+        data = wait_status(status)
         counters = data["counters"]
         check("status: state stopped", data["state"] == "stopped",
               f"state={data['state']}, exit_code={data['exit_code']}")
@@ -736,12 +754,13 @@ def group_a(tmp: pathlib.Path, daemon_module):
 
 
 def group_b(tmp: pathlib.Path, daemon_module):
-    """Automatic topology: HHD-shaped preferred, AT-shaped fallback, EBUSY."""
+    """Automatic topology: never grab hhd's device; AT only when free; observe."""
     hhd = VirtualDevice(HHD_NAME, HHD_PHYS, HHD_PRODUCT, rep=False)
     at = None
     daemons = []
     shim = None
     holder = None
+    grabbed_hhd = []
     try:
         at = VirtualDevice(AT_REAL_NAME, AT_REAL_PHYS, AT_PRODUCT, rep=True,
                            proc_name=AT_LABEL_NAME, proc_phys=AT_LABEL_PHYS)
@@ -749,6 +768,10 @@ def group_b(tmp: pathlib.Path, daemon_module):
         sys_root = tmp / "sys-auto"
         sys_root.mkdir()
         write_proc(proc_root, [hhd, at])
+
+        # -- phase 1: hhd device present, physical keyboard free ------------
+        # The only device the daemon may take is the free AT keyboard. hhd's
+        # own volume keyboard must be refused (that grab caused the outage).
         status = tmp / "status-auto.json"
         daemon = Daemon([
             "run", "--proc-root", str(proc_root), "--sys-root", str(sys_root),
@@ -756,151 +779,195 @@ def group_b(tmp: pathlib.Path, daemon_module):
             "--hold", "0.05", "--gap", "0.060",
         ], tmp / "daemon-auto.log")
         daemons.append(daemon)
-        daemon.wait_for(rf"grabbed {re.escape(hhd.path)} \(", 12.0,
-                        "a grab of the HHD-shaped device")
         line = daemon.wait_for(
-            r"grabbed .*role=hhd-virtual.*\n", 3.0,
-            "role=hhd-virtual").group(0)
-        if f"id={hhd.vendor:04x}:{hhd.product:04x}" not in line:
-            raise Failure(f"HHD-shaped device was not the one grabbed: {line!r}")
-        scenario("HHD-shaped device preferred",
-                 f"grabbed {hhd.path} role=hhd-virtual (our sandbox id "
-                 f"{hhd.vendor:04x}:{hhd.product:04x})")
-
-        # The preferred device must actually carry events downstream.
-        old_shim = find_node(daemon_module.SHIM_NAME, daemon_module.SHIM_PHYS)
-        shim = find_shim(daemon_module)
-        shim.drain()
-        tap(hhd, UP)
-        expect("HHD-shaped path forwards taps", shim.drain(),
-               [(UP, 1), (UP, 0)])
-
-        data = json.loads(status.read_text(encoding="utf-8"))
-        check("status: hhd-virtual topology",
-              data["topology"] == "hhd-virtual"
-              and data["selected"]["path"] == hhd.path,
-              f"topology={data['topology']} selected={data['selected']['path']}")
-
-        # Remove the preferred device -> daemon must drop it and fall back.
-        shim.close()
-        shim = None
-        hhd.close()
-        write_proc(proc_root, [at])
-        daemon.wait_for(rf"device lost: {re.escape(hhd.path)}", 8.0,
-                        "the device-lost line")
-        fallback_line = daemon.wait_for(
             rf"grabbed {re.escape(at.path)} \([^\n]*", 12.0,
             "a grab of the AT-shaped fallback with role=at-kbd").group(0)
-        if f"id={at.vendor:04x}:{at.product:04x}" not in fallback_line:
-            raise Failure(
-                "the fallback grab is not our AT stand-in: "
-                f"{fallback_line!r}")
-        scenario("fallback after preferred device removal",
-                 f"dropped {hhd.path}, grabbed {at.path} role=at-kbd")
+        check("physical device chosen when it is free", "role=at-kbd" in line,
+              line)
+        scenario("hhd device present, physical free",
+                 f"grabbed {at.path} role=at-kbd; hhd's device was refused")
+        check("hhd's own device is not grabbed by default",
+              hhd.path not in daemon.grabbed_paths(),
+              f"grab lines: {daemon.grabbed_paths()}")
 
-        # The fallback proxies the whole keyboard and recreates the shim with
-        # EV_REP; the recreated shim must still deliver one pair per tap.
-        deadline = time.monotonic() + 8.0
-        while time.monotonic() < deadline:
-            now = find_node(daemon_module.SHIM_NAME, daemon_module.SHIM_PHYS)
-            if now is not None and now != old_shim:
-                break
-            time.sleep(0.05)
+        # The physical path must still carry events downstream.
         shim = find_shim(daemon_module)
         shim.drain()
         tap(at, UP)
-        expect("AT-shaped fallback forwards taps", shim.drain(),
+        expect("physical path forwards taps", shim.drain(),
                [(UP, 1), (UP, 0)])
-        daemon.wait_for(r"created 'OXP3 volume tap shim'.*EV_REP", 5.0,
-                        "an EV_REP shim recreation")
-        scenario("fallback shim advertises EV_REP",
-                 "physical-keyboard proxy keeps non-volume key repeat")
 
+        data = wait_status(status)
+        check("status: physical topology, hhd protected",
+              data["topology"] == "physical"
+              and data["selected"]["path"] == at.path
+              and data["hhd_protected"] is True
+              and data["allow_hhd_grab"] is False
+              and data["observe"] is False,
+              f"topology={data['topology']} hhd_protected="
+              f"{data['hhd_protected']} observe={data['observe']}")
         rc = daemon.stop()
         check("auto-topology daemon exits cleanly", rc == 0, f"exit {rc}")
-        data = json.loads(status.read_text(encoding="utf-8"))
-        check("status: physical topology after fallback",
-              data["topology"] == "physical", f"topology={data['topology']}")
-        allowed = {hhd.path, at.path}
-        stray = [path for path in daemon.grabbed_paths() if path not in allowed]
-        check("auto topology never grabbed a real device", not stray,
-              f"every grab line points at a sandbox device ({sorted(allowed)})")
+        shim.close()
+        shim = None
 
-        # -- DEGRADED when the test itself holds the only grab -------------
-        busy = VirtualDevice(HHD_NAME, HHD_PHYS, HHD_PRODUCT, rep=False)
+        # -- phase 2: the outage topology, hhd holds the AT keyboard --------
+        # Simulate a running hhd: it owns event4, so the only rocker path is
+        # hhd's virtual keyboard. Default must observe, never open or grab it.
+        holder = at.grab()
+        add_fake_holder(proc_root, at, holder.fd)
+        observe_status = tmp / "status-observe.json"
+        observe = Daemon([
+            "run", "--once",
+            "--proc-root", str(proc_root), "--sys-root", str(sys_root),
+            "--status-file", str(observe_status),
+        ], tmp / "daemon-observe.log")
+        daemons.append(observe)
         try:
-            write_proc(proc_root, [busy])
-            holder = busy.grab()
-            add_fake_holder(proc_root, busy, holder.fd)
-            status_busy = tmp / "status-busy.json"
-            busy_daemon = Daemon([
-                "run", "--once",
-                "--proc-root", str(proc_root), "--sys-root", str(sys_root),
-                "--status-file", str(status_busy),
-            ], tmp / "daemon-busy.log")
-            daemons.append(busy_daemon)
-            try:
-                rc = busy_daemon.proc.wait(timeout=15.0)
-            except subprocess.TimeoutExpired:
-                busy_daemon.proc.kill()
-                busy_daemon.proc.wait()
-                rc = busy_daemon.proc.returncode
-            busy_daemon.log.close()
-            log = busy_daemon.text()
-            check("grab refused exits with the documented code", rc == 3,
-                  f"--once exit {rc} (expected 3)")
-            check("grab refused logs DEGRADED bus", 
-                  "DEGRADED: every candidate is held or refused (EBUSY)" in log,
-                  "the documented DEGRADED busy line is present")
-            data = json.loads(status_busy.read_text(encoding="utf-8"))
-            check("grab refused status is degraded-busy exit 3",
-                  data["state"] == "degraded-busy"
-                  and data["exit_code"] == 3 and data["selected"] is None,
-                  f"state={data['state']} exit_code={data['exit_code']}")
-            check("grab refused records the holder",
-                  bool(data["refused"])
-                  and data["refused"][0]["kind"] == "busy"
-                  and str(os.getpid()) in data["refused"][0]["detail"],
-                  f"refused={data['refused']}")
-            allowed = {busy.path}
-            stray = [path for path in busy_daemon.grabbed_paths()
-                     if path not in allowed]
-            check("refused run never grabbed a real device", not stray,
-                  "no grab succeeded during the refused run")
+            rc = observe.proc.wait(timeout=15.0)
+        except subprocess.TimeoutExpired:
+            observe.proc.kill()
+            observe.proc.wait()
+            rc = observe.proc.returncode
+        log = observe.text()
+        check("hhd-protected run exits with the documented code 4", rc == 4,
+              f"--once exit {rc} (expected 4)")
+        check("hhd-protected run logs a clear OBSERVE line",
+              "OBSERVE: hhd owns the volume path" in log,
+              "the documented OBSERVE line is present")
+        check("hhd-protected run grabs nothing", observe.grabbed_paths() == [],
+              f"grab lines: {observe.grabbed_paths()}")
+        data = wait_status(observe_status)
+        check("status: degraded-hhd-protected exit 4",
+              data["state"] == "degraded-hhd-protected"
+              and data["exit_code"] == 4
+              and data["selected"] is None
+              and data["observe"] is True
+              and data["hhd_protected"] is True,
+              f"state={data['state']} exit_code={data['exit_code']} "
+              f"observe={data.get('observe')}")
+        check("status: reason names the plugin path",
+              "hhd plugin" in (data.get("reason") or "")
+              and "--allow-hhd-grab" in (data.get("reason") or ""),
+              data.get("reason"))
+        scenario("outage topology (hhd holds the AT keyboard)",
+                 "observe mode, exit 4, nothing opened or grabbed")
 
-            # The daemon keeps retrying the degraded state; it must log the
-            # transition once, not one line per rescan.
-            live = Daemon([
-                "run", "--proc-root", str(proc_root),
-                "--sys-root", str(sys_root), "--rescan", "0.25",
-                "--status-file", str(tmp / "status-held-live.json"),
-            ], tmp / "daemon-held-live.log")
-            daemons.append(live)
-            live.wait_for(
-                r"DEGRADED: every candidate is held or refused \(EBUSY\)",
-                8.0, "the DEGRADED busy line from the retrying daemon")
-            time.sleep(1.1)               # several rescans
-            count = live.text().count("DEGRADED:")
-            check("degraded state is logged once, not per rescan", count == 1,
-                  f"{count} DEGRADED line(s) across several rescans")
-            rc_live = live.stop()
-            check("retrying degraded daemon stops cleanly", rc_live == 0,
-                  f"exit {rc_live}")
-        finally:
-            if holder is not None:
+        # The daemon keeps retrying the observe state but logs it once, not
+        # once per rescan.
+        live = Daemon([
+            "run", "--proc-root", str(proc_root),
+            "--sys-root", str(sys_root), "--rescan", "0.25",
+            "--status-file", str(tmp / "status-observe-live.json"),
+        ], tmp / "daemon-observe-live.log")
+        daemons.append(live)
+        live.wait_for(r"OBSERVE: hhd owns the volume path", 8.0,
+                      "the OBSERVE line from the retrying daemon")
+        # Nothing of ours may hold the device hhd needs: inspect the live
+        # daemon's own fds (same user as this test, so /proc is readable).
+        held_fds = []
+        try:
+            for entry in pathlib.Path(f"/proc/{live.proc.pid}/fd").iterdir():
                 try:
-                    holder.ungrab()
+                    target = os.readlink(entry)
                 except OSError:
-                    pass
-                holder.close()
-                holder = None
-            busy.close()
+                    continue
+                if target == hhd.path or target.endswith(
+                        os.path.basename(hhd.path) + " (deleted)"):
+                    held_fds.append(target)
+        except OSError as exc:
+            raise Failure(f"cannot inspect the observe daemon's fds: {exc}")
+        check("observe daemon holds no fd on hhd's device",
+              not held_fds,
+              f"fds on hhd's device: {held_fds}")
+        time.sleep(1.1)               # several rescans
+        count = live.text().count("OBSERVE:")
+        check("observe state is logged once, not per rescan", count == 1,
+              f"{count} OBSERVE line(s) across several rescans")
+        rc_live = live.stop()
+        check("retrying observe daemon stops cleanly", rc_live == 0,
+              f"exit {rc_live}")
+
+        # -- phase 3: --allow-hhd-grab is a deliberate last resort ----------
+        allowed_status = tmp / "status-allowed.json"
+        allowed = Daemon([
+            "run", "--proc-root", str(proc_root), "--sys-root", str(sys_root),
+            "--allow-hhd-grab", "--status-file", str(allowed_status),
+            "--rescan", "0.25",
+        ], tmp / "daemon-allowed.log")
+        daemons.append(allowed)
+        allowed.wait_for(rf"grabbed {re.escape(hhd.path)} \(", 12.0,
+                         "a grab of the hhd device with --allow-hhd-grab")
+        grabbed_hhd = allowed.grabbed_paths()
+        check("--allow-hhd-grab makes hhd's device the last resort",
+              grabbed_hhd == [hhd.path],
+              f"grab lines: {grabbed_hhd} (the AT keyboard is held by the test)")
+        data = wait_status(allowed_status)
+        check("status: explicit hhd last-resort topology",
+              data["topology"] == "hhd-virtual"
+              and data["selected"]["decision"] == "last-resort"
+              and data["allow_hhd_grab"] is True,
+              f"topology={data['topology']} decision="
+              f"{(data.get('selected') or {}).get('decision')}")
+        scenario("explicit --allow-hhd-grab",
+                 f"grabbed {hhd.path} only because the flag was given")
+        allowed.stop()
+
+        # -- phase 4: a free-device EBUSY conflict is still exit 3 ----------
+        # No hhd device here, so the protection rule cannot apply: a held AT
+        # keyboard is the documented degraded-busy state.
+        write_proc(proc_root, [at])
+        busy_status = tmp / "status-busy.json"
+        busy = Daemon([
+            "run", "--once",
+            "--proc-root", str(proc_root), "--sys-root", str(sys_root),
+            "--status-file", str(busy_status),
+        ], tmp / "daemon-busy.log")
+        daemons.append(busy)
+        try:
+            rc = busy.proc.wait(timeout=15.0)
+        except subprocess.TimeoutExpired:
+            busy.proc.kill()
+            busy.proc.wait()
+            rc = busy.proc.returncode
+        log = busy.text()
+        check("grab refused exits with the documented code 3", rc == 3,
+              f"--once exit {rc} (expected 3)")
+        check("grab refused logs DEGRADED busy",
+              "DEGRADED: every candidate is held or refused (EBUSY)" in log,
+              "the documented DEGRADED busy line is present")
+        data = wait_status(busy_status)
+        check("grab refused status is degraded-busy exit 3",
+              data["state"] == "degraded-busy"
+              and data["exit_code"] == 3 and data["selected"] is None,
+              f"state={data['state']} exit_code={data['exit_code']}")
+        check("grab refused records the holder",
+              bool(data["refused"])
+              and data["refused"][0]["kind"] == "busy"
+              and str(os.getpid()) in data["refused"][0]["detail"],
+              f"refused={data['refused']}")
+        scenario("held physical device without hhd",
+                 "degraded-busy exit 3, holder recorded")
+
+        # Nothing may ever have grabbed hhd's device except the explicit flag.
+        every = []
+        for item in daemons:
+            every.extend(item.grabbed_paths())
+        strays = sorted({path for path in every
+                         if path not in (at.path, hhd.path)})
+        check("auto topology never grabbed a real device", not strays,
+              f"every grab line points at a sandbox device ({strays})")
+        check("hhd's device only appears in the explicit-flag run",
+              every.count(hhd.path) == 1 and grabbed_hhd == [hhd.path],
+              f"grabs: {sorted(set(every))}")
     finally:
         if holder is not None:
             try:
-                holder.close()
+                holder.ungrab()
             except OSError:
                 pass
+            holder.close()
+            holder = None
         if shim is not None:
             shim.close()
         for daemon in daemons:

@@ -66,9 +66,13 @@ persistent change as a side effect of a "just look" run.
 **real** `tools/oxp3-voltap` process against them, injects a tap, three quick
 taps, a 3 s hold with `value==2` auto-repeat, a bounce, a duplicate storm, an
 orphan release and a late release, and reads the result from the daemon's own
-uinput shim. It also exercises the HHD-preferred / AT-fallback topology decision
-through a synthetic `--proc-root`/`--sys-root`, and the `degraded-busy`/exit-3
-path while the test itself holds `EVIOCGRAB`.
+uinput shim. The automatic-topology phase (synthetic
+`--proc-root`/`--sys-root`) proves the corrected protection rules: the free
+AT-shaped device is chosen while the hhd-shaped stand-in is refused; with the
+AT-shaped device held (the outage topology) the daemon logs `OBSERVE:` and exits
+4 **without opening an fd on hhd's device**; `--allow-hhd-grab` makes it a
+last-resort but only then; a held device without an hhd stand-in still produces
+`degraded-busy`/exit 3.
 
 ```sh
 # direct; SKIPs with the exact enable command when /dev/uinput or the created
@@ -156,10 +160,10 @@ scheduler or adaptive TDP, and a plain game launch leaves no igdext trace.
 
 ## 3. Check inventory — what each check proves
 
-Default mode runs **72 checks** (measured 2026-11-09, including `preflight.verdict`).
-`--full` adds four (**76**); `--with-changes` adds two more (**78**). The opt-in rows
+Default mode runs **76 checks** (measured 2026-11-09, including `preflight.verdict`).
+`--full` adds four (**80**); `--with-changes` adds two more (**82**). The opt-in rows
 (`vol.hold`, `led.write`, `life.sim`, `aud.activate` and `fan.savemode`) run only with
-`--full` / `--with-changes`; the harness declares **79** ids in total, which `--selftest`
+`--full` / `--with-changes`; the harness declares **82** ids in total, which `--selftest`
 asserts. The ids are stable (they are the `state` keys in `--json`).
 
 ### preflight (1)
@@ -172,9 +176,9 @@ asserts. The ids are stable (they are the `state` keys in `--json`).
 
 | id | proves | how |
 |---|---|---|
-| `vol.unit` | `oxp3-voltap` is running | `systemctl show` LoadState/ActiveState; `SKIP` when not installed (e.g. the hhd-patch path) |
-| `vol.grab` | the daemon holds the rocker device (EVIOCGRAB) | this boot's journal contains `grabbed /dev/input/eventN` (the "for probing" line does not count) |
-| `vol.topology` | which device the daemon would grab and why (hhd virtual first, physical fallback only when free) | `oxp3-voltap check --kv`: role/selection/holder fields from `/proc/bus/input/devices` + `/sys/class/input`; `PASS` for a hhd-virtual or free at-kbd choice, `FAIL` on a conflict prediction |
+| `vol.unit` | `oxp3-voltap` is running, or installed-but-disabled on purpose (the plugin is the supported path) | `systemctl show` LoadState/ActiveState; `SKIP` when not installed or explicitly disabled, `FAIL` when enabled but failed |
+| `vol.grab` | the daemon grabbed a **non-hhd** device, or is observing because hhd owns the path | this boot's journal contains `grabbed /dev/input/eventN` (not "for probing") or `OBSERVE: hhd owns the volume path`; `FAIL` if the grabbed path is hhd's virtual volume keyboard |
+| `vol.topology` | which device the daemon would grab and why | `oxp3-voltap check --kv`: role/selection/holder/`HHD_PROTECTED`/`OBSERVE` fields; `PASS` for a free at-kbd choice or the protected/observe prediction (`PREDICTED_EXIT=4`), `UNKNOWN` when hhd runs and the holder scan needs root, `FAIL` for a predicted conflict or any hhd-virtual selection |
 | `vol.holder` | the physical AT keyboard is held only by hhd (or nobody) | `/proc/*/fdinfo` `grab: 1` + `fd` symlink; `SKIP` without root, `UNKNOWN` for a non-hhd holder |
 | `vol.hwdb` | the kernel releases the rocker key at press time, so a hold cannot ramp | `/etc/udev/hwdb.d/84-oxp3-volume-keys*.hwdb` exists, has a `KEYBOARD_KEY_*=<key>` force-release entry, and `/etc/udev/hwdb.bin` is newer than it (compiled) |
 | `vol.hold` (root) | a hold yields exactly one step, not a ramp | `tools/oxp3-voltap/oxp3-voltap selftest`: creates the uinput device and emits taps through the real state machine |
@@ -184,6 +188,19 @@ The state machine, discovery and grab FSM are unit-tested by
 end-to-end evidence that the real daemon process suppresses a hold to one step
 and emits exactly one pair per tap (see
 [hw/volume-buttons.md](hw/volume-buttons.md#integration-test-the-daemon-against-a-virtual-device-proven-end-to-end)).
+
+### hhd protection (3) — "never grab what HHD owns"
+
+The outage of 2026-11-09 (a second `EVIOCGRAB` on hhd's own volume keyboard made
+hhd drop the emulated Steam controller) is now an explicit invariant. The plugin
+is the supported path; these checks prove no tool of ours competes with hhd for
+the device. Contract: [DAEMONS.md §0](DAEMONS.md).
+
+| id | proves | how |
+|---|---|---|
+| `hhd.unit` | hhd is installed and active (or genuinely not installed) | `systemctl show hhd.service`; `SKIP` when not installed, `FAIL` when installed but not active |
+| `hhd.busy` | this boot's hhd journal has no **unrecovered** `Device or resource busy` / `Assuming controllers disconnected` episode | tail of `journalctl -u hhd -b`; `PASS` when there is no episode, or when a later `Initialization Complete!`/`Loaded the following plugins` proves recovery; `FAIL` otherwise |
+| `hhd.grab` | no process of ours holds an fd or `EVIOCGRAB` on an `hhd-*` event device | scans `/proc/<pid>/fd` of running `oxp3-voltap run` processes and their `fdinfo` (`grab: 1`), plus this boot's `oxp3-voltap` journal; `SKIP` when the root daemon's fds are unreadable |
 
 ### home button / LEDs / RGB (9 + `led.write` in `--full`)
 
@@ -341,7 +358,8 @@ manifest and backup images. A `FAIL` is actionable (`adopt`), not a hardware def
 | fix (INSTALL-HW.md §) | checks |
 |---|---|
 | (preflight, every component) | `preflight.verdict` |
-| 1 volume rocker | `vol.unit`, `vol.grab`, `vol.topology`, `vol.holder`, `vol.hwdb`, (`vol.hold`) |
+| 1 volume rocker (plugin, supported) | `hhd.unit`, `hhd.busy`, `hhd.grab`, `vol.hwdb` |
+| 1 volume rocker (legacy daemon) | `vol.unit`, `vol.grab`, `vol.topology`, `vol.holder`, (`vol.hold`) |
 | 2 LEDs / home button | `hid.rule`, `led.status`, `led.zones`, `hid.access`, `homebtn.unit`, `homebtn.mapping`, `homebtn.press`, (`led.write`), (`hid-integration` in repo-test) |
 | 2 RGB keeper | `rgbd.unit`, `rgbd.check` |
 | daemon lifecycle (DAEMONS.md) | `life.fd`, `life.reconnect`, (`life.sim`) |
@@ -500,18 +518,40 @@ reports 72 checks in the default mode and adds the opt-in rows with `--full`/
 `--with-changes`; the three lifecycle rows are `SKIP` without the daemons (`life.sim` is gated
 until `--full`).
 
+**Update (2026-11-09, hhd-protection change, uncommitted tree).** After adding the
+`hhd.*` checks and the plugin, the default run on this host reports
+**76 checks: 57 pass, 8 fail, 9 skip, 2 unknown, exit 1**:
+
+* `hhd.unit`, `hhd.busy`, `hhd.grab` **PASS**: hhd is active; the outage's
+  `EBUSY`/`Assuming controllers disconnected` lines exist earlier in this boot
+  but hhd completed a later initialization, so the check reports "recovered"
+  (it would FAIL without that later init); no process of ours holds an fd or
+  grab on `event23` (`/proc/<pid>/fd` + `fdinfo` + this boot's daemon journal).
+* `vol.unit` **SKIP** ("installed but disabled on purpose" - the owner ran
+  `systemctl disable --now oxp3-voltap` during the incident); `vol.grab`
+  **SKIP** (daemon not running); `vol.holder` **SKIP** (root needed);
+  `vol.topology` **UNKNOWN** (hhd runs, the holder scan for `event4` needs
+  root; it explicitly refuses `event23` and prefers the plugin). `vol.hwdb`
+  **PASS**.
+* The 8 failures are unchanged/pre-existing and unrelated: three Bluetooth
+  rows (boot-time firmware gap), `hid.access`, `homebtn.press`,
+  `life.fd`/`life.reconnect` (the home-button user unit never opened hidraw
+  this boot) and `sleep.trigger` (trigger policy not installed here).
+* `tools/oxp3-verify.sh --selftest`: **188 checks passed, 0 failed**.
+
 ## 8. Offline validation performed (no root, no host change)
 
 * `bash -n tools/oxp3-verify.sh` and `sh -n tests/verify/run.sh`: clean.
-* `tools/oxp3-verify.sh --selftest`: **172 assertions / 0 failures** over the parsers
+* `tools/oxp3-verify.sh --selftest`: **188 assertions / 0 failures** over the parsers
   (`display-mode` ANSI output, `powerctl` domains/fan/profile, `status` indicators,
   `suspend_stats`, `bt --check`, `led status`, `rgbd --check`, `pactl` sinks,
   the two journals, `sleep-audit`), the ten deferred-risk probes -- HID candidate map
   and verdicts, dry-run frame counts, adaptive decision/AC verdict, per-domain limit
   ordering, curve summary, battery-limit dry run, install-common helper output, IIO
-  primary/fallback map, rgbd timing -- the exit-code mapping, and a fixed inventory
-  check that the 79 declared check ids are exactly the documented set (no typos, no
-  drops). New fixtures live under `tests/verify/fixtures/` (`hidraw/`, `iio/`,
+  primary/fallback map, rgbd timing, the new `hhd` journal parser and the
+  protected/allowed `vol-topology` fixtures -- the exit-code mapping, and a fixed
+  inventory check that the 82 declared check ids are exactly the documented set (no
+  typos, no drops). New fixtures live under `tests/verify/fixtures/` (`hidraw/`, `iio/`,
   `adaptive-*.json`, `hid-verdict-*.txt`, `led-dry-*.txt`, `battery-limit-dry.json`,
   `powerctl-profile-*.json`, `curve-dup.json`, `rgbd-check-nojournal.txt`,
   `inst-paths*.txt`, `logind-cat-config-{default,oxp3}.txt`, `inhibitors-{plasma,sleep-block}.txt`,
@@ -533,13 +573,39 @@ until `--full`).
 * `shellcheck` is not installed on this host, so the script is covered by `bash -n`
   and the runtime paths above only (same limitation as the rest of the repo, see
   [QA.md](QA.md) row 17).
+* Unit suite: **861 tests, 0 failures, 1 skip** (`python3 -m unittest discover -s
+  tests/unit -q`), including the 29 new `tests/unit/test_hhd_voltap_plugin.py` tests
+  (tap state machine, defensive hook against fake `OxpAtKbd` variants, wrong API
+  shape -> no-op, filter exception -> pass-through + HHD's taps restored, producer
+  errors still propagate, entry-point contract, `install.sh --site` install/status/
+  uninstall round trip) and the updated `tests/unit/test_voltap.py` (58 tests:
+  hhd refused by default, `--allow-hhd-grab` last resort, observe/exit 4, explicit
+  hhd refusal, kv/json fields, `GrabFSM.protected`).
+* Volume integration harness (`tests/integration/volume/run.sh`, this host has the
+  `/dev/uinput` ACL): **46 assertions passed, 0 failed**, including the outage
+  topology (observe/exit 4, no fd on the hhd stand-in), the explicit
+  `--allow-hhd-grab` last resort, and `degraded-busy`/exit 3 without an hhd device.
+* Plugin package: `tools/hhd-oxp3-voltap/install.sh --site /tmp/... install`
+  resolves the `hhd.plugins` entry point and `autodetect([])` returns `oxp3_voltap`;
+  `status` reports it; `uninstall` removes exactly the package + dist-info and
+  leaves an unrelated sentinel file alone. `install.sh check` against this hhd build
+  reports `available: true` for `hhd.device.oxp.base.OxpAtKbd` (`has_volume_taps:
+  true`).
+* `tools/oxp3-hw-install.sh --dry-run --volume` / `--volume-daemon` /
+  `--uninstall --volume` print the documented commands and the hhd-restart warning
+  without writing; `--root DIR --volume` installs the hwdb under the prefix and
+  skips the `/usr/local` plugin as designed (`--dry-run` writes nothing).
 
 ## 9. Open points
 
-* **The hhd volume-rocker patch is not covered.** If you use the hhd patch instead of
-  `oxp3-voltap` (the recommended path in INSTALL-HW §2.1), the three `vol.*` checks
-  `SKIP`; the functional rocker test stays manual. Adding a check would need hhd's
-  internals or a real key press, neither of which is read-only here.
+* **The plugin's real-hardware press is still unmeasured.** The plugin is the
+  supported path, its entry point and defensive hook are proven offline, and the
+  whole volume pipeline is proven against virtual devices, but "one physical press =
+  one mixer step with hhd 4.1.12" needs the owner: install, `sudo systemctl restart
+  hhd`, press/hold the rocker, and check that no `Device or resource busy` appears.
+  The three `hhd.*` checks then prove the invariant on every later run; they cannot
+  prove the tap feel. A read-only check of the plugin's per-press behaviour would
+  need hhd to expose its producer events, which it does not.
 * **Root-only functional paths were not executed in this round** (no `sudo` policy):
   `vol.hold` and `sleep.suspend`. They are exercised as `SKIP` with the exact command;
   `--full` with `sudo` is the device-side acceptance step.

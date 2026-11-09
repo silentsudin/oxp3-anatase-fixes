@@ -35,20 +35,35 @@ Rollback:
 sudo tools/oxp3-voltap/install.sh uninstall
 ```
 
-## Topology
+## Topology (read this before using the daemon)
 
-hhd grabs the physical AT keyboard (`EVIOCGRAB`, one grab per device) and
+This daemon is the **legacy** path. With hhd installed, the supported volume fix
+is the HHD plugin [`tools/hhd-oxp3-voltap`](../hhd-oxp3-voltap/README.md): it
+normalises taps inside hhd and never opens or grabs a device.
+
+Why: hhd grabs the physical AT keyboard (`EVIOCGRAB`, one grab per device) and
 republishes the translated volume keys on its own uinput device
-`Handheld Daemon Volume Keyboard` (`phys-hhd-vbtn`). A second grab on the AT
-keyboard fails with `EBUSY`, so the daemon:
+`Handheld Daemon Volume Keyboard` (`phys-hhd-vbtn`). hhd's OXP keyboard producer
+(`hhd/device/oxp/base.py`, `VID:PID 0001:0001`, no name filter) matches that
+uinput device too, so a second `EVIOCGRAB` on it makes hhd's own `grab()` fail
+with `OSError: [Errno 16] Device or resource busy`; hhd then logs "Assuming
+controllers disconnected" and the emulated Steam controller (`28DE:12FF`)
+disappears for a few seconds. That happened on this unit. Therefore:
 
-1. **prefers the hhd virtual volume keyboard** when it exists;
-2. falls back to the **physical AT keyboard** only when no hhd virtual device is
-   selectable and nothing else holds it - then it proxies the whole keyboard
-   (non-volume keys included, with `EV_REP` repeats) through its own shim;
-3. if every grab is refused, logs one `DEGRADED:` line, writes the JSON status
-   and keeps retrying. `--once` and `--degrade-exit-after N` expose the
-   documented exit code (0 grabbed, 2 no device, 3 every grab refused).
+1. **never grab an hhd-owned device by default** - the hhd virtual volume
+   keyboard is refused (`decision=refused`); `--allow-hhd-grab`
+   (`VOLTAP_ALLOW_HHD_GRAB=1`) is a deliberate, dangerous last resort;
+2. grab the **free physical AT keyboard** when hhd is not holding it (hhd
+   stopped/disabled) - then the whole keyboard is proxied (non-volume keys
+   included, with `EV_REP` repeats) through our shim;
+3. when hhd owns the only rocker path, stay in **observe mode**: one
+   `OBSERVE:` journal line, JSON status `state=degraded-hhd-protected`, exit
+   code **4**, nothing opened and nothing grabbed, retry every
+   `VOLTAP_RESCAN_S`;
+4. if a grab is refused, log one `DEGRADED:` line, write the JSON status and
+   keep retrying. `--once` and `--degrade-exit-after N` expose the documented
+   exit code (0 grabbed, 2 no device, 3 every grab refused, 4 hhd-protected
+   observe).
 
 ## What it does
 
@@ -73,7 +88,8 @@ keyboard fails with `EBUSY`, so the daemon:
 
 Tuning lives in `/etc/oxp3-voltap.conf` (`VOLTAP_HOLD_MS`, `VOLTAP_GAP_MS`,
 `VOLTAP_MAX_HOLD_MS`, `VOLTAP_ORPHAN_TAP`, `VOLTAP_PREFER`,
-`VOLTAP_ALLOW_PHYSICAL`, `VOLTAP_NAME/PHYS/DEVICES`, `VOLTAP_STATS`,
+`VOLTAP_ALLOW_PHYSICAL`, `VOLTAP_ALLOW_HHD_GRAB`, `VOLTAP_NAME/PHYS/DEVICES`,
+`VOLTAP_STATS`,
 `VOLTAP_RESCAN_S`, `VOLTAP_STATUS_FILE`, `VOLTAP_DEGRADE_EXIT_S`).
 
 ## Notes
@@ -83,4 +99,6 @@ Tuning lives in `/etc/oxp3-voltap.conf` (`VOLTAP_HOLD_MS`, `VOLTAP_GAP_MS`,
 * The physical-keyboard fallback is a full keyboard proxy; holding a
   non-volume key repeats through the shim because `EV_REP` is advertised there.
   Without hhd, that is the only way to keep the built-in keyboard usable.
+* With hhd running this daemon is normally in observe mode and does nothing:
+  that is intentional. Install the plugin instead.
 * Licence: GPL-2.0-or-later. No vendor code or binaries are included.

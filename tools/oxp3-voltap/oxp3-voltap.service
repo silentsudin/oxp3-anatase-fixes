@@ -2,8 +2,12 @@
 Description=OneXPLAYER 3 volume rocker tap normaliser (oxp3-voltap)
 Documentation=file:/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/DAEMONS.md
 Documentation=file:/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/hw/volume-buttons.md
-# hhd owns the AT keyboard and publishes the volume keys on its own uinput
-# device; we sit on top of that device, so start after hhd when both run.
+# hhd owns the volume path while it runs.  This daemon must never grab hhd's
+# own virtual device (a second EVIOCGRAB there makes hhd drop the controller);
+# by default it only grabs a FREE physical AT keyboard and otherwise stays in
+# observable degraded/observe mode (exit code 4, status
+# state=degraded-hhd-protected).  The supported path with hhd is the plugin
+# tools/hhd-oxp3-voltap.  After= keeps ordering sane when both are installed.
 After=hhd.service dev-uinput.device
 # No ConditionPathExists=/dev/uinput: a condition failure leaves the unit
 # "inactive (dead)" with no restart, and uinput can appear after boot. The

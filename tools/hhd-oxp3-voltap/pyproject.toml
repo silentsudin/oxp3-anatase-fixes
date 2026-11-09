@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oxp3-hhd-voltap"
+version = "0.1.0"
+description = "OneXPlayer 3 volume rocker tap normalisation as a Handheld Daemon (HHD) plugin"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-2.0-or-later" }
+authors = [
+  { name = "silentsudin", email = "25103587+silentsudin@users.noreply.github.com" },
+]
+keywords = ["onexplayer", "hhd", "handheld-daemon", "volume", "evdev"]
+classifiers = [
+  "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+]
+
+[project.entry-points."hhd.plugins"]
+oxp3_voltap = "oxp3_hhd_voltap:autodetect"
+
+[tool.setuptools]
+packages = ["oxp3_hhd_voltap"]

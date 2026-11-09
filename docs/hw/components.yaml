@@ -289,26 +289,34 @@ components:
     state: awaiting-install
     group: hardware
     headline: false
-    summary: "A hold on the rocker ramps instead of stepping: our daemon prefers hhd's virtual volume keyboard, falls back to the free physical AT keyboard, degrades observably on EBUSY, and keeps a force-release hwdb as defence in depth."
+    summary: "A hold on the rocker ramps instead of stepping. The supported fix is an hhd plugin that normalises taps inside hhd's producer path and never opens or grabs a device; the legacy daemon only takes a free physical AT keyboard and otherwise observes (exit 4), and a force-release hwdb stays as defence in depth."
     implementation:
+      - tools/hhd-oxp3-voltap
       - tools/oxp3-voltap
       - files/84-oxp3-volume-keys.hwdb
       - tools/lib/install-common.sh
     doc: docs/hw/volume-buttons.md
     root_required: "yes"
     install:
-      summary: "the standalone daemon (orchestrator --volume) or the hhd patch applied by oxp3-fixes.sh"
+      summary: "the hhd plugin (orchestrator --volume, default) plus the force-release hwdb; the legacy oxp3-voltap daemon only with --volume-daemon"
       entrypoint: "sudo tools/oxp3-hw-install.sh --volume"
       steps:
-        - "alternative: sudo tools/oxp3-voltap/install.sh install --hwdb"
-        - "never combine the two: both normalise the same key"
+        - "then: sudo systemctl restart hhd (imports the plugin; drops 28DE:12FF for a few seconds)"
+        - "legacy alternative: sudo tools/oxp3-hw-install.sh --volume-daemon"
+        - "the plugin replaces the hhd tap policy per producer; the daemon only observes while hhd runs"
     verify:
+      - id: hhd.unit
+        expect: "hhd is installed and active"
+      - id: hhd.busy
+        expect: "no unrecovered EBUSY/disconnect episode in this boot's hhd journal"
+      - id: hhd.grab
+        expect: "no process of ours holds an fd or EVIOCGRAB on an hhd event device"
       - id: vol.unit
-        expect: "oxp3-voltap is active (running)"
+        expect: "oxp3-voltap active, or installed-but-disabled on purpose (plugin path)"
       - id: vol.grab
-        expect: "this boot's journal has grabbed /dev/input/eventN"
+        expect: "a non-hhd device is grabbed, or the documented OBSERVE line (hhd owns the path)"
       - id: vol.topology
-        expect: "the daemon would grab the hhd virtual volume keyboard, or a free physical fallback, and says why"
+        expect: "the free physical AT keyboard, or protected/observe (exit 4); never hhd's device"
       - id: vol.holder
         expect: "the physical AT keyboard is held only by hhd (or by nobody); SKIP without root"
       - id: vol.hwdb
@@ -318,12 +326,12 @@ components:
         root: true
     dependencies: []
     caveats:
-      - "do not combine with the hhd volume patch from oxp3-fixes.sh install"
-      - "the standing alternative is the hhd patch, which is why the doc says pick one"
-      - "device discovery is by name/phys/capabilities plus /proc/*/fdinfo holders, never by eventN; exit 2 = no candidate, 3 = every grab refused"
+      - "never grab what hhd owns (docs/DAEMONS.md section 0); the plugin opens no device"
+      - "device discovery is by name/phys/capabilities plus /proc/*/fdinfo holders, never by eventN; exit 2 = no candidate, 3 = every grab refused, 4 = hhd-protected observe"
+      - "a plugin change needs `systemctl restart hhd`, which drops the emulated Steam controller for a few seconds"
     last_validated:
       date: 2026-11-09
-      evidence: "tools/oxp3-voltap selftest and capture evidence in docs/hw/volume-buttons.md; not installed on the QA host (docs/QA.md row 34)"
+      evidence: "plugin entry point + install/uninstall round trip and 29 offline plugin tests; daemon topology tests in tests/unit/test_voltap.py and tests/integration/volume/test_voltap_integration.py; hardware press still pending (docs/hw/volume-buttons.md, docs/VALIDATION.md)"
 
   - id: leds
     title: Home button and top LEDs

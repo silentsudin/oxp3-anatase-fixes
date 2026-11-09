@@ -62,9 +62,10 @@ command that reverses it; `restore` means `tools/oxp3-rollback.sh restore`.
 | 30 | shim inside Proton prefixes | `<prefix>/drive_c/windows/system32/driverstore/.../igdext64.dll` | `tools/oxp3-flatpak-xmx.sh remove` (it keeps `.stock` copies) |
 | 31 | Steam Flatpak overrides | `~/.local/share/flatpak/overrides/org.anatase.Steam` | remove by hand; XMX env is per-game now |
 | 32 | MOK signing key + enrolment | `$MOK_DIR` (outside the repo), firmware MokList | keep the key; removing an enrolled MOK needs `mokutil` + MokManager in the firmware |
-| 33 | runtime/EC state | RAPL PL1/PL2/PL4 (sysfs + MSR), `charge_control_end_threshold`, `charge_behaviour`, `platform_profile`, fan `pwm_enable`, wakeup sysfs, `udevadm trigger`, `systemd-hwdb update`, `systemctl restart` of hhd/bluetooth/rapl-power/logind/pipewire/wireplumber, default PipeWire sink | see §4; the uninstaller now undoes the power state first |
+| 34 | **hhd volume plugin (supported path)** | `/usr/local/lib/python3.15/site-packages/oxp3_hhd_voltap/` and `oxp3_hhd_voltap-0.1.0.dist-info/` | `sudo tools/hhd-oxp3-voltap/install.sh uninstall` removes exactly those two directories, then `sudo systemctl restart hhd` unloads the code |
+| 35 | runtime/EC state | RAPL PL1/PL2/PL4 (sysfs + MSR), `charge_control_end_threshold`, `charge_behaviour`, `platform_profile`, fan `pwm_enable`, wakeup sysfs, `udevadm trigger`, `systemd-hwdb update`, `systemctl restart` of hhd/bluetooth/rapl-power/logind/pipewire/wireplumber, default PipeWire sink | see §4; the uninstaller now undoes the power state first |
 
-That is **33 families / about 64 concrete paths**, plus the runtime state in row 33. 28 rows are
+That is **34 families / about 66 concrete paths**, plus the runtime state in row 35. 28 rows are
 files we create and remove ourselves; rows 10, 14, 23 and 24 are files we modify in place and
 are the reason the undo state exists.
 
@@ -145,6 +146,13 @@ unbacked. On this host it fails until `adopt` has been run once.
   at `sudo tools/oxp3-rollback.sh restore`, which has the exact pre-patch bytes.
 * **Heroic launcher and GamesConfig** - `restore` puts the adopted pre-edit content back; nothing
   in the installers owned these files before.
+* **hhd volume plugin** - `--uninstall --volume` (the component's default path) runs
+  `tools/hhd-oxp3-voltap/install.sh uninstall`, which removes **only** the package directory and
+  its dist-info; no unit, no udev rule, no config. It also removes the legacy `oxp3-voltap`
+  daemon/binary if it is still present, so no leftover process can grab an input device. The
+  running hhd keeps the already-imported module until it is restarted; `--uninstall --volume`
+  therefore prints the exact `sudo systemctl restart hhd` step instead of restarting it (a
+  restart drops the emulated Steam controller for a few seconds).
 * **`--uninstall --all`** prints the `tools/oxp3-rollback.sh restore` command so the in-place
   edits are not forgotten.
 

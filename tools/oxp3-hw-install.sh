@@ -12,7 +12,11 @@
 #   tools/oxp3-hw-install.sh --dry-run --all   print every command, change nothing
 #
 # Components and their implementation:
-#   volume     tools/oxp3-voltap/install.sh          (daemon + hwdb + unit)
+#   volume     tools/hhd-oxp3-voltap/install.sh      (hhd plugin + force-release hwdb;
+#              the default.  `--volume-daemon` selects the legacy oxp3-voltap
+#              daemon instead: tools/oxp3-voltap/install.sh, daemon + hwdb + unit.
+#              A plugin change only takes effect after `systemctl restart hhd`,
+#              which drops the emulated Steam controller for a few seconds.)
 #   leds       this script: udev rule + user unit     (tools/oxp3-homebtn.py, oxp3-led.py)
 #   sleep      this script: files/oxp3-sleep-* units, tools/oxp3-sleep-*, plus the
 #              trigger policy files/logind-oxp3.conf -> /etc/systemd/logind.conf.d/ and
@@ -62,6 +66,7 @@ BT_ARGS=(--persist=items)
 POWER_ARGS=()
 DECKY_ARTIFACT=""
 DECKY_RESTART=0
+VOLUME_MODE=plugin
 SELECTED=()
 TARGET_USER=""
 ORIG_ARGS=("$@")
@@ -82,6 +87,13 @@ Options:
   --all                     every component (volume sleep bluetooth power imu leds rgb audio decky)
   --volume --leds --sleep --bluetooth --power --rgb --imu --audio --decky
                             select components (repeatable; --all selects every one)
+  --volume-daemon           with --volume: install the LEGACY oxp3-voltap daemon
+                            (grabs an input device; with hhd running it only
+                            observes) instead of the hhd plugin. The plugin is
+                            the default and the supported path; a plugin change
+                            needs `systemctl restart hhd`, which drops the
+                            emulated Steam controller (28DE:12FF) for a few
+                            seconds.
   --decky-artifact PATH     install this plugin zip instead of building one; it must match the
                             sha256 recorded in tools/decky-oxp3-status/artifact.sha256
   --restart-plugin-loader   after --decky, restart plugin_loader.service (root; only when the
@@ -519,10 +531,55 @@ user_unit_state() { # unit -> enabled/active
 # ---------------------------------------------------------------------------------------------
 # components: install
 # ---------------------------------------------------------------------------------------------
+volume_hwdb_install() {
+    local hwdb=/etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb
+    install_file 0644 "$repo/tools/oxp3-voltap/84-oxp3-volume-keys-taps.hwdb" "$(p "$hwdb")"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "systemd-hwdb update (writes /etc/udev/hwdb.bin)"
+    elif (( DRY_RUN )); then
+        printf '  [dry-run] systemd-hwdb update\n'
+        printf '  [dry-run] udevadm trigger --subsystem-match=input --action=change\n'
+    else
+        run systemd-hwdb update
+        run udevadm trigger --subsystem-match=input --action=change
+    fi
+}
+
+volume_restart_notice() {
+    cat <<EOF
+
+  IMPORTANT: the hhd plugin is imported only when hhd starts. Restart it:
+    sudo systemctl restart hhd
+    Restarting hhd drops the emulated Steam controller (28DE:12FF) and the
+    volume keyboard for a few seconds. Do it outside a game.
+  The plugin never opens or grabs an input device. Do not grab hhd's devices -
+  see docs/DAEMONS.md, "never grab what HHD owns".
+EOF
+}
+
 comp_volume_install() {
-    say "volume rocker (oxp3-voltap daemon + force-release hwdb)"
-    [[ -n $PREFIX ]] && { skip_prefixed "tools/oxp3-voltap/install.sh install --hwdb (writes to /)"; return; }
-    run "$repo/tools/oxp3-voltap/install.sh" install --hwdb
+    if [[ $VOLUME_MODE == daemon ]]; then
+        say "volume rocker (LEGACY oxp3-voltap daemon + force-release hwdb)"
+        [[ -n $PREFIX ]] && { skip_prefixed "tools/oxp3-voltap/install.sh install --hwdb (writes to /)"; return; }
+        run "$repo/tools/oxp3-voltap/install.sh" install --hwdb
+        warn "legacy daemon selected: with hhd running it stays in observe mode (exit 4) instead of grabbing hhd's device."
+        warn "the supported path is the hhd plugin: rerun without --volume-daemon. See docs/DAEMONS.md."
+        return 0
+    fi
+    say "volume rocker (hhd plugin + force-release hwdb)"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "tools/hhd-oxp3-voltap/install.sh install (writes to /usr/local)"
+        volume_hwdb_install
+        volume_restart_notice
+        return 0
+    fi
+    run "$repo/tools/hhd-oxp3-voltap/install.sh" install
+    volume_hwdb_install
+    if [[ -e /etc/systemd/system/oxp3-voltap.service || -e /usr/local/libexec/oxp3-voltap ]]; then
+        warn "legacy oxp3-voltap daemon files are present; the plugin replaces it."
+        printf '  disable/remove it: sudo systemctl disable --now oxp3-voltap ; sudo tools/oxp3-voltap/install.sh uninstall\n'
+    fi
+    volume_restart_notice
 }
 
 HID_RULES_DONE=0
@@ -738,8 +795,25 @@ comp_decky_uninstall() {
 # ---------------------------------------------------------------------------------------------
 comp_volume_uninstall() {
     say "volume rocker"
-    [[ -n $PREFIX ]] && { skip_prefixed "tools/oxp3-voltap/install.sh uninstall (writes to /)"; return; }
-    run "$repo/tools/oxp3-voltap/install.sh" uninstall
+    [[ -n $PREFIX ]] && { skip_prefixed "plugin + daemon uninstall (writes to /)"; return; }
+    if [[ $VOLUME_MODE == daemon ]]; then
+        run "$repo/tools/oxp3-voltap/install.sh" uninstall
+    else
+        run "$repo/tools/hhd-oxp3-voltap/install.sh" uninstall
+        # A leftover legacy daemon would still be able to grab an input device;
+        # remove it too so uninstalling the component leaves no grabber behind.
+        if [[ -e /etc/systemd/system/oxp3-voltap.service || -e /usr/local/libexec/oxp3-voltap ]]; then
+            warn "also removing the legacy oxp3-voltap daemon"
+            run "$repo/tools/oxp3-voltap/install.sh" uninstall
+        fi
+        run rm -f "$(p /etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb)"
+        if (( DRY_RUN )); then
+            printf '  [dry-run] systemd-hwdb update; udevadm trigger --subsystem-match=input --action=change\n'
+        else
+            run systemd-hwdb update || true
+            run udevadm trigger --subsystem-match=input --action=change || true
+        fi
+    fi
     if (( PURGE_CONFIG )); then
         run rm -f "$(p /etc/oxp3-voltap.conf)"
     else
@@ -957,7 +1031,7 @@ print_verify_hints() {
         return 0
     fi
     say "verify"
-    component_selected volume && printf '  tools/oxp3-hw-install.sh --status; press volume up/down; journalctl -u oxp3-voltap -b\n'
+    component_selected volume && printf '  systemctl status hhd; tools/hhd-oxp3-voltap/install.sh status; tools/oxp3-verify.sh (hhd.*, vol.*)\n'
     component_selected leds && printf '  systemctl --user status oxp3-homebtn; tools/oxp3-led.py status\n'
     component_selected sleep && printf '  systemctl status oxp3-sleep-wakeup; tools/sleep-power-measure.sh audit\n'
     component_selected bluetooth && printf '  bluetoothctl show; ls /sys/class/bluetooth\n'
@@ -1058,6 +1132,13 @@ print_status() {
     local where="live system"
     [[ -n $PREFIX ]] && where="root-prefix $PREFIX"
     say "oxp3 hardware fixes ($where)"
+    local pyver site
+    pyver=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo 3.15)
+    site="$PREFIX/usr/local/lib/python$pyver/site-packages"
+    printf '  volume:       hhd-plugin=%s daemon-unit=%s daemon-binary=%s\n' \
+        "$(yes_no "$site/oxp3_hhd_voltap")" \
+        "$(prefixed_yes_no /etc/systemd/system/oxp3-voltap.service)" \
+        "$(prefixed_yes_no /usr/local/libexec/oxp3-voltap)"
     printf '  libexec:      vol=%s sleep-wakeup=%s sleep-log=%s powerctl=%s adaptivetdp=%s\n' \
         "$(prefixed_yes_no /usr/local/libexec/oxp3-voltap)" \
         "$(prefixed_yes_no /usr/local/libexec/oxp3-sleep-wakeup)" \
@@ -1116,7 +1197,10 @@ add_component() {
 while (( $# )); do
     case $1 in
         --volume|--leds|--sleep|--bluetooth|--power|--rgb|--imu|--audio|--decky)
-            add_component "${1#--}" ;;
+            add_component "${1#--}"
+            [[ $1 == --volume ]] && VOLUME_MODE=plugin ;;
+        --volume-daemon)
+            add_component volume; VOLUME_MODE=daemon ;;
         --all) for c in "${ALL_COMPONENTS[@]}"; do add_component "$c"; done ;;
         --uninstall|--remove) ACTION=uninstall ;;
         --status) ACTION=status ;;

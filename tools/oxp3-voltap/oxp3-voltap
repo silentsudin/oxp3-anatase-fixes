@@ -12,17 +12,27 @@ keyboard class driver never sees a stuck make code.
 
 Topology (decided from the devices, not from hardcoded event numbers)
 --------------------------------------------------------------------
-hhd already grabs the physical AT keyboard (EVIOCGRAB, one grab per device) and
-republishes the translated volume keys on its own uinput device
-"Handheld Daemon Volume Keyboard" (phys phys-hhd-vbtn).  A second EVIOCGRAB on
-the AT keyboard fails with EBUSY.  Therefore:
+hhd owns the volume path while it runs: it grabs the physical AT keyboard
+(EVIOCGRAB, one grab per device) and republishes the translated volume keys on
+its own uinput device "Handheld Daemon Volume Keyboard" (phys phys-hhd-vbtn).
+That virtual device is part of hhd, not a spare copy of the rocker: hhd's own
+OXP keyboard producer (hhd/device/oxp/base.py, VID:PID 0001:0001, no name
+filter) matches it too, so a second EVIOCGRAB on it makes hhd's grab() fail
+with EBUSY.  hhd then logs "Assuming controllers disconnected", and the
+emulated Steam controller (28DE:12FF) disappears for a few seconds.  That
+outage happened on this unit; the rule below is therefore absolute:
 
-  * prefer the hhd virtual volume keyboard when it exists - it carries the same
-    KEY_VOLUMEUP/DOWN after hhd's translation and can still be grabbed;
-  * fall back to the physical AT keyboard only when no hhd virtual device is
-    selectable and the holder scan shows nothing else holds it;
-  * if every grab is refused, say so once (journal + JSON status + exit code)
-    and keep retrying - never silently sit there.
+  * NEVER grab a device hhd owns or opens by default.  An hhd-virtual candidate
+    is a last resort that requires the explicit --allow-hhd-grab flag (and is
+    never what the supported install path uses - the hhd plugin
+    tools/hhd-oxp3-voltap does the normalisation inside hhd instead);
+  * default order: the physical AT keyboard, but only when it is free (hhd
+    stopped, controller mode disabled, or a non-hhd host);
+  * when the only rocker path belongs to hhd, enter observable degraded/observe
+    mode: one clear journal line, JSON status state "degraded-hhd-protected"
+    and exit code 4, no grab attempt at all, retry every VOLTAP_RESCAN_S;
+  * if a grab is refused, say so once (journal + JSON status + exit code) and
+    keep retrying - never silently sit there.
 
 Candidates are discovered from /proc/bus/input/devices and /sys/class/input, so
 `check`, `explain`, `diagnose` and `status` work without opening /dev/input
@@ -67,7 +77,7 @@ try:
 except ImportError:  # pragma: no cover - dependency is present on Anatase
     sys.exit("oxp3-voltap: python3-evdev is missing (rpm: python3-evdev)")
 
-VERSION = "1.2"
+VERSION = "1.3"
 
 SHIM_NAME = "OXP3 volume tap shim"
 SHIM_PHYS = "phys-oxp3-voltap"
@@ -102,6 +112,9 @@ EXIT_OK = 0
 EXIT_USAGE = 1
 EXIT_NO_DEVICE = 2
 EXIT_GRAB_REFUSED = 3
+# The only rocker path belongs to hhd and grabbing it is forbidden by default.
+# Observable degraded/observe mode: nothing is opened, nothing is grabbed.
+EXIT_HHD_PROTECTED = 4
 
 DEFAULT_STATUS_FILE = "/run/oxp3-voltap/status.json"
 
@@ -487,10 +500,12 @@ def build_plan(devices, cfg, holders, holders_known, hhd):
             cand.decision = "not-selected"
             cand.reason = "does not advertise KEY_VOLUMEUP/DOWN"
 
+    allow_hhd = bool(getattr(cfg, "allow_hhd_grab", False))
     explicit = [p for p in getattr(cfg, "devices", []) if p and p != "auto"]
     missing = []
     if explicit:
         ordered = []
+        blocked_hhd = []
         for wanted in explicit:
             cand = _explicit_match(cands, wanted)
             if cand is None:
@@ -502,6 +517,16 @@ def build_plan(devices, cfg, holders, holders_known, hhd):
                 cand.selectable = False
                 cand.decision = "refused"
                 cand.reason = "explicitly configured but this is our own shim"
+            elif cand.role == ROLE_HHD and not allow_hhd:
+                # The explicit flag cannot be used to bypass the one rule that
+                # caused the outage: hhd's virtual device is hhd's own.
+                cand.selectable = False
+                cand.decision = "refused"
+                cand.reason = ("explicitly configured, but this is hhd's own "
+                               "virtual volume keyboard; grabbing it breaks "
+                               "hhd. Pass --allow-hhd-grab deliberately, or "
+                               "use the hhd plugin")
+                blocked_hhd.append(cand)
             else:
                 cand.selectable = True
                 ordered.append(cand)
@@ -509,14 +534,26 @@ def build_plan(devices, cfg, holders, holders_known, hhd):
         selected = ordered[0] if ordered else None
         if ordered:
             reason = ordered[0].reason
+            predicted = EXIT_OK
+        elif blocked_hhd:
+            reason = ("refusing to grab hhd's virtual volume keyboard (" +
+                      blocked_hhd[0].path + "): it is hhd's own device and a "
+                      "second EVIOCGRAB there makes hhd drop the controller. "
+                      "Use the hhd plugin, or pass --allow-hhd-grab")
+            predicted = EXIT_HHD_PROTECTED
         elif missing:
             reason = "configured device(s) not present: " + ", ".join(missing)
+            predicted = EXIT_NO_DEVICE
         else:
             reason = "explicit device is our own shim and is never grabbed"
+            predicted = EXIT_NO_DEVICE
         return {"candidates": cands, "ordered": ordered, "selected": selected,
                 "topology": topology, "missing": missing, "reason": reason,
                 "holders_known": holders_known, "hhd": hhd, "source": "explicit",
-                "predicted_exit": EXIT_OK if ordered else EXIT_NO_DEVICE}
+                "allow_hhd_grab": allow_hhd,
+                "hhd_protected": bool(blocked_hhd),
+                "observe": bool(blocked_hhd) and not ordered,
+                "predicted_exit": predicted}
 
     hhd_cands = [c for c in cands if c.role == ROLE_HHD]
     at_cands = [c for c in cands if c.role == ROLE_AT]
@@ -524,11 +561,28 @@ def build_plan(devices, cfg, holders, holders_known, hhd):
     configured = [c for c in cands
                   if c.configured and c.role in (ROLE_VOLUME, ROLE_OTHER)]
 
-    prefer = getattr(cfg, "prefer", "auto")
-    if prefer == "physical":
-        primary, secondary = at_cands, hhd_cands
+    allow_physical = bool(getattr(cfg, "allow_physical", True))
+
+    # hhd's virtual volume keyboard is never a default candidate.  hhd created
+    # it for the desktop, and hhd's own OXP keyboard producer matches it by
+    # VID:PID; a second EVIOCGRAB on it makes hhd's grab() fail with EBUSY and
+    # hhd then drops the emulated controller.  It is a last resort that needs
+    # the explicit --allow-hhd-grab flag.
+    if allow_hhd:
+        hhd_usable = list(hhd_cands)
     else:
-        primary, secondary = hhd_cands, at_cands
+        hhd_usable = []
+        for cand in hhd_cands:
+            cand.decision = "refused"
+            cand.reason = ("hhd's own virtual volume keyboard; never grabbed "
+                           "by default (a second EVIOCGRAB there breaks hhd). "
+                           "Use the hhd plugin, or --allow-hhd-grab")
+
+    prefer = getattr(cfg, "prefer", "auto")
+    if prefer == "hhd-virtual":
+        primary, secondary = hhd_usable, (at_cands if allow_physical else [])
+    else:
+        primary, secondary = (at_cands if allow_physical else []), hhd_usable
     extra = [c for c in configured if c not in primary and c not in secondary]
     groups = [primary, extra, secondary, vol_cands]
 
@@ -551,7 +605,7 @@ def build_plan(devices, cfg, holders, holders_known, hhd):
                 cand.reason = ("volume-only device (not the rocker); "
                                "use --device to grab it explicitly")
                 continue
-            if cand.role == ROLE_AT and not getattr(cfg, "allow_physical", True):
+            if cand.role == ROLE_AT and not allow_physical:
                 cand.decision = "refused"
                 cand.reason = "physical fallback disabled (VOLTAP_ALLOW_PHYSICAL=0)"
                 continue
@@ -564,9 +618,8 @@ def build_plan(devices, cfg, holders, holders_known, hhd):
                                    "same keys as the physical rocker)")
                 elif cand.role == ROLE_AT:
                     cand.decision = "fallback"
-                    cand.reason = ("physical AT keyboard; used only when no hhd "
-                                   "virtual device is selectable and nothing "
-                                   "else holds it")
+                    cand.reason = ("physical AT keyboard; grabbed only when it "
+                                   "is free (hhd does not hold it)")
                 else:
                     cand.decision = "fallback"
                     cand.reason = "configured name/phys match"
@@ -574,8 +627,9 @@ def build_plan(devices, cfg, holders, holders_known, hhd):
                 cand.decision = "fallback"
                 cand.reason = "only attempted if the higher-priority device is refused"
             if index > 0 and cand.role == ROLE_HHD:
-                cand.decision = "fallback"
-                cand.reason = "only attempted if the physical device is refused"
+                cand.decision = "last-resort"
+                cand.reason = ("only attempted with --allow-hhd-grab, and only "
+                               "when the physical device is refused")
 
     selected = ordered[0] if ordered else None
     topology = "none"
@@ -586,19 +640,34 @@ def build_plan(devices, cfg, holders, holders_known, hhd):
             topology = "physical"
         else:
             topology = "configured"
-    if not ordered:
-        if hhd_cands or at_cands:
-            reason = ("every volume candidate is held by another process; "
-                      "the grab would fail with EBUSY")
-        else:
-            reason = "no hhd virtual volume keyboard and no physical AT keyboard"
-    else:
+    protected = bool(hhd_cands) and not allow_hhd
+    if ordered:
         reason = selected.reason
-    predicted = EXIT_OK if ordered else (
-        EXIT_GRAB_REFUSED if (hhd_cands or at_cands) else EXIT_NO_DEVICE)
+    elif protected:
+        reason = (f"hhd owns the volume path: '{hhd_cands[0].path}' "
+                  f"({hhd_cands[0].name!r}) is present"
+                  + (f" and the physical AT keyboard (ATKBD) is not free"
+                     if at_cands else "")
+                  + "; refusing to grab hhd's device. Use the hhd plugin "
+                    "(tools/hhd-oxp3-voltap), or pass --allow-hhd-grab")
+    elif hhd_cands or at_cands:
+        reason = ("every volume candidate is held by another process; "
+                  "the grab would fail with EBUSY")
+    else:
+        reason = "no hhd virtual volume keyboard and no physical AT keyboard"
+    if ordered:
+        predicted = EXIT_OK
+    elif protected:
+        predicted = EXIT_HHD_PROTECTED
+    elif hhd_cands or at_cands:
+        predicted = EXIT_GRAB_REFUSED
+    else:
+        predicted = EXIT_NO_DEVICE
     return {"candidates": cands, "ordered": ordered, "selected": selected,
             "topology": topology, "missing": [], "reason": reason,
             "holders_known": holders_known, "hhd": hhd, "source": "auto",
+            "allow_hhd_grab": allow_hhd, "hhd_protected": protected,
+            "observe": protected and not ordered,
             "predicted_exit": predicted}
 
 
@@ -619,10 +688,12 @@ class GrabResult:
 class GrabFSM:
     """One scan of the ordered candidates -> a documented state.
 
-    States: init, grabbed, degraded-empty, degraded-busy, degraded-error.
-    Exit codes: 0 grabbed, 2 nothing to grab, 3 every grab refused.  A retry
-    (after the rescan interval) is just another scan; the daemon keeps the
-    status file in the degraded state and logs the transition once.
+    States: init, grabbed, degraded-empty, degraded-busy, degraded-error,
+    degraded-hhd-protected.
+    Exit codes: 0 grabbed, 2 nothing to grab, 3 every grab refused, 4 the only
+    rocker path belongs to hhd and grabbing it is forbidden (observe mode).  A
+    retry (after the rescan interval) is just another scan; the daemon keeps
+    the status file in the degraded state and logs the transition once.
     """
 
     def __init__(self):
@@ -631,6 +702,7 @@ class GrabFSM:
         self.refused = []
         self.exit_code = EXIT_OK
         self._last_key = None
+        self._reason = ""
 
     def reset(self):
         self.state = "init"
@@ -683,6 +755,29 @@ class GrabFSM:
             for cand in held]
         return self._result()
 
+    def protected(self, plan):
+        """The only rocker path is hhd's and --allow-hhd-grab was not given.
+
+        This is an observable degraded/observe state, not an outage: nothing
+        is opened and nothing is grabbed, and the same transition is logged
+        once per candidate set.
+        """
+        self.state = "degraded-hhd-protected"
+        self.exit_code = EXIT_HHD_PROTECTED
+        self.selected = None
+        def get(cand, key):
+            return cand[key] if isinstance(cand, dict) else getattr(cand, key)
+
+        self.refused = [
+            {"path": get(cand, "path"), "kind": "protected",
+             "detail": "hhd's own virtual volume keyboard; not grabbed "
+                       "without --allow-hhd-grab"}
+            for cand in plan.get("candidates", [])
+            if get(cand, "role") == ROLE_HHD
+        ]
+        self._reason = plan.get("reason", "")
+        return self._result()
+
     def _result(self):
         key = (self.state,
                tuple(item["path"] for item in self.refused))
@@ -694,6 +789,9 @@ class GrabFSM:
     def describe(self) -> str:
         if self.state == "grabbed" and self.selected is not None:
             return f"grabbed {self.selected.path}"
+        if self.state == "degraded-hhd-protected":
+            return getattr(self, "_reason", "") or (
+                "hhd owns the volume path; observe mode, nothing grabbed")
         if self.state == "degraded-busy":
             details = "; ".join(
                 f"{item['path']}: {item['detail']}" for item in self.refused)
@@ -866,10 +964,18 @@ def format_check(plan, holders_known) -> str:
     else:
         lines.append("topology: none")
         lines.append(f"would grab nothing: {plan.get('reason', '')}")
+        if plan.get("observe"):
+            lines.append("mode: observe/degraded-hhd-protected - hhd owns the "
+                         "volume path; opening or grabbing its device is "
+                         "forbidden (use the hhd plugin, tools/hhd-oxp3-voltap)")
     if plan.get("missing"):
         lines.append("missing configured device(s): " + ", ".join(plan["missing"]))
     lines.append(f"predicted run exit: {plan['predicted_exit']} "
-                 f"(0 grabbed, 2 no device, 3 every grab refused)")
+                 f"(0 grabbed, 2 no device, 3 every grab refused, "
+                 f"4 hhd-protected observe)")
+    if plan.get("hhd_protected") and plan.get("selected") is not None:
+        lines.append("note: hhd's own volume device is present and was refused; "
+                     "the supported volume path is the hhd plugin")
     return "\n".join(lines)
 
 
@@ -892,9 +998,10 @@ def format_explain(plan, holders_known) -> str:
         elif cand.held_by:
             lines.append("    unsuitable: EVIOCGRAB would fail with EBUSY "
                          "(single grab per device)")
-        elif cand.decision == "preferred":
-            lines.append("    suitable: hhd already owns the physical keyboard, "
-                         "this device carries the translated keys")
+        elif cand.role == ROLE_HHD and cand.decision == "refused":
+            lines.append("    refused: this is hhd's own virtual volume "
+                         "keyboard; grabbing it makes hhd drop the controller "
+                         "- that is the outage this rule prevents")
         elif cand.decision == "fallback":
             lines.append("    usable fallback: only grabbed when no higher "
                          "priority device is selectable")
@@ -926,6 +1033,9 @@ def format_kv(plan, holders_known) -> str:
         f"ATKBD_HELD={_held_text(at) if at else ''}",
         f"HOLDERS_KNOWN={1 if holders_known else 0}",
         f"CANDIDATES={len(cands)}",
+        f"ALLOW_HHD_GRAB={1 if plan.get('allow_hhd_grab') else 0}",
+        f"HHD_PROTECTED={1 if plan.get('hhd_protected') else 0}",
+        f"OBSERVE={1 if plan.get('observe') else 0}",
     ]
     return "\n".join(lines)
 
@@ -940,6 +1050,9 @@ def plan_json(plan) -> dict:
         "source": plan.get("source", "auto"),
         "predicted_exit": plan["predicted_exit"],
         "holders_known": plan["holders_known"],
+        "allow_hhd_grab": bool(plan.get("allow_hhd_grab")),
+        "hhd_protected": bool(plan.get("hhd_protected")),
+        "observe": bool(plan.get("observe")),
         "hhd": plan.get("hhd") or {},
         "missing": plan.get("missing", []),
         "candidates": [c.to_dict() for c in plan["candidates"]],
@@ -983,7 +1096,13 @@ def cmd_probe(cfg) -> int:
     else:
         sel = [c for c in plan["candidates"]
                if c.dev.has_volume and c.role in
-               (ROLE_HHD, ROLE_AT, ROLE_VOLUME) and not c.held_by]
+               (ROLE_HHD, ROLE_AT, ROLE_VOLUME) and not c.held_by
+               and not (c.role == ROLE_HHD and not cfg.allow_hhd_grab)]
+        skipped_hhd = [c for c in plan["candidates"]
+                       if c.role == ROLE_HHD and not cfg.allow_hhd_grab]
+        for cand in skipped_hhd:
+            log(f"skipping {cand.path} ({cand.name!r}): hhd's own device is "
+                f"never opened/grabbed without --allow-hhd-grab")
     if not sel:
         log(f"no device matched ({hstats['unreadable']} unreadable /proc "
             f"entries); see check / --device /dev/input/eventN")
@@ -1000,7 +1119,9 @@ def cmd_probe(cfg) -> int:
             try:
                 dev.grab()
                 log(f"grabbed {cand.path} for probing "
-                    f"(input goes only to us meanwhile)")
+                    f"(input goes only to us meanwhile)"
+                    + (" - this IS hhd's device: --allow-hhd-grab was given"
+                       if cand.role == ROLE_HHD else ""))
             except OSError as exc:
                 log(f"cannot grab {cand.path}: {exc}; reading it ungrabbed")
         else:
@@ -1104,6 +1225,9 @@ def cmd_diagnose(cfg) -> int:
             cand = next((c for c in plan["candidates"] if c.role == role), None)
             if cand is not None:
                 targets.append(cand)
+        if any(c.role == ROLE_HHD for c in targets):
+            log("note: diagnose reads hhd's device ungrabbed, read-only; it "
+                "never grabs it. The supported volume path is the hhd plugin.")
     if not targets:
         log("no volume candidate to capture")
         return EXIT_NO_DEVICE
@@ -1168,9 +1292,16 @@ def cmd_diagnose(cfg) -> int:
     hhd_events = sum(hhd_counts.values())
     at_events = sum(at_counts.values())
     if hhd_cand is not None and hhd_events:
-        verdict = (f"grab {hhd_cand.path} (hhd-virtual): it carries the "
-                   f"translated volume keys while the physical device stays "
-                   f"hhd's")
+        if cfg.allow_hhd_grab:
+            verdict = (f"grab {hhd_cand.path} (hhd-virtual) is possible because "
+                       f"--allow-hhd-grab was given, but it makes hhd drop the "
+                       f"controller when hhd needs the device; prefer the hhd "
+                       f"plugin")
+        else:
+            verdict = (f"do NOT grab {hhd_cand.path} (hhd-virtual): it carries "
+                       f"the translated volume keys because hhd owns the "
+                       f"physical keyboard. Grabbing it breaks hhd. Install "
+                       f"tools/hhd-oxp3-voltap (the hhd plugin) instead")
     elif at_cand is not None and at_events:
         if hhd_cand is not None:
             why = ("the hhd virtual keyboard produced no volume events; hhd is "
@@ -1331,7 +1462,11 @@ class Runner:
         held = [cand for cand in self.plan["candidates"]
                 if cand.held_by and cand.dev.has_volume
                 and cand.role != ROLE_NEVER]
-        if not self.plan["ordered"] and held:
+        if self.plan.get("observe"):
+            # hhd owns the only rocker path and we must not touch it. Open
+            # nothing (not even read-only) and report the documented state.
+            result = self.fsm.protected(self.plan)
+        elif not self.plan["ordered"] and held:
             result = self.fsm.refused_held(held)
         else:
             result = self.fsm.scan(self.plan["ordered"], self._attempt)
@@ -1375,6 +1510,12 @@ class Runner:
             log(f"DEGRADED: every candidate is held or refused (EBUSY): "
                 f"{details}; status=degraded-busy exit={result.exit_code}; "
                 f"retrying in {self.cfg.rescan:g}s")
+        elif result.state == "degraded-hhd-protected":
+            log(f"OBSERVE: hhd owns the volume path; not opening or grabbing "
+                f"its device (status=degraded-hhd-protected "
+                f"exit={result.exit_code}). The supported path is the hhd "
+                f"plugin (tools/hhd-oxp3-voltap); see docs/DAEMONS.md. "
+                f"Retrying in {self.cfg.rescan:g}s.")
         elif result.state == "degraded-empty":
             log(f"DEGRADED: no volume event device candidate "
                 f"(status=degraded-empty exit={result.exit_code}); "
@@ -1398,6 +1539,11 @@ class Runner:
             "refused": self.fsm.refused,
             "topology": self.plan["topology"] if self.plan else "none",
             "reason": self.plan.get("reason", "") if self.plan else "",
+            "allow_hhd_grab": bool(self.plan.get("allow_hhd_grab"))
+            if self.plan else False,
+            "hhd_protected": bool(self.plan.get("hhd_protected"))
+            if self.plan else False,
+            "observe": bool(self.plan.get("observe")) if self.plan else False,
             "holders_known": self.holders_known,
             "hhd": self.hhd,
             "candidates": ([c.to_dict() for c in self.plan["candidates"]]
@@ -1609,8 +1755,13 @@ def cmd_status(cfg) -> int:
     print(f"selected: {selected.get('path', '-')} "
           f"({selected.get('name', '')!r} role={selected.get('role', '-')})")
     print(f"reason:   {data.get('reason', '')}")
+    if data.get("observe") or data.get("state") == "degraded-hhd-protected":
+        print("mode:     observe/degraded-hhd-protected (hhd owns the volume "
+              "path; nothing opened or grabbed)")
     print(f"hhd:      running={data.get('hhd', {}).get('running')} "
-          f"pids={data.get('hhd', {}).get('pids', [])}")
+          f"pids={data.get('hhd', {}).get('pids', [])} "
+          f"protected={data.get('hhd_protected')} "
+          f"allow_hhd_grab={data.get('allow_hhd_grab')}")
     if data.get("refused"):
         print("refused:  " + "; ".join(
             f"{item.get('path')}: {item.get('detail', item.get('kind'))}"
@@ -1664,7 +1815,16 @@ def main(argv=None) -> int:
     parser.add_argument("--prefer", choices=("auto", "hhd-virtual", "physical"),
                         default=os.environ.get("VOLTAP_PREFER", "auto"),
                         help="automatic topology preference (default auto: "
-                             "hhd virtual first, physical fallback)")
+                             "physical AT keyboard when free; hhd's virtual "
+                             "device only with --allow-hhd-grab)")
+    parser.add_argument("--allow-hhd-grab", dest="allow_hhd_grab",
+                        action="store_true",
+                        default=os.environ.get("VOLTAP_ALLOW_HHD_GRAB",
+                                               "0") not in ("0", "no", "off"),
+                        help="DANGEROUS last resort: allow EVIOCGRAB on hhd's "
+                             "own virtual volume keyboard. hhd needs that device "
+                             "and drops the controller (EBUSY) while we hold "
+                             "it; the supported path is the hhd plugin")
     parser.add_argument("--hhd-name",
                         default=os.environ.get(
                             "VOLTAP_HHD_NAME",
@@ -1727,12 +1887,13 @@ def main(argv=None) -> int:
                              "probe)")
     parser.add_argument("--once", action="store_true",
                         help="run: one scan, then exit with the documented "
-                             "code (0 grabbed, 2 no device, 3 refused)")
+                             "code (0 grabbed, 2 no device, 3 refused, "
+                             "4 hhd-protected observe)")
     parser.add_argument("--degrade-exit-after", type=float,
                         default=float(os.environ.get(
                             "VOLTAP_DEGRADE_EXIT_S", 0)),
-                        help="run: exit with the degraded code after N seconds "
-                             "without a grab (0 = keep retrying forever)")
+                        help="run: exit with the degraded/observe code after N "
+                             "seconds without a grab (0 = keep retrying)")
     parser.add_argument("--status-file",
                         default=os.environ.get("VOLTAP_STATUS_FILE",
                                                DEFAULT_STATUS_FILE),

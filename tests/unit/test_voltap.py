@@ -201,6 +201,7 @@ KEY_VOLUME = UP_BIT | DOWN_BIT
 def make_cfg(**over):
     base = dict(
         devices=[], name="", phys="", prefer="auto", allow_physical=True,
+        allow_hhd_grab=False,
         hhd_name="Handheld Daemon Volume Keyboard", hhd_phys="hhd-vbtn",
         atkbd_name="AT Translated Set 2 keyboard",
         atkbd_phys="isa0060/serio0",
@@ -391,15 +392,63 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(voltap.classify(make_dev("event5", "Mouse", "", key=0),
                                          cfg), voltap.ROLE_OTHER)
 
-    def test_hhd_virtual_is_preferred_and_physical_is_refused_when_held(self):
-        holders = {"/dev/input/event4": [6752]}
-        plan = plan_for([at_dev(), hhd_dev()], holders=holders)
-        self.assertEqual(plan["topology"], "hhd-virtual")
-        self.assertEqual(plan["selected"].path, "/dev/input/event23")
+    def test_hhd_virtual_is_never_the_default_and_physical_is_used_when_free(self):
+        # The supported default: never hhd's device, the free AT keyboard is
+        # the only thing we may grab.
+        plan = plan_for([at_dev(), hhd_dev()])
+        self.assertEqual(plan["topology"], "physical")
+        self.assertEqual(plan["selected"].path, "/dev/input/event4")
+        hhd = [c for c in plan["candidates"] if c.role == voltap.ROLE_HHD][0]
+        self.assertEqual(hhd.decision, "refused")
+        self.assertIn("hhd's own virtual volume keyboard", hhd.reason)
+        self.assertNotIn(hhd.path, [c.path for c in plan["ordered"]])
+        self.assertTrue(plan["hhd_protected"])
+        self.assertFalse(plan["allow_hhd_grab"])
+        self.assertEqual(plan["predicted_exit"], voltap.EXIT_OK)
+
+    def test_hhd_only_is_observe_mode_exit_4(self):
+        # hhd runs and owns the physical keyboard: the only rocker path is
+        # hhd's. Do not open it, do not grab it - report observe/degraded.
+        plan = plan_for([hhd_dev()])
+        self.assertEqual(plan["topology"], "none")
+        self.assertIsNone(plan["selected"])
+        self.assertEqual(plan["predicted_exit"], voltap.EXIT_HHD_PROTECTED)
+        self.assertTrue(plan["observe"])
+        self.assertTrue(plan["hhd_protected"])
+        self.assertIn("hhd owns the volume path", plan["reason"])
+        self.assertIn("--allow-hhd-grab", plan["reason"])
+        self.assertIn("hhd plugin", plan["reason"])
+        hhd = [c for c in plan["candidates"] if c.role == voltap.ROLE_HHD][0]
+        self.assertEqual(hhd.decision, "refused")
+
+    def test_hhd_present_and_physical_held_is_protected_not_busy(self):
+        # This is the outage topology: hhd owns event4, its virtual keyboard
+        # (event23) exists. The old daemon grabbed event23 and broke hhd. The
+        # new default must report protected/observe, never attempt event23.
+        members = {"/dev/input/event4": [6752]}
+        plan = plan_for([at_dev(), hhd_dev()], holders=members)
+        self.assertEqual(plan["topology"], "none")
+        self.assertEqual(plan["predicted_exit"], voltap.EXIT_HHD_PROTECTED)
+        self.assertEqual(plan["ordered"], [])
         at = [c for c in plan["candidates"] if c.role == voltap.ROLE_AT][0]
         self.assertEqual(at.decision, "refused-held")
-        self.assertIn(6752, at.held_by)
+
+    def test_allow_hhd_grab_makes_it_a_last_resort(self):
+        holders = {"/dev/input/event4": [6752]}
+        plan = plan_for([at_dev(), hhd_dev()], holders=holders,
+                        cfg=make_cfg(allow_hhd_grab=True))
+        self.assertEqual(plan["topology"], "hhd-virtual")
+        self.assertEqual(plan["selected"].path, "/dev/input/event23")
+        self.assertEqual(plan["selected"].decision, "last-resort")
+        self.assertFalse(plan["hhd_protected"])
         self.assertEqual(plan["predicted_exit"], voltap.EXIT_OK)
+
+    def test_prefer_hhd_without_the_flag_is_still_refused(self):
+        plan = plan_for([at_dev(), hhd_dev()],
+                        cfg=make_cfg(prefer="hhd-virtual"))
+        self.assertEqual(plan["topology"], "physical")
+        self.assertNotIn("/dev/input/event23",
+                         [c.path for c in plan["ordered"]])
 
     def test_physical_fallback_only_when_nothing_holds_it(self):
         plan = plan_for([at_dev()])
@@ -435,6 +484,19 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(plan["topology"], "explicit")
         self.assertEqual(plan["selected"].path, "/dev/input/event4")
 
+    def test_explicit_hhd_device_requires_the_flag(self):
+        plan = plan_for([hhd_dev()], cfg=make_cfg(devices=["/dev/input/event23"]))
+        self.assertIsNone(plan["selected"])
+        self.assertEqual(plan["predicted_exit"], voltap.EXIT_HHD_PROTECTED)
+        self.assertTrue(plan["hhd_protected"])
+        self.assertIn("--allow-hhd-grab", plan["reason"])
+        hhd = [c for c in plan["candidates"] if c.role == voltap.ROLE_HHD][0]
+        self.assertEqual(hhd.decision, "refused")
+        allowed = plan_for([hhd_dev()], cfg=make_cfg(
+            devices=["/dev/input/event23"], allow_hhd_grab=True))
+        self.assertEqual(allowed["topology"], "explicit")
+        self.assertEqual(allowed["selected"].path, "/dev/input/event23")
+
     def test_explicit_missing_device_is_reported(self):
         plan = plan_for([hhd_dev()],
                         cfg=make_cfg(devices=["/dev/input/event99"]))
@@ -455,17 +517,66 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(plan["topology"], "configured")
 
     def test_kv_output_has_stable_keys(self):
+        # Default topology: physical is refused-held, hhd's device is protected.
         plan = plan_for([at_dev(), hhd_dev()],
                         holders={"/dev/input/event4": [6752]})
         out = voltap.format_kv(plan, True)
         fields = dict(line.split("=", 1) for line in out.splitlines())
-        self.assertEqual(fields["TOPO"], "hhd-virtual")
-        self.assertEqual(fields["SEL"], "/dev/input/event23")
-        self.assertEqual(fields["SEL_ROLE"], "hhd-virtual")
+        self.assertEqual(fields["TOPO"], "none")
+        self.assertEqual(fields["SEL"], "")
         self.assertEqual(fields["ATKBD"], "/dev/input/event4")
         self.assertEqual(fields["ATKBD_HELD"], "6752")
-        self.assertEqual(fields["PREDICTED_EXIT"], "0")
+        self.assertEqual(fields["PREDICTED_EXIT"], "4")
         self.assertEqual(fields["HOLDERS_KNOWN"], "1")
+        self.assertEqual(fields["ALLOW_HHD_GRAB"], "0")
+        self.assertEqual(fields["HHD_PROTECTED"], "1")
+        self.assertEqual(fields["OBSERVE"], "1")
+
+        physical = plan_for([at_dev(), hhd_dev()])
+        fields = dict(line.split("=", 1)
+                      for line in voltap.format_kv(physical, True).splitlines())
+        self.assertEqual(fields["TOPO"], "physical")
+        self.assertEqual(fields["SEL"], "/dev/input/event4")
+        self.assertEqual(fields["SEL_ROLE"], "at-kbd")
+        self.assertEqual(fields["PREDICTED_EXIT"], "0")
+        self.assertEqual(fields["HHD_PROTECTED"], "1")
+
+
+class GrabFSMProtectedTest(unittest.TestCase):
+    def plan(self):
+        return {
+            "reason": "hhd owns the volume path",
+            "candidates": [
+                {"path": "/dev/input/event23", "role": "hhd-virtual"},
+                {"path": "/dev/input/event4", "role": "at-kbd"},
+            ],
+        }
+
+    def test_protected_state_and_exit_4(self):
+        fsm = voltap.GrabFSM()
+        result = fsm.protected(self.plan())
+        self.assertEqual(result.state, "degraded-hhd-protected")
+        self.assertEqual(result.exit_code, voltap.EXIT_HHD_PROTECTED)
+        self.assertIsNone(result.selected)
+        self.assertEqual([item["path"] for item in result.refused],
+                         ["/dev/input/event23"])
+        self.assertEqual(result.refused[0]["kind"], "protected")
+        self.assertIn("hhd", fsm.describe())
+        self.assertTrue(result.changed)
+
+    def test_protected_is_stable_across_rescans(self):
+        fsm = voltap.GrabFSM()
+        first = fsm.protected(self.plan())
+        second = fsm.protected(self.plan())
+        self.assertTrue(first.changed)
+        self.assertFalse(second.changed)
+
+    def test_protected_then_grabbed_is_a_transition(self):
+        fsm = voltap.GrabFSM()
+        fsm.protected(self.plan())
+        result = fsm.scan([], {})
+        self.assertEqual(result.state, "degraded-empty")
+        self.assertTrue(result.changed)
 
 
 class GrabFSMTest(unittest.TestCase):

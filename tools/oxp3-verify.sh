@@ -504,14 +504,37 @@ parse_voltopology() { # stdin: oxp3-voltap check --kv
                    "SEL_REASON=%s\nSEL_SOURCE=%s\nPREDICTED_EXIT=%s\n" \
                    "HHD_RUNNING=%s\nHHD_PROCESS=%s\nHHD_VIRTUAL_PRESENT=%s\n" \
                    "HHD_PID=%s\nHHD_VIRTUAL=%s\nATKBD=%s\nATKBD_HELD=%s\n" \
-                   "HOLDERS_KNOWN=%s\nCANDIDATES=%s\n", \
+                   "HOLDERS_KNOWN=%s\nCANDIDATES=%s\n" \
+                   "ALLOW_HHD_GRAB=%s\nHHD_PROTECTED=%s\nOBSERVE=%s\n", \
                 value["TOPO"], value["SEL"], value["SEL_ROLE"], \
                 value["SEL_HELD"], value["SEL_REASON"], value["SEL_SOURCE"], \
                 value["PREDICTED_EXIT"], value["HHD_RUNNING"], \
                 value["HHD_PROCESS"], value["HHD_VIRTUAL_PRESENT"], \
                 value["HHD_PID"], value["HHD_VIRTUAL"], value["ATKBD"], \
                 value["ATKBD_HELD"], value["HOLDERS_KNOWN"], \
-                value["CANDIDATES"]
+                value["CANDIDATES"], value["ALLOW_HHD_GRAB"], \
+                value["HHD_PROTECTED"], value["OBSERVE"]
+        }
+    '
+}
+
+parse_hhd_journal() { # stdin: journalctl -u hhd
+    # The outage signature: hhd could not open/grab its own volume keyboard and
+    # then assumed the controllers disconnected.  A later successful
+    # initialization means the episode was recovered (the boot keeps history).
+    awk '
+        /Device or resource busy|Assuming controllers disconnected/ {
+            busy++
+            last = $0
+            last_bad = NR
+            next
+        }
+        /Initialization Complete!|Loaded the following plugins/ {
+            last_ok = NR
+        }
+        END {
+            recovered = (busy > 0 && last_ok > last_bad) ? 1 : 0
+            printf "BUSY=%d\nRECOVERED=%d\nLAST=%s\n", busy + 0, recovered, last
         }
     '
 }
@@ -556,7 +579,9 @@ parse_lifecycle_journal() { # stdin: this boot's journal text of one daemon
 }
 
 parse_fd_report() { # stdin: "unit<TAB>pid<TAB>state<TAB>denied<TAB>fds"
-    awk -F'\t' '
+    # vol_observe=1 means the volume daemon logged the documented OBSERVE state,
+    # so it legitimately holds no input fd (the supported hhd path).
+    awk -F'\t' -v vol_observe="${VOLTAP_OBSERVE:-0}" '
         function needed(u) {
             if (u == "oxp3-voltap.service") return "input"
             if (u == "oxp3-homebtn.service") return "hidraw"
@@ -569,6 +594,9 @@ parse_fd_report() { # stdin: "unit<TAB>pid<TAB>state<TAB>denied<TAB>fds"
             detail = detail sprintf("%s pid=%s fds=%s; ", unit, pid, (fds == "" ? "-" : fds))
             need = needed(unit)
             if (need == "" && unit == "oxp3-rgbd.service") { perapply++; next }
+            # The volume daemon is allowed to hold no input fd when it is in
+            # observable degraded/observe mode (hhd owns the volume path).
+            if (unit == "oxp3-voltap.service" && vol_observe == 1) { volskip++; next }
             if (denied == "1") { denied_n++; next }
             checked++
             found = (need == "input") ? (fds ~ /\/dev\/input\/event/) : (fds ~ /\/dev\/hidraw/)
@@ -580,8 +608,8 @@ parse_fd_report() { # stdin: "unit<TAB>pid<TAB>state<TAB>denied<TAB>fds"
             else if (checked == 0 && denied_n == 0) verdict = "skip"
             else if (checked > 0 && ok == checked) verdict = "pass"
             else verdict = "fail"
-            printf "ACTIVE=%d\nCHECKED=%d\nDENIED=%d\nPERAPPLY=%d\nOK=%d\nVERDICT=%s\nWHY=%s\nMISSING=%s\n",
-                active + 0, checked + 0, denied_n + 0, perapply + 0, ok + 0, verdict, detail, missing
+            printf "ACTIVE=%d\nCHECKED=%d\nDENIED=%d\nPERAPPLY=%d\nVOLSKIP=%d\nOK=%d\nVERDICT=%s\nWHY=%s\nMISSING=%s\n",
+                active + 0, checked + 0, denied_n + 0, perapply + 0, volskip + 0, ok + 0, verdict, detail, missing
         }
     '
 }
@@ -1084,37 +1112,36 @@ check_preflight() {
 
 # ------------------------------------------------------------------ 1. volume
 check_volume() {
-    local st load active file journal dev h hwdb
+    local st load active file journal dev observe h hwdb
     st=$(unit_state oxp3-voltap.service)
     IFS='|' read -r load active file <<<"$st"
 
     if ! have systemctl; then
         record vol.unit volume "oxp3-voltap service" UNKNOWN "systemctl not available" "" "this host is not systemd-managed"
     elif [ "$load" = not-found ]; then
-        record vol.unit volume "oxp3-voltap service" SKIP "not installed" "LoadState=not-found" "sudo tools/oxp3-voltap/install.sh install --hwdb (standalone path; do not combine with the hhd volume patch)"
+        record vol.unit volume "oxp3-voltap service" SKIP "not installed (the supported path is the hhd plugin)" "LoadState=not-found" "sudo tools/hhd-oxp3-voltap/install.sh install (plugin); legacy daemon: sudo tools/oxp3-voltap/install.sh install --hwdb"
     elif [ "$active" = active ]; then
         record vol.unit volume "oxp3-voltap service" PASS "active (running)" "unit oxp3-voltap.service; UnitFileState=$file" ""
+    elif [ "$file" = disabled ]; then
+        record vol.unit volume "oxp3-voltap service" SKIP \
+            "installed but disabled on purpose (legacy daemon)" \
+            "LoadState=$load ActiveState=$active UnitFileState=$file" \
+            "supported path: the hhd plugin (sudo tools/hhd-oxp3-voltap/install.sh install ; sudo systemctl restart hhd)"
     else
         record vol.unit volume "oxp3-voltap service" FAIL "unit is $active" "LoadState=$load ActiveState=$active" "journalctl -u oxp3-voltap -b ; sudo systemctl restart oxp3-voltap"
     fi
 
-    if [ "$active" != active ]; then
-        record vol.grab volume "volume event device grabbed" SKIP "daemon not running" "" "start oxp3-voltap: it grabs the hhd uinput volume keyboard"
-    else
-        journal=$(journal_text oxp3-voltap)
-        dev=$(printf '%s\n' "$journal" | parse_vol_journal)
-        if [ -n "$dev" ]; then
-            record vol.grab volume "volume event device grabbed" PASS "grabbed ${dev#grabbed }" "journalctl -u oxp3-voltap -b" ""
-        else
-            record vol.grab volume "volume event device grabbed" FAIL "no grab line in this boot's journal" "expected 'grabbed /dev/input/eventN (...)'; the configured device may be missing" "journalctl -u oxp3-voltap -b | grep grabbed ; cat /etc/oxp3-voltap.conf"
-        fi
-    fi
+    journal=$(journal_text oxp3-voltap)
+    observe=0
+    printf '%s\n' "$journal" | grep -q 'OBSERVE: hhd owns the volume path' && observe=1
+    dev=$(printf '%s\n' "$journal" | parse_vol_journal)
 
     # Which device would be grabbed and why (read-only; root only completes the
     # holder view).  vol.topology is the decision, vol.holder is the EVIOCGRAB
     # owner of the physical AT keyboard that makes that decision necessary.
     local vbin topo t_topo t_sel t_role t_selheld t_reason t_source t_pred
     local t_hhdrunning t_hhdpresent t_hhdpids t_atkbd t_atheld t_known
+    local t_allow t_protected t_observe t_hhdvirtual
     vbin=$REPO/tools/oxp3-voltap/oxp3-voltap
     if [ ! -x "$vbin" ] || ! have python3; then
         record vol.topology volume "volume device choice" SKIP "daemon or python3 missing" "$vbin" "install the repo tooling and python3"
@@ -1131,10 +1158,22 @@ check_volume() {
         t_hhdpids=$(kv "$topo" HHD_PID)
         t_atkbd=$(kv "$topo" ATKBD); t_atheld=$(kv "$topo" ATKBD_HELD)
         t_known=$(kv "$topo" HOLDERS_KNOWN)
+        t_allow=$(kv "$topo" ALLOW_HHD_GRAB)
+        t_protected=$(kv "$topo" HHD_PROTECTED)
+        t_observe=$(kv "$topo" OBSERVE)
+        t_hhdvirtual=$(kv "$topo" HHD_VIRTUAL)
 
         if [ -z "$t_topo" ]; then
             record vol.topology volume "volume device choice" SKIP "cannot read /proc/bus/input/devices" "$(last_line "$RUN_OUT")" "run $vbin check --kv"
             record vol.holder volume "physical volume device holder" SKIP "cannot read /proc" "" "run $vbin check --kv"
+        elif [ "$t_pred" = 4 ] && [ "$t_protected" = 1 ]; then
+            record vol.topology volume "volume device choice" PASS \
+                "observe: hhd owns the volume path; nothing would be grabbed" \
+                "$t_reason" \
+                "supported path: install/keep the hhd plugin (tools/hhd-oxp3-voltap)"
+            record vol.holder volume "physical volume device holder" PASS \
+                "hhd holds the physical AT keyboard; we leave it alone" \
+                "ATKBD=${t_atkbd:--} HHD_PID=${t_hhdpids:--}" ""
         elif [ "$t_pred" = 3 ]; then
             record vol.topology volume "volume device choice" FAIL "grab would be refused: $t_reason" "selected=${t_sel:--} held=${t_selheld:--}" "sudo $vbin explain ; sudo $vbin diagnose --duration 8"
             record vol.holder volume "physical volume device holder" FAIL "every volume candidate is held" "$t_reason" "sudo $vbin explain ; sudo $vbin diagnose --duration 8"
@@ -1142,10 +1181,20 @@ check_volume() {
             if [ "$t_source" = explicit ]; then
                 record vol.topology volume "volume device choice" PASS "explicit override: would grab $t_sel" "$t_reason" ""
             elif [ "$t_role" = hhd-virtual ]; then
-                record vol.topology volume "volume device choice" PASS "would grab $t_sel (hhd virtual)" "$t_reason" ""
+                record vol.topology volume "volume device choice" FAIL \
+                    "would grab hhd's own volume keyboard ($t_sel)" \
+                    "$t_reason; ALLOW_HHD_GRAB=${t_allow:-?}. hhd needs that device: a second EVIOCGRAB makes hhd drop the controller" \
+                    "unset VOLTAP_ALLOW_HHD_GRAB, install the hhd plugin (tools/hhd-oxp3-voltap) and restart hhd; docs/DAEMONS.md"
             elif [ "$t_role" = at-kbd ]; then
-                if [ "$t_hhdrunning" = 1 ]; then
-                    record vol.topology volume "volume device choice" FAIL "hhd is running but the physical AT keyboard would be grabbed" "$t_reason" "sudo $vbin explain ; journalctl -u hhd -b --no-pager"
+                if [ "$t_hhdrunning" = 1 ] && [ "$t_known" != 1 ]; then
+                    record vol.topology volume "volume device choice" UNKNOWN \
+                        "physical AT keyboard selected; hhd is running and the holder scan needs root" \
+                        "$t_reason; at that point the daemon would refuse the EBUSY grab and observe" \
+                        "sudo $vbin check --kv ; the supported path is the hhd plugin"
+                elif [ "$t_hhdrunning" = 1 ]; then
+                    record vol.topology volume "volume device choice" PASS \
+                        "would grab the physical AT keyboard; hhd does not hold it" \
+                        "$t_reason" ""
                 else
                     record vol.topology volume "volume device choice" PASS "would grab $t_sel (physical fallback)" "$t_reason; hhd not holding it" ""
                 fi
@@ -1158,7 +1207,7 @@ check_volume() {
             record vol.topology volume "volume device choice" SKIP "no volume event device on this host" "$t_reason" "sudo $vbin check"
         fi
 
-        if [ -z "$t_topo" ] || [ "$t_pred" = 3 ]; then
+        if [ -z "$t_topo" ] || [ "$t_pred" = 3 ] || [ "$t_pred" = 4 ]; then
             : # already recorded above
         elif [ "$t_known" != 1 ]; then
             record vol.holder volume "physical volume device holder" SKIP "holder scan needs root (/proc/*/fdinfo)" "ATKBD=${t_atkbd:--} HHD_PID=${t_hhdpids:--}" "sudo $vbin check --kv"
@@ -1178,6 +1227,26 @@ check_volume() {
             else
                 record vol.holder volume "physical volume device holder" UNKNOWN "AT keyboard held by a non-hhd pid" "ATKBD=${t_atkbd:--} held by ${t_atheld}" "sudo $vbin diagnose --duration 8 ; check for a second grabber"
             fi
+        fi
+
+        # Did this boot's daemon journal show a grab of hhd's own device?  That
+        # is the exact regression that dropped the emulated controller.
+        if [ -n "$dev" ] && [ -n "$t_hhdvirtual" ] && [ "$dev" = "$t_hhdvirtual" ]; then
+            record vol.grab volume "volume event device grabbed" FAIL \
+                "our daemon grabbed hhd's own device ${dev}" \
+                "journalctl -u oxp3-voltap -b" \
+                "sudo systemctl disable --now oxp3-voltap ; sudo systemctl restart hhd ; install the hhd plugin (tools/hhd-oxp3-voltap)"
+        elif [ "$active" != active ]; then
+            record vol.grab volume "volume event device grabbed" SKIP "daemon not running" "the supported path with hhd is the plugin" "sudo tools/hhd-oxp3-voltap/install.sh install ; sudo systemctl restart hhd"
+        elif [ -n "$dev" ]; then
+            record vol.grab volume "volume event device grabbed" PASS "grabbed ${dev#grabbed } (not an hhd device)" "journalctl -u oxp3-voltap -b" ""
+        elif [ "$observe" = 1 ]; then
+            record vol.grab volume "volume event device grabbed" PASS \
+                "observe: hhd owns the volume path; nothing grabbed" \
+                "journalctl -u oxp3-voltap -b" \
+                "supported path: the hhd plugin (tools/hhd-oxp3-voltap)"
+        else
+            record vol.grab volume "volume event device grabbed" FAIL "no grab and no OBSERVE line in this boot's journal" "expected 'grabbed /dev/input/eventN (...)' or 'OBSERVE: hhd owns the volume path'" "journalctl -u oxp3-voltap -b ; cat /etc/oxp3-voltap.conf"
         fi
     fi
 
@@ -1210,6 +1279,141 @@ check_volume() {
         record vol.hold volume "tap/hold functional test" PASS "selftest done (tap/hold state machine over uinput)" "$(last_line "$RUN_OUT")" ""
     else
         record vol.hold volume "tap/hold functional test" FAIL "selftest failed (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "sudo tools/oxp3-voltap/oxp3-voltap selftest ; journalctl -u oxp3-voltap -b"
+    fi
+}
+
+# ------------------------------------------------------------------ 1b. hhd owns the volume path
+# The outage of 2026-11-09: a second EVIOCGRAB on hhd's own virtual volume
+# keyboard made hhd's grab() fail with EBUSY, hhd assumed the controller had
+# disconnected and 28DE:12FF disappeared.  These two read-only invariants catch
+# that class of regression:
+#   * hhd is healthy in this boot (active, no EBUSY / "assuming controllers
+#     disconnected" in its journal);
+#   * nothing of ours holds an hhd-* event device (our processes' /proc/<pid>/fd,
+#     EVIOCGRAB from fdinfo where readable, and this boot's oxp3-voltap journal).
+check_hhd_volume() {
+    local st load active file jtext busy=0 jreadable=0 paths="" d name path last_busy="" recovered=0
+    local p pid cmd tgt l fd held="" grabbers="" denied=0 journal_grabbed="" jvol
+
+    st=$(unit_state hhd.service)
+    IFS='|' read -r load active file <<<"$st"
+    if ! have systemctl; then
+        record hhd.unit hhd "hhd service" UNKNOWN "systemctl not available" "" "this host is not systemd-managed"
+        return 0
+    elif [ "$load" = not-found ]; then
+        record hhd.unit hhd "hhd service" SKIP "hhd is not installed" "LoadState=not-found" "the volume plugin and topology rules assume hhd; without it the daemon may take the free AT keyboard"
+        record hhd.grab hhd "no hhd device held by us" PASS "hhd is not installed; no hhd event device exists" "" ""
+        return 0
+    elif [ "$active" = active ]; then
+        record hhd.unit hhd "hhd service" PASS "active (running)" "UnitFileState=$file" ""
+    else
+        record hhd.unit hhd "hhd service" FAIL "hhd is $active" "LoadState=$load ActiveState=$active" "sudo systemctl restart hhd ; journalctl -u hhd -b --no-pager | tail -40"
+    fi
+
+    # hhd is chatty; health is about the most recent state, so use the tail
+    # (journal_text truncates the head, which would hide a later recovery).
+    jtext=$(journalctl -u hhd.service -b --no-pager -o cat 2>/dev/null | tail -n 600)
+    local jkv
+    if [ -n "$jtext" ]; then
+        jreadable=1
+        jkv=$(printf '%s\n' "$jtext" | parse_hhd_journal)
+        busy=$(printf '%s\n' "$jkv" | sed -n 's/^BUSY=//p')
+        last_busy=$(printf '%s\n' "$jkv" | sed -n 's/^LAST=//p')
+        recovered=$(printf '%s\n' "$jkv" | sed -n 's/^RECOVERED=//p')
+    fi
+    if [ "$jreadable" -eq 0 ]; then
+        record hhd.busy hhd "hhd volume device not held by others" SKIP \
+            "hhd journal not readable" "" \
+            "journalctl -u hhd -b --no-pager ; sudo tools/oxp3-verify.sh"
+    elif [ "${busy:-0}" -gt 0 ] && [ "${recovered:-0}" = 1 ]; then
+        record hhd.busy hhd "hhd volume device not held by others" PASS \
+            "recovered: ${busy} earlier EBUSY/disconnect line(s); hhd initialized afterwards" \
+            "${last_busy:--}" ""
+    elif [ "${busy:-0}" -gt 0 ]; then
+        record hhd.busy hhd "hhd volume device not held by others" FAIL \
+            "this boot's hhd journal reports EBUSY/disconnect (${busy} line(s)) with no later successful init" \
+            "${last_busy:--}" \
+            "find the second grabber: sudo tools/oxp3-verify.sh ; then remove it (never grab what hhd owns, docs/DAEMONS.md)"
+    else
+        record hhd.busy hhd "hhd volume device not held by others" PASS \
+            "no EBUSY/disconnect in this boot's hhd journal" \
+            "journalctl -u hhd -b" ""
+    fi
+
+    # Which event devices are hhd's own virtual volume keyboards?
+    for d in /sys/class/input/event*; do
+        [ -r "$d/device/name" ] || continue
+        name=$(cat "$d/device/name" 2>/dev/null || true)
+        case $name in
+            *"Handheld Daemon"*) paths="$paths /dev/input/${d##*/}" ;;
+        esac
+    done
+    if [ -z "$paths" ]; then
+        record hhd.grab hhd "no hhd device held by us" PASS \
+            "hhd's virtual volume keyboard is not present" "" ""
+        return 0
+    fi
+
+    # Anything of ours that is running the daemon must not have an fd or grab
+    # on one of those devices.
+    for p in /proc/[0-9]*; do
+        pid=${p#/proc/}
+        [ -r "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' <"$p/cmdline" 2>/dev/null || true)
+        case $cmd in
+            *oxp3-voltap*run*) ;;
+            *) continue ;;
+        esac
+        if [ ! -r "$p/fd" ]; then
+            denied=$((denied + 1))
+            continue
+        fi
+        for l in "$p/fd"/*; do
+            tgt=$(readlink "$l" 2>/dev/null) || continue
+            for d in $paths; do
+                [ "$tgt" = "$d" ] || continue
+                held="$held $pid:$tgt"
+                fd=${l##*/}
+                if [ -r "$p/fdinfo/$fd" ] && grep -q '^grab: 1$' "$p/fdinfo/$fd" 2>/dev/null; then
+                    grabbers="$grabbers $pid:$tgt"
+                fi
+            done
+        done
+    done
+
+    # Historical evidence: did this boot's daemon journal claim a grab on one?
+    jvol=$(journal_text oxp3-voltap)
+    if [ -n "$jvol" ]; then
+        for d in $paths; do
+            if printf '%s\n' "$jvol" | grep -q "grabbed $d "; then
+                journal_grabbed="$journal_grabbed $d"
+            fi
+        done
+    fi
+
+    if [ -n "$grabbers" ]; then
+        record hhd.grab hhd "no hhd device held by us" FAIL \
+            "our process holds an EVIOCGRAB on hhd's device:$grabbers" \
+            "that is the outage: hhd cannot open its own volume keyboard" \
+            "sudo systemctl disable --now oxp3-voltap ; sudo systemctl restart hhd ; install the hhd plugin (tools/hhd-oxp3-voltap)"
+    elif [ -n "$held" ]; then
+        record hhd.grab hhd "no hhd device held by us" FAIL \
+            "our process has an open fd on hhd's device:$held" "" \
+            "stop holding hhd's devices (docs/DAEMONS.md); the supported path is the hhd plugin"
+    elif [ -n "$journal_grabbed" ]; then
+        record hhd.grab hhd "no hhd device held by us" FAIL \
+            "this boot's daemon journal shows a grab of hhd's device:$journal_grabbed" \
+            "journalctl -u oxp3-voltap -b" \
+            "sudo systemctl disable --now oxp3-voltap ; sudo systemctl restart hhd ; install the hhd plugin (tools/hhd-oxp3-voltap)"
+    elif [ "$denied" -gt 0 ]; then
+        record hhd.grab hhd "no hhd device held by us" SKIP \
+            "cannot inspect the root daemon's fds" \
+            "denied /proc/<pid>/fd for ${denied} daemon process(es); devices:$paths" \
+            "sudo tools/oxp3-verify.sh --full (read-only); the journal part above already passed"
+    else
+        record hhd.grab hhd "no hhd device held by us" PASS \
+            "no process of ours holds an fd or grab on hhd's device(s)" \
+            "checked:$paths" ""
     fi
 }
 
@@ -1500,6 +1704,9 @@ check_lifecycle() {
     lines="$(daemon_fd_lines oxp3-voltap.service 0)
 $(daemon_fd_lines oxp3-homebtn.service 1)
 $(daemon_fd_lines oxp3-rgbd.service 1)"
+    if [ "$FULL" -ne 1 ] && journal_text oxp3-voltap             | grep -q 'OBSERVE: hhd owns the volume path'; then
+        VOLTAP_OBSERVE=1
+    fi
     fd_kv=$(printf '%s\n' "$lines" | parse_fd_report)
     verdict=$(printf '%s\n' "$fd_kv" | sed -n 's/^VERDICT=//p')
     why=$(printf '%s\n' "$fd_kv" | sed -n 's/^WHY=//p')
@@ -1508,6 +1715,7 @@ $(daemon_fd_lines oxp3-rgbd.service 1)"
     checked=$(printf '%s\n' "$fd_kv" | sed -n 's/^CHECKED=//p')
     denied=$(printf '%s\n' "$fd_kv" | sed -n 's/^DENIED=//p')
     perapply=$(printf '%s\n' "$fd_kv" | sed -n 's/^PERAPPLY=//p')
+    volskip=$(printf '%s\n' "$fd_kv" | sed -n 's/^VOLSKIP=//p')
 
     case ${verdict:-skip} in
         pass)
@@ -1526,6 +1734,11 @@ $(daemon_fd_lines oxp3-rgbd.service 1)"
                 record life.fd lifecycle "live device fd per daemon" SKIP \
                     "no lifecycle daemon active" "$why" \
                     "install/enable oxp3-homebtn, oxp3-rgbd or oxp3-voltap (docs/DAEMONS.md)"
+            elif [ "${volskip:-0}" -gt 0 ] && [ "${perapply:-0}" -eq 0 ]; then
+                record life.fd lifecycle "live device fd per daemon" SKIP \
+                    "volume daemon is in observe mode (hhd owns the volume path)" \
+                    "$why" \
+                    "supported path: install the hhd plugin (tools/hhd-oxp3-voltap); docs/DAEMONS.md"
             else
                 record life.fd lifecycle "live device fd per daemon" SKIP \
                     "only the RGB keeper is active; it opens the node per apply" \
@@ -2880,17 +3093,39 @@ run_selftest() {
     out=$(journal_fixture "$fx/vol-journal.txt")
     t_eq "vol/grab" /dev/input/event12 "$out"
     out=$(parse_voltopology <"$fx/vol-topology.txt")
-    t_eq "voltopo/hhd-topo" hhd-virtual "$(kv "$out" TOPO)"
-    t_eq "voltopo/hhd-role" hhd-virtual "$(kv "$out" SEL_ROLE)"
-    t_eq "voltopo/hhd-at-held" 6752 "$(kv "$out" ATKBD_HELD)"
-    t_eq "voltopo/hhd-running" 1 "$(kv "$out" HHD_RUNNING)"
-    t_eq "voltopo/hhd-holders" 1 "$(kv "$out" HOLDERS_KNOWN)"
-    t_eq "voltopo/hhd-exit" 0 "$(kv "$out" PREDICTED_EXIT)"
+    t_eq "voltopo/protected-topo" none "$(kv "$out" TOPO)"
+    t_eq "voltopo/protected-sel" "" "$(kv "$out" SEL)"
+    t_eq "voltopo/protected-at-held" 6752 "$(kv "$out" ATKBD_HELD)"
+    t_eq "voltopo/protected-running" 1 "$(kv "$out" HHD_RUNNING)"
+    t_eq "voltopo/protected-holders" 1 "$(kv "$out" HOLDERS_KNOWN)"
+    t_eq "voltopo/protected-exit" 4 "$(kv "$out" PREDICTED_EXIT)"
+    t_eq "voltopo/protected-protected" 1 "$(kv "$out" HHD_PROTECTED)"
+    t_eq "voltopo/protected-observe" 1 "$(kv "$out" OBSERVE)"
+    t_eq "voltopo/protected-allow" 0 "$(kv "$out" ALLOW_HHD_GRAB)"
+    out=$(parse_voltopology <"$fx/vol-topology-hhd-allowed.txt")
+    t_eq "voltopo/allowed-topo" hhd-virtual "$(kv "$out" TOPO)"
+    t_eq "voltopo/allowed-role" hhd-virtual "$(kv "$out" SEL_ROLE)"
+    t_eq "voltopo/allowed-allow" 1 "$(kv "$out" ALLOW_HHD_GRAB)"
+    t_eq "voltopo/allowed-protected" 0 "$(kv "$out" HHD_PROTECTED)"
+    t_eq "voltopo/allowed-exit" 0 "$(kv "$out" PREDICTED_EXIT)"
     out=$(parse_voltopology <"$fx/vol-topology-physical.txt")
     t_eq "voltopo/phys-topo" physical "$(kv "$out" TOPO)"
     t_eq "voltopo/phys-role" at-kbd "$(kv "$out" SEL_ROLE)"
     t_eq "voltopo/phys-hhd" 0 "$(kv "$out" HHD_RUNNING)"
     t_eq "voltopo/phys-at-free" "" "$(kv "$out" ATKBD_HELD)"
+    t_eq "voltopo/phys-protected" 1 "$(kv "$out" HHD_PROTECTED)"
+    # hhd journal: the outage signature must be detected (and not invented).
+    out=$(parse_hhd_journal <"$fx/hhd-journal-busy.txt")
+    t_eq "hhd/busy-count" 2 "$(kv "$out" BUSY)"
+    t_contains "hhd/busy-last" "Assuming controllers disconnected" "$(kv "$out" LAST)"
+    out=$(parse_hhd_journal <"$fx/hhd-journal-ok.txt")
+    t_eq "hhd/ok-count" 0 "$(kv "$out" BUSY)"
+    t_eq "hhd/ok-recovered" 0 "$(kv "$out" RECOVERED)"
+    out=$(parse_hhd_journal <"$fx/hhd-journal-busy.txt")
+    t_eq "hhd/busy-recovered" 0 "$(kv "$out" RECOVERED)"
+    out=$(parse_hhd_journal <"$fx/hhd-journal-recovered.txt")
+    t_eq "hhd/recovered-count" 2 "$(kv "$out" BUSY)"
+    t_eq "hhd/recovered-flag" 1 "$(kv "$out" RECOVERED)"
     out=$(parse_homebtn_journal <"$fx/homebtn-journal.txt")
     t_eq "homebtn/listen" 1 "$(kv "$out" LISTEN)"
     t_eq "homebtn/press" 2 "$(kv "$out" PRESS)"
@@ -3030,6 +3265,7 @@ run_selftest() {
         fan.curvedup fan.savemode \
         gfx.mesa gfx.working gfx.xe gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc \
         gfx.xmx.icd gfx.xmx.kernels gfx.xmx.trace \
+        hhd.busy hhd.grab hhd.unit \
         hid.access hid.node hid.rule \
         homebtn.mapping homebtn.press homebtn.unit \
         imu.iio imu.selftest \
@@ -3148,6 +3384,7 @@ fi
 
 check_preflight
 check_volume
+check_hhd_volume
 check_leds
 check_lifecycle
 check_imu

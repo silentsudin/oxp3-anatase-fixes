@@ -1,0 +1,3 @@
+Starting Handheld Daemon...
+Opening virtual device 'Handheld Daemon Volume Keyboard'.
+Initialization Complete!

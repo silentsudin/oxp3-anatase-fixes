@@ -94,6 +94,9 @@ REPO_REQUIRED = (
     "tools/lib/install-common.sh",
     "tools/lib/decky_plugin.py",
     "tools/decky-oxp3-status/artifact.sha256",
+    "tools/hhd-oxp3-voltap/install.sh",
+    "tools/hhd-oxp3-voltap/oxp3_hhd_voltap/__init__.py",
+    "tools/hhd-oxp3-voltap/pyproject.toml",
     "tools/oxp3-voltap/install.sh",
     "tools/oxp3-power-install.sh",
     "tools/oxp3-bt-firmware.sh",
@@ -107,7 +110,12 @@ REPO_REQUIRED = (
 # Install artefacts per component. 0 present = not installed; all = installed;
 # anything between = a half-install the installer can complete.
 COMPONENT_FILES = {
+    # The supported volume path is the hhd plugin; the daemon artefacts are the
+    # legacy alternative. A host with only the daemon is a "half-install" here,
+    # which is accurate: re-running --volume installs the plugin (and the daemon
+    # uninstall can follow).
     "volume": (
+        "/usr/local/lib/python3.15/site-packages/oxp3_hhd_voltap",
         "/usr/local/libexec/oxp3-voltap",
         "/etc/systemd/system/oxp3-voltap.service",
         "/etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb",
@@ -1046,11 +1054,14 @@ def check_devices(ctx: Context) -> List[Check]:
         out.append(ok("dev.input-events", "dev", "input event devices",
                       "%d node(s)" % len(events), EVDEV_COMPONENTS))
     else:
-        out.append(fail(
+        # The supported volume path (the hhd plugin) opens no event node; only
+        # the legacy daemon needs one, so this is a WARN, not a blocker.
+        out.append(warn(
             "dev.input-events", "dev", "input event devices",
             "no /dev/input/event* node",
-            "check the kernel input stack (CONFIG_INPUT_EVDEV) and udev; "
-            "oxp3-voltap cannot grab anything without it", EVDEV_COMPONENTS,
+            "check CONFIG_INPUT_EVDEV and udev; only the LEGACY oxp3-voltap "
+            "daemon reads event nodes - the hhd plugin needs none",
+            EVDEV_COMPONENTS,
         ))
 
     if ctx.exists("/dev/uinput"):
@@ -1059,9 +1070,14 @@ def check_devices(ctx: Context) -> List[Check]:
     else:
         out.append(fail(
             "dev.uinput", "dev", "uinput", "/dev/uinput is missing",
-            "sudo modprobe uinput   (and CONFIG_INPUT_UINPUT); the volume shim "
-            "and the home-button keyboard both create uinput devices",
-            UINPUT_COMPONENTS,
+            "sudo modprobe uinput   (and CONFIG_INPUT_UINPUT); the home-button "
+            "keyboard creates a uinput device", ("leds",),
+        ))
+        out.append(warn(
+            "dev.uinput-legacy", "dev", "uinput for the legacy volume daemon",
+            "/dev/uinput is missing",
+            "only the LEGACY oxp3-voltap shim needs it; the hhd plugin needs "
+            "neither /dev/uinput nor an event node", ("volume",),
         ))
 
     spidev = ctx.glob("/dev/spidev*")
@@ -1165,9 +1181,14 @@ def check_kernel(ctx: Context) -> List[Check]:
             "hidraw-only"))
         out.append(module_check(
             "kernel.uinput", "INPUT_UINPUT", ("CONFIG_INPUT_UINPUT",),
-            UINPUT_COMPONENTS, FAIL,
-            "enable CONFIG_INPUT_UINPUT; the volume shim and home-button "
-            "keyboard create uinput devices"))
+            ("leds",), FAIL,
+            "enable CONFIG_INPUT_UINPUT; the home-button keyboard creates a "
+            "uinput device"))
+        out.append(module_check(
+            "kernel.uinput-legacy", "INPUT_UINPUT", ("CONFIG_INPUT_UINPUT",),
+            ("volume",), WARN,
+            "only the LEGACY oxp3-voltap shim needs uinput; the hhd plugin "
+            "opens no device"))
         out.append(module_check(
             "kernel.rapl", "INTEL_RAPL",
             ("CONFIG_INTEL_RAPL", "CONFIG_INTEL_RAPL_CORE"), RAPL_COMPONENTS,
@@ -1317,29 +1338,36 @@ def check_conflicts(ctx: Context) -> List[Check]:
     patches = int(info.get("patches") or 0)
     voltap = (ctx.exists("/usr/local/libexec/oxp3-voltap") or
               ctx.exists("/etc/systemd/system/oxp3-voltap.service"))
+    plugin = ctx.exists("/usr/local/lib/python3.15/site-packages/"
+                        "oxp3_hhd_voltap")
     if patches and patched == patches:
-        if voltap:
-            out.append(fail(
+        if plugin:
+            out.append(ok(
                 "conflict.volume-path", "conflict", "volume implementation",
-                "the hhd volume patch is applied AND oxp3-voltap is installed; "
-                "both normalise the same key",
-                "pick one: remove the standalone daemon "
-                "(sudo tools/oxp3-voltap/install.sh uninstall) or remove the "
-                "hhd patch (./oxp3-fixes-fast.sh uninstall)", ("volume",),
-            ))
-        else:
+                "hhd plugin + hhd patch applied; the plugin supersedes the "
+                "patch's tap policy per producer, so the key is normalised once",
+                ("volume",)))
+        elif voltap:
             out.append(warn(
                 "conflict.volume-path", "conflict", "volume implementation",
-                "the hhd volume-rocker patch is applied (recommended path); "
-                "do not also install oxp3-voltap",
-                "use the driver-installer path: omit --volume; "
-                "tools/oxp3-hw-install.sh --volume is the alternative",
-                ("volume",),
-            ))
+                "the hhd volume patch is applied AND the legacy oxp3-voltap "
+                "daemon is installed; with hhd running the daemon only observes",
+                "the supported path is the plugin "
+                "(sudo tools/hhd-oxp3-voltap/install.sh install); otherwise "
+                "remove the unused one", ("volume",)))
+        else:
+            out.append(ok(
+                "conflict.volume-path", "conflict", "volume implementation",
+                "the hhd volume-rocker patch is applied; no plugin/daemon",
+                "the supported upgrade is the plugin: sudo tools/oxp3-hw-install.sh --volume",
+                ("volume",)))
+    elif plugin:
+        out.append(ok("conflict.volume-path", "conflict", "volume implementation",
+                      "hhd plugin installed (supported path)", ("volume",)))
     elif voltap:
         out.append(ok("conflict.volume-path", "conflict", "volume implementation",
-                      "standalone oxp3-voltap installed; hhd patch not applied",
-                      ("volume",)))
+                      "legacy oxp3-voltap installed; hhd patch not applied "
+                      "(the plugin is the supported path)", ("volume",)))
     else:
         out.append(ok("conflict.volume-path", "conflict", "volume implementation",
                       "no volume implementation installed yet", ("volume",)))

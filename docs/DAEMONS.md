@@ -7,7 +7,7 @@ identity while they run:
 |---|---|---|---|
 | `tools/oxp3-homebtn.py` | vendor hidraw `1a86:fe00`, usage page `0xFF00` | uinput keyboard (`KEY_HOMEPAGE`) or `--exec` | `oxp3-homebtn.service` (user) |
 | `tools/oxp3-rgbd.py` | same hidraw node (write-only), plus hhd journal/`hhdctl` | RGB frames on the same node | `oxp3-rgbd.service` (user) |
-| `tools/oxp3-voltap/oxp3-voltap` | evdev device carrying the volume rocker (default: hhd's `Handheld Daemon Volume Keyboard`) | uinput shim (`OXP3 volume tap shim`) | `oxp3-voltap.service` (root) |
+| `tools/oxp3-voltap/oxp3-voltap` (legacy) | the **free** physical AT keyboard that carries the rocker; **never hhd's virtual volume keyboard** (unless `--allow-hhd-grab`) | uinput shim (`OXP3 volume tap shim`) | `oxp3-voltap.service` (root) |
 
 A suspend with USB re-enumeration, a USB reset, a hhd restart or an unplug
 invalidates the fd; the kernel does not always tell us with a friendly error.
@@ -19,6 +19,39 @@ The shared primitives live in [`tools/oxp3_lifecycle.py`](../tools/oxp3_lifecycl
 `Interval`, and the identity-based discovery (`hidraw_identity`/`find_hidraw`,
 `input_identity`/`find_input_event`). They are stdlib-only and unit-tested in
 `tests/unit/test_lifecycle.py`.
+
+---
+
+## 0. Never grab what HHD owns
+
+This is the hard rule for every tool in this repository. It is written here
+because breaking it took the controller down on 2026-11-09.
+
+* hhd's virtual `Handheld Daemon Volume Keyboard` (`phys-hhd-vbtn`,
+  `0001:0001`) is **hhd's own device**, not a spare copy of the rocker. hhd's
+  OXP keyboard producer (`hhd/device/oxp/base.py`, `OxpAtKbd`, matched by
+  VID:PID only) also picks that node up. If a second process holds an
+  `EVIOCGRAB` on it, hhd's own `grab()` fails with `EBUSY`, hhd logs
+  "Assuming controllers disconnected, restarting after 3s" and the emulated
+  Steam controller (`28DE:12FF`) disappears for a few seconds.
+* Therefore: **no `EVIOCGRAB`, no open-for-read, no uinput clone of any
+  `Handheld Daemon*` event node.** Not in a daemon, not in a probe, not
+  "just to measure".
+* The supported volume path is the **hhd plugin**
+  [`tools/hhd-oxp3-voltap`](../tools/hhd-oxp3-voltap/README.md). It runs inside
+  hhd's producer path (see
+  [`docs/hw/hhd-plugin.md`](hw/hhd-plugin.md)) and opens no device at all.
+* The legacy `oxp3-voltap` daemon enforces the rule itself: an `hhd-virtual`
+  candidate is refused (`decision=refused`) unless `--allow-hhd-grab`
+  (`VOLTAP_ALLOW_HHD_GRAB=1`), and even then it is only a `last-resort` after
+  the free physical AT keyboard. With hhd running it stays in observable
+  observe mode - one `OBSERVE:` line, JSON status
+  `state=degraded-hhd-protected`, exit code **4**, no grab attempt.
+* `oxp3-verify.sh` proves both halves read-only: `hhd.unit`/`hhd.busy`
+  (hhd healthy, no unrecovered EBUSY episode in this boot) and `hhd.grab` (no
+  process of ours holds an fd or `EVIOCGRAB` on an hhd device, checked from
+  `/proc/<pid>/fd` and `fdinfo` where permitted and from the daemon journal).
+  It also fails `vol.grab` if this boot's daemon grabbed hhd's device.
 
 ---
 
@@ -113,11 +146,21 @@ The shared primitives live in [`tools/oxp3_lifecycle.py`](../tools/oxp3_lifecycl
   loop also restarts a dead thread and logs `watchdog: watcher thread …`.
 * **No exclusive open:** HHD and the daemon still share the node.
 
-### 1.4 `oxp3-voltap` (grabbed evdev → uinput)
+### 1.4 `oxp3-voltap` (grabbed evdev → uinput, legacy)
 
+This is the legacy path; with hhd installed the plugin (§0) is the supported
+one. The daemon must never take hhd's device:
+
+* **Eligible devices:** the free physical AT keyboard (hhd stopped or
+  `controller_mode.mode = disabled`). An `hhd-virtual` candidate is refused
+  unless `--allow-hhd-grab` is given explicitly, and is then only a
+  `last-resort` after the physical device. When hhd owns the path the daemon
+  enters observe mode (`OBSERVE:` line, `degraded-hhd-protected`, exit 4) and
+  opens nothing.
 * **Reconnects to:** the configured/auto-selected input device by
   name/phys/vendor/product. With an explicit `--device`, the remembered
-  identity is used to find the device at its new `eventN`.
+  identity is used to find the device at its new `eventN`. Explicitly naming
+  an hhd device is still refused without the flag.
 * **Triggers:** `select()`/read errors (`ENODEV`, `EBADF`), a device that
   disappears from the inventory, or a 10 s idle-health check that finds the
   sysfs identity changed.
@@ -134,7 +177,7 @@ The shared primitives live in [`tools/oxp3_lifecycle.py`](../tools/oxp3_lifecycl
 |---|---|---|
 | `oxp3-homebtn.service` | `Restart=always`, `RestartSec=2`, `StartLimitIntervalSec=0` | user unit; no sandbox that would block hidraw/uinput or `--exec` children |
 | `oxp3-rgbd.service` | `Restart=always`, `RestartSec=3`, `StartLimitIntervalSec=0` | `ConditionPathExists=%h/.config/oxp3-rgb.toml` is intentional (no config = no work) |
-| `oxp3-voltap.service` | `Restart=always`, `RestartSec=2`, `TimeoutStopSec=10`, `StartLimitIntervalSec=0`, `After=hhd.service dev-uinput.device` | `ConditionPathExists=/dev/uinput` was removed: a condition failure leaves the unit dead with no restart, while the daemon can retry until uinput appears |
+| `oxp3-voltap.service` | `Restart=always`, `RestartSec=2`, `TimeoutStopSec=10`, `StartLimitIntervalSec=0`, `After=hhd.service dev-uinput.device` | `ConditionPathExists=/dev/uinput` was removed: a condition failure leaves the unit dead with no restart, while the daemon can retry until uinput appears. With hhd running the unit normally sits in observe mode (exit 4 is not a failure) |
 
 Rationale: `Restart=on-failure` masks a daemon that exits 0 after a
 transient error, and the default start rate limit (5 starts / 10 s) can turn
@@ -152,7 +195,9 @@ the tests parse them.
 | line | meaning |
 |---|---|
 | `listening on /dev/hidrawN (identity …)` | homebtn opened the vendor node (repeated on every reopen) |
-| `grabbed /dev/input/eventN (… phys=… id=…)` | voltap holds the device (existing format kept) |
+| `grabbed /dev/input/eventN (… phys=… id=…)` | voltap holds a **non-hhd** device (a grab of an hhd device is a verify failure) |
+| `OBSERVE: hhd owns the volume path; not opening or grabbing its device (status=degraded-hhd-protected exit=4)` | voltap refused hhd's device; nothing opened, nothing grabbed |
+| `vltp  INFO  oxp3-voltap: installed the volume-tap filter on hhd.device.oxp.base.OxpAtKbd.produce` | the hhd plugin is loaded and hooked into hhd's own producer (no device opened) |
 | `applied N frame(s) to /dev/hidrawN (why)` | rgbd wrote the configured state |
 | `device lost: <reason>; …` | fd/node gone (EOF, ENODEV, EBADF, select, identity change) |
 | `retrying in X.Xs (attempt N)` | the current backoff delay |
@@ -210,6 +255,11 @@ oxp3-homebtn: reconnect #1 to /dev/hidraw9 (identity 1a86:fe00 …)
 10. **No retry of `--exec` commands.** If the launched command fails,
     homebtn logs nothing about it (subprocess is fire-and-forget); that is
     existing behaviour.
+11. **Fighting hhd for its device.** We do not try to out-grab hhd, retry a
+    busy `EVIOCGRAB`, or open hhd's volume keyboard "read-only" as a
+    workaround. hhd owns that device; a tool of ours that needs the rocker
+    either uses the plugin or observes (exit 4). This is deliberate, not a
+    missing feature: the workaround caused the outage described in §0.
 
 ---
 
@@ -220,7 +270,8 @@ oxp3-homebtn: reconnect #1 to /dev/hidraw9 (identity 1a86:fe00 …)
 | `tests/unit/test_lifecycle.py` | backoff ladder/cap/reset, errno classification, `sleep_interruptible`, resume detector (one report per jump, no report for a small step), monotonic `Interval` after an hour of suspend, identity parsing and discovery across renumbering (hidraw + input), numeric node ordering |
 | `tests/unit/test_homebtn_lifecycle.py` | happy path press/release; EOF/ENODEV/EBADF/EPIPE → loss; select EBADF; open failures back off 0.5/1/2 s and reset; permission hint; recycled node identity; vanished node; uinput write failure recreation; uinput unavailable does not crash; reader classifies EAGAIN/EINTR/EOF |
 | `tests/unit/test_rgbd_lifecycle.py` | simulated suspend (BOOTTIME +120 s, MONOTONIC +1 s) → one `resume detected` and one schedule; baseline after start; watchdog does not fire after +3600 s suspend; missing device → backoff → reappearance → `reconnect #1`; ENODEV write retry; `EACCES` is not a device loss; ladder cap; watcher crash restart; dead-thread restart; health-note rate limit |
-| `tests/unit/test_voltap.py` | the tap state machine and the rewritten discovery/selection (owned by the vol-tap change) |
+| `tests/unit/test_voltap.py` | the tap state machine, discovery/selection and the hhd-protection rules (hhd refused by default, `--allow-hhd-grab` last resort, observe/exit 4, explicit hhd refusal) |
+| `tests/unit/test_hhd_voltap_plugin.py` | the plugin: tap state machine; defensive hook against a fake `OxpAtKbd` (wrap, idempotency, wrong API shape → no-op, filter exception → pass-through and HHD's taps restored, producer errors still propagate); entry-point contract; `install.sh --site` round trip (entry point resolves, uninstall removes exactly our files) |
 
 Run them all offline: `make unit` (or
 `python3 -m unittest discover -s tests/unit -q`). No root, no device, no
@@ -241,7 +292,15 @@ tools/oxp3-verify.sh --json     # same checks, machine-readable
   whether it currently holds a live `hidraw`/`event`/`uinput` fd.
   `oxp3-voltap` (root) needs root to inspect its fds, so in the default run
   it degrades to `SKIP` with a hint; `oxp3-rgbd` opens the node per apply by
-  design and is reported as such rather than failed.
+  design and is reported as such rather than failed. When the volume daemon
+  logged `OBSERVE:` (hhd owns the path) it legitimately holds no input fd and
+  is reported as observe, not as missing.
+* `hhd.unit` / `hhd.busy` / `hhd.grab` — the "never grab what HHD owns"
+  invariant (§0): hhd is active; this boot's hhd journal has no unrecovered
+  `EBUSY`/`assuming controllers disconnected` episode; and no process of ours
+  holds an fd or `EVIOCGRAB` on an `hhd-*` event device (fd scan + fdinfo,
+  plus this boot's `oxp3-voltap` journal). See
+  [`docs/hw/volume-buttons.md`](hw/volume-buttons.md).
 * `life.reconnect` — parses this boot's journal for the vocabulary in §2:
   `PASS` when there is no loss, or when every loss has a later
   `reconnect #`/open line; `FAIL` when a `device lost:` was never followed by
