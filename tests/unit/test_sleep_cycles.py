@@ -849,3 +849,48 @@ class PolicyBlockTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResourceGuardTest(unittest.TestCase):
+    """The bench must refuse to suspend when resources are low or the boot has
+    already seen several suspends (repeated rtcwake batches wedged the firmware
+    on the reference device)."""
+
+    def opts(self, **kw):
+        base = dict(cycles=3, dry_run=False, force=False)
+        base.update(kw)
+        return type("O", (), base)()
+
+    def guards_with(self, free=50 * 1024 ** 3, mem_kb=8 * 1024 * 1024,
+                    success="0"):
+        def fake_disk(_):
+            return type("U", (), dict(total=0, used=0, free=free))()
+        with mock.patch.object(mod.shutil, "disk_usage", fake_disk), \
+             mock.patch("builtins.open", mock.mock_open(
+                 read_data="MemAvailable: %d kB\n" % mem_kb)), \
+             mock.patch.object(mod, "suspend_stats", lambda *a, **k: {"success": success}):
+            return mod.resource_guards(self.opts())
+
+    def test_healthy_host_passes(self):
+        self.assertEqual(self.guards_with(), [])
+
+    def test_low_disk_refuses(self):
+        problems = self.guards_with(free=1024 ** 3)
+        self.assertTrue(any("free on /var" in p for p in problems), problems)
+
+    def test_low_memory_refuses(self):
+        problems = self.guards_with(mem_kb=256 * 1024)
+        self.assertTrue(any("available memory" in p for p in problems), problems)
+
+    def test_many_suspends_in_one_boot_refuses_a_batch(self):
+        problems = self.guards_with(success="6")
+        self.assertTrue(any("suspends already completed" in p for p in problems), problems)
+
+    def test_force_overrides_the_suspend_count(self):
+        with mock.patch.object(mod.shutil, "disk_usage",
+                               lambda _: type("U", (), dict(total=0, used=0,
+                                                            free=50 * 1024 ** 3))()), \
+             mock.patch("builtins.open", mock.mock_open(
+                 read_data="MemAvailable: 8388608 kB\n")), \
+             mock.patch.object(mod, "suspend_stats", lambda *a, **k: {"success": "9"}):
+            self.assertEqual(mod.resource_guards(self.opts(force=True)), [])

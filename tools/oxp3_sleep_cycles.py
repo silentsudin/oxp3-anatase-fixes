@@ -286,6 +286,48 @@ def temperatures(root="/"):
     return zones
 
 
+def resource_guards(opts):
+    """Refuse a suspend run that could hurt the machine or the filesystem.
+
+    Real cycles write the transcript, arm an RTC alarm and suspend; on this
+    hardware repeated rtcwake cycles have hung the firmware at the suspend
+    entry (journal ends at rtcwake, no OOM and no disk pressure).  The guards
+    below keep a run from starting when the obvious resources are low, and
+    stop a second multi-cycle batch in the same boot unless forced.
+    """
+    problems = []
+    try:
+        usage = shutil.disk_usage("/var" if os.path.isdir("/var") else "/")
+        if usage.free < 2 * 1024 ** 3:
+            problems.append("only %.1f GiB free on /var (need 2 GiB for the transcript)"
+                            % (usage.free / 1024 ** 3))
+    except OSError:
+        pass
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    if kb < 1024 * 1024:
+                        problems.append("only %d MiB available memory (need 1 GiB)" % (kb // 1024))
+                    break
+    except OSError:
+        pass
+    stats = suspend_stats()
+    success = stats.get("success") if isinstance(stats, dict) else None
+    if not getattr(opts, "force", False) and success:
+        try:
+            done = int(str(success).split()[0])
+        except (ValueError, IndexError):
+            done = 0
+        if done >= 6 and opts.cycles > 1:
+            problems.append(
+                "%d suspends already completed in this boot; repeated multi-cycle "
+                "batches have wedged the firmware here - reboot and run --cycles 1, "
+                "or pass --force if you accept the risk" % done)
+    return problems
+
+
 def suspend_stats(root="/"):
     root = pathlib.Path(root) / "sys/power/suspend_stats"
     stats = {}
@@ -2048,6 +2090,14 @@ def cmd_run(opts):
     }
     if capture["baseline"].get("energy_full_wh"):
         capture["meta"]["energy_full_wh"] = capture["baseline"]["energy_full_wh"]
+
+    guards = resource_guards(opts) if not opts.dry_run else []
+    if guards:
+        print("refusing to suspend:")
+        for problem in guards:
+            print("  - %s" % problem)
+        print("nothing was suspended and no alarm was armed")
+        return 2
 
     started = time.monotonic()
     interrupted = False
