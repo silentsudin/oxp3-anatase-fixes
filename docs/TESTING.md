@@ -35,19 +35,20 @@ one FAIL or timeout) and `2` (usage/configuration error: bad option, no suite
 matched, unwritable log directory, missing `timeout`). The runner prints the
 failing command and its log path.
 
-Recorded on this host (2026-11-09, no root):
+Recorded on this host (2026-11-09, no root). The counts predate the `gamewrap`
+suite, so today's `--list` has one more fast suite:
 
 ```
-== 25 suite(s): 19 pass, 0 fail, 6 skip -> exit 0      # --fast
-== 25 suite(s): 23 pass, 0 fail, 2 skip -> exit 0      # --full
+== 26 suite(s): 20 pass, 0 fail, 6 skip -> exit 0      # --fast (25/19/6 before gamewrap)
+== 26 suite(s): 24 pass, 0 fail, 2 skip -> exit 0      # --full (25/23/2 before gamewrap)
 ```
 
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 20 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 25 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 21 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 26 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
 `--full` still never installs host packages. The one network-dependent suite
 (`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
@@ -95,6 +96,7 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `led-selftest` | fast | fast | 60 s | `python3` | – |
 | `hid-selftest` | fast | fast | 60 s | `python3` | – |
 | `unit` | fast | fast | 120 s | `python3` | – (synthetic sysfs/config fixtures in `$TMPDIR`) |
+| `gamewrap` | fast | fast | 120 s | `python3` | – (synthetic HOME/config/panel state; stub commands) |
 | `eq-model` | fast | fast | 60 s | `python3` | – |
 | `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check) |
 
@@ -129,13 +131,18 @@ Areas and what is actually proven:
   `systemd-hwdb --strict` compilation of both `.hwdb` files.
 * **tools** — the RGB/HID encoder self-tests (captured frames, no hardware),
   the status backend self-test, and the speaker EQ model table.
-* **unit** — the stdlib `unittest` suite in `tests/unit/` (318 tests, ~0.6 s):
+* **gamewrap** — the launch-composition decision table behind
+  `tools/oxp3-gamewrap.sh` (45 tests): XMX opt-in/veto/missing-path refusal,
+  HDR gating on the panel state, vibrance backend choice, MangoHud env-only
+  behaviour, gamescope wrapping/inside-session handling, argv/JSON safety and
+  the parsed-not-sourced XMX env file. The `unit` suite runs the same file.
+* **unit** — the stdlib `unittest` suite in `tests/unit/` (363 tests, ~1.2 s):
   HID/LED frame encoders, rgbd TOML config and frame planning, powerctl
   parsers/write ordering/readback and exit codes, adaptivetdp policy and
   hysteresis, the voltap tap state machine, IMU helpers, EDID/ICC parsers and
   colour maths, `oxp3-sagv.sh` exit codes and RAPL averaging, and the
-  `install-common.sh` contract. No root, no hardware, no network; synthetic
-  sysfs trees only. Inventory, coverage and the bugs found are in
+  `install-common.sh` contract, and the launch wrapper's decisions. No root, no
+  hardware, no network; synthetic sysfs trees and a synthetic HOME only. Inventory, coverage and the bugs found are in
   [UNIT-TESTS.md](UNIT-TESTS.md).
 * **generated docs** — `tools/gen-docs.py --check` re-renders the component tables from
   `docs/hw/components.yaml` in memory and fails when a generated block in

@@ -99,11 +99,12 @@ components:
     state: partial
     group: driver-stack
     headline: true
-    summary: "XeSS SR/FG on the Arc XMX units instead of DP4a; the shim, ControlLib and compiler install, but the driver CM patches are parked on Mesa 26.3 while the installer pins main."
+    summary: "XeSS SR/FG on the Arc XMX units instead of DP4a for native Steam and Heroic; the shim, ControlLib and compiler install, but the driver CM patches are parked on Mesa 26.3 while the installer pins main. Flatpak Steam has its own deployment (docs/hw/flatpak-xmx.md) and is not trace-verified yet."
     implementation:
       - patches/xess-26.3
       - patches/xess-main
       - tools/lib/install-common.sh
+      - tools/oxp3-flatpak-xmx.sh
       - oxp3-fixes-fast.sh
     doc: docs/xess-xmx.md
     root_required: "yes"
@@ -128,9 +129,10 @@ components:
     caveats:
       - "XMX is unavailable until the 26.3 driver CM patches are ported to Mesa main"
       - "gfx.xmx.trace SKIPs unless an igdext trace was produced for that launch"
+      - "Flatpak Steam: env must come from per-game launch options, the shim must be copied into the game prefix, and the kernel cache lives in ~/.cache/xess-xmx; see docs/hw/flatpak-xmx.md (no permission change needed, trace pending)"
     last_validated:
       date: 2026-11-09
-      evidence: "docs/state/oxp3-status-2026-11-09.json xmx rows (warn: trace absent); patch status recorded in docs/xess-xmx.md"
+      evidence: "docs/state/oxp3-status-2026-11-09.json xmx rows (warn: trace absent); patch status recorded in docs/xess-xmx.md; Flatpak: tools/oxp3-flatpak-xmx.sh status --probe-sandbox shows all launch paths visible and ocloc runnable inside the org.anatase.Steam sandbox (docs/hw/flatpak-xmx.md)"
 
   - id: mangohud
     title: MangoHud
@@ -661,17 +663,21 @@ components:
     state: working
     group: hardware
     headline: false
-    summary: "The internal OLED is 10-bit PQ/HDR10 wide gamut and Plasma toggles it; our ICC profile and vibrance shader ship, and Gamemode needs two gamescope flags."
+    summary: "The internal OLED is 10-bit PQ/HDR10 wide gamut and Plasma toggles it; our ICC profile, vibrance shader and one per-game launch wrapper ship, while Gamemode needs the gamescope session flags."
     implementation:
       - tools/display
+      - tools/oxp3-gamewrap.sh
+      - tools/lib/oxp3_gamewrap.py
+      - tools/oxp3-gamewrap.toml.example
       - patches/gamescope
     doc: docs/hw/hdr-vibrance.md
     root_required: partial
     install:
-      summary: "user-scope status/HDR/ICC/vibrance tooling; the Gamemode flag is the only privileged part"
+      summary: "user-scope status/HDR/ICC/vibrance and per-game launch composition; the Gamemode flag is the only privileged part"
       steps:
         - "tools/display/display-mode.sh hdr on"
         - "tools/display/vibrance.sh install && tools/display/vibrance.sh set 35"
+        - "install -m 0644 tools/oxp3-gamewrap.toml.example ~/.config/oxp3-gamewrap.toml (then opt games in; docs/LAUNCH.md)"
     verify:
       - id: dsp.hdr
         expect: "HDR/WCG/depth/VRR reported for eDP-1 (HDR off is a valid state)"
@@ -681,11 +687,15 @@ components:
         expect: "the EDID verdict has 10-bit, PQ/HDR10 and BT.2020"
       - id: dsp.vibrance
         expect: "the saturation shader tooling is present"
+      - command: "tools/oxp3-gamewrap.sh --status --json"
+        expect: "one decision object per feature; HDR is skipped unless the panel reports HDR on and the app opted in"
     dependencies:
       - gamescope
     caveats:
       - "HDR in the Gamemode session is the only part that needs root"
       - "the panel is wide gamut; an ICC profile is what keeps SDR colours sane"
+      - "feature composition for a launch is tools/oxp3-gamewrap.sh (docs/LAUNCH.md): per-game opt-in, HDR never forced, MangoHud config untouched"
+      - "Flatpak Steam gets the XMX variables via tools/oxp3-flatpak-xmx.sh plus OXP3_XMX_ENV_FILE in the launch options (docs/hw/flatpak-xmx.md)"
     last_validated:
       date: 2026-11-09
       evidence: "docs/QA.md rows 51-52 (eDP-1 1920x1200@144, 10-bit, HDR off, WCG off); reproduction in docs/hw/hdr-vibrance.md"

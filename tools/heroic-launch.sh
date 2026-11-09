@@ -12,6 +12,10 @@
 # CPU under Gamemode, which starves the GPU on this 35 W package. Any extra launch
 # options after the URL (e.g. -benchmark) are passed on to the game.
 #
+# Graphics feature composition (XMX env, HDR, vibrance, MangoHud) is owned by
+# tools/oxp3-gamewrap.sh via tools/cp2077-direct.sh; OXP3_APP lets it select the
+# per-app section and OXP3_XMX=1 stays as the explicit override/legacy fallback.
+#
 # Usage: Target = this script, Launch Options = heroic://launch?appName=...&runner=...
 
 url="$1"
@@ -27,6 +31,7 @@ case "$url" in
             --env=SteamGameId="${SteamGameId:-}" \
             --env=STEAM_COMPAT_APP_ID="${SteamAppId:-}" \
             --env=STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.local/share/Steam" \
+            --env=OXP3_APP=cyberpunk2077 \
             --env=OXP3_XMX=1 \
             "$HOME/git/linux_scratch/oxp3-anatase-fixes/tools/cp2077-direct.sh" "$@"
         ;;

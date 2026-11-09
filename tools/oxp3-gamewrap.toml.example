@@ -1,0 +1,102 @@
+# oxp3-gamewrap.toml - per-game graphics feature composition for the OneXPlayer 3.
+#
+# Copy to ~/.config/oxp3-gamewrap.toml and edit. The wrapper is the single place
+# where XMX, HDR, vibrance and MangoHud are decided; launchers only call
+#     tools/oxp3-gamewrap.sh [--app NAME] -- <command...>
+# See docs/LAUNCH.md for the decision matrix, examples and wiring.
+#
+# Safety model: values are argv tokens and variable names, never shell text.
+# The XMX env file is parsed as `export KEY=VALUE` lines - it is not sourced.
+# Nothing here can make the wrapper write a MangoHud config or force HDR: HDR
+# flags are added only when the app says hdr = "on" *and* the panel reports HDR
+# enabled right now.
+schema = 1
+
+# Defaults for every app that has no [apps.<name>] override. The safe default
+# is "everything off, pass through": a game only gets a feature after an
+# explicit opt-in below.
+[defaults]
+xmx = "auto"       # off | on | auto (auto = only OXP3_XMX=1 arms it, which
+                   # keeps the old Heroic shortcut working before you copy this file)
+hdr = "off"        # off | on  (on still requires the panel to report HDR on)
+vibrance = "auto"  # off | auto | gamescope | vkbasalt
+mangohud = "keep"  # keep | on | off (environment variable only, never the config)
+gamescope = "auto" # auto | on | off (auto wraps only when a feature needs it)
+
+[gamescope]
+# Only used when the wrapper itself starts gamescope. 0 means "do not pass the
+# flag and let gamescope choose".
+command = "gamescope"
+width = 0
+height = 0
+refresh = 0
+# The HDR flags documented in docs/hw/hdr-vibrance.md 5.2. They are added only
+# when [apps.<name>].hdr = "on" and the panel currently reports HDR enabled.
+hdr_args = [
+  "--hdr-enabled",
+  "--hdr-pq-internal-enable",
+  "--hdr-sdr-content-nits", "200",
+]
+extra_args = []
+reshade_dir = "~/.local/share/gamescope/reshade/Shaders"
+effect = "oxp3-vibrance.fx"
+
+[vibrance]
+# Written by tools/display/vibrance.sh install; only used when the layer and
+# config both exist and the app selects (or auto-selects) vkBasalt.
+vkbasalt_layer = "~/.local/share/oxp3-vkbasalt/layer"
+vkbasalt_config = "~/.config/oxp3-vkbasalt.conf"
+
+[mangohud]
+# MANGOHUD=1 / MANGOHUD=0 only. The config file path is shown by --status and
+# is never read or written by the wrapper.
+env = "MANGOHUD"
+conf = "~/.config/MangoHud/MangoHud.conf"
+
+[xmx]
+# tools/xmx-enable.sh writes this file; it is parsed, not sourced.
+env_file = "~/.config/xess-xmx/oxp3-env.sh"
+# XMX is skipped (with a warning) when one of these is missing from the env
+# file, so a broken XMX setup falls back to the system driver instead of
+# launching the game on a missing ICD.
+require = [
+  "VK_DRIVER_FILES",
+  "ANV_CM_HELPER",
+  "XMX_IGC_DIR",
+  "INTC_ALT_DRIVER_EXTENSIONS_PATH",
+]
+verify_paths = true
+
+# Per-app sections. "match" entries are matched against --app, OXP3_APP,
+# STEAM_COMPAT_APP_ID/SteamAppId and the basenames of the command arguments
+# (case-insensitive shell wildcards). The first matching section wins.
+[apps.cyberpunk2077]
+match = ["Cyberpunk2077.exe", "*1423049311*"]
+xmx = "on"        # known-compatible: XeSS 2.0.2.68 libraries + XMX driver
+hdr = "on"        # user opted in; still gated on the panel reporting HDR on
+vibrance = "auto"
+mangohud = "keep"
+gamescope = "auto" # on the Plasma desktop this starts gamescope when HDR needs it
+
+# Example of a plain DX12 game: no XeSS, vibrance through the gamescope pass
+# only when a wrap already happens, MangoHud left to Steam's own option.
+# [apps.example-dx12]
+# match = ["ExampleGame.exe", "*1234567*"]
+# xmx = "off"
+# hdr = "off"
+# vibrance = "auto"
+# mangohud = "keep"
+
+# Steam build of a title (native Steam): selection comes from SteamAppId, which
+# Steam puts in the launch environment. For a Flatpak Steam launch, deploy XMX
+# with tools/oxp3-flatpak-xmx.sh and set
+#   OXP3_XMX_ENV_FILE=/var/home/holzr/.config/xess-xmx/flatpak-env.sh
+# in the game's Steam launch options so this section parses the sandbox env
+# instead of the host ~/.config/xess-xmx/oxp3-env.sh.
+# [apps.cyberpunk2077-steam]
+# match = ["*1091500*"]
+# xmx = "on"
+# hdr = "on"
+# vibrance = "auto"
+# mangohud = "keep"
+# gamescope = "auto"

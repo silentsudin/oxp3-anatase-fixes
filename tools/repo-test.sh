@@ -444,6 +444,17 @@ suite_unit() {
     python3 -m unittest discover -s tests/unit -q
 }
 
+suite_gamewrap() {
+    [ -x "$REPO/tools/oxp3-gamewrap.sh" ] || skip "tools/oxp3-gamewrap.sh is missing"
+    need python3
+    cd "$REPO" || exit 1
+    # Decision-table tests: synthetic HOME/config/panel state, stub commands.
+    python3 -m unittest discover -s tests/unit -p 'test_gamewrap.py' -q
+    # The shell entry point's own usage and status paths.
+    tools/oxp3-gamewrap.sh --help >/dev/null
+    tools/oxp3-gamewrap.sh --status --json >/dev/null
+}
+
 suite_eq_model() {
     [ -f "$REPO/tools/audio/eq_response.py" ] || skip "tools/audio/eq_response.py is missing"
     need python3
@@ -547,6 +558,9 @@ def_suite hid-selftest fast fast 60 0 \
 def_suite unit fast fast 120 0 \
     "offline unit tests for the Python tooling (stdlib unittest, synthetic fixtures)" \
     "python3 -m unittest discover -s tests/unit -q"
+def_suite gamewrap fast fast 120 0 \
+    "game launch wrapper: feature decisions, HDR gating, argv safety" \
+    "python3 -m unittest discover -s tests/unit -p test_gamewrap.py -q"
 def_suite eq-model fast fast 60 0 \
     "speaker EQ biquad model table" \
     "python3 tools/audio/eq_response.py"

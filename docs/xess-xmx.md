@@ -74,8 +74,12 @@ runs XMX like our test runs. If artifacts reappear there, compare against a laun
 - XMX engaged and measured faster; kernels compile and cache.
 - Heroic env wired; needs one normal-launch confirmation from the user that artifacts are gone.
 - Frame generation (`XESS_FG=n`) needs `ControlLib.dll`; not tested yet.
-- Flatpak Steam is not supported by the project; Steam games would need the env in the Flatpak override and the shim
-  reachable from the sandbox.
+- Flatpak Steam: the earlier assumption here ("not supported; would need the env in the Flatpak override") was
+  incomplete. The sandbox itself is not the obstacle (`home` is granted, so every XMX path is visible with its host
+  absolute path, and the bundled `ocloc` runs inside it); the missing pieces are the shim inside the game's prefix and
+  the environment arriving as per-game launch options, because `~/.config/environment.d` is not read in the sandbox.
+  `tools/oxp3-flatpak-xmx.sh` implements that with no permission change — see [hw/flatpak-xmx.md](hw/flatpak-xmx.md).
+  It is not trace-verified yet: the Flatpak Steam on this host has never been launched and has no Proton or prefix.
 
 ## Update: CM series ported to our Mesa main build
 
