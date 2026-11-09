@@ -174,3 +174,12 @@ console.log(
   html.length,
   fixtures.total
 );
+
+
+// The Decky loader evaluates dist/index.js as a classic script, so the shipped
+// bundle must be an IIFE expression and must not contain a top-level ESM export.
+{
+  const bundle = readFileSync(new URL("../dist/index.js", import.meta.url), "utf8");
+  if (!bundle.includes("/* decky-iife */")) throw new Error("dist/index.js is not IIFE-wrapped");
+  if (/^export\s/m.test(bundle)) throw new Error("dist/index.js still has a top-level export");
+}

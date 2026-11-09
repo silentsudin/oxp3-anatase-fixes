@@ -67,6 +67,10 @@ npm run --silent typecheck
 echo "build: rollup"
 npm run --silent build
 
+# Decky's loader evaluates dist/index.js as a classic script; rollup emits ESM.
+echo "build: wrap the bundle as an IIFE expression"
+node wrap-iife.mjs dist/index.js
+
 echo "build: headless load/render smoke test"
 npm run --silent smoke
 
