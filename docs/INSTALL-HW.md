@@ -300,6 +300,7 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Suspend and wake policy | awaiting-install | `sleep.mmcwake` | no armed mmc wakeup bit; the measured mmc0 is a virtual source (no device link, wakeup_count=0) and is parked with the SD host | no |
 | Suspend and wake policy | awaiting-install | `sleep.sdcard` | the SD host is bound while awake and parked only across suspend; a leftover park (unbound, or state says unbound) fails, because the reader would be dead | no |
 | Suspend and wake policy | awaiting-install | `sleep.aspm` | pcie_aspm.policy selects powersave (the storage link is allowed to idle) | no |
+| Suspend and wake policy | awaiting-install | `sleep.nvmeacpi` | PASS in `tools/oxp3-verify.sh --json` | no |
 | Suspend and wake policy | awaiting-install | `sleep.nvme` | nvme_core.default_ps_max_latency_us > 0 and force_apst != Y, so APST is not disabled | no |
 | Suspend and wake policy | awaiting-install | `sleep.measure` | PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h | no |
 | Suspend and wake policy | awaiting-install | `sleep.suspend` | one real s2idle cycle (rtcwake) with suspend_stats/success incremented; needs --full --with-changes and OXP3_ALLOW_SUSPEND=1 | yes |
