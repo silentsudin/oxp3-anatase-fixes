@@ -435,6 +435,15 @@ suite_hid_selftest() {
     python3 tools/oxp3_hid.py
 }
 
+suite_unit() {
+    [ -d "$REPO/tests/unit" ] || skip "tests/unit is missing"
+    need python3
+    cd "$REPO" || exit 1
+    # Pure stdlib unittest; synthetic sysfs/config fixtures only, no hardware,
+    # no root, no network. Bytecode is disabled by the runner's environment.
+    python3 -m unittest discover -s tests/unit -q
+}
+
 suite_eq_model() {
     [ -f "$REPO/tools/audio/eq_response.py" ] || skip "tools/audio/eq_response.py is missing"
     need python3
@@ -535,6 +544,9 @@ def_suite led-selftest fast fast 60 0 \
 def_suite hid-selftest fast fast 60 0 \
     "vendor HID encoder self-test" \
     "python3 tools/oxp3_hid.py"
+def_suite unit fast fast 120 0 \
+    "offline unit tests for the Python tooling (stdlib unittest, synthetic fixtures)" \
+    "python3 -m unittest discover -s tests/unit -q"
 def_suite eq-model fast fast 60 0 \
     "speaker EQ biquad model table" \
     "python3 tools/audio/eq_response.py"

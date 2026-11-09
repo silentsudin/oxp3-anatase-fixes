@@ -3,6 +3,9 @@
 Date: **2026-11-09** (Europe/London; commands run 01:32–01:41 UTC).
 Repo revision at start: **4dc7366** (`fingerprint: tested protocol library + compile-checked libfprint
 driver; decky: deterministic build`), author `silentsudin`.
+Update (licensing round, same day, unprivileged): added [PROVENANCE.md](PROVENANCE.md),
+`tools/apply-license.py` and `tools/provenance-audit.py`; validated the licence application on a
+`/tmp` copy only. No licence was applied to this checkout.
 No `sudo`, no reboot, no host configuration change, no privileged write was performed. Everything marked
 "root" below is written out as a command, not executed.
 
@@ -24,12 +27,15 @@ No `sudo`, no reboot, no host configuration change, no privileged write was perf
 | result | count |
 |---|---:|
 | PASS | 50 |
-| FAIL | 1 |
+| DECISION PENDING | 1 |
+| FAIL | 0 |
 | SKIP | 2 |
 
 `PASS (expected exit N)` rows are checks whose tool deliberately exits non-zero on this host (SAGV probe,
 Bluetooth diagnosis, `--strict` with warnings); the exit code was the documented, correct one.
-The single FAIL is the licence-header/top-level-licence gap. No functional test failed.
+The one pending item is the licence-header/top-level-licence gap (check 23): the repair is written,
+validated and waiting for the owner's licence choice, so it is no longer a FAIL. No functional test
+failed.
 
 ## Checks
 
@@ -57,7 +63,7 @@ The single FAIL is the licence-header/top-level-licence gap. No functional test 
 | 20 | hygiene | `.gitignore` coverage | `git check-ignore` on probe paths, then re-check | **PASS (fixed)** | Before: nested Decky `dist/build/node_modules` ignored, but a root `foo.zip`/`foo.pyc` was not. Added generic `dist/`, `build/`, `node_modules/`, `*.zip`, `*.pyc`, `*.pyo` to `.gitignore`; all probes now ignored. |
 | 21 | hygiene | large files | `git ls-files` sizes | **PASS** | Max 126,183 B; no file > 128 KiB, no LFS pointers. |
 | 22 | hygiene | secrets/tokens/keys | `git grep -nEI` for AWS/GitHub/Slack tokens, `BEGIN … PRIVATE KEY`, `password\|secret\|api_key = "…"`, `sk-…`; plus credential-in-URL/curl-auth scan | **PASS** | 0 matches across all tracked text, including docs, scripts and fixtures. |
-| 23 | hygiene | licence headers / top-level licence | first 8 lines of every tracked source-like file | **FAIL** | No `LICENSE`/`COPYING` at the repo root, and **60 of 71** source-like files have no `SPDX-License-Identifier`. Only the fingerprint C/driver/shim/test files and two test scripts carry `LGPL-2.1-or-later`. See “Failures”. |
+| 23 | hygiene | licence headers / top-level licence | first 8 lines of every tracked source-like file; then `tools/apply-license.py --check …` | **DECISION PENDING (ready to apply)** | No `LICENSE`/`COPYING` and **60 of 71** source-like files had no `SPDX-License-Identifier` at the audit revision; the fingerprint subtree (12 files) already declares `LGPL-2.1-or-later`. No licence is asserted by this repository: [PROVENANCE.md](PROVENANCE.md) records the provenance guarantee and `tools/apply-license.py` applies the owner's choice in one reviewable commit. Its scope covers every hand-written source (81 files at HEAD, including the Java helpers, the `.fx` shader and the extensionless scripts) and exempts only the generated `tools/fingerprint/tests/vectors.h`. The command is `tools/apply-license.py --write --spdx <id> [--except …]`; see [Decisions pending](#decisions-pending-not-failures). |
 | 24 | hygiene | line endings / executable bits | `git grep -Il $'\r'`; compare shebang to `git ls-files -s` mode | **PASS** | No CRLF. Every shebang file is `100755` except `files/oxp3-audio-route`, `files/oxp3-tdp-sync`, `files/oxp3-xpad-sleep` (100644; the installers use `install -m 0755`, so installed behaviour is unaffected) and `main.py`/`package.py` (invoked via `python3`). |
 | 25 | docs | relative Markdown links | local link parser over all tracked `.md` plus `docs/QA.md` | **PASS** | 87 relative links, 0 missing. |
 | 26 | docs | repo paths cited in docs | token scan for `tools/…`, `files/…`, `docs/…`, `patches/…`; existence check | **PASS (fixed)** | 120 unique paths. One genuine broken in-repo reference: README cited `docs/BEYOND-PARITY.md`, which is not in this repo; corrected to “out-of-tree `BEYOND-PARITY` notes” (no fabricated content). Remaining hits are shorthand (`files/oxp3-sleep-*`), vendor payload paths (`tools/intel/...`) or an external project’s `docs/debugging.md`. |
@@ -89,15 +95,28 @@ The single FAIL is the licence-header/top-level-licence gap. No functional test 
 | 52 | tool | vibrance status | `tools/display/vibrance.sh status` | **PASS** | Shader present (4,758 B), gamescope shader installed, vkBasalt absent; no writes. |
 | 53 | tool | fingerprint probe CLI | `tools/fingerprint/oxp3-fp-probe.py --help` | **PASS** | Usage renders; probe itself needs `spidev` + root and was not run (no hardware access). |
 
-## Failures a future round must fix
+## Decisions pending (not failures)
 
-1. **Licensing/provenance (the only FAIL).** There is no top-level `LICENSE`/`COPYING`, and 60 of 71
-   source-like files have no SPDX header. The fingerprint subtree is consistently
-   `LGPL-2.1-or-later`; everything else is unlabelled (and kernel patches carry their upstream
-   licences). Choose a repository licence (the patches suggest GPL-2.0-or-later compatibility; the
-   Python/shell tools could be MIT or GPL-2.0-or-later), add `LICENSE`, and apply one
-   `SPDX-License-Identifier` line per file in a separate, reviewable commit. Until then, reuse terms
-   are ambiguous even though every file is our own work.
+1. **Licensing/provenance — DECISION PENDING, ready to apply.** There is no top-level
+   `LICENSE`/`COPYING`, and 60 of 71 source-like files had no SPDX header. Choosing a licence is the
+   owner's call and this repository does not assert one. The groundwork is done and validated on a
+   copy (no real-tree write): [PROVENANCE.md](PROVENANCE.md) records the no-vendor-code guarantee,
+   the per-category policy, the audit evidence and the contributor rules; `tools/apply-license.py`
+   writes `LICENSE` plus one `SPDX-License-Identifier` line per source file, preserving shebangs and
+   module docstrings. The fingerprint subtree keeps its existing `LGPL-2.1-or-later` via `--except`.
+   Run one of:
+
+   ```sh
+   tools/apply-license.py --write --spdx MIT --holder "silentsudin" --except 'tools/fingerprint/**=LGPL-2.1-or-later'
+   tools/apply-license.py --write --spdx LGPL-2.1-or-later --holder "silentsudin"
+   ```
+
+   then `--check` with the same arguments (idempotent), review `git diff`, and commit. Patches keep
+   their upstream licences and are out of scope. Copy validation: MIT+exception wrote 70 headers and
+   `LICENSE`, both `--check` runs exited 0 with an unchanged tree, byte-diff showed only the added
+   SPDX lines, shebang/docstring positions were preserved, all 85 fingerprint tests passed and the
+   fixture-drift check stayed clean. Until the owner decides, default copyright applies and reuse
+   terms are ambiguous even though every file is our own work.
 2. **Root-only checks intentionally not executed.** RAPL writes/readback, `oxp3-fan-curve` manual PWM,
    real suspend (`sleep-power-measure.sh suspend`), `oxp3-voltap selftest`, `spidev` bind + fingerprint
    probe, Bluetooth module reload and the real installer are all unverified here by the no-sudo rule.
@@ -183,6 +202,10 @@ network) are reported as `SKIP` with a reason, never as a pass. On this host the
 fast run is **18 pass / 0 fail / 6 skip** (five full-only suites plus
 `shellcheck`); `--full` is **22 pass / 0 fail / 2 skip**. See
 [TESTING.md](TESTING.md) for the suite inventory, timing tiers and CI notes.
+*Added after this snapshot:* the `unit` suite (`tests/unit/`, 318 stdlib
+unittest cases) raises those rows to 25 suites — **19 pass / 0 fail / 6 skip**
+in `--fast` and **23 pass / 0 fail / 2 skip** in `--full`; see
+[UNIT-TESTS.md](UNIT-TESTS.md).
 
 The pre-`repo-test.sh` per-suite commands are preserved verbatim in
 [Appendix A](#appendix-a--per-suite-commands-pre-repo-test) for debugging a

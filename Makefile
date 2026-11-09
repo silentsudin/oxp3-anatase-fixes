@@ -9,7 +9,7 @@
 
 REPO_TEST = tools/repo-test.sh
 
-.PHONY: help test test-full verify decky install-dry-run units clean
+.PHONY: help test test-full verify decky install-dry-run units unit clean
 
 help:
 	@printf '%s\n' \
@@ -19,6 +19,7 @@ help:
 		'make decky           - build, smoke-test and package the Decky plugin (offline)' \
 		'make install-dry-run - print every hardware-installer command, change nothing' \
 		'make units           - verify systemd units, udev rules and hwdb files' \
+		'make unit            - offline Python unit suite (tests/unit, no root, no hardware)' \
 		'make clean           - remove our build output (Decky node_modules/dist/build, C build)'
 
 test:
@@ -38,6 +39,9 @@ install-dry-run:
 
 units:
 	$(REPO_TEST) --fast --only unit-verify --only udev-rules --only hwdb-compile
+
+unit:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/unit -q
 
 clean:
 	rm -rf -- tools/decky-oxp3-status/node_modules

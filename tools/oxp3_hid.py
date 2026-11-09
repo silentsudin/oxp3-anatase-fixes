@@ -229,7 +229,9 @@ def find_vendor_hidraw() -> str | None:
     """Return the /dev/hidrawN path of the 1a86:fe00 vendor collection."""
     for path in sorted(glob.glob("/sys/class/hidraw/hidraw*/device")):
         try:
-            txt = open(os.path.join(path, "uevent")).read().upper()
+            with open(os.path.join(path, "uevent"), encoding="utf-8",
+                      errors="replace") as fh:
+                txt = fh.read().upper()
         except OSError:
             continue
         if f"HID_ID=0003:{VID:08X}:{PID:08X}" not in txt:
@@ -238,7 +240,8 @@ def find_vendor_hidraw() -> str | None:
         if os.path.isdir(os.path.join(path, "input")):
             continue
         try:
-            desc = open(os.path.join(path, "report_descriptor"), "rb").read()
+            with open(os.path.join(path, "report_descriptor"), "rb") as fh:
+                desc = fh.read()
         except OSError:
             desc = b""
         node = "/dev/" + os.path.basename(os.path.dirname(path))
@@ -263,40 +266,65 @@ def open_report(write: bool = True) -> tuple[int, str]:
     return fd, dev
 
 
+def _write_frame(fd: int, frame: bytes) -> int:
+    """Write one frame completely: hidraw accepts short writes under load."""
+    view = memoryview(frame)
+    written = 0
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:
+            raise OSError(f"short write to hidraw: {written}/{len(frame)} bytes")
+        view = view[n:]
+        written += n
+    return written
+
+
 def send(fd: int, frames) -> int:
     total = 0
     for f in frames:
+        f = bytes(f)
         if len(f) != REPORT_SIZE:
             raise ValueError("frame must be 64 bytes")
-        total += os.write(fd, f)
+        total += _write_frame(fd, f)
     return total
+
+
+NAMED_COLORS = {
+    "red": (0xFF, 0, 0),
+    "green": (0, 0xFF, 0),
+    "blue": (0, 0, 0xFF),
+    "white": (0xFF, 0xFF, 0xFF),
+    "orange": (0xFF, 0x60, 0x00),
+    "off": (0, 0, 0),
+}
 
 
 def parse_rgb(text: str):
     t = text.strip().lstrip("#")
+    # Names are checked first: "red" is three characters, so the hex shortcut
+    # below used to consume it and fail on int("rr", 16), making the named
+    # colours with 3 or 6 letters unreachable.
+    if t.lower() in NAMED_COLORS:
+        return NAMED_COLORS[t.lower()]
+    rgb = None
     try:
         if "," in t:
             parts = [int(x, 0) for x in t.split(",")]
             if len(parts) != 3:
                 raise SystemExit("colour must be r,g,b")
-            return tuple(parts)
-        if len(t) == 6:
-            return tuple(int(t[i : i + 2], 16) for i in (0, 2, 4))
-        if len(t) == 3:
-            return tuple(int(c * 2, 16) for c in t)
+            rgb = tuple(parts)
+        elif len(t) == 6:
+            rgb = tuple(int(t[i : i + 2], 16) for i in (0, 2, 4))
+        elif len(t) == 3:
+            rgb = tuple(int(c * 2, 16) for c in t)
     except ValueError:
+        rgb = None
+    if rgb is None:
         raise SystemExit(f"cannot parse colour {text!r} (use #rrggbb, rrggbb or r,g,b)")
-    named = {
-        "red": (0xFF, 0, 0),
-        "green": (0, 0xFF, 0),
-        "blue": (0, 0, 0xFF),
-        "white": (0xFF, 0xFF, 0xFF),
-        "orange": (0xFF, 0x60, 0x00),
-        "off": (0, 0, 0),
-    }
-    if t.lower() in named:
-        return named[t.lower()]
-    raise SystemExit(f"cannot parse colour {text!r}")
+    if any(not 0 <= c <= 255 for c in rgb):
+        # bytes() in v1_frame() would otherwise raise a bare ValueError.
+        raise SystemExit(f"cannot parse colour {text!r}: each component must be 0..255")
+    return rgb
 
 
 def parse_sides(values, default="all") -> list:
@@ -409,12 +437,10 @@ CAPTURED = {
 def selftest() -> int:
     ok = True
     for name, (frame, want) in CAPTURED.items():
-        # Captured hex is truncated in the source for a few cases; compare the
-        # full 64 bytes when both are full length, else the prefix.
+        # Every vector is a full 64-byte frame; require an exact match so a
+        # truncated future vector fails instead of silently comparing a prefix.
         got = frame.hex()
-        good = len(frame) == REPORT_SIZE and (
-            got == want if len(want) == REPORT_SIZE * 2 else got.startswith(want)
-        )
+        good = len(frame) == REPORT_SIZE and len(want) == REPORT_SIZE * 2 and got == want
         ok &= good
         print(("PASS " if good else "FAIL ") + name + ("  " + got if not good else ""))
     return 0 if ok else 1

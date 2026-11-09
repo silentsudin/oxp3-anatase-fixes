@@ -374,8 +374,10 @@ def cmd_watch(args) -> int:
     peak = [0.0, 0.0, 0.0]
     try:
         while time.perf_counter() - t0 < args.seconds:
-            a = [int(read(os.path.join(iio, c), "0") or 0) * sa for c in CH_A]
-            g = [int(read(os.path.join(iio, c), "0") or 0) * sg for c in CH_G]
+            # _read_int() turns a transient empty/garbled sysfs read into 0
+            # instead of raising ValueError in the middle of the display.
+            a = [_read_int(os.path.join(iio, c)) * sa for c in CH_A]
+            g = [_read_int(os.path.join(iio, c)) * sg for c in CH_G]
             for i in range(3):
                 peak[i] = max(peak[i], abs(g[i]))
             print(f"  {a[0]:8.2f}{a[1]:8.2f}{a[2]:8.2f}   |"

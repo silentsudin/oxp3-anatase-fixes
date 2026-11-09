@@ -240,7 +240,8 @@ class Domain:
             return None
         try:
             return int(read_text(c["limit"]))
-        except ControlError:
+        except (ControlError, ValueError):
+            # A truncated/garbled sysfs attribute is unreadable, not fatal.
             return None
 
     def get_window(self, level="pl1"):
@@ -249,7 +250,7 @@ class Domain:
             return None
         try:
             return int(read_text(c["window"]))
-        except ControlError:
+        except (ControlError, ValueError):
             return None
 
     def set(self, level, uw):
@@ -365,9 +366,15 @@ def apply_limits(domains, values, *, dry_run=False, allow_partial=False):
 
     # Readback verification: the kernel quantises to its power unit
     # (0.125 W here) and may clamp/reject a value, so verify rather than trust.
+    # Only pairs whose write succeeded are verified: a failed write would
+    # otherwise also read back the old value and be misreported as a readback
+    # mismatch (exit 3) instead of a refused control (exit 2).
+    failed = {(e.get("domain"), e.get("level")) for e in report["errors"]}
     for domain in domains:
         for level, _ in LEVELS:
             if level not in values or level not in domain.constraints:
+                continue
+            if (domain.path, level) in failed:
                 continue
             actual = domain.get(level)
             want = int(round(values[level] * 1_000_000))
@@ -576,15 +583,25 @@ def load_curve(path):
         raise ControlError(f"curve file {path} does not exist")
     if path:
         points = []
-        with open(path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.split("#", 1)[0].strip()
-                if not line:
-                    continue
-                parts = re.split(r"[\s,:=]+", line)
-                if len(parts) < 2:
-                    raise ControlError(f"bad curve line: {line!r}", hint="expected: <tempC> <pwm>")
-                points.append((float(parts[0]), int(float(parts[1]))))
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.split("#", 1)[0].strip()
+                    if not line:
+                        continue
+                    parts = re.split(r"[\s,:=]+", line)
+                    if len(parts) < 2:
+                        raise ControlError(f"bad curve line: {line!r}",
+                                           hint="expected: <tempC> <pwm>")
+                    points.append((float(parts[0]), float(parts[1])))
+        except ControlError:
+            raise
+        except (OSError, ValueError) as exc:
+            # `curve --file` is user input: report it like every other control
+            # error instead of escaping as a traceback.
+            raise ControlError(f"cannot parse curve file {path}: {exc}",
+                               hint="expected: <tempC> <pwm>, one point per line") from exc
+        points = [(t, int(round(pwm))) for t, pwm in points]
         if not points:
             raise ControlError(f"curve file {path} is empty")
         source = path

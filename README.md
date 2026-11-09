@@ -409,6 +409,16 @@ switching Windows pins per profile, see [docs/hw/sagv.md](docs/hw/sagv.md)).
 - Not included: a battery percentage clamp. The gauge only over-reports right after a full
   charge, which hhd's 80 % charge limit never reaches.
 
+## Licence and provenance
+
+No repository-wide licence has been chosen yet - that is the owner's decision and this repository
+does not assert one (until a `LICENSE` exists, default copyright applies). The provenance guarantee
+is already in force: only our own code, documentation and derived data are tracked, with no vendor
+binaries, firmware blobs or decompiled listings; vendor files are downloaded at build/install time
+and pinned by SHA-256. [docs/PROVENANCE.md](docs/PROVENANCE.md) records the policy, the audit and
+the evidence, and `tools/apply-license.py` applies the chosen licence (including the existing
+`LGPL-2.1-or-later` fingerprint subtree) in one reviewable commit.
+
 ## Updating the patches
 
 If a build stops with "doesn't apply" or a missing anchor line, Anatase changed the package

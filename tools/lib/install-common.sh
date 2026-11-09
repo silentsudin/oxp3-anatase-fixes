@@ -393,8 +393,9 @@ EOF
     ls "$OUT/$KMOD_NAME"-*.rpm
 }
 
-# revision of the first microcode header in a file
-ucode_rev() { od -An -t x4 -j 4 -N 4 "$1" 2>/dev/null | tr -d ' '; }
+# revision of the first microcode header in a file; empty when the file is absent (callers test
+# for that: build_firmware compares an installed revision only when sys_fw found the file)
+ucode_rev() { [[ -f $1 ]] || return 0; od -An -t x4 -j 4 -N 4 "$1" 2>/dev/null | tr -d ' '; }
 
 # installed (Anatase) copy of a firmware file, compressed or not
 sys_fw() { local f; for f in /usr/lib/firmware/$1{,.xz,.zst}; do [[ -e $f ]] && { echo "$f"; return; }; done; }

@@ -81,7 +81,13 @@ def _zone_side(key: str) -> int:
     try:
         side = int(k, 0)
     except ValueError:
-        raise ValueError(f"unknown zone {key!r}; use {', '.join(hid.SIDE_NAMES)} or an id")
+        # Accept zero-padded decimal ids ([zones.05]) exactly like
+        # oxp3_hid.parse_sides does for --sides; int("05", 0) is invalid.
+        if low.isdigit():
+            side = int(low, 10)
+        else:
+            raise ValueError(
+                f"unknown zone {key!r}; use {', '.join(hid.SIDE_NAMES)} or an id")
     if side not in hid.SIDE_NAMES.values() and side not in hid.SIDE_UNUSED:
         raise ValueError(f"zone 0x{side:02x} is not a known OXP3 zone")
     return side
@@ -240,25 +246,27 @@ class RgbDaemon:
             self._last_sched_log = now
         self.wake.set()
 
-    def apply(self, why: str) -> None:
+    def apply(self, why: str) -> bool:
+        """Apply the config once. Return True when frames reached a device
+        (or were printed by --dry-run), False when there was nothing to do."""
         with self.lock:
             cfg = self.cfg
         if cfg is None:
-            return
+            return False
         frames = build_frames(cfg)
         dev = hid.find_vendor_hidraw()
         if not dev:
             if self.dev_present or self.last_apply == 0:
                 log("vendor hidraw node not found; will retry when it appears")
             self.dev_present = False
-            return
+            return False
         self.dev_present = True
         if self.args.dry_run:
             log(f"dry-run: would apply {len(frames)} frame(s) to {dev} ({why})")
             for f in frames:
                 print(f.hex())
             self.last_apply = time.time()
-            return
+            return True
         try:
             fd = os.open(dev, os.O_WRONLY | os.O_NONBLOCK)
         except PermissionError:
@@ -266,15 +274,17 @@ class RgbDaemon:
             if self.last_error != "permission":
                 log(f"{dev}: permission denied - install tools/oxp3-hid.rules (see docs/hw/rgb-coverage.md)")
                 self.last_error = "permission"
-            return
+            return False
         try:
             hid.send(fd, frames)
             self.last_apply = time.time()
             self.last_error = None
             log(f"applied {len(frames)} frame(s) to {dev} ({why})")
+            return True
         except OSError as e:
             log(f"write to {dev} failed: {e}")
             self.last_error = str(e)
+            return False
         finally:
             os.close(fd)
 
@@ -380,8 +390,8 @@ class RgbDaemon:
     def run_once(self) -> int:
         if not self.reload_config():
             return 1
-        self.apply("one-shot")
-        return 0 if self.last_error is None else 1
+        applied = self.apply("one-shot")
+        return 0 if applied and self.last_error is None else 1
 
     def run(self) -> int:
         if not self.reload_config():

@@ -27,6 +27,7 @@ tools/repo-test.sh --only 'fp-*'   # only matching suites (repeatable glob)
 make test                          # == tools/repo-test.sh --fast
 make test-full                     # == tools/repo-test.sh --full
 make units                         # only the unit/udev/hwdb suites
+make unit                          # only tests/unit (the Python unit suite)
 ```
 
 Exit codes are `0` (nothing failed; skips are allowed and counted), `1` (at least
@@ -37,16 +38,16 @@ failing command and its log path.
 Recorded on this host (2026-11-09, no root):
 
 ```
-== 24 suite(s): 18 pass, 0 fail, 6 skip -> exit 0      # --fast
-== 24 suite(s): 22 pass, 0 fail, 2 skip -> exit 0      # --full
+== 25 suite(s): 19 pass, 0 fail, 6 skip -> exit 0      # --fast
+== 25 suite(s): 23 pass, 0 fail, 2 skip -> exit 0      # --full
 ```
 
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 19 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 24 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 20 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 25 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
 `--full` still never installs host packages. The one network-dependent suite
 (`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
@@ -93,6 +94,7 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `status-selftest` | fast | fast | 120 s | `python3`, `bash` | – |
 | `led-selftest` | fast | fast | 60 s | `python3` | – |
 | `hid-selftest` | fast | fast | 60 s | `python3` | – |
+| `unit` | fast | fast | 120 s | `python3` | – (synthetic sysfs/config fixtures in `$TMPDIR`) |
 | `eq-model` | fast | fast | 60 s | `python3` | – |
 | `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check) |
 
@@ -127,6 +129,14 @@ Areas and what is actually proven:
   `systemd-hwdb --strict` compilation of both `.hwdb` files.
 * **tools** — the RGB/HID encoder self-tests (captured frames, no hardware),
   the status backend self-test, and the speaker EQ model table.
+* **unit** — the stdlib `unittest` suite in `tests/unit/` (318 tests, ~0.6 s):
+  HID/LED frame encoders, rgbd TOML config and frame planning, powerctl
+  parsers/write ordering/readback and exit codes, adaptivetdp policy and
+  hysteresis, the voltap tap state machine, IMU helpers, EDID/ICC parsers and
+  colour maths, `oxp3-sagv.sh` exit codes and RAPL averaging, and the
+  `install-common.sh` contract. No root, no hardware, no network; synthetic
+  sysfs trees only. Inventory, coverage and the bugs found are in
+  [UNIT-TESTS.md](UNIT-TESTS.md).
 * **generated docs** — `tools/gen-docs.py --check` re-renders the component tables from
   `docs/hw/components.yaml` in memory and fails when a generated block in
   `README.md`, `docs/hw/README.md` or `docs/INSTALL-HW.md` is stale. Read-only:
@@ -265,12 +275,12 @@ Two container recipes were exercised for this round (both exit 0 on `--fast`):
 
 ```sh
 # root container: units/udev and the installer dry-run SKIP (no systemd, no
-# unprivileged user); 13 pass / 10 skip
+# unprivileged user); 15 pass / 10 skip
 podman run --rm --security-opt label=disable \
   -v "$PWD":/w:z -w /w localhost/oxp3-fixes-build:f45 ./tools/repo-test.sh --fast
 
 # non-root container: same, but the installer dry-run also runs
-# (14 pass / 9 skip)
+# (16 pass / 9 skip)
 podman run --rm --userns=keep-id -u "$(id -u):$(id -g)" -e HOME=/tmp \
   --security-opt label=disable \
   -v "$PWD":/w:z -w /w localhost/oxp3-fixes-build:f45 ./tools/repo-test.sh --fast
@@ -303,13 +313,14 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 | run | result |
 |---|---|
-| `tools/repo-test.sh --fast` | 24 rows: **18 pass, 0 fail, 6 skip**, exit 0, ≈ 6 s |
-| `tools/repo-test.sh --full` | 24 rows: **22 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
-| `tools/repo-test.sh --list` | 24 suites; 19 run in `--fast`, 24 in `--full` |
+| `tools/repo-test.sh --fast` | 25 rows: **19 pass, 0 fail, 6 skip**, exit 0, ≈ 7 s |
+| `tools/repo-test.sh --full` | 25 rows: **23 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
+| `tools/repo-test.sh --list` | 25 suites; 20 run in `--fast`, 25 in `--full` |
+| `python3 -m unittest discover -s tests/unit -q` | `Ran 318 tests ... OK (skipped=1)`, ≈ 0.6 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
 | deliberately broken copy in `/tmp`, `--only fp-python` | 1 fail, exit 1, failing command + log path printed |
-| root container `--fast` | 13 pass / 0 fail / 10 skip, exit 0 |
-| non-root container `--fast` | 14 pass / 0 fail / 9 skip, exit 0 |
+| root container `--fast` | 15 pass / 0 fail / 10 skip, exit 0 |
+| non-root container `--fast` | 16 pass / 0 fail / 9 skip, exit 0 |
 
 The six fast-mode skips are the five full-only suites plus `shellcheck`; they
 are enumerated in the table on every run, not implied.
