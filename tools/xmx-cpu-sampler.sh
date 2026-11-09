@@ -5,7 +5,7 @@
 # a game process to appear, then samples instantaneous CPU with top, so a one-time
 # compile can be told apart from a persistent spin. Start it, then launch the game.
 set -uo pipefail
-secs=150 wait_s=600
+secs=180 wait_s=1800
 while [ $# -gt 0 ]; do case $1 in
     --seconds) secs=${2:-150}; shift 2 ;;
     --wait) wait_s=${2:-600}; shift 2 ;;
@@ -13,7 +13,9 @@ while [ $# -gt 0 ]; do case $1 in
 esac; done
 out=${XDG_STATE_HOME:-$HOME/.local/state}/oxp3-reports
 mkdir -p "$out"; log=$out/cpu-startup.log; : > "$log"
-game_re='(HogwartsLegacy|\.exe$|gamescope)'
+# Only a real game process counts: gamescope itself runs before the title and
+# would make a Gamemode session look like a launch.
+game_re='(\.exe$|HogwartsLegacy|Cyberpunk2077)'
 echo "# $(date -Is) waiting up to ${wait_s}s for a game, then sampling ${secs}s" >> "$log"
 t0=$SECONDS
 while [ $((SECONDS - t0)) -lt "$wait_s" ]; do
