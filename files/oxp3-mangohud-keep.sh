@@ -22,8 +22,11 @@ shopt -u nullglob
 # Unlocked: development while /usr is read-only after a reboot.
 probe=/usr/.oxp3-rw-probe.$$
 if ! install -m 000 /dev/null "$probe" 2>/dev/null; then
-    rpm-ostree usroverlay >/dev/null 2>&1 || { log "usroverlay failed"; exit 0; }
-    install -m 000 /dev/null "$probe" 2>/dev/null || { log "/usr still read-only"; exit 0; }
+    # "Deployment is already in unlocked state" is a non-zero exit that still means
+    # the overlay is (or is about to be) writable, and at boot two keep units race
+    # into it. Ignore the status and decide by probing the filesystem instead.
+    rpm-ostree usroverlay >/dev/null 2>&1 || true
+    install -m 000 /dev/null "$probe" 2>/dev/null || { log "usroverlay did not become writable"; exit 0; }
 fi
 rm -f "$probe"
 failed=0

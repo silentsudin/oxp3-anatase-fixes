@@ -1,6 +1,6 @@
 {
   "name": "decky-oxp3-status",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Decky Loader plugin: live status of the OneXPlayer 3 (OXP3) Anatase fixes for the running game",
   "type": "module",
   "private": true,

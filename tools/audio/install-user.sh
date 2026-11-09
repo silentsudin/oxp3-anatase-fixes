@@ -172,7 +172,7 @@ Description=OneXPlayer 3: keep the speaker gain at maximum across UCM resets
 
 [Timer]
 OnStartupSec=20s
-OnUnitActiveSec=60s
+OnUnitInactiveSec=60s
 AccuracySec=10s
 
 [Install]

@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 # ---------------------------------------------------------------------------
 # Recorded expectations (docs/WORKING-BUILD-2026-11-08.md, docs/xess-xmx.md).
@@ -1055,6 +1055,18 @@ def _mesa_indicators(
         entry = merged_env[key]
         resolved = resolve_icd_entry(entry["value"], home)
         parts = []
+        if "pressure-vessel" in entry["value"]:
+            items.append(
+                ind(
+                    "mesa.env.%s" % key.lower(),
+                    "driver override (%s)" % key,
+                    "ok",
+                    "Steam Linux Runtime private ICD (managed by Steam; not a host override)",
+                    "value: %s\nsource: %s" % (entry["value"], entry["source"]),
+                    entry["source"],
+                )
+            )
+            continue
         state = "warn"
         if not resolved:
             parts.append("unresolvable value")
