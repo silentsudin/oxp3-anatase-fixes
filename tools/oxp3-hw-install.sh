@@ -599,6 +599,20 @@ install_hid_rules() {
         run udevadm control --reload-rules
         run udevadm trigger --subsystem-match=hidraw --action=change
         run udevadm trigger --subsystem-match=misc --sysname-match=uinput --action=change
+
+        # The node is root:input 0660 and the vendor HID collection carries no seat
+        # tag, so logind never applies a uaccess ACL. Put the invoking user in the
+        # input group instead; membership needs a fresh login.
+        local target_user
+        target_user=${SUDO_USER:-${USER:-}}
+        if [[ -n $target_user && $target_user != root ]]; then
+            if id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx input; then
+                ok "$target_user is already in the input group"
+            else
+                run usermod -aG input "$target_user"
+                note "log out and back in (or reboot) so $target_user can open the vendor HID node"
+            fi
+        fi
     fi
     HID_RULES_DONE=1
 }

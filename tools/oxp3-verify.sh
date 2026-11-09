@@ -529,7 +529,7 @@ parse_hhd_journal() { # stdin: journalctl -u hhd
             last_bad = NR
             next
         }
-        /Initialization Complete!|Loaded the following plugins/ {
+        /Initialization Complete!|Loaded the following plugins|Emulated controller launched/ {
             last_ok = NR
         }
         END {

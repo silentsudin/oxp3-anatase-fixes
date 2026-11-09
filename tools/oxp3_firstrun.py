@@ -39,6 +39,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import tempfile
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
@@ -133,6 +134,9 @@ DRIVER_CANDIDATES: Tuple[str, ...] = (
 
 # Environment variables that describe the *current session's* graphics stack. Values are
 # paths (redacted like everything else) and feature switches; no secrets belong here.
+#: set by --quiet; suppresses the [collect] progress lines on stderr
+QUIET = False
+
 ENV_PREFIXES = (
     "VK_", "INTC_", "XESS", "IGC_", "MESA_", "OCLOC", "LIBVA_", "DRI_",
     "__GL", "PROTON_", "OXP3_", "LD_LIBRARY_PATH", "VKD3D_", "DXVK_",
@@ -1257,6 +1261,12 @@ def _missing_artifact(relpath: str, title: str, detail: str, priority: int = 50)
     return Artifact(relpath, title, "", "text", "missing", "", detail, priority)
 
 
+def _progress(message: str) -> None:
+    """One flushed progress line on stderr (never part of the artifact bundle)."""
+    if not QUIET:
+        print("[collect] " + message, file=sys.stderr, flush=True)
+
+
 def run_tool(
     ctx: Context,
     relpath: str,
@@ -1274,7 +1284,14 @@ def run_tool(
     tool = argv[0]
     if not ctx.which(tool) and not Path(tool).exists():
         return _missing_artifact(relpath, title, "tool not found: %s" % tool, priority)
+    # Collection runs for minutes; say what is running and how long it may take,
+    # and report the time each step actually took.
+    _progress("run  %-34s (max %3ds) ..." % (title, timeout_s))
+    started = time.monotonic()
     res = ctx.run(argv, timeout_s, cwd)
+    _progress("done %-34s %5.1fs %s" % (
+        title, time.monotonic() - started,
+        "TIMEOUT" if res.timed_out else "rc=%d" % res.rc))
     body = res.text
     if transform:
         body = transform(body)
@@ -1639,7 +1656,7 @@ def collect_all(ctx: Context, facts: Facts, opts: "Options") -> List[Artifact]:
     else:
         artifact = run_tool(
             ctx, "repo/repo-test-fast.txt", "repo-test --fast (tail)",
-            [str(ctx.repo / "tools/repo-test.sh"), "--fast"], 25, 900,
+            [str(ctx.repo / "tools/repo-test.sh"), "--fast"], 25, 240,
             transform=lambda text: "\n".join(text.splitlines()[-60:]) + "\n",
         )
         artifacts.append(artifact)
@@ -2957,4 +2974,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\ninterrupted: no bundle was finalised (partial work is in the transcript "
+              "directory, if one was created)", file=sys.stderr)
+        sys.exit(130)
