@@ -763,6 +763,54 @@ PY
     printf 'selftest ok; live JSON schema ok; quiet one-line ok\n'
 }
 
+# The sleep-cycle harness: offline analyser fixtures plus the read-only plan
+# and state modes.  A real suspend cycle needs root *and* an explicit owner
+# decision, so this suite never starts one; without root it reports the offline
+# half and SKIPs with the exact command.
+suite_sleep_cycles() {
+    local tool=$REPO/tools/sleep-cycle-test.sh
+    [ -x "$tool" ] || skip "tools/sleep-cycle-test.sh is missing"
+    need python3
+    cd "$REPO" || exit 1
+
+    "$tool" --selftest || return 1
+
+    local dry=$LOGDIR/sleep-cycles-dry-run.txt rc=0
+    "$tool" --dry-run >"$dry" 2>&1 || rc=$?
+    cat "$dry"
+    if [ "$rc" -ne 0 ]; then
+        printf 'FAIL --dry-run exited %d\n' "$rc"
+        return 1
+    fi
+    grep -q 'nothing was armed, suspended or written' "$dry" \
+        || { printf 'FAIL --dry-run does not promise to write nothing\n'; return 1; }
+    grep -q 'rtcwake -m mem -s 60' "$dry" \
+        || { printf 'FAIL --dry-run does not name the rtcwake command\n'; return 1; }
+    grep -q 'rtcwake -m disable' "$dry" \
+        || { printf 'FAIL --dry-run does not name the alarm disarm command\n'; return 1; }
+
+    # --no-suspend writes a state report; keep it outside the checkout.
+    local state=$LOGDIR/sleep-cycles-state src=0
+    "$tool" --no-suspend --output "$state" >"$LOGDIR/sleep-cycles-state.txt" 2>&1 \
+        || src=$?
+    cat "$LOGDIR/sleep-cycles-state.txt"
+    if [ "$src" -ne 2 ]; then
+        printf 'FAIL --no-suspend exited %d (expected 2: no measurement)\n' "$src"
+        return 1
+    fi
+    [ -f "$state/report.json" ] && [ -f "$state/report.txt" ] \
+        || { printf 'FAIL --no-suspend wrote no report\n'; return 1; }
+    python3 -m json.tool "$state/report.json" >/dev/null \
+        || { printf 'FAIL --no-suspend report.json is not valid JSON\n'; return 1; }
+    printf 'offline: selftest, dry-run and no-suspend report ok\n'
+
+    [ "$(id -u)" -eq 0 ] \
+        || skip "real suspend cycles need root and an explicit owner decision; the offline half passed (sudo $tool --cycles 3)"
+    # Root: the timed-wake path and the report writer were exercised above
+    # without cycling.  This suite deliberately does not suspend the host.
+    printf 'root present; rtc/lib plumbing validated without cycling\n'
+}
+
 # ------------------------------------------------------------------ registry
 # name | mode (fast/full) | tier (fast/medium/slow-network) | timeout s |
 # network (0/1) | one-line description | command shown when it fails
@@ -894,6 +942,9 @@ def_suite cli-contracts fast medium 180 0 \
 def_suite health fast medium 180 0 \
     "one-command health front-end: offline verdict selftest + live JSON/quiet contract" \
     "tools/oxp3-health.sh --selftest && ... --json && ... --quiet"
+def_suite sleep-cycles fast fast 120 0 \
+    "sleep-cycle harness: analyser fixtures, dry-run plan, no-suspend report (real cycles: root)" \
+    "tools/sleep-cycle-test.sh --selftest && --dry-run && --no-suspend"
 
 # ------------------------------------------------------------------ selection
 # Fail fast on a registry typo instead of reporting a confusing FAIL at run time.

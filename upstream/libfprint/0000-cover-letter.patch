@@ -1,0 +1,73 @@
+From 852731301e944e793adbdce3e2ec5ae2643c961b Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 08:23:50 +0000
+Subject: [PATCH 0/3] libfprint: add a driver for the Betterlife BF63112
+
+This series adds a read-only driver for the Betterlife BF63112 fingerprint
+module, the sensor on the ONEXPLAYER 3 (ACPI\BF63112 on the Intel LPSS SPI
+bus).  It is based on libfprint v1.94.9 (commit dc8b05f0a30e) and builds and
+passes the in-tree unit tests there, but it has not run against the sensor yet.
+
+The device is match-in-sensor and speaks a framed SPI protocol recovered from
+static analysis of the vendor's Windows UMDF driver.  This first series is
+deliberately limited: it binds the device, queries sensor information (0xC1)
+and firmware version (0xA0), and implements open, close, suspend and resume.
+Enrol, verify and identify return FP_DEVICE_ERROR_NOT_SUPPORTED because the
+0xB0/0xB1 payloads, the template handle, the score encoding and the
+SM2/SM3/SM4 session are not decoded.  No write opcode is allowlisted, so
+templates already enrolled from Windows cannot be touched.
+
+Patch 1 adds the dependency-free protocol, SPI/SPB transport, _CRS and
+discovery helpers.  Patch 2 adds the FpDevice driver and wires it into the
+build and the generated udev rule.  Patch 3 adds a documentation stub.
+
+Known limitations, all repeated in the commit messages and the docs stub:
+no hardware transcript; the _CRS bus parameters are unread; the answer
+framing is assumed to mirror the request; the sensor and firmware field
+layouts are inferred; and the interrupt line is handled by polling because
+the SPI controller driver does not expose it.  These must be resolved, or
+explicitly accepted by the maintainers, before the driver can be considered
+complete.
+
+The licence line is a TODO in every new file.  The project owner has not
+chosen a licence for this subtree yet; the SPDX-License-Identifier
+(LGPL-2.1-or-later, to match libfprint) is set before this series is submitted
+upstream.
+
+Build and test as posted: meson setup with -Ddrivers=bf63112 (introspection
+and API docs off), ninja, then meson test.  The new files compile without
+warnings; the two in-tree unit tests pass and the driver-emulation tests skip
+because they need introspection/umockdev.
+
+silentsudin (3):
+  drivers: add BF63112 protocol and SPI transport
+  drivers: wire BF63112 into the build
+  docs: describe BF63112
+
+ doc/drivers/bf63112.md               |   81 ++
+ libfprint/drivers/bf63112.c          | 1067 +++++++++++++++
+ libfprint/drivers/bf63112_acpi.c     |  835 ++++++++++++
+ libfprint/drivers/bf63112_acpi.h     |  270 ++++
+ libfprint/drivers/bf63112_discover.c |  104 ++
+ libfprint/drivers/bf63112_discover.h |   44 +
+ libfprint/drivers/bf63112_proto.c    |  409 ++++++
+ libfprint/drivers/bf63112_proto.h    |  254 ++++
+ libfprint/drivers/bf63112_spi.c      | 1894 ++++++++++++++++++++++++++
+ libfprint/drivers/bf63112_spi.h      |  459 +++++++
+ libfprint/meson.build                |    6 +
+ meson.build                          |    5 +-
+ 12 files changed, 5427 insertions(+), 1 deletion(-)
+ create mode 100644 doc/drivers/bf63112.md
+ create mode 100644 libfprint/drivers/bf63112.c
+ create mode 100644 libfprint/drivers/bf63112_acpi.c
+ create mode 100644 libfprint/drivers/bf63112_acpi.h
+ create mode 100644 libfprint/drivers/bf63112_discover.c
+ create mode 100644 libfprint/drivers/bf63112_discover.h
+ create mode 100644 libfprint/drivers/bf63112_proto.c
+ create mode 100644 libfprint/drivers/bf63112_proto.h
+ create mode 100644 libfprint/drivers/bf63112_spi.c
+ create mode 100644 libfprint/drivers/bf63112_spi.h
+
+-- 
+2.56.0
+

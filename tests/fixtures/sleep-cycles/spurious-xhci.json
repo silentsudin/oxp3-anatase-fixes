@@ -1,0 +1,715 @@
+{
+  "schema": 1,
+  "tool": "sleep-cycle-test",
+  "version": "1.0.0",
+  "mode": "run",
+  "notes": [],
+  "meta": {
+    "started_at": "2026-11-09T08:00:00Z",
+    "ended_at": "2026-11-09T08:10:00Z",
+    "kernel": "7.2.7-an28.fc45.x86_64",
+    "hostname": "anatase-oxp3",
+    "root": true,
+    "cycles_requested": 2,
+    "cycles_completed": 2,
+    "sleep_s": 60,
+    "settle_s": 10,
+    "max_runtime_s": 1800,
+    "rtc": "rtc0",
+    "on_ac": false,
+    "allow_ac": false,
+    "thresholds": {
+      "good_pct_per_h": 1.0,
+      "investigate_pct_per_h": 3.0,
+      "good_temp_rise_c": 2.0,
+      "implausible_pct_per_h": 25.0,
+      "energy_increase_tolerance_wh": 0.05,
+      "gauge_step_wh": 0.01
+    },
+    "energy_full_wh": 87.665,
+    "rtc_cleanup": {
+      "ok": true,
+      "attempts": [],
+      "detail": "no alarm was armed"
+    },
+    "interrupted": false,
+    "confirmation": "typed"
+  },
+  "baseline": {
+    "ts": "2026-11-09T08:00:00Z",
+    "epoch": 1762675200.0,
+    "energy_wh": 70.253,
+    "energy_full_wh": 87.665,
+    "pct": 80,
+    "status": "Discharging",
+    "on_ac": false,
+    "platform_profile": "balanced",
+    "pl1_uw": 35000000,
+    "temp_pkg_c": 52.0,
+    "temp_max_c": 54.0,
+    "temps": {
+      "x86_pkg_temp": 52.0,
+      "TCPU": 54.0
+    },
+    "suspend_stats": {
+      "success": 0,
+      "fail": 0,
+      "failed_suspend": 0,
+      "failed_resume": 0,
+      "last_hw_sleep": 0,
+      "max_hw_sleep": 0,
+      "total_hw_sleep": 0,
+      "last_failed_dev": "",
+      "last_failed_step": ""
+    },
+    "wakeup_counts": [
+      {
+        "id": "wakeup35",
+        "name": "PNP0C0D:00",
+        "event_count": 0,
+        "device": "pci0000:00/0000:00:1f.0/PNP0C09:00/PNP0C0D:00"
+      },
+      {
+        "id": "wakeup39",
+        "name": "PNP0C0C:00",
+        "event_count": 0,
+        "device": "platform/PNP0C0C:00"
+      },
+      {
+        "id": "wakeup47",
+        "name": "0000:00:14.0",
+        "event_count": 0,
+        "device": "pci0000:00/0000:00:14.0"
+      },
+      {
+        "id": "wakeup49",
+        "name": "rtc_cmos",
+        "event_count": 0,
+        "device": "platform/rtc_cmos"
+      },
+      {
+        "id": "wakeup50",
+        "name": "alarmtimer.0.auto",
+        "event_count": 0,
+        "device": "platform/rtc_cmos/rtc/rtc0/alarmtimer.0.auto"
+      },
+      {
+        "id": "wakeup51",
+        "name": "3-4",
+        "event_count": 0,
+        "device": "pci0000:00/0000:00:14.0/usb3/3-4"
+      },
+      {
+        "id": "wakeup23",
+        "name": "0000:00:1c.0",
+        "event_count": 0,
+        "device": "pci0000:00/0000:00:1c.0"
+      }
+    ],
+    "acpi_wakeup_enabled": [
+      {
+        "name": "LID0",
+        "state": "S3",
+        "enabled": true,
+        "sysfs": "platform:PNP0C0D:00"
+      },
+      {
+        "name": "PWRB",
+        "state": "S3",
+        "enabled": true,
+        "sysfs": "platform:PNP0C0C:00"
+      },
+      {
+        "name": "SLPB",
+        "state": "S3",
+        "enabled": true,
+        "sysfs": "platform:PNP0C0E:00"
+      },
+      {
+        "name": "AWAC",
+        "state": "S4",
+        "enabled": true,
+        "sysfs": "platform:ACPI000E:00"
+      }
+    ],
+    "device_wakeups": [
+      {
+        "bus": "pci",
+        "id": "0000:00:14.0"
+      },
+      {
+        "bus": "pci",
+        "id": "0000:00:0d.0"
+      },
+      {
+        "bus": "usb",
+        "id": "3-4"
+      },
+      {
+        "bus": "usb",
+        "id": "3-5"
+      }
+    ],
+    "rtc_alarm": {
+      "rtc0": "",
+      "rtc1": ""
+    },
+    "mem_sleep": "[s2idle] deep",
+    "s0ix_us": 0
+  },
+  "cycles": [
+    {
+      "index": 1,
+      "requested_s": 60,
+      "before": {
+        "ts": "2026-11-09T08:00:00Z",
+        "epoch": 1762675200.0,
+        "energy_wh": 70.253,
+        "energy_full_wh": 87.665,
+        "pct": 80,
+        "status": "Discharging",
+        "on_ac": false,
+        "platform_profile": "balanced",
+        "pl1_uw": 35000000,
+        "temp_pkg_c": 52.0,
+        "temp_max_c": 54.0,
+        "temps": {
+          "x86_pkg_temp": 52.0,
+          "TCPU": 54.0
+        },
+        "suspend_stats": {
+          "success": 0,
+          "fail": 0,
+          "failed_suspend": 0,
+          "failed_resume": 0,
+          "last_hw_sleep": 0,
+          "max_hw_sleep": 0,
+          "total_hw_sleep": 0,
+          "last_failed_dev": "",
+          "last_failed_step": ""
+        },
+        "wakeup_counts": [
+          {
+            "id": "wakeup35",
+            "name": "PNP0C0D:00",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:1f.0/PNP0C09:00/PNP0C0D:00"
+          },
+          {
+            "id": "wakeup39",
+            "name": "PNP0C0C:00",
+            "event_count": 0,
+            "device": "platform/PNP0C0C:00"
+          },
+          {
+            "id": "wakeup47",
+            "name": "0000:00:14.0",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:14.0"
+          },
+          {
+            "id": "wakeup49",
+            "name": "rtc_cmos",
+            "event_count": 0,
+            "device": "platform/rtc_cmos"
+          },
+          {
+            "id": "wakeup50",
+            "name": "alarmtimer.0.auto",
+            "event_count": 0,
+            "device": "platform/rtc_cmos/rtc/rtc0/alarmtimer.0.auto"
+          },
+          {
+            "id": "wakeup51",
+            "name": "3-4",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:14.0/usb3/3-4"
+          },
+          {
+            "id": "wakeup23",
+            "name": "0000:00:1c.0",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:1c.0"
+          }
+        ],
+        "acpi_wakeup_enabled": [
+          {
+            "name": "LID0",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0D:00"
+          },
+          {
+            "name": "PWRB",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0C:00"
+          },
+          {
+            "name": "SLPB",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0E:00"
+          },
+          {
+            "name": "AWAC",
+            "state": "S4",
+            "enabled": true,
+            "sysfs": "platform:ACPI000E:00"
+          }
+        ],
+        "device_wakeups": [
+          {
+            "bus": "pci",
+            "id": "0000:00:14.0"
+          },
+          {
+            "bus": "pci",
+            "id": "0000:00:0d.0"
+          },
+          {
+            "bus": "usb",
+            "id": "3-4"
+          },
+          {
+            "bus": "usb",
+            "id": "3-5"
+          }
+        ],
+        "rtc_alarm": {
+          "rtc0": "",
+          "rtc1": ""
+        },
+        "mem_sleep": "[s2idle] deep",
+        "s0ix_us": 0
+      },
+      "after": {
+        "ts": "2026-11-09T08:00:00Z",
+        "epoch": 1762675200.0,
+        "energy_wh": 70.247,
+        "energy_full_wh": 87.665,
+        "pct": 80,
+        "status": "Discharging",
+        "on_ac": false,
+        "platform_profile": "balanced",
+        "pl1_uw": 35000000,
+        "temp_pkg_c": 52.6,
+        "temp_max_c": 54.6,
+        "temps": {
+          "x86_pkg_temp": 52.6,
+          "TCPU": 54.6
+        },
+        "suspend_stats": {
+          "success": 1,
+          "fail": 0,
+          "failed_suspend": 0,
+          "failed_resume": 0,
+          "last_hw_sleep": 30200000000,
+          "max_hw_sleep": 0,
+          "total_hw_sleep": 30200000000,
+          "last_failed_dev": "",
+          "last_failed_step": ""
+        },
+        "wakeup_counts": [
+          {
+            "id": "wakeup35",
+            "name": "PNP0C0D:00",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:1f.0/PNP0C09:00/PNP0C0D:00"
+          },
+          {
+            "id": "wakeup39",
+            "name": "PNP0C0C:00",
+            "event_count": 0,
+            "device": "platform/PNP0C0C:00"
+          },
+          {
+            "id": "wakeup47",
+            "name": "0000:00:14.0",
+            "event_count": 1,
+            "device": "pci0000:00/0000:00:14.0"
+          },
+          {
+            "id": "wakeup49",
+            "name": "rtc_cmos",
+            "event_count": 0,
+            "device": "platform/rtc_cmos"
+          },
+          {
+            "id": "wakeup50",
+            "name": "alarmtimer.0.auto",
+            "event_count": 0,
+            "device": "platform/rtc_cmos/rtc/rtc0/alarmtimer.0.auto"
+          },
+          {
+            "id": "wakeup51",
+            "name": "3-4",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:14.0/usb3/3-4"
+          },
+          {
+            "id": "wakeup23",
+            "name": "0000:00:1c.0",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:1c.0"
+          }
+        ],
+        "acpi_wakeup_enabled": [
+          {
+            "name": "LID0",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0D:00"
+          },
+          {
+            "name": "PWRB",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0C:00"
+          },
+          {
+            "name": "SLPB",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0E:00"
+          },
+          {
+            "name": "AWAC",
+            "state": "S4",
+            "enabled": true,
+            "sysfs": "platform:ACPI000E:00"
+          }
+        ],
+        "device_wakeups": [
+          {
+            "bus": "pci",
+            "id": "0000:00:14.0"
+          },
+          {
+            "bus": "pci",
+            "id": "0000:00:0d.0"
+          },
+          {
+            "bus": "usb",
+            "id": "3-4"
+          },
+          {
+            "bus": "usb",
+            "id": "3-5"
+          }
+        ],
+        "rtc_alarm": {
+          "rtc0": "",
+          "rtc1": ""
+        },
+        "mem_sleep": "[s2idle] deep",
+        "s0ix_us": 30200000
+      },
+      "boottime_ns": {
+        "before": 1000000000000,
+        "after": 1040200000000
+      },
+      "monotonic_ns": {
+        "before": 1000000000000,
+        "after": 1010000000000
+      },
+      "wall": {
+        "before": 1762675260.0,
+        "after": 1762675300.2
+      },
+      "rtcwake": {
+        "rc": 0,
+        "seconds": 60,
+        "log": ""
+      },
+      "journal": [
+        "2026-11-09T08:03:00+0000 anatase kernel: PM: suspend entry (s2idle)",
+        "2026-11-09T08:03:00+0000 anatase kernel: PM: suspend exit (30.2 s later)"
+      ],
+      "alarm_armed_after_resume": false,
+      "notes": [],
+      "settle": {
+        "seconds": 10.0,
+        "energy_wh": 70.228,
+        "ts": "2026-11-09T08:00:10Z"
+      }
+    },
+    {
+      "index": 2,
+      "requested_s": 60,
+      "before": {
+        "ts": "2026-11-09T08:00:00Z",
+        "epoch": 1762675200.0,
+        "energy_wh": 70.247,
+        "energy_full_wh": 87.665,
+        "pct": 80,
+        "status": "Discharging",
+        "on_ac": false,
+        "platform_profile": "balanced",
+        "pl1_uw": 35000000,
+        "temp_pkg_c": 52.0,
+        "temp_max_c": 54.0,
+        "temps": {
+          "x86_pkg_temp": 52.0,
+          "TCPU": 54.0
+        },
+        "suspend_stats": {
+          "success": 1,
+          "fail": 0,
+          "failed_suspend": 0,
+          "failed_resume": 0,
+          "last_hw_sleep": 30200000000,
+          "max_hw_sleep": 0,
+          "total_hw_sleep": 30200000000,
+          "last_failed_dev": "",
+          "last_failed_step": ""
+        },
+        "wakeup_counts": [
+          {
+            "id": "wakeup35",
+            "name": "PNP0C0D:00",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:1f.0/PNP0C09:00/PNP0C0D:00"
+          },
+          {
+            "id": "wakeup39",
+            "name": "PNP0C0C:00",
+            "event_count": 0,
+            "device": "platform/PNP0C0C:00"
+          },
+          {
+            "id": "wakeup47",
+            "name": "0000:00:14.0",
+            "event_count": 1,
+            "device": "pci0000:00/0000:00:14.0"
+          },
+          {
+            "id": "wakeup49",
+            "name": "rtc_cmos",
+            "event_count": 0,
+            "device": "platform/rtc_cmos"
+          },
+          {
+            "id": "wakeup50",
+            "name": "alarmtimer.0.auto",
+            "event_count": 0,
+            "device": "platform/rtc_cmos/rtc/rtc0/alarmtimer.0.auto"
+          },
+          {
+            "id": "wakeup51",
+            "name": "3-4",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:14.0/usb3/3-4"
+          },
+          {
+            "id": "wakeup23",
+            "name": "0000:00:1c.0",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:1c.0"
+          }
+        ],
+        "acpi_wakeup_enabled": [
+          {
+            "name": "LID0",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0D:00"
+          },
+          {
+            "name": "PWRB",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0C:00"
+          },
+          {
+            "name": "SLPB",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0E:00"
+          },
+          {
+            "name": "AWAC",
+            "state": "S4",
+            "enabled": true,
+            "sysfs": "platform:ACPI000E:00"
+          }
+        ],
+        "device_wakeups": [
+          {
+            "bus": "pci",
+            "id": "0000:00:14.0"
+          },
+          {
+            "bus": "pci",
+            "id": "0000:00:0d.0"
+          },
+          {
+            "bus": "usb",
+            "id": "3-4"
+          },
+          {
+            "bus": "usb",
+            "id": "3-5"
+          }
+        ],
+        "rtc_alarm": {
+          "rtc0": "",
+          "rtc1": ""
+        },
+        "mem_sleep": "[s2idle] deep",
+        "s0ix_us": 30200000
+      },
+      "after": {
+        "ts": "2026-11-09T08:00:00Z",
+        "epoch": 1762675200.0,
+        "energy_wh": 70.241,
+        "energy_full_wh": 87.665,
+        "pct": 80,
+        "status": "Discharging",
+        "on_ac": false,
+        "platform_profile": "balanced",
+        "pl1_uw": 35000000,
+        "temp_pkg_c": 52.5,
+        "temp_max_c": 54.5,
+        "temps": {
+          "x86_pkg_temp": 52.5,
+          "TCPU": 54.5
+        },
+        "suspend_stats": {
+          "success": 2,
+          "fail": 0,
+          "failed_suspend": 0,
+          "failed_resume": 0,
+          "last_hw_sleep": 30400000000,
+          "max_hw_sleep": 0,
+          "total_hw_sleep": 60600000000,
+          "last_failed_dev": "",
+          "last_failed_step": ""
+        },
+        "wakeup_counts": [
+          {
+            "id": "wakeup35",
+            "name": "PNP0C0D:00",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:1f.0/PNP0C09:00/PNP0C0D:00"
+          },
+          {
+            "id": "wakeup39",
+            "name": "PNP0C0C:00",
+            "event_count": 0,
+            "device": "platform/PNP0C0C:00"
+          },
+          {
+            "id": "wakeup47",
+            "name": "0000:00:14.0",
+            "event_count": 2,
+            "device": "pci0000:00/0000:00:14.0"
+          },
+          {
+            "id": "wakeup49",
+            "name": "rtc_cmos",
+            "event_count": 0,
+            "device": "platform/rtc_cmos"
+          },
+          {
+            "id": "wakeup50",
+            "name": "alarmtimer.0.auto",
+            "event_count": 0,
+            "device": "platform/rtc_cmos/rtc/rtc0/alarmtimer.0.auto"
+          },
+          {
+            "id": "wakeup51",
+            "name": "3-4",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:14.0/usb3/3-4"
+          },
+          {
+            "id": "wakeup23",
+            "name": "0000:00:1c.0",
+            "event_count": 0,
+            "device": "pci0000:00/0000:00:1c.0"
+          }
+        ],
+        "acpi_wakeup_enabled": [
+          {
+            "name": "LID0",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0D:00"
+          },
+          {
+            "name": "PWRB",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0C:00"
+          },
+          {
+            "name": "SLPB",
+            "state": "S3",
+            "enabled": true,
+            "sysfs": "platform:PNP0C0E:00"
+          },
+          {
+            "name": "AWAC",
+            "state": "S4",
+            "enabled": true,
+            "sysfs": "platform:ACPI000E:00"
+          }
+        ],
+        "device_wakeups": [
+          {
+            "bus": "pci",
+            "id": "0000:00:14.0"
+          },
+          {
+            "bus": "pci",
+            "id": "0000:00:0d.0"
+          },
+          {
+            "bus": "usb",
+            "id": "3-4"
+          },
+          {
+            "bus": "usb",
+            "id": "3-5"
+          }
+        ],
+        "rtc_alarm": {
+          "rtc0": "",
+          "rtc1": ""
+        },
+        "mem_sleep": "[s2idle] deep",
+        "s0ix_us": 60600000
+      },
+      "boottime_ns": {
+        "before": 2000000000000,
+        "after": 2040500000000
+      },
+      "monotonic_ns": {
+        "before": 2000000000000,
+        "after": 2010100000000
+      },
+      "wall": {
+        "before": 1762675320.0,
+        "after": 1762675360.5
+      },
+      "rtcwake": {
+        "rc": 0,
+        "seconds": 60,
+        "log": ""
+      },
+      "journal": [
+        "2026-11-09T08:06:00+0000 anatase kernel: PM: suspend entry (s2idle)",
+        "2026-11-09T08:06:00+0000 anatase kernel: PM: suspend exit (30.4 s later)"
+      ],
+      "alarm_armed_after_resume": false,
+      "notes": [],
+      "settle": {
+        "seconds": 10.0,
+        "energy_wh": 70.222,
+        "ts": "2026-11-09T08:00:10Z"
+      }
+    }
+  ],
+  "name": "spurious-xhci"
+}

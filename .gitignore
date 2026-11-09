@@ -22,5 +22,6 @@ node_modules/
 tools/fingerprint/build/
 
 # first-run evidence bundles: machine-local snapshots (journals, hashes), never committed
+docs/state/sleep-cycles-*/
 docs/state/firstrun-*/
 docs/state/fp-session-*/

@@ -1,0 +1,109 @@
+From 852731301e944e793adbdce3e2ec5ae2643c961b Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 08:21:38 +0000
+Subject: [PATCH 3/3] docs: describe BF63112
+
+Add a documentation stub for the BF63112 SPI driver: device identity, the
+recovered selector and frame layout, the operations the driver implements,
+the safety rule that no write opcode is allowlisted, and the remaining
+unknowns (no hardware transcript, unread _CRS, inferred field layouts,
+polling interrupt, undecoded enrol/verify payloads).
+
+libfprint has no per-driver documentation convention, so this is a standalone
+page under doc/drivers/; the text can move into the manual if the maintainers
+prefer another place.
+---
+ doc/drivers/bf63112.md | 81 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+ create mode 100644 doc/drivers/bf63112.md
+
+diff --git a/doc/drivers/bf63112.md b/doc/drivers/bf63112.md
+new file mode 100644
+index 00000000..07ba4bde
+--- /dev/null
++++ b/doc/drivers/bf63112.md
+@@ -0,0 +1,81 @@
++# Betterlife BF63112 (SPI)
++
++_STATUS: stub.  This page documents a driver that has been built but has not
++yet run against hardware._
++
++## Device
++
++The BF63112 is a match-in-sensor fingerprint module from Betterlife.  On the
++ONEXPLAYER 3 it sits on the Intel LPSS SPI bus as `ACPI\BF63112`
++(`spi-BF63112:00`); there is no USB interface.  The module keeps its own
++templates, so a Linux driver stores only opaque handles.
++
++The firmware describes the bus parameters in the `_CRS` resources of the
++`FPRT` ACPI device: SPI clock, mode, word size, chip select, the interrupt
++line and a reset line.  None of those values are hard-coded in the driver.
++On a normal boot `spidev` is not bound to the device.  The udev rule that
++libfprint generates from the driver's id table does that binding; no static
++rule file is installed by this series.
++
++## Transport
++
++A transaction is a one-byte selector followed by a payload, or by a
++receive-only clock:
++
++    selector = (opcode & 0x3f) << 1            host reads
++    selector = 0x80 | ((opcode & 0x3f) << 1)   host writes
++
++Frames are:
++
++    AA | L:u32 LE | 16 x 0 | 4C op phase 00 arg:u16 len:u32 data | pad16 | CRC-32
++
++`L = 20 + align16 (10 + data_len)` counts the bytes after the start-of-frame
++byte, without the CRC.  The CRC is CRC-32/ISO-HDLC over every preceding byte,
++including the `0xAA`.  A query without data is 41 bytes with `L = 36`.  The
++answer uses the same layout; the opcode is at offset 22, the phase at 23, the
++body length at 27 and the body at 31.  The driver validates the CRC and the
++opcode.
++
++## Supported operations
++
++| opcode | meaning | driver use |
++|---|---|---|
++| `0xA0` | firmware version | informational, at open |
++| `0xB6` | sleep | not sent; suspend closes the spidev node |
++| `0xC1` | sensor information | required, at open and after resume |
++
++Enrol, verify and identify return `FP_DEVICE_ERROR_NOT_SUPPORTED` on purpose.
++Their payloads, the template handle and the score encoding are not decoded,
++and the driver must never guess at biometric state.  No opcode that can
++destroy a template is on the driver's read allowlist.
++
++The `0xA2` handshake (SM2 ECDH, GM/T 0003 KDF, SM3 tag, SM4-wrapped key) is
++not needed for the read-only queries and is not part of this driver yet.
++
++## Remaining unknowns
++
++* No hardware transcript exists.  Every statement about the device above is
++  derived from static analysis of the vendor Windows driver or from the
++  module's own framing rules, not from an observed exchange on Linux.
++* The SPI clock, mode, word size and GPIO polarity come from `_CRS`; the
++  values on this machine have not been read (the table is root-only).
++* The sensor information and firmware field layouts are inferred from the
++  handler's reads and have not been confirmed against a live answer.
++* The interrupt line is not exposed by the SPI controller driver, so the
++  driver falls back to a timed poll.  The optional sysfs/libgpiod paths are
++  compile-tested only.
++* Whether the module echoes the request phase in the answer is unverified;
++  the driver checks the opcode only.
++* Chunks of the `0xB4` image command can exceed the default `spidev` buffer
++  (4096 bytes); the command is not implemented.
++
++## Bring-up
++
++The driver takes optional environment configuration while the ACPI values are
++not available to it: `BF63112_SPIDEV`, `BF63112_SPI_SPEED`, `BF63112_SPI_MODE`,
++`BF63112_SPI_BITS`, `BF63112_CRS`, `BF63112_IRQ_GPIO` and the reset-line
++variables.  A real submission should replace these with a proper device
++property or `_CRS` lookup; they exist so a first hardware session can happen
++without changing the driver.
++
++See the top of `drivers/bf63112.c` for the complete list and the safety rules.
+-- 
+2.56.0
+

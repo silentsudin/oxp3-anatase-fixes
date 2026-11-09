@@ -521,6 +521,8 @@ firmware default flip, the one optional argument is
 
     tools/sleep-power-measure.sh audit                     # configuration + every armed wake source
     sudo tools/sleep-power-measure.sh suspend -w 600       # 10 min of real s2idle, then the numbers
+    sudo tools/sleep-cycle-test.sh --cycles 3              # N cycles + wake attribution + verdict
+                                                           # (see docs/SLEEP-TEST.md)
     tools/sleep-power-measure.sh run -w 600                # 10 min in the current (awake) state
     tools/sleep-power-measure.sh snapshot                  # one line, for your own loop
 
