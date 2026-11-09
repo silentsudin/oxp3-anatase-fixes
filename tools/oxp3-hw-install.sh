@@ -577,8 +577,9 @@ comp_volume_install() {
     run "$repo/tools/hhd-oxp3-voltap/install.sh" install
     volume_hwdb_install
     if [[ -e /etc/systemd/system/oxp3-voltap.service || -e /usr/local/libexec/oxp3-voltap ]]; then
-        warn "legacy oxp3-voltap daemon files are present; the plugin replaces it."
-        printf '  disable/remove it: sudo systemctl disable --now oxp3-voltap ; sudo tools/oxp3-voltap/install.sh uninstall\n'
+        warn "legacy oxp3-voltap daemon present; disabling it so the HHD plugin owns the buttons"
+        run systemctl disable --now oxp3-voltap || warn "could not stop oxp3-voltap; check systemctl status oxp3-voltap"
+        printf '  files are kept; remove them with: sudo tools/oxp3-voltap/install.sh uninstall\n'
     fi
     volume_restart_notice
 }
@@ -642,6 +643,11 @@ comp_sleep_install() {
     run udevadm control --reload-rules
     run udevadm trigger --action=change --subsystem-match=usb --subsystem-match=pci
     run udevadm trigger --action=change --subsystem-match=mmc_host --subsystem-match=mmc
+    # The Predator GM7 in this machine needs nvme.noacpi=1 or the NVMe controller
+    # aborts the s2idle walk; the tool is a no-op on other hardware.
+    if [[ -x "$repo/tools/oxp3-nvme-suspend.sh" ]]; then
+        run "$repo/tools/oxp3-nvme-suspend.sh" apply
+    fi
 }
 
 # The trigger half of --sleep: what makes a *request* reach the kernel at all.
@@ -735,8 +741,12 @@ comp_rgb_install() {
         printf '  HHD configures the RGB zones; no per-zone daemon installed\n'
         printf '  per-zone custom frames: re-run with --rgb-daemon (or tools/oxp3-rgbd.py)\n'
         if [[ -e $HOME/.config/systemd/user/oxp3-rgbd.service || -e ${PREFIX:-}/etc/systemd/user/oxp3-rgbd.service ]]; then
-            printf '  note: oxp3-rgbd is installed from an earlier run; hand the zones back with\n'
-            printf '        tools/oxp3-rgb-handback.sh\n'
+            if [[ -n $PREFIX ]]; then
+                skip_prefixed "tools/oxp3-rgb-handback.sh (stops the user daemon)"
+            else
+                warn "oxp3-rgbd is installed from an earlier run; handing the zones back to HHD"
+                as_user_run "$repo/tools/oxp3-rgb-handback.sh" || warn "rgb handback failed; run tools/oxp3-rgb-handback.sh"
+            fi
         fi
         return 0
     fi
@@ -807,11 +817,12 @@ comp_gfx_install() {
 }
 
 comp_xmx_install() {
-    say "XeSS XMX for Flatpak Steam (sandbox env + Proton shim)"
+    say "XeSS XMX (Flatpak shim + native Steam launch options)"
     local tool=$repo/tools/oxp3-flatpak-xmx.sh
     [[ -x $tool ]] || { warn "missing $tool"; return 0; }
     if (( DRY_RUN )); then
-        printf '  [dry-run] as %s: %s install\n' "$TARGET_USER" "$tool"
+        printf '  [dry-run] as %s: %s install ; xmx-write-env.sh\n' "$TARGET_USER" "$tool"
+        printf '  [dry-run] as %s: tools/xmx-steam-enable.sh --all (native Steam XeSS titles)\n' "$TARGET_USER"
         return 0
     fi
     # install is per game prefix: cover every Proton prefix that already exists.
@@ -830,6 +841,11 @@ comp_xmx_install() {
     # Deliberately NOT a session-wide VK_ICD override: that would also put gamescope
     # on the XMX/CM driver, which breaks PQ HDR composition. Per-game XMX goes through
     # tools/xmx-run.sh (or the launch option it prints).
+    if [[ -d "$home/.local/share/Steam/steamapps" && -x "$repo/tools/xmx-steam-enable.sh" ]]; then
+        printf '  native Steam: enabling XMX for installed XeSS titles\n'
+        as_user_run "$repo/tools/xmx-steam-enable.sh" --all || warn "native Steam XMX enabling failed"
+        printf '  restart Steam afterwards: the XMX environment is written into each app LaunchOptions\n'
+    fi
     if (( ${#appids[@]} == 0 )); then
         as_user_run "$tool" status | sed 's/^/  /'
         printf '  no Flatpak Steam Proton prefix exists yet, so there is no game shim to place.\n'

@@ -31,10 +31,11 @@ sudo tools/oxp3-hw-install.sh --all --audio-activate --restart-plugin-loader
 sudo reboot
 ```
 
-`--all` covers: volume (HHD plugin), sleep policy, Bluetooth firmware + boot reload, power/fan, IMU blacklist, LEDs and
-home button, RGB (HHD-owned), speaker EQ + gain staging, scheduler, host Mesa restore + keep unit, **gamescope PQ HDR
-build + keep unit**, **Gamemode HDR launcher override**, XMX env/per-game wiring, MangoHud patched build + config (Intel
-iGPU power/temperature), and Decky 1.1/1.2. The gamescope build is extracted from the cached
+`--all` covers: volume (HHD plugin, legacy daemon disabled), sleep policy + low-power park + `nvme.noacpi=1` for the
+GM7, Bluetooth firmware + boot reload, power/fan, IMU blacklist, LEDs and home button (session-independent), RGB handed
+back to HHD, speaker EQ + persistent gain loop, scheduler, host Mesa restore + keep unit, **gamescope PQ HDR build + keep
+unit**, **Gamemode HDR launcher override**, XMX (shared env, native Steam launch options for every installed XeSS title,
+Flatpak shim per existing prefix), MangoHud patched build + config + keep unit, and Decky 1.3.0. The gamescope build is extracted from the cached
 `~/.cache/oxp3-fixes/out/gamescope-*.oxp3*.rpm`; if those are missing, rebuild with `./oxp3-fixes-fast.sh build`.
 
 Reboot is safe now: gamescope, Mesa and MangoHud are restored by keep units, and the HDR launcher override lives in `/etc`
