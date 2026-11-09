@@ -243,8 +243,36 @@ decky_state_dir() {
     fi
 }
 
-# Build with the repository's deterministic build when the toolchain exists; otherwise reuse an
-# existing zip, which must match the digest recorded in tools/decky-oxp3-status/artifact.sha256.
+# Prefer the artifact we already ship: reuse build/oxp3-status-*.zip when its digest matches the
+# recorded one (no build, no network, works under sudo where root has no npm cache).  Build only
+# when there is no usable artifact, and when building, do it as the invoking user, not as root.
+decky_recorded_digest() {
+    local f="$repo/tools/decky-oxp3-status/artifact.sha256" d
+    [[ -f $f ]] || return 1
+    d=$(awk '/^[0-9a-f]{64}[[:space:]]/ {print $1; exit}' "$f")
+    [[ -n $d ]] || return 1
+    printf '%s' "$d"
+}
+
+decky_find_verified_artifact() {
+    local want z got
+    want=$(decky_recorded_digest) || return 1
+    while IFS= read -r z; do
+        [[ -n $z ]] || continue
+        got=$(sha256sum "$z" 2>/dev/null | cut -d' ' -f1)
+        [[ $got == "$want" ]] && { printf '%s' "$z"; return 0; }
+    done < <(find "$repo/tools/decky-oxp3-status/build" -maxdepth 1 -name 'oxp3-status-*.zip' -print 2>/dev/null | sort)
+    return 1
+}
+
+decky_newest_zip() {
+    local z
+    z=$(find "$repo/tools/decky-oxp3-status/build" -maxdepth 1 -name 'oxp3-status-*.zip' -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr | head -n 1 | cut -d' ' -f2-)
+    [[ -n $z ]] || return 1
+    printf '%s' "$z"
+}
+
 decky_select_artifact() {
     local z
     if [[ -n $DECKY_ARTIFACT ]]; then
@@ -252,22 +280,37 @@ decky_select_artifact() {
         printf '%s' "$DECKY_ARTIFACT"
         return 0
     fi
+    z=$(decky_find_verified_artifact) || z=""
+    if [[ -n $z ]]; then
+        printf '  using the recorded plugin artifact (sha256 matches artifact.sha256)\n' >&2
+        printf '%s' "$z"
+        return 0
+    fi
     if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-        say "Decky plugin: building the package (node $(node --version), npm $(npm --version))"
-        if "$repo/tools/decky-oxp3-status/build.sh" --offline; then
+        local -a buildenv=()
+        if [[ -n ${SUDO_USER:-} && ${SUDO_USER:-} != root ]]; then
+            local uh uhcache
+            uh=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+            if [[ -n $uh && -d $uh ]]; then
+                uhcache="$uh/.npm"
+                buildenv=(env "HOME=$uh" "NPM_CONFIG_CACHE=$uhcache" "npm_config_cache=$uhcache")
+            fi
+        fi
+        say "Decky plugin: no recorded artifact to reuse; building the package"
+        if "${buildenv[@]}" "$repo/tools/decky-oxp3-status/build.sh" --offline; then
             DECKY_ARTIFACT_FROM_BUILD=1
-            z=$(ls -1t "$repo"/tools/decky-oxp3-status/build/oxp3-status-*.zip 2>/dev/null | head -n 1) || true
+            z=$(decky_newest_zip) || z=""
             [[ -n $z ]] || die "the plugin build produced no build/oxp3-status-*.zip"
             printf '%s' "$z"
             return 0
         fi
-        warn "the plugin build failed; falling back to an existing verified artifact"
+        warn "the plugin build failed; falling back to an existing artifact"
     else
-        printf '  node/npm not found; reusing an existing verified plugin zip\n'
+        printf '  node/npm not found; reusing an existing plugin zip\n'
     fi
-    z=$(ls -1t "$repo"/tools/decky-oxp3-status/build/oxp3-status-*.zip 2>/dev/null | head -n 1) || true
+    z=$(decky_newest_zip) || z=""
     [[ -n $z ]] || die \
-        "no plugin artifact to reuse; build it on a host with node/npm (cd tools/decky-oxp3-status && ./build.sh --offline) and commit/copy build/oxp3-status-*.zip, or pass --decky-artifact PATH"
+        "no plugin artifact available; build it as your normal user (cd tools/decky-oxp3-status && ./build.sh --offline) and update artifact.sha256, or pass --decky-artifact PATH"
     printf '%s' "$z"
 }
 
