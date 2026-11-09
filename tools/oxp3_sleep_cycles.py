@@ -1900,7 +1900,7 @@ def _print_preflight(errors, warnings, opts):
            else (opts.sleep_s, opts.rtc or "rtc0")),
         "journalctl -k -b --since=@<cycle-start-epoch> --until=@<resume-epoch> "
         "--no-pager -o short-iso",
-        "rtcwake -m disable -d %s" % (opts.rtc or "rtc0"),
+        "echo 0 > /sys/class/rtc/%s/wakealarm" % (opts.rtc or "rtc0"),
         "sh -c 'echo 0 > /sys/class/rtc/%s/wakealarm'" % (opts.rtc or "rtc0"),
     ]
     for code, message in errors:

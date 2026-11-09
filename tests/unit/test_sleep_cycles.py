@@ -638,6 +638,7 @@ class SafetyTest(unittest.TestCase):
         self.assertIn("exceeds", mod._check_ranges(Opts()))
 
     def test_rtcwake_command_shape_is_documented_in_dry_run(self):
+        # default path: sysfs wakealarm + logind; --direct keeps rtcwake
         # The dry-run plan is the contract the docs quote; assert the exact
         # command shape without running it.
         parser = mod.build_parser()
@@ -646,8 +647,9 @@ class SafetyTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             mod.cmd_dry_run(opts)
         text = out.getvalue()
-        self.assertIn("rtcwake -m mem -s 30", text)
-        self.assertIn("rtcwake -m disable", text)
+        self.assertIn("/sys/class/rtc/rtc0/wakealarm", text)
+        self.assertIn("systemctl suspend", text)
+        self.assertIn("echo 0 > /sys/class/rtc/rtc0/wakealarm", text)
         self.assertIn("nothing was armed, suspended or written", text)
 
 
