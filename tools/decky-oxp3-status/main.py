@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # Recorded expectations (docs/WORKING-BUILD-2026-11-08.md, docs/xess-xmx.md).
@@ -3145,6 +3145,18 @@ def get_last_verification() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Decky Loader backend
 # ---------------------------------------------------------------------------
+def _report_payload(status: Any, overview: Any) -> Dict[str, Any]:
+    """One self-describing document: the panel report plus the overview."""
+    return {
+        "schema": 1,
+        "kind": "oxp3-status-report",
+        "version": VERSION,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "status": status,
+        "overview": overview,
+    }
+
+
 class Plugin:
     """Decky Loader entry point. All methods return JSON-serialisable data."""
 
@@ -3153,6 +3165,55 @@ class Plugin:
 
     async def _unload(self) -> None:
         return None
+
+    async def save_report(self) -> Dict[str, Any]:
+        """Write the full JSON report into the owner's home and return the path.
+
+        The panel used to hand the JSON to the clipboard, which is useless on a
+        handheld in Gamemode and cannot be handed over for offline analysis. This
+        writes ~/oxp3-reports/oxp3-report-<UTC>.json plus latest.json (same bytes)
+        so the owner can attach it or point an agent at it.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            status = await loop.run_in_executor(None, collect_status)
+            try:
+                overview = await loop.run_in_executor(None, collect_overview)
+            except Exception:  # the report is still useful without the overview
+                overview = {}
+            home, _notes = resolve_home()
+            payload = _report_payload(status, overview)
+            text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+            target = Path(home) / "oxp3-reports"
+            target.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            path = target / ("oxp3-report-%s.json" % stamp)
+            tmp = target / (".tmp-%s" % stamp)
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(str(tmp), str(path))
+            latest = target / "latest.json"
+            latest.write_text(text, encoding="utf-8")
+            ident = _deck_identity(Path(home))
+            if ident and os.geteuid() == 0:
+                for item in (target, path, latest):
+                    try:
+                        os.chown(str(item), ident[0], ident[1])
+                    except OSError:
+                        pass
+            for item in (path, latest):
+                try:
+                    os.chmod(str(item), 0o644)
+                except OSError:
+                    pass
+            return {
+                "ok": True,
+                "path": str(path),
+                "latest": str(latest),
+                "bytes": len(text.encode("utf-8")),
+                "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            }
+        except Exception as exc:  # never crash the plugin host
+            return {"ok": False, "error": str(exc)}
 
     async def get_status(self) -> Dict[str, Any]:
         # Fast hashes are cached in-process (by path+mtime+size), but the first
@@ -3807,6 +3868,24 @@ def _proc_fixture_globals(root: Path):
         _OVERVIEW_XESS_CACHE["value"] = None
 
 
+def report_selftest() -> List[str]:
+    errors: List[str] = []
+    payload = _report_payload({"overall": "ok"}, {"health": {"headline": "x"}})
+    if payload.get("kind") != "oxp3-status-report":
+        errors.append("report payload kind")
+    if payload.get("version") != VERSION:
+        errors.append("report payload version")
+    if "generated_at" not in payload or not str(payload["generated_at"]).endswith("Z"):
+        errors.append("report payload timestamp")
+    if payload.get("status", {}).get("overall") != "ok":
+        errors.append("report payload status")
+    if payload.get("overview", {}).get("health", {}).get("headline") != "x":
+        errors.append("report payload overview")
+    if not callable(getattr(Plugin, "save_report", None)):
+        errors.append("save_report method missing")
+    return errors
+
+
 def overview_selftest() -> Tuple[int, List[str]]:
     """Synthetic verify reports and synthetic /proc trees for the two top
     lines. Nothing here reads the real /proc of a game or runs the harness."""
@@ -4285,6 +4364,11 @@ def run_selftest() -> int:
     overview_total, overview_failures = overview_selftest()
     checks.total += overview_total
     checks.failures.extend(overview_failures)
+
+    # -- JSON report export (payload shape + the save method) -----------
+    report_errors = report_selftest()
+    checks.total += 6
+    checks.failures.extend(report_errors)
 
     if checks.failures:
         print("selftest: %d check(s), %d FAILED" % (checks.total, len(checks.failures)))

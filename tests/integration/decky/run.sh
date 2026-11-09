@@ -31,9 +31,15 @@ state=$home/.local/state/oxp3-fixes
 backups=$state/decky-backups
 
 artifact=""
+if [ -r "$repo/tools/decky-oxp3-status/artifact.sha256" ]; then
+    artifact=$repo/tools/decky-oxp3-status/build/$(awk '{print $2}' "$repo/tools/decky-oxp3-status/artifact.sha256")
+fi
 for z in "$repo"/tools/decky-oxp3-status/build/oxp3-status-*.zip; do
+    [ -n "$artifact" ] && break
     [ -f "$z" ] && { artifact=$z; break; }
 done
+plugin_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+    "$repo/tools/decky-oxp3-status/plugin.json" 2>/dev/null || echo 1.2.0)
 if [ -z "$artifact" ]; then
     echo "SKIP: no built plugin artifact; run: (cd tools/decky-oxp3-status && ./build.sh --offline)"
     exit 77
@@ -57,7 +63,7 @@ check "the ownership marker is installed" test -f "$plugin/.oxp3-managed"
 check "the marker names the plugin" grep -qx 'plugin=oxp3-status' "$plugin/.oxp3-managed"
 check "the marker records the artifact digest" grep -q '^artifact_sha256=[0-9a-f]\{64\}$' "$plugin/.oxp3-managed"
 check "the installed manifest has the expected version" \
-    grep -q '"version"[[:space:]]*:[[:space:]]*"1.1.0"' "$plugin/plugin.json"
+    grep -q "\"version\"[[:space:]]*:[[:space:]]*\"$plugin_version\"" "$plugin/plugin.json"
 check "the artifact digest was verified" grep -q 'recorded: .* (match)' "$tmp/install.log"
 check "the restart command is printed instead of restarting" \
     grep -q 'sudo systemctl restart plugin_loader.service' "$tmp/install.log"
@@ -69,7 +75,7 @@ else
     bad "status exits 0"
 fi
 check "status reports the decky component as ok" grep -q '^  decky:.*state=ok' "$tmp/status.log"
-check "status reports the installed version" grep -q 'version=1.1.0' "$tmp/status.log"
+check "status reports the installed version" grep -q "version=$plugin_version" "$tmp/status.log"
 check "status reports the marker" grep -q 'marker=yes' "$tmp/status.log"
 
 # --- 3. reinstall (backup created) ----------------------------------------------------------

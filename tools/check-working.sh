@@ -1,5 +1,5 @@
 #!/bin/sh
-# Verify the installed system still matches the recorded working build of 2026-11-08.
+# Verify the installed system still matches the recorded working build of 2026-11-09.
 fail=0
 ok() { printf 'OK       %s\n' "$1"; }
 bad() { printf 'MISMATCH %s\n' "$1"; fail=1; }
@@ -15,6 +15,24 @@ OV=/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides
 [ "$(($(cat /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null)/1000000))" = 35 ] \
     && ok "PL1 35 W" || bad "PL1 is not 35 W"
 case "$(modinfo -F filename xe 2>/dev/null)" in */updates/*) ok "patched xe module layered";; *) bad "stock xe module (patched modules missing)";; esac
+# PQ HDR: the patched gamescope build and the persistent launcher override.
+if [ -r /var/lib/oxp3-fixes/gamescope.sha256 ] && \
+   [ "$(sha256sum /usr/bin/gamescope 2>/dev/null | cut -d' ' -f1)" = "$(cat /var/lib/oxp3-fixes/gamescope.sha256)" ]; then
+    ok "patched gamescope (PQ HDR)"
+else
+    bad "stock gamescope (PQ HDR patch missing)"
+fi
+HDRCOPY=/usr/local/libexec/anatase-gamemode-hdr
+HDRDROP=/etc/systemd/user/anatase-gamemode.service.d/90-oxp3-hdr.conf
+if grep -q -- '--hdr-enabled' "$HDRCOPY" 2>/dev/null && grep -q "^ExecStart=$HDRCOPY$" "$HDRDROP" 2>/dev/null; then
+    ok "Gamemode HDR/PQ launcher override"
+else
+    bad "Gamemode HDR launcher override missing"
+fi
+for u in oxp3-mesa-keep oxp3-gamescope-keep oxp3-mangohud-keep; do
+    if systemctl is-enabled --quiet "$u" 2>/dev/null; then ok "$u enabled"; else bad "$u not enabled"; fi
+done
+
 n=$(python3 - <<'PY'
 import json,glob,os
 c=0

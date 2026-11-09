@@ -816,15 +816,32 @@ function StatusPanel() {
     });
   }, [reload, reloadOverview]);
 
-  const onCopyJson = useCallback(async () => {
-    if (!report) return;
+  const onSaveReport = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
-      toaster.toast({ title: "OXP3 Status", body: "Report copied as JSON" });
-    } catch {
-      toaster.toast({ title: "OXP3 Status", body: "Clipboard is not available here" });
+      const res = (await call("save_report")) as {
+        ok?: boolean;
+        path?: string;
+        latest?: string;
+        error?: string;
+      };
+      if (res?.ok) {
+        toaster.toast({
+          title: "OXP3 Status",
+          body: `Report saved: ${res.path ?? "~/oxp3-reports/"}`,
+        });
+      } else {
+        toaster.toast({
+          title: "OXP3 Status",
+          body: `Could not save the report: ${res?.error ?? "unknown error"}`,
+        });
+      }
+    } catch (err) {
+      toaster.toast({
+        title: "OXP3 Status",
+        body: `Could not save the report: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
-  }, [report]);
+  }, []);
 
   const overall = asState(report?.overall);
   const counts = report?.counts ?? {};
@@ -952,8 +969,8 @@ function StatusPanel() {
             </PanelSectionRow>
           ))}
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={onCopyJson} disabled={!report}>
-              Copy report JSON
+            <ButtonItem layout="below" onClick={onSaveReport}>
+              Save report JSON (~/oxp3-reports/latest.json)
             </ButtonItem>
           </PanelSectionRow>
           <PanelSectionRow>
