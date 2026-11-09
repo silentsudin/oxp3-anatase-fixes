@@ -74,8 +74,8 @@ scheduler or adaptive TDP, and a plain game launch leaves no igdext trace.
 
 ## 3. Check inventory — what each check proves
 
-Default mode runs **69 checks**; `--full` adds 4 (**73**); `--with-changes` adds
-`aud.activate` and `fan.savemode` (**75**). The ids are stable (they are the `state`
+Default mode runs **70 checks**; `--full` adds 4 (**74**); `--with-changes` adds
+`aud.activate` and `fan.savemode` (**76**). The ids are stable (they are the `state`
 keys in `--json`).
 
 ### volume (6; `vol.hold` only in `--full`)
@@ -121,7 +121,7 @@ The contract and the manual suspend/hotplug procedures are in
 |---|---|---|
 | `imu.selftest` | BMI260 works and HHD exposes gyro to Steam | `tools/oxp3-imu.py selftest` |
 
-### sleep (5 + 2 in `--full`)
+### sleep (6 + 2 in `--full`)
 
 | id | proves | how |
 |---|---|---|
@@ -129,9 +129,10 @@ The contract and the manual suspend/hotplug procedures are in
 | `sleep.stats` | a real suspend happened, not a 3 s abort | `success > 0` **and** `last_hw_sleep > 0`; `FAIL` when attempts failed or when `success > 0` with `last_hw_sleep == 0` (the original never-suspended bug); `SKIP` before the first attempt |
 | `sleep.units` | the wake policy is applied at boot | `oxp3-sleep-wakeup` active (and reports pre/log state) |
 | `sleep.wakeup` | the devices that must not wake the machine are disarmed | for each USB id / PCI address in `files/99-oxp3-sleep-wakeup.rules`: `…/power/wakeup == disabled` |
+| `sleep.trigger` | a suspend *request* has a permitted path that does not need a desktop session | read-only: our logind drop-in present and parsed (`systemd-analyze cat-config systemd/logind.conf` → `HandlePowerKey=suspend`, `HandleSuspendKey=suspend`), the polkit rule present and `pkcheck --action-id org.freedesktop.login1.suspend --process $$` says yes, and no `block` inhibitor of type `sleep` exists (`systemd-inhibit --list`). A `block` on `handle-*` (PowerDevil, hhd) is reported but does not fail: it only stops logind's own key handling, not an explicit `Suspend` call. `SKIP` while the policy is not installed |
 | `sleep.audit` | the audit tooling reads the suspend record | `tools/sleep-power-measure.sh audit` produces the capability + record blocks (its exit code is incidental) |
 | `sleep.measure` (long) | the machine does not drain like a laptop in a bag | `sleep-power-measure.sh run -w N`: `PASS` ≤ 1 %/h, `WARN` 1–2 %/h, `FAIL` > 2 %/h; `SKIP` (exit 2) on AC or unreadable battery |
-| `sleep.suspend` (root, long) | a real s2idle sleep/resume cycle works now | `sleep-power-measure.sh suspend -w N` via `rtcwake`, same thresholds; `FAIL` when the machine refuses to suspend |
+| `sleep.suspend` (root, long, triple opt-in) | a real s2idle sleep/resume cycle works now | the **only** check that suspends the machine: requires `--full`, `--with-changes` *and* `OXP3_ALLOW_SUSPEND=1`, then runs `sleep-power-measure.sh suspend -w N` via `rtcwake`, and requires `suspend_stats/success` to increment (same thresholds, `FAIL` when the machine refuses to suspend). Without all three opt-ins it is `SKIP` with the exact command |
 
 ### Bluetooth (5)
 
@@ -234,7 +235,7 @@ remains a manual step (see §9).
 | 2 LEDs / home button | `hid.rule`, `led.status`, `led.zones`, `hid.access`, `homebtn.unit`, `homebtn.mapping`, `homebtn.press`, (`led.write`) |
 | 2 RGB keeper | `rgbd.unit`, `rgbd.check` |
 | daemon lifecycle (DAEMONS.md) | `life.fd`, `life.reconnect`, (`life.sim`) |
-| 3 sleep / wake policy | `sleep.mem`, `sleep.stats`, `sleep.units`, `sleep.wakeup`, `sleep.audit`, (`sleep.measure`), (`sleep.suspend`) |
+| 3 sleep / wake policy | `sleep.mem`, `sleep.stats`, `sleep.units`, `sleep.wakeup`, `sleep.trigger`, `sleep.audit`, (`sleep.measure`), (`sleep.suspend`) |
 | 4 Bluetooth firmware | `bt.files`, `bt.dracut`, `bt.journal`, `bt.controller`, `bt.diag` |
 | 5 power envelope / fan | `pwr.zones`, `pwr.pl1`, `pwr.profile`, `pwr.fan`, `pwr.rapl` |
 | 5 adaptive TDP (opt-in) | `pwr.adaptive` |
@@ -271,11 +272,14 @@ machine. The pass/skip split above is otherwise unchanged.)
   the daemons are installed; `life.sim` additionally needs `--full`). `vol.topology`
   is the one volume row that `PASS`es without root on this host.
 * Without the Decky plugin, `decky.dir`/`decky.backend` also `SKIP`: 45 pass / 10 skip.
-* `--full` on the same machine: `73 checks` (adds `vol.hold`, `led.write`,
+* `--full` on the same machine: `74 checks` (adds `vol.hold`, `led.write`,
   `sleep.measure`, `sleep.suspend`; `life.sim` then runs its offline suite instead of
-  being gated). Run it on battery; `sleep.measure` is `SKIP` on AC by design.
-* `--full --with-changes`: `75 checks` — the two extra rows over `--full` are
+  being gated; `sleep.suspend` stays `SKIP` until `OXP3_ALLOW_SUSPEND=1` is also set).
+  Run it on battery; `sleep.measure` is `SKIP` on AC by design.
+* `--full --with-changes`: `76 checks` — the two extra rows over `--full` are
   `aud.activate` and `fan.savemode`, the only checks that may change persistent state.
+  Adding `OXP3_ALLOW_SUSPEND=1` changes no count: it turns `sleep.suspend` from `SKIP`
+  into a real 60 s suspend.
 
 Representative passing lines:
 
@@ -296,7 +300,9 @@ Representative passing lines:
 | `homebtn.*` / `rgbd.*` "no user systemd instance" | the shell has no user manager bus (root shell, SSH without a seat) | re-run inside the logged-in desktop session |
 | `homebtn.press` "no press since boot" | the daemon is listening but nobody pressed the button | press the home button once, re-run |
 | `rgbd.*` "no user config" | `~/.config/oxp3-rgb.toml` was never installed | install `tools/oxp3-rgbd.toml.example` and enable the unit |
-| `sleep.stats` "no suspend attempt since boot" | accurate: nothing to prove yet | `--full` (root) performs a real suspend, or `sudo tools/sleep-power-measure.sh suspend -w 60` |
+| `sleep.stats` "no suspend attempt since boot" | accurate: nothing to prove yet | `sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes`, or `sudo tools/sleep-power-measure.sh suspend -w 60`, or the shortest proof: `sudo systemctl suspend` and re-run |
+| `sleep.trigger` "trigger policy not installed" | the logind drop-in and the polkit rule are not on this host | `sudo tools/oxp3-hw-install.sh --sleep`, then `sudo systemctl restart systemd-logind` (or reboot), then re-run |
+| `sleep.suspend` "gated" | by design: this is the only check that suspends the machine | `sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes` |
 | `sleep.measure` "measurement invalid" | on AC, or the battery is unreadable; the tool refuses to fake a number | unplug, re-run |
 | `bt.dracut` | no standalone dracut drop-in; a layered firmware rpm may cover it | `bt.journal`/`bt.controller` carry the verdict |
 | `aud.eq` "EQ not installed" | the drop-in is missing | `tools/audio/eq-on.sh` |
@@ -354,11 +360,12 @@ This is the honest state of this machine, not a harness problem:
   zones/PL1/fan/RAPL/ordering, adaptive AC detection, battery limit/behaviour/default,
   audio server/model/scripts, display HDR/ICC/EDID/vibrance, Mesa/XMX/xe/working-build,
   HID node/empty-sides, rgbd timing, install-common helpers, status overview.
-* `--full` here (non-root, 1 s measurement) = 73 checks: adds `vol.hold` SKIP
+* `--full` here (non-root, 1 s measurement) = 74 checks: adds `vol.hold` SKIP
   (`needs root`), `led.write` SKIP (hidraw 0600), `sleep.measure` SKIP (on AC),
-  `sleep.suspend` SKIP (`needs root`); `life.sim` runs the offline suite and PASSes.
+  `sleep.suspend` SKIP (gated: `OXP3_ALLOW_SUSPEND` unset); `life.sim` runs the
+  offline suite and PASSes.
   Still exit 1 for the same three Bluetooth rows.
-  `--full --with-changes` = 75 checks and additionally SKIPs `fan.savemode` (`needs
+  `--full --with-changes` = 76 checks and additionally SKIPs `fan.savemode` (`needs
   root`); `aud.activate` was attempted as the documented opt-in.
   The root-only paths (`vol.hold`, `sleep.suspend`) were **not** executed here: this
   repository's rules forbid `sudo`, so they are device-side acceptance steps.
@@ -367,27 +374,28 @@ Verbatim evidence (never overwritten, regenerate when the machine changes):
 
 * [`docs/state/verify-default-2026-11-09.txt`](state/verify-default-2026-11-09.txt) — 108 lines, the run above.
 * [`docs/state/verify-default-2026-11-09.json`](state/verify-default-2026-11-09.json) — `--json`, 55 checks (pre-deferred-risk inventory), schema 1, exit 1.
-* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 104).
+* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 150).
 
 The snapshots above predate the three `life.*` rows: a host without the daemons now
-reports 69 (default), 73 (`--full`) and 75 (`--full --with-changes`) checks, with the
+reports 70 (default), 74 (`--full`) and 76 (`--full --with-changes`) checks, with the
 three lifecycle rows as `SKIP` (`life.sim` is gated until `--full`).
 
 ## 8. Offline validation performed (no root, no host change)
 
 * `bash -n tools/oxp3-verify.sh` and `sh -n tests/verify/run.sh`: clean.
-* `tools/oxp3-verify.sh --selftest`: **95 assertions / 0 failures** over the parsers
+* `tools/oxp3-verify.sh --selftest`: **150 assertions / 0 failures** over the parsers
   (`display-mode` ANSI output, `powerctl` domains/fan/profile, `status` indicators,
   `suspend_stats`, `bt --check`, `led status`, `rgbd --check`, `pactl` sinks,
   the two journals, `sleep-audit`), the ten deferred-risk probes -- HID candidate map
   and verdicts, dry-run frame counts, adaptive decision/AC verdict, per-domain limit
   ordering, curve summary, battery-limit dry run, install-common helper output, IIO
   primary/fallback map, rgbd timing -- the exit-code mapping, and a fixed inventory
-  check that the 75 declared check ids are exactly the documented set (no typos, no
+  check that the 76 declared check ids are exactly the documented set (no typos, no
   drops). New fixtures live under `tests/verify/fixtures/` (`hidraw/`, `iio/`,
   `adaptive-*.json`, `hid-verdict-*.txt`, `led-dry-*.txt`, `battery-limit-dry.json`,
   `powerctl-profile-*.json`, `curve-dup.json`, `rgbd-check-nojournal.txt`,
-  `inst-paths*.txt`), including the SKIP paths.
+  `inst-paths*.txt`, `logind-cat-config-{default,oxp3}.txt`, `inhibitors-{plasma,sleep-block}.txt`,
+  `polkit-rule-bad.rules`), including the SKIP paths.
 * `tools/oxp3-verify.sh`: 64 checks, exit 1, ~4 s wall clock. Two consecutive
   `--json` runs were identical apart from `generated_at` (volatile values such as fan
   rpm can legitimately differ between runs).

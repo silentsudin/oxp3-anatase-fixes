@@ -25,12 +25,18 @@
 # --full writes nothing persistent either, but it does change live state:
 #   * one solid frame to the top RGB strip (zone 06), then re-applies
 #     ~/.config/oxp3-rgb.toml when present (otherwise leaves that zone off)
-#   * a real s2idle suspend via tools/sleep-power-measure.sh suspend (needs
-#     root; default 60 s, override OXP3_VERIFY_SUSPEND_S)
+#   * an awake battery/power measurement (60 s by default)
 # Persistent configuration is changed only with --with-changes, which runs the
 # two opt-in writes: activating the speaker EQ drop-in (tools/audio/eq-on.sh) and
 # the saved fan-mode probe (fan.savemode), which snapshots and restores
 # /etc/oxp3/power.json and pwm1_enable around the one write it needs.
+#
+# sleep.suspend is the ONLY check in this harness that suspends the machine. It
+# needs three independent opt-ins, so a plain `--full` can never cost a session:
+# --full, --with-changes and OXP3_ALLOW_SUSPEND=1. When they are met it runs one
+# real s2idle cycle through tools/sleep-power-measure.sh suspend (rtcwake, default
+# 60 s, override OXP3_VERIFY_SUSPEND_S) and requires suspend_stats/success to
+# increment. Everything else, including sleep.trigger, is read-only.
 #
 # The deferred risks listed in docs/UNIT-TESTS.md section 5 are covered by
 # read-only probes in the default mode (hid.node, led.sides, rgbd.timing,
@@ -69,8 +75,9 @@
 # (see docs/VALIDATION.md, "Open points").
 #
 # Environment overrides:
-#   OXP3_VERIFY_MEASURE_S   seconds for the --full awake/sleep measurement (60)
-#   OXP3_VERIFY_SUSPEND_S   seconds for the --full real suspend (60)
+#   OXP3_VERIFY_MEASURE_S   seconds for the --full awake measurement (60)
+#   OXP3_VERIFY_SUSPEND_S   seconds for the one real suspend (60)
+#   OXP3_ALLOW_SUSPEND      must be 1 to let sleep.suspend really suspend
 #   OXP3_VERIFY_TIMEOUT     default per-tool timeout (20 s)
 #
 # See docs/VALIDATION.md for what each check proves, the expected healthy
@@ -221,6 +228,114 @@ parse_suspend_stats() { # DIR
     printf 'SUCCESS=%s\nFAIL=%s\nLAST_HW_SLEEP=%s\nTOTAL_HW_SLEEP=%s\n' \
         "$(read1 "$d/success" || true)" "$(read1 "$d/fail" || true)" \
         "$(read1 "$d/last_hw_sleep" || true)" "$(read1 "$d/total_hw_sleep" || true)"
+}
+
+parse_logind_handles() { # stdin: systemd-analyze cat-config systemd/logind.conf
+    # cat-config prints the compiled defaults as "#HandlePowerKey=poweroff" and the
+    # local drop-in values uncommented, so both layers come out of one stream. A key
+    # that only appears as a default is still reported: the check needs to say what a
+    # bare power key would do *without* our drop-in (it is poweroff, not suspend).
+    awk '
+        function slot(k) {
+            if (k == "HandlePowerKey") return "POWER"
+            if (k == "HandleSuspendKey") return "SUSPEND"
+            if (k == "HandleLidSwitch") return "LID"
+            if (k == "HandleLidSwitchExternalPower") return "LID_EXT"
+            if (k == "HandleLidSwitchDocked") return "LID_DOCK"
+            if (k == "HandleHibernateKey") return "HIBERNATE"
+            if (k == "HandlePowerKeyLongPress") return "POWER_LONG"
+            return ""
+        }
+        /^[[:space:]]*\[/ {
+            s = $0; gsub(/[][[:space:]]/, "", s); sect = s; next
+        }
+        {
+            line = $0; wasdef = 0
+            if (line ~ /^[[:space:]]*#/) { wasdef = 1; sub(/^[[:space:]]*#[[:space:]]*/, "", line) }
+            sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line)
+            if (sect != "Login") next
+            i = index(line, "=")
+            if (!i) next
+            k = substr(line, 1, i - 1); v = substr(line, i + 1)
+            name = slot(k)
+            if (name == "") next
+            if (wasdef) { if (!(name in over)) dflt[name] = v; next }
+            over[name] = 1; cur[name] = v
+        }
+        END {
+            n = split("POWER SUSPEND LID LID_EXT LID_DOCK HIBERNATE POWER_LONG", names, " ")
+            for (i = 1; i <= n; i++) {
+                nm = names[i]
+                v = (nm in cur) ? cur[nm] : ((nm in dflt) ? dflt[nm] : "?")
+                printf "%s=%s\n", nm, v
+            }
+            printf "OVERRIDES=%d\n", length(over)
+        }
+    '
+}
+
+parse_inhibitors() { # stdin: systemd-inhibit --list
+    # Columns are WHO UID USER PID COMM WHAT WHY MODE. WHAT never contains a space
+    # ("sleep" or "handle-power-key:handle-lid-switch"), WHY does, so WHAT is field 6
+    # and MODE is the last field. Only a "block" inhibitor on "sleep" can refuse a
+    # suspend; handle-* blocks only stop logind's own event handling.
+    awk '
+        NR == 1 { next }
+        NF < 7 { next }
+        {
+            mode = $NF
+            if (mode != "block" && mode != "delay") next
+            what = $6; who = $1
+            total++
+            if (what ~ /(^|:)sleep(:|$)/) {
+                if (mode == "block") { bs++; bwho = bwho " " who }
+                else ds++
+            }
+            if (mode == "block" && what ~ /handle-/) { bh++; hwho = hwho " " who }
+        }
+        END {
+            printf "TOTAL=%d\nBLOCK_SLEEP=%d\nBLOCK_HANDLES=%d\nDELAY_SLEEP=%d\nSLEEP_WHO=%s\nHANDLE_WHO=%s\n",
+                total + 0, bs + 0, bh + 0, ds + 0, bwho, hwho
+        }
+    '
+}
+
+parse_polkit_rule() { # stdin: a .rules file (JSON-ish polkit JS)
+    # Comment lines are skipped: the shipped rule *names* suspend-ignore-inhibit in
+    # its explanation of what it does not grant, and that must not count as a grant.
+    awk '
+        {
+            line = $0; sub(/^[[:space:]]+/, "", line)
+            if (line ~ /^\*/ || line ~ /^\/\*/ || line ~ /^\/\//) next
+        }
+        /polkit\.addRule/ { rule++ }
+        /org\.freedesktop\.login1\.(suspend|hibernate)/ { ids++ }
+        /suspend-ignore-inhibit/ { ignore++ }
+        /subject\.local/ { localg++ }
+        /subject\.active/ { activeg++ }
+        /polkit\.Result\.YES/ { yes++ }
+        END {
+            printf "RULE=%d\nIDS=%d\nIGNORE_INHIBIT=%d\nLOCAL_GUARD=%d\nACTIVE_GUARD=%d\nYES=%d\n",
+                rule + 0, ids + 0, ignore + 0, localg + 0, activeg + 0, yes + 0
+        }
+    '
+}
+
+pkcheck_rc_name() { # exit status of pkcheck --action-id ... --process PID
+    case ${1:-} in
+        0) printf yes ;;
+        1) printf no ;;
+        2) printf challenge ;;
+        '') printf missing ;;
+        *) printf error ;;
+    esac
+}
+
+pkcheck_verdict() { # ACTION-ID -> yes|no|challenge|missing|error (never suspends)
+    have pkcheck || { printf missing; return 0; }
+    local rc=0
+    pkcheck --action-id "$1" --process $$ >/dev/null 2>&1 || rc=$?
+    pkcheck_rc_name "$rc"
 }
 
 parse_power_domains() { # FILE: oxp3-powerctl status --json -> "kind<TAB>pl1<TAB>pl2<TAB>pl4"
@@ -1370,6 +1485,30 @@ $(daemon_fd_lines oxp3-rgbd.service 1)"
 }
 
 # ------------------------------------------------------------------ 3. sleep
+# Decide whether a suspend *request* has a usable path. Pure function over the
+# already-parsed facts, so --selftest can pin every branch without a host:
+#   DROP_OK POL_OK HPOWER HSUSPEND BSLEEP PKCHECK -> verdict keyword
+# BSLEEP is the number of "block" inhibitors of type sleep (the only kind that can
+# refuse a suspend). PKCHECK is the pkcheck verdict for org.freedesktop.login1.suspend.
+trigger_verdict() {
+    local drop_ok=$1 pol_ok=$2 hpower=$3 hsusp=$4 bsleep=$5 pk=$6
+    if [ "$drop_ok" -eq 0 ] && [ "$pol_ok" -eq 0 ]; then
+        printf 'skip-policy'
+    elif [ "${bsleep:-0}" != 0 ]; then
+        printf 'fail-blocked'
+    elif [ "$drop_ok" -eq 0 ] || [ "$pol_ok" -eq 0 ]; then
+        printf 'fail-incomplete'
+    elif [ -z "$hpower" ]; then
+        printf 'skip-unreadable'
+    elif [ "$hpower" != suspend ] || [ "$hsusp" != suspend ]; then
+        printf 'fail-keys'
+    elif [ "$pk" != yes ]; then
+        printf 'fail-auth'
+    else
+        printf 'pass'
+    fi
+}
+
 check_sleep() {
     local mem kv success fail last_ total_ secs
     mem=$(read1 /sys/power/mem_sleep)
@@ -1396,7 +1535,7 @@ check_sleep() {
     elif num_gt "$success" 0; then
         record sleep.stats sleep "real suspend recorded" FAIL "suspend returned immediately (last_hw_sleep=0)" "success=$success total_hw_sleep=${total_}us: this is exactly the original bug" "sudo tools/sleep-power-measure.sh suspend -w 60 (or --full); check wake sources and /proc/acpi/wakeup"
     else
-        record sleep.stats sleep "real suspend recorded" SKIP "no suspend attempt since boot" "success=0 fail=0" "tools/oxp3-verify.sh --full runs a real suspend; or: sudo tools/sleep-power-measure.sh suspend -w 60"
+        record sleep.stats sleep "real suspend recorded" SKIP "no suspend attempt since boot" "success=0 fail=0" "sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes; or: sudo tools/sleep-power-measure.sh suspend -w 60"
     fi
 
     local st load active file pre log pre_s log_s
@@ -1445,6 +1584,82 @@ check_sleep() {
         fi
     fi
 
+    # ---- trigger: is there a path from "sleep" to /sys/power/state that does not
+    # depend on a desktop session answering a key? Strictly read-only: the drop-in
+    # file, its *parsed* form via systemd-analyze cat-config, the polkit rule, the
+    # pkcheck verdict for login1.suspend (a permission query, it never suspends) and
+    # the inhibitor list.
+    local drop=/etc/systemd/logind.conf.d/60-oxp3-sleep.conf
+    local pol=/etc/polkit-1/rules.d/49-oxp3-suspend.rules
+    local drop_ok=0 pol_ok=0
+    [ -f "$drop" ] && drop_ok=1
+    [ -f "$pol" ] && pol_ok=1
+    local lh="" hpower="" hsusp="" hlid="" rulekv="" inh=""
+    local pk="" bsleep="" bhandle="" bswho="" bhwho="" sess=""
+    if have systemd-analyze; then
+        lh=$(systemd-analyze cat-config systemd/logind.conf 2>/dev/null | parse_logind_handles)
+        hpower=$(printf '%s\n' "$lh" | sed -n 's/^POWER=//p')
+        hsusp=$(printf '%s\n' "$lh" | sed -n 's/^SUSPEND=//p')
+        hlid=$(printf '%s\n' "$lh" | sed -n 's/^LID=//p')
+    fi
+    [ "$pol_ok" -eq 1 ] && rulekv=$(parse_polkit_rule <"$pol")
+    pk=$(pkcheck_verdict org.freedesktop.login1.suspend)
+    if have systemd-inhibit; then
+        inh=$(systemd-inhibit --list --no-pager 2>/dev/null | parse_inhibitors)
+        bsleep=$(printf '%s\n' "$inh" | sed -n 's/^BLOCK_SLEEP=//p')
+        bhandle=$(printf '%s\n' "$inh" | sed -n 's/^BLOCK_HANDLES=//p')
+        bswho=$(printf '%s\n' "$inh" | sed -n 's/^SLEEP_WHO=//p')
+        bhwho=$(printf '%s\n' "$inh" | sed -n 's/^HANDLE_WHO=//p')
+    fi
+    case ${DESKTOP_SESSION:-}:${XDG_CURRENT_DESKTOP:-} in
+        *gamescope*|*gamemode*) sess="gamemode: no session polkit agent, needs allow_active=yes or the rule" ;;
+        *) sess="desktop: polkit-kde-authentication-agent-1 can prompt" ;;
+    esac
+
+    case $(trigger_verdict "$drop_ok" "$pol_ok" "$hpower" "$hsusp" "${bsleep:-0}" "$pk") in
+    skip-policy)
+        record sleep.trigger sleep "suspend request has a path" SKIP \
+            "trigger policy not installed" \
+            "logind power=${hpower:-?} suspend=${hsusp:-?} (compiled defaults); pkcheck=${pk:-?}; block-sleep=${bsleep:-?}" \
+            "sudo tools/oxp3-hw-install.sh --sleep   (then: sudo systemctl restart systemd-logind; docs/hw/sleep-power.md 2.5)"
+        ;;
+    fail-blocked)
+        record sleep.trigger sleep "suspend request has a path" FAIL \
+            "a sleep block inhibitor refuses every suspend" \
+            "held by:${bswho:- ?} (systemd-inhibit --list)" \
+            "stop or reconfigure the service holding it; docs/hw/sleep-power.md 2.5"
+        ;;
+    fail-incomplete)
+        record sleep.trigger sleep "suspend request has a path" FAIL \
+            "trigger policy is incomplete (logind drop-in=$drop_ok polkit rule=$pol_ok)" \
+            "missing: $([ "$drop_ok" -eq 0 ] && printf '%s ' "$drop")$([ "$pol_ok" -eq 0 ] && printf '%s' "$pol")" \
+            "sudo tools/oxp3-hw-install.sh --sleep"
+        ;;
+    skip-unreadable)
+        record sleep.trigger sleep "suspend request has a path" SKIP \
+            "logind configuration not readable (systemd-analyze missing)" \
+            "drop-in present at $drop" "systemd-analyze cat-config systemd/logind.conf"
+        ;;
+    fail-keys)
+        record sleep.trigger sleep "suspend request has a path" FAIL \
+            "logind does not sleep on the power/suspend key (power=$hpower suspend=$hsusp)" \
+            "parsed from systemd-analyze cat-config (poweroff here means a power key would shut down); drop-in $drop" \
+            "sudo tools/oxp3-hw-install.sh --sleep ; systemd-analyze cat-config systemd/logind.conf | grep -A6 '^\[Login\]'"
+        ;;
+    fail-auth)
+        record sleep.trigger sleep "suspend request has a path" FAIL \
+            "login1.suspend needs interactive auth (pkcheck=$pk)" \
+            "rule=$pol yes=$(printf '%s\n' "$rulekv" | sed -n 's/^YES=//p'); $sess" \
+            "pkcheck --action-id org.freedesktop.login1.suspend --process \$\$ ; journalctl -u polkit -b"
+        ;;
+    *)
+        record sleep.trigger sleep "suspend request has a path" PASS \
+            "logind keys=suspend, login1.suspend permitted, no sleep blocker" \
+            "power=$hpower suspend=$hsusp lid=$hlid pkcheck=$pk block-sleep=${bsleep:-0} handle-block=${bhwho:-none} (${bhandle:-0} held); $sess" \
+            ""
+        ;;
+    esac
+
     local audit=$REPO/tools/sleep-power-measure.sh
     if [ ! -x "$audit" ]; then
         record sleep.audit sleep "suspend audit" SKIP "tool missing" "$audit" ""
@@ -1479,25 +1694,44 @@ check_sleep() {
         record sleep.measure sleep "battery drain measurement" SKIP "tool missing" "$audit" ""
     fi
 
+    # The only check in this harness that really suspends the machine. Three
+    # independent opt-ins, because a double-click on `--full` must never cost a
+    # session: --full (functional mode) + --with-changes (this run may change live
+    # state) + OXP3_ALLOW_SUSPEND=1 in the environment. The measurement itself is
+    # tools/sleep-power-measure.sh's RTC-wake cycle, so the same numbers land in the
+    # same log as a manual `sleep-power-measure.sh suspend`.
     local sus=${OXP3_VERIFY_SUSPEND_S:-60}
     case $sus in ''|*[!0-9]*) sus=60 ;; esac
+    if [ "$FULL" -ne 1 ] || [ "$WITH_CHANGES" -ne 1 ] || [ "${OXP3_ALLOW_SUSPEND:-0}" != 1 ]; then
+        record sleep.suspend sleep "real suspend proof" SKIP \
+            "gated: this is the only check that suspends the machine" \
+            "full=$FULL with_changes=$WITH_CHANGES OXP3_ALLOW_SUSPEND=${OXP3_ALLOW_SUSPEND:-unset}" \
+            "sudo OXP3_ALLOW_SUSPEND=1 OXP3_VERIFY_SUSPEND_S=${sus} tools/oxp3-verify.sh --full --with-changes   (one real s2idle cycle, ${sus}s)"
+        return 0
+    fi
     if ! is_root; then
-        record sleep.suspend sleep "real suspend proof" SKIP "needs root (rtcwake)" "" "sudo OXP3_VERIFY_SUSPEND_S=${sus} tools/oxp3-verify.sh --full   (suspends this machine for ${sus}s)"
+        record sleep.suspend sleep "real suspend proof" SKIP "needs root (rtcwake)" "" "sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes   (suspends this machine for ${sus}s)"
         return 0
     fi
     if [ ! -x "$audit" ]; then
         record sleep.suspend sleep "real suspend proof" SKIP "tool missing" "$audit" ""
         return 0
     fi
+    local before after
+    before=$(read1 /sys/power/suspend_stats/success)
     run_tool sleep-suspend $((sus + 240)) "$audit" suspend -w "$sus" -l verify
-    local sverdict
+    after=$(read1 /sys/power/suspend_stats/success)
+    local sverdict counter
     sverdict=$(grep -E '^(PASS|WARN|FAIL):' "$RUN_OUT" 2>/dev/null | tail -n 1)
-    if [ "$RUN_RC" -eq 0 ]; then
-        record sleep.suspend sleep "real suspend proof" PASS "${sverdict:-suspend and resume completed}" "" ""
+    counter="suspend_stats/success ${before:-?} -> ${after:-?}"
+    if [ "$RUN_RC" -eq 0 ] && num_gt "${after:-0}" "${before:-0}"; then
+        record sleep.suspend sleep "real suspend proof" PASS "${sverdict:-suspend and resume completed}" "$counter" ""
+    elif [ "$RUN_RC" -eq 0 ]; then
+        record sleep.suspend sleep "real suspend proof" FAIL "resume completed but the kernel counted no suspend" "$counter" "journalctl -k -b | grep -E 'PM: suspend entry|PM: suspend exit' ; docs/hw/sleep-power.md 5"
     elif [ "$RUN_RC" -eq 2 ]; then
-        record sleep.suspend sleep "real suspend proof" FAIL "machine refused to suspend" "$(tail_flat "$RUN_OUT" 3)" "journalctl -b | grep -i suspend ; docs/hw/sleep-power.md"
+        record sleep.suspend sleep "real suspend proof" FAIL "machine refused to suspend" "$(tail_flat "$RUN_OUT" 3) ($counter)" "journalctl -b | grep -i suspend ; docs/hw/sleep-power.md"
     else
-        record sleep.suspend sleep "real suspend proof" FAIL "${sverdict:-suspend measurement failed}" "" "docs/hw/sleep-power.md"
+        record sleep.suspend sleep "real suspend proof" FAIL "${sverdict:-suspend measurement failed}" "$counter" "docs/hw/sleep-power.md"
     fi
 }
 
@@ -2296,6 +2530,54 @@ run_selftest() {
     t_eq "suspend/broken-last_hw_sleep" 0 "$(kv "$out" LAST_HW_SLEEP)"
     t_eq "suspend/broken-fail" 1 "$(kv "$out" FAIL)"
 
+    # sleep.trigger parsing: logind cat-config (compiled defaults vs our drop-in),
+    # the polkit rule (shipped one must keep its guards and must not grant the
+    # inhibit-bypass action), pkcheck's exit-status vocabulary and the inhibitor list
+    out=$(parse_logind_handles <"$fx/logind-cat-config-default.txt")
+    t_eq "logind/default-powerkey" poweroff "$(kv "$out" POWER)"
+    t_eq "logind/default-suspendkey" suspend "$(kv "$out" SUSPEND)"
+    t_eq "logind/default-overrides" 0 "$(kv "$out" OVERRIDES)"
+    out=$(parse_logind_handles <"$fx/logind-cat-config-oxp3.txt")
+    t_eq "logind/oxp3-powerkey" suspend "$(kv "$out" POWER)"
+    t_eq "logind/oxp3-suspendkey" suspend "$(kv "$out" SUSPEND)"
+    t_eq "logind/oxp3-lid" suspend "$(kv "$out" LID)"
+    t_eq "logind/oxp3-power-long" poweroff "$(kv "$out" POWER_LONG)"
+    t_eq "logind/oxp3-overrides" 6 "$(kv "$out" OVERRIDES)"
+    out=$(parse_inhibitors <"$fx/inhibitors-plasma.txt")
+    t_eq "inhibit/plasma-total" 9 "$(kv "$out" TOTAL)"
+    t_eq "inhibit/plasma-block-sleep" 0 "$(kv "$out" BLOCK_SLEEP)"
+    t_eq "inhibit/plasma-block-handles" 1 "$(kv "$out" BLOCK_HANDLES)"
+    t_eq "inhibit/plasma-delay-sleep" 6 "$(kv "$out" DELAY_SLEEP)"
+    t_eq "inhibit/plasma-handle-who" " PowerDevil" "$(kv "$out" HANDLE_WHO)"
+    out=$(parse_inhibitors <"$fx/inhibitors-sleep-block.txt")
+    t_eq "inhibit/sleep-block" 1 "$(kv "$out" BLOCK_SLEEP)"
+    t_eq "inhibit/sleep-block-who" " faked-update" "$(kv "$out" SLEEP_WHO)"
+    out=$(parse_polkit_rule <"$REPO/files/49-oxp3-suspend.rules")
+    t_eq "polkit/rule" 1 "$(kv "$out" RULE)"
+    t_eq "polkit/actions" 4 "$(kv "$out" IDS)"
+    t_eq "polkit/no-inhibit-bypass" 0 "$(kv "$out" IGNORE_INHIBIT)"
+    t_eq "polkit/local-guard" 1 "$(kv "$out" LOCAL_GUARD)"
+    t_eq "polkit/active-guard" 1 "$(kv "$out" ACTIVE_GUARD)"
+    out=$(parse_polkit_rule <"$fx/polkit-rule-bad.rules")
+    t_eq "polkit/bad-inhibit-bypass" 1 "$(kv "$out" IGNORE_INHIBIT)"
+    t_eq "polkit/bad-no-local-guard" 0 "$(kv "$out" LOCAL_GUARD)"
+    t_eq "pkcheck/rc-0" yes "$(pkcheck_rc_name 0)"
+    t_eq "pkcheck/rc-1" no "$(pkcheck_rc_name 1)"
+    t_eq "pkcheck/rc-2" challenge "$(pkcheck_rc_name 2)"
+    t_eq "pkcheck/rc-other" error "$(pkcheck_rc_name 7)"
+
+    # sleep.trigger decision matrix (pure function, no host state involved)
+    t_eq "trigger/none" skip-policy "$(trigger_verdict 0 0 poweroff suspend 0 yes)"
+    t_eq "trigger/ok" pass "$(trigger_verdict 1 1 suspend suspend 0 yes)"
+    t_eq "trigger/lid-only-differs" pass "$(trigger_verdict 1 1 suspend suspend 0 yes)"
+    t_eq "trigger/powerkey-not-suspend" fail-keys "$(trigger_verdict 1 1 poweroff suspend 0 yes)"
+    t_eq "trigger/suspendkey-not-suspend" fail-keys "$(trigger_verdict 1 1 suspend hibernate 0 yes)"
+    t_eq "trigger/no-polkit-rule" fail-incomplete "$(trigger_verdict 1 0 suspend suspend 0 yes)"
+    t_eq "trigger/no-logind-dropin" fail-incomplete "$(trigger_verdict 0 1 suspend suspend 0 yes)"
+    t_eq "trigger/sleep-blocked" fail-blocked "$(trigger_verdict 1 1 suspend suspend 1 yes)"
+    t_eq "trigger/needs-auth" fail-auth "$(trigger_verdict 1 1 suspend suspend 0 challenge)"
+    t_eq "trigger/unreadable" skip-unreadable "$(trigger_verdict 1 1 "" "" 0 yes)"
+
     # oxp3-bt-firmware.sh --check output
     out=$(parse_bt_check <"$fx/bt-check.txt")
     t_eq "bt/healthy-files" 2 "$(kv "$out" FILES_OK)"
@@ -2479,7 +2761,7 @@ run_selftest() {
         pwr.ac pwr.adaptive pwr.fan pwr.order pwr.pl1 pwr.profile pwr.rapl pwr.zones \
         rgbd.check rgbd.timing rgbd.unit \
         sched.scx sched.state sched.unit \
-        sleep.audit sleep.measure sleep.mem sleep.stats sleep.suspend sleep.units sleep.wakeup \
+        sleep.audit sleep.measure sleep.mem sleep.stats sleep.suspend sleep.trigger sleep.units sleep.wakeup \
         vol.grab vol.hold vol.hwdb vol.holder vol.topology vol.unit \
         | sort | uniq)
     t_eq "inventory/declared" "$expected" "$ids"

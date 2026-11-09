@@ -1,0 +1,12 @@
+WHO              UID  USER  PID    COMM            WHAT                                                                       WHY                                                        MODE
+HandheldDaemon   0    root  6810   systemd-inhibit sleep                                                                      Handheld Daemon: Restore HDMI-CEC state before sleep       delay
+ModemManager     0    root  1373   ModemManager    sleep                                                                      ModemManager needs to reset devices                        delay
+NetworkManager   0    root  1522   NetworkManager  sleep                                                                      NetworkManager needs to turn off networks                  delay
+Realtime Kit     0    root  1250   rtkit-daemon    sleep                                                                      Demote realtime scheduling and stop canary.                delay
+UPower           0    root  1267   upowerd         sleep                                                                      Pause device polling                                       delay
+PowerDevil       1000 holzr 147067 org_kde_powerde handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch KDE handles power events                                   block
+compositor       1000 holzr 146825 kwin_wayland    sleep                                                                      Ensuring that the screen gets locked before going to sleep delay
+deepseek-harness 1000 holzr 147491 deepseek-harnes shutdown                                                                   Ensure a clean shutdown                                    delay
+deepseek-harness 1000 holzr 147491 deepseek-harnes sleep                                                                      Application cleanup before suspend                         delay
+
+9 inhibitors listed.

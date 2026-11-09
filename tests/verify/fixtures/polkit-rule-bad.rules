@@ -1,0 +1,7 @@
+/* negative fixture for tools/oxp3-verify.sh --selftest:
+   wide open on purpose - no guards, and it grants the inhibit-bypass action. */
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.login1.suspend" ||
+        action.id == "org.freedesktop.login1.suspend-ignore-inhibit")
+        return polkit.Result.YES;
+});

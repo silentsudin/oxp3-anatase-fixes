@@ -436,18 +436,20 @@ components:
     state: awaiting-install
     group: hardware
     headline: false
-    summary: "The unit never suspended at all: wake sources are disarmed at boot, a pre-suspend hook and a resume log are installed, and a real suspend is measurable."
+    summary: "Suspend works here (nine real s2idle cycles in the journal) but nothing in the current boots asks for it: logind had no Handle* policy (power-key default poweroff), KDE PowerDevil owns handle-*-key, and hhd only forwards the key to Steam in Gamepad mode; a shipped logind drop-in plus polkit rule make sleep reachable without a desktop session."
     implementation:
       - files/oxp3-sleep-wakeup
       - files/oxp3-sleep-wakeup.service
       - files/oxp3-sleep-pre.service
       - files/oxp3-sleep-log.service
       - files/99-oxp3-sleep-wakeup.rules
+      - files/logind-oxp3.conf
+      - files/49-oxp3-suspend.rules
       - tools/sleep-power-measure.sh
     doc: docs/hw/sleep-power.md
     root_required: "yes"
     install:
-      summary: "three units, the wake-source rule and the measurement tool"
+      summary: "three units, the wake-source rule, the logind/polkit trigger policy and the measurement tool"
       entrypoint: "sudo tools/oxp3-hw-install.sh --sleep"
     verify:
       - id: sleep.mem
@@ -456,6 +458,8 @@ components:
         expect: "oxp3-sleep-wakeup is active and reports the pre/log units"
       - id: sleep.wakeup
         expect: "every listed USB id / PCI address has wakeup disabled"
+      - id: sleep.trigger
+        expect: "logind drop-in parsed with HandlePowerKey/SuspendKey=suspend, polkit rule present, pkcheck says yes, no sleep block inhibitor"
       - id: sleep.audit
         expect: "the capability table and the suspend record block"
       - id: sleep.stats
@@ -463,15 +467,18 @@ components:
       - id: sleep.measure
         expect: "PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h"
       - id: sleep.suspend
-        expect: "a real s2idle cycle with wake by rtcwake"
+        expect: "one real s2idle cycle (rtcwake) with suspend_stats/success incremented; needs --full --with-changes and OXP3_ALLOW_SUSPEND=1"
         root: true
     dependencies: []
     caveats:
-      - "no real suspend recorded since install: run sudo tools/sleep-power-measure.sh suspend -w 600"
+      - "sleep.suspend is the only check that really suspends the machine; it needs --full --with-changes and OXP3_ALLOW_SUSPEND=1"
+      - "no real suspend recorded since install: run sudo tools/sleep-power-measure.sh suspend -w 600, or sudo systemctl suspend"
       - "sleep.measure SKIPs on AC by design"
+      - "the logind drop-in is read at logind start: restart systemd-logind (or reboot) after installing"
+      - "PowerDevil keeps owning handle-power-key while Plasma runs, so HandlePowerKey=suspend only takes effect when no desktop claims the key"
     last_validated:
       date: 2026-11-09
-      evidence: "docs/state/snapshot-2026-11-09.txt: [s2idle] selected, success=0 attempts; tools/sleep-power-measure.sh audit OK (docs/QA.md row 49)"
+      evidence: "trigger audit: journalctl -b all -k shows 9x 'PM: suspend entry (s2idle)' (Oct 12-19) with the Oct 16 login1.Suspend call from Steam via xdg-dbus-proxy; systemd-analyze cat-config systemd/logind.conf = [Login] only (poweroff default); systemd-inhibit shows PowerDevil block on handle-*; pkcheck login1.suspend exit 0; hhd 4.1.12 plugins/powerbutton/base.py:30,89-106,311-338,341-371 quoted in docs/hw/sleep-power.md 2.5"
 
   - id: audio
     title: Speaker tuning (Harman APO)

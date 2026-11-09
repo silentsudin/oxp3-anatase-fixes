@@ -14,7 +14,10 @@
 # Components and their implementation:
 #   volume     tools/oxp3-voltap/install.sh          (daemon + hwdb + unit)
 #   leds       this script: udev rule + user unit     (tools/oxp3-homebtn.py, oxp3-led.py)
-#   sleep      this script: files/oxp3-sleep-* units, tools/oxp3-sleep-*
+#   sleep      this script: files/oxp3-sleep-* units, tools/oxp3-sleep-*, plus the
+#              trigger policy files/logind-oxp3.conf -> /etc/systemd/logind.conf.d/ and
+#              files/49-oxp3-suspend.rules -> /etc/polkit-1/rules.d/ (so sleep does not
+#              depend on a desktop session asking for it)
 #   bluetooth  tools/oxp3-bt-firmware.sh             (upstream firmware into updates/ + initramfs)
 #   power      tools/oxp3-power-install.sh           (oxp3-powerctl, boot/resume, fan, adaptive TDP)
 #   rgb        this script: shared udev rule + user config/unit (tools/oxp3-rgbd.py)
@@ -335,6 +338,7 @@ comp_sleep_install() {
     done
     install_file 0644 "$repo/files/99-oxp3-sleep-wakeup.rules" \
         "$(p /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules)"
+    maybe_install_trigger_policy
     if [[ -n $PREFIX ]]; then
         skip_prefixed "systemctl/udevadm for the sleep units"
         return
@@ -344,6 +348,36 @@ comp_sleep_install() {
     run systemctl enable oxp3-sleep-pre.service oxp3-sleep-log.service
     run udevadm control --reload-rules
     run udevadm trigger --action=change --subsystem-match=usb --subsystem-match=pci
+}
+
+# The trigger half of --sleep: what makes a *request* reach the kernel at all.
+# Kept in one function so install, uninstall and --dry-run cannot drift.
+TRIGGER_FILES=(
+    "files/logind-oxp3.conf:/etc/systemd/logind.conf.d/60-oxp3-sleep.conf"
+    "files/49-oxp3-suspend.rules:/etc/polkit-1/rules.d/49-oxp3-suspend.rules"
+)
+TRIGGER_LOGIND_UNIT=systemd-logind.service
+
+maybe_install_trigger_policy() {
+    local spec src dst
+    say "suspend trigger policy (logind handles + polkit rule, no desktop session needed)"
+    for spec in "${TRIGGER_FILES[@]}"; do
+        src=${spec%%:*}
+        dst=${spec#*:}
+        install_file 0644 "$repo/$src" "$(p "$dst")"
+    done
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "restart of $TRIGGER_LOGIND_UNIT (the drop-in is read at start)"
+        return
+    fi
+    # polkitd watches /etc/polkit-1/rules.d and re-reads it by itself, so only the
+    # logind drop-in needs the service to be told. Do not restart logind from a
+    # running desktop session: the drop-in is picked up on the next start, and
+    # `systemd-analyze cat-config systemd/logind.conf` already proves the parse.
+    printf '  note: %s reads its drop-ins at start; apply the power-key policy with\n' "$TRIGGER_LOGIND_UNIT"
+    printf '        sudo systemctl restart %s   (sessions survive; inhibitor locks are dropped and\n' "$TRIGGER_LOGIND_UNIT"
+    printf '        re-acquired by their owners) or simply reboot. Verify with\n'
+    printf '        systemd-analyze cat-config systemd/logind.conf | grep -A6 "^\\[Login\\]"\n'
 }
 
 comp_bluetooth_install() {
@@ -455,7 +489,7 @@ comp_leds_uninstall() {
 }
 
 comp_sleep_uninstall() {
-    local x
+    local x spec dst
     say "suspend/resume units"
     if [[ -n $PREFIX ]]; then
         skip_prefixed "systemctl disable --now for the sleep units"
@@ -469,12 +503,19 @@ comp_sleep_uninstall() {
         run rm -f "$(p "/usr/local/libexec/$x")"
     done
     run rm -f "$(p /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules)"
+    say "suspend trigger policy (removed: logind and polkit go back to their defaults)"
+    for spec in "${TRIGGER_FILES[@]}"; do
+        dst=${spec#*:}
+        run rm -f "$(p "$dst")"
+    done
     if [[ -n $PREFIX ]]; then
         skip_prefixed "systemctl daemon-reload / udevadm reload after removing the sleep units"
     else
         run systemctl daemon-reload
         run udevadm control --reload-rules
         run udevadm trigger --action=change --subsystem-match=usb --subsystem-match=pci
+        printf '  note: %s keeps the trigger policy it read at start until it is restarted or the\n' "$TRIGGER_LOGIND_UNIT"
+        printf '        machine reboots; until then a bare power key is handled by KDE, not logind.\n'
     fi
 }
 
@@ -651,6 +692,9 @@ print_status() {
         "$(prefixed_yes_no /etc/udev/rules.d/90-oxp3-hid.rules)" \
         "$(prefixed_yes_no /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules)" \
         "$(prefixed_yes_no /etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb)"
+    printf '  sleep trigger: logind-drop-in=%s polkit-rule=%s\n' \
+        "$(prefixed_yes_no /etc/systemd/logind.conf.d/60-oxp3-sleep.conf)" \
+        "$(prefixed_yes_no /etc/polkit-1/rules.d/49-oxp3-suspend.rules)"
     printf '  units:        vol=%s sleep=%s pre=%s log=%s profile=%s resume=%s fan=%s adaptivetdp=%s\n' \
         "$(unit_state oxp3-voltap.service)" "$(unit_state oxp3-sleep-wakeup.service)" \
         "$(unit_state oxp3-sleep-pre.service)" "$(unit_state oxp3-sleep-log.service)" \

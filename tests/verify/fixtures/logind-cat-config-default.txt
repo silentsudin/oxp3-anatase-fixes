@@ -1,0 +1,27 @@
+# fixture: shape of `systemd-analyze cat-config systemd/logind.conf` on a stock host
+# (authored for this test; the parser only needs the structure: one [Login] section,
+# compiled defaults printed commented out, no drop-in section).
+
+[Login]
+#NAutoVTs=6
+#ReserveVT=6
+#KillUserProcesses=no
+#InhibitDelayMaxSec=5
+#UserStopDelaySec=10
+#SleepOperation=suspend-then-hibernate suspend
+#HandlePowerKey=poweroff
+#HandlePowerKeyLongPress=ignore
+#HandlePowerKeyLongPressOnAc=ignore
+#HandleSuspendKey=suspend
+#HandleSuspendKeyLongPress=hibernate
+#HandleSuspendKeyLongPressOnAc=ignore
+#HandleHibernateKey=hibernate
+#HandleHibernateKeyLongPress=ignore
+#HandleLidSwitch=suspend
+#HandleLidSwitchExternalPower=suspend
+#HandleLidSwitchDocked=ignore
+#PowerKeyIgnoreInhibited=no
+#SuspendKeyIgnoreInhibited=no
+#HibernateKeyIgnoreInhibited=no
+#LidSwitchIgnoreInhibited=yes
+#HoldoffTimeoutSec=30s

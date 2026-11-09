@@ -367,6 +367,13 @@ suite_udev_rules() {
     local f n=0 bad=0
     for f in "$REPO"/files/*.rules "$REPO"/tools/*.rules; do
         [ -f "$f" ] || continue
+        # files/ also carries polkit rules (the .rules suffix is required by both
+        # polkit and udev). polkit's rules.d is JavaScript, so udevadm cannot parse
+        # it: keep it out of this suite instead of special-casing a file name.
+        if grep -q 'polkit\.addRule' -- "$f" 2>/dev/null; then
+            printf 'skip  polkit rule (not a udev rule): %s\n' "${f#"$REPO"/}"
+            continue
+        fi
         n=$((n + 1))
         udevadm verify -- "$f" || { bad=$((bad + 1)); printf 'FAIL udevadm verify %s\n' "$f"; }
     done

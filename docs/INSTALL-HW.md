@@ -143,7 +143,7 @@ Every flag is repeatable and idempotent.
 |---|---|---|
 | `--volume` | `oxp3-voltap` daemon, `/etc/oxp3-voltap.conf`, unit, force-release hwdb | `--uninstall --volume` |
 | `--leds` | `90-oxp3-hid.rules`, user unit `oxp3-homebtn.service` | `--uninstall --leds` |
-| `--sleep` | `oxp3-sleep-wakeup/pre/log` units + `/usr/local/libexec/oxp3-sleep-*` + `99-oxp3-sleep-wakeup.rules` | `--uninstall --sleep` |
+| `--sleep` | `oxp3-sleep-wakeup/pre/log` units + `/usr/local/libexec/oxp3-sleep-*` + `99-oxp3-sleep-wakeup.rules` + the trigger policy (`/etc/systemd/logind.conf.d/60-oxp3-sleep.conf`, `/etc/polkit-1/rules.d/49-oxp3-suspend.rules`); after installing, `sudo systemctl restart systemd-logind` (or reboot) so logind reads the drop-in | `--uninstall --sleep` |
 | `--bluetooth` | upstream firmware in `/usr/lib/firmware/updates/intel`, dracut `install_items`, controller reload | `--uninstall --bluetooth` |
 | `--power` | `oxp3-powerctl`, boot/resume units; `--fan-curve`, `--adaptive-tdp` add the opt-in units | `--uninstall --power` |
 | `--rgb` | shared HID rule, `~/.config/oxp3-rgb.toml` (if absent), user unit `oxp3-rgbd.service` | `--uninstall --rgb [--purge-config]` |
@@ -165,6 +165,8 @@ Known interaction: **do not run `--volume` together with the hhd volume-rocker p
 /usr/local/libexec/oxp3-voltap          /etc/systemd/system/oxp3-voltap.service
 /usr/local/libexec/oxp3-sleep-wakeup    /etc/systemd/system/oxp3-sleep-{wakeup,pre,log}.service
 /usr/local/libexec/oxp3-sleep-log       /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules
+                                        /etc/systemd/logind.conf.d/60-oxp3-sleep.conf
+                                        /etc/polkit-1/rules.d/49-oxp3-suspend.rules
 /usr/local/libexec/oxp3-powerctl        /etc/systemd/system/oxp3-power-{profile,resume}.service
 /usr/local/libexec/oxp3-adaptivetdp     /etc/systemd/system/oxp3-fan-curve.service
                                         /etc/systemd/system/oxp3-adaptivetdp.service
@@ -244,10 +246,11 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Suspend and wake policy | awaiting-install | `sleep.mem` | /sys/power/mem_sleep selects [s2idle] | no |
 | Suspend and wake policy | awaiting-install | `sleep.units` | oxp3-sleep-wakeup is active and reports the pre/log units | no |
 | Suspend and wake policy | awaiting-install | `sleep.wakeup` | every listed USB id / PCI address has wakeup disabled | no |
+| Suspend and wake policy | awaiting-install | `sleep.trigger` | logind drop-in parsed with HandlePowerKey/SuspendKey=suspend, polkit rule present, pkcheck says yes, no sleep block inhibitor | no |
 | Suspend and wake policy | awaiting-install | `sleep.audit` | the capability table and the suspend record block | no |
 | Suspend and wake policy | awaiting-install | `sleep.stats` | success > 0 and last_hw_sleep > 0 (a real suspend) | no |
 | Suspend and wake policy | awaiting-install | `sleep.measure` | PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h | no |
-| Suspend and wake policy | awaiting-install | `sleep.suspend` | a real s2idle cycle with wake by rtcwake | yes |
+| Suspend and wake policy | awaiting-install | `sleep.suspend` | one real s2idle cycle (rtcwake) with suspend_stats/success incremented; needs --full --with-changes and OXP3_ALLOW_SUSPEND=1 | yes |
 | Speaker tuning (Harman APO) | working | `aud.scripts` | eq-on.sh and eq-off.sh are executable | no |
 | Speaker tuning (Harman APO) | working | `aud.server` | an audio session answers pactl info | no |
 | Speaker tuning (Harman APO) | working | `aud.eq` | oxp3_speaker_eq.sink is loaded | no |
@@ -312,7 +315,7 @@ the orchestrator warns if it sees them.
 | volume | `sudo tools/oxp3-voltap/install.sh uninstall; sudo rm -f /etc/oxp3-voltap.conf; sudo systemd-hwdb update; sudo udevadm trigger --subsystem-match=input --action=change` |
 | LEDs / home button | `systemctl --user disable --now oxp3-homebtn; rm ~/.config/systemd/user/oxp3-homebtn.service; sudo rm -f /etc/udev/rules.d/90-oxp3-hid.rules; sudo udevadm control --reload-rules` (keep the rule if RGB uses it) |
 | RGB | `systemctl --user disable --now oxp3-rgbd; rm ~/.config/systemd/user/oxp3-rgbd.service ~/.config/oxp3-rgb.toml; sudo rm -f /etc/udev/rules.d/90-oxp3-hid.rules; sudo udevadm control --reload-rules` |
-| sleep | `sudo systemctl disable --now oxp3-sleep-wakeup oxp3-sleep-pre oxp3-sleep-log; sudo rm -f /etc/systemd/system/oxp3-sleep-*.service /usr/local/libexec/oxp3-sleep-* /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules; sudo systemctl daemon-reload; sudo udevadm control --reload-rules` — wake-up defaults return after a reboot |
+| sleep | `sudo tools/oxp3-hw-install.sh --uninstall --sleep` (or: `sudo systemctl disable --now oxp3-sleep-wakeup oxp3-sleep-pre oxp3-sleep-log; sudo rm -f /etc/systemd/system/oxp3-sleep-*.service /usr/local/libexec/oxp3-sleep-* /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules /etc/systemd/logind.conf.d/60-oxp3-sleep.conf /etc/polkit-1/rules.d/49-oxp3-suspend.rules; sudo systemctl daemon-reload; sudo udevadm control --reload-rules; sudo systemctl restart systemd-logind`) — wake-up defaults return after a reboot |
 | Bluetooth | `sudo tools/oxp3-hw-install.sh --uninstall --bluetooth` (removes the dracut conf and the files we added); if the `oxp3-firmware` rpm is layered, `./oxp3-fixes-fast.sh uninstall`. Stock = the radio dead again, which is the pre-fix state |
 | power / fan / battery | `sudo /usr/local/libexec/oxp3-powerctl restore-baseline` **before** uninstalling, or just reboot (firmware re-initialises the RAPL limits); `sudo systemctl disable --now oxp3-fan-curve` (the tool restores EC auto mode on SIGTERM); `sudo tools/oxp3-power-install.sh uninstall`; `/etc/oxp3/` is kept |
 | battery limit / bypass | `sudo /usr/local/libexec/oxp3-powerctl battery limit off` and `battery bypass off`; the EC keeps the last saved limit until changed, so do this before uninstalling |

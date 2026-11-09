@@ -1,0 +1,57 @@
+/* oxp3 - let the local seat reach suspend/hibernate without an interactive
+ * polkit agent on the OneXPlayer 3.
+ *
+ * Installed as /etc/polkit-1/rules.d/49-oxp3-suspend.rules by
+ *     sudo tools/oxp3-hw-install.sh --sleep
+ * and removed again by
+ *     sudo tools/oxp3-hw-install.sh --uninstall --sleep
+ * polkitd re-reads this directory on change; no restart is needed.
+ *
+ * What this does and does not change
+ * ----------------------------------
+ * systemd's own policy (org.freedesktop.login1.policy) already says
+ *     allow_active = yes        (an active local session may suspend silently)
+ *     allow_inactive/any = auth_admin_keep
+ * so on this host `pkcheck --action-id org.freedesktop.login1.suspend --process
+ * <pid>` answers "yes" for the desktop session (verified: rc=0). Permission is
+ * therefore not what stops suspend today - nothing asks.
+ *
+ * The rule matters for the cases that have no agent to prompt and no active
+ * session: a script or service running as the user while the seat is on another
+ * session, a second logged-in user (the "-multiple-sessions" action), and the
+ * Steam Gamemode session, which carries no polkit authentication agent at all
+ * (only Plasma starts polkit-kde-authentication-agent-1). Without this rule
+ * those calls fail with "Interactive authentication required" and the write to
+ * /sys/power/state is never attempted.
+ *
+ * It grants exactly the population that can already run `sudo` on this box
+ * (group wheel) and only while that user is physically at the local seat in an
+ * active session. Remote and inactive sessions still authenticate.
+ *
+ * Deliberately NOT granted: org.freedesktop.login1.suspend-ignore-inhibit.
+ * That action skips *all* inhibitors, including the "sleep" block that is
+ * supposed to stop a suspend (e.g. an in-flight firmware update); it remains
+ * auth_admin_keep.
+ */
+polkit.addRule(function (action, subject) {
+    var sleepless = [
+        "org.freedesktop.login1.suspend",
+        "org.freedesktop.login1.suspend-multiple-sessions",
+        "org.freedesktop.login1.hibernate",
+        "org.freedesktop.login1.hibernate-multiple-sessions"
+    ];
+
+    if (sleepless.indexOf(action.id) === -1)
+        return polkit.Result.NOT_HANDLED;
+
+    /* Physically present only: no silent sleep from ssh, cron or a background
+       login of the same user. */
+    if (!subject.local || !subject.active)
+        return polkit.Result.NOT_HANDLED;
+
+    /* Same people who can already sudo - this adds no new privilege. */
+    if (!subject.isInGroup("wheel"))
+        return polkit.Result.NOT_HANDLED;
+
+    return polkit.Result.YES;
+});

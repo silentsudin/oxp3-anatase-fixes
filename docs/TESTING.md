@@ -323,7 +323,7 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 | `tools/repo-test.sh --fast` | 25 rows: **19 pass, 0 fail, 6 skip**, exit 0, ≈ 7 s |
 | `tools/repo-test.sh --full` | 25 rows: **23 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
 | `tools/repo-test.sh --list` | 25 suites; 20 run in `--fast`, 25 in `--full` |
-| `python3 -m unittest discover -s tests/unit -q` | `Ran 318 tests ... OK (skipped=1)`, ≈ 0.6 s |
+| `python3 -m unittest discover -s tests/unit -q` | `Ran 470 tests ... OK (skipped=1)`, ≈ 1.3 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
 | deliberately broken copy in `/tmp`, `--only fp-python` | 1 fail, exit 1, failing command + log path printed |
 | root container `--fast` | 15 pass / 0 fail / 10 skip, exit 0 |
