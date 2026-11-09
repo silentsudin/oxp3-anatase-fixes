@@ -838,31 +838,37 @@ comp_xmx_install() {
 
 comp_mango_install() {
     say "MangoHud with Intel iGPU stats (patched build)"
-    local rel cache rpms=()
+    local rel cache rpms=0
     rel=$(rpm -q --qf '%{RELEASE}' mangohud 2>/dev/null | head -1)
-    if [[ $rel == *oxp3* ]]; then
-        printf '  patched mangohud already installed (%s)\n' "$rel"
-        return 0
-    fi
+    case $rel in
+        *oxp3*) printf '  patched mangohud already installed (%s)\n' "$rel"; return 0 ;;
+    esac
     cache=$HOME/.cache/oxp3-fixes/out
     [[ -d $cache ]] || cache=/var/home/"${TARGET_USER}"/.cache/oxp3-fixes/out
     shopt -s nullglob
-    rpms=("$cache"/mangohud-*.x86_64.rpm "$cache"/mangohud-*.i686.rpm)
+    set -- "$cache"/mangohud-*oxp3*.x86_64.rpm "$cache"/mangohud-*oxp3*.i686.rpm
+    rpms=$#
     shopt -u nullglob
-    if (( ${#rpms[@]} == 0 )); then
+    if (( rpms == 0 )); then
         warn "no patched mangohud RPM in $cache; build it with ./oxp3-fixes-fast.sh build"
         return 0
     fi
     if (( DRY_RUN )); then
-        printf '  [dry-run] rpm-ostree install %s\n' "${rpms[*]}"
+        printf '  [dry-run] extract %d mangohud RPM(s) into the /usr overlay + enable oxp3-mangohud-keep.service\n' "$rpms"
         return 0
     fi
-    if rpm-ostree override replace "${rpms[@]}"; then
-        printf '  patched mangohud layered as an override; reboot to activate the Intel GPU power/temperature stats\n'
-    elif rpm-ostree install --idempotent "${rpms[@]}"; then
-        printf '  patched mangohud layered; reboot to activate the Intel GPU power/temperature stats\n'
+    # rpm-ostree cannot replace the base mangohud here ("cannot install both ... from @System"), and
+    # the host already uses the writable /usr overlay for Mesa; extract the patched build the same way
+    # and repeat it at boot via the keep unit, because the overlay is cleared on reboot.
+    install -D -m0755 "$repo/files/oxp3-mangohud-keep.sh" "$PREFIX/usr/local/libexec/oxp3-mangohud-keep"
+    install -D -m0644 "$repo/files/oxp3-mangohud-keep.service" \
+        "$PREFIX/etc/systemd/system/oxp3-mangohud-keep.service"
+    systemctl daemon-reload
+    systemctl enable oxp3-mangohud-keep.service
+    if "$PREFIX/usr/local/libexec/oxp3-mangohud-keep"; then
+        printf '  patched MangoHud extracted; oxp3-mangohud-keep.service re-applies it on every boot\n'
     else
-        warn "rpm-ostree could not layer the patched mangohud; see its output above"
+        warn "MangoHud extraction failed; see the output above"
     fi
 }
 

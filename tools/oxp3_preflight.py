@@ -471,6 +471,9 @@ def version_at_least(have: Optional[Tuple[int, int, int]],
 
 def stale_checkout_refs(text: str, repo: str, home: str) -> List[str]:
     """Absolute pnpm-style checkout paths in a file that are not this checkout."""
+    # URLs are not checkout paths: https://github.com/<user>/oxp3-anatase-fixes
+    # would otherwise look like another checkout under a realpath check.
+    text = re.sub(r"https?://\S+", " ", text)
     text = text.replace("%h", home)
     refs: List[str] = []
     for match in re.finditer(r"(/[^\s\"'<>,;)]*oxp3-anatase-fixes)(?=/|\s|\"|'|$)", text):

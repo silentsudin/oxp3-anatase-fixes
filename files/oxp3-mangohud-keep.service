@@ -1,0 +1,12 @@
+[Unit]
+Description=OXP3: install the patched MangoHud into the writable /usr overlay
+After=local-fs.target
+Before=display-manager.service
+ConditionPathExists=/usr/local/libexec/oxp3-mangohud-keep
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-mangohud-keep
+
+[Install]
+WantedBy=multi-user.target
