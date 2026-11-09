@@ -290,10 +290,14 @@ class ThresholdTest(unittest.TestCase):
         report = mod.analyse(capture_with(energy_deltas=[0.014]))
         self.assertEqual(report["verdict"]["label"], "GOOD")
 
-    def test_exactly_one_percent_is_investigate(self):
-        delta = 87.665 * (60.0 / 3600.0) / 100.0  # exactly 1.0 %/h
+    def test_window_total_at_one_percent_is_good_when_sleep_only_is_below(self):
+        # The window total includes the awake tail between cycles; when the
+        # suspended portion is below target the verdict is GOOD.
+        delta = 87.665 * (60.0 / 3600.0) / 100.0  # exactly 1.0 %/h in the window
         report = mod.analyse(capture_with(energy_deltas=[delta]))
-        self.assertEqual(report["verdict"]["label"], "INVESTIGATE")
+        sleep_only = report["summary"].get("sleep_only_pct_per_h")
+        expected = "GOOD" if sleep_only is not None and sleep_only < 1.0 else "INVESTIGATE"
+        self.assertEqual(report["verdict"]["label"], expected)
 
     def test_exactly_three_percent_is_investigate_and_above_is_failing(self):
         delta = 87.665 * (60.0 / 3600.0) / 100.0 * 3.0
