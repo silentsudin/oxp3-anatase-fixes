@@ -854,20 +854,33 @@ write_attr() { # path value description
         journal mutation planned "$desc"
         return 0
     fi
-    before=$(tr -d '\n' <"$path" 2>/dev/null || true)
-    if ! printf '%s\n' "$value" >"$path" 2>/dev/null; then
+    # Some sysfs attributes (/,bind, /unbind) are write-only (0200): reading them
+    # gives EACCES, and the shell reports that redirection error even though the
+    # write succeeded.  Only read back attributes that are readable, and let the
+    # caller verify the resulting state for the write-only ones.
+    local readable=0
+    [ -r "$path" ] && readable=1
+    if [ "$readable" = 1 ]; then
+        before=$( { tr -d '\n' <"$path"; } 2>/dev/null || true)
+    fi
+    if ! { printf '%s\n' "$value" >"$path"; } 2>/dev/null; then
         journal mutation failed "$desc (write)"
         fail "$desc: cannot write $path"
         return 1
     fi
-    after=$(tr -d '\n' <"$path" 2>/dev/null || true)
-    if [ "$after" != "$value" ]; then
-        journal mutation failed "$desc (readback: $after)"
-        fail "$desc: read-back of $path is $(sq "$after"), expected $(sq "$value")"
-        return 1
+    if [ "$readable" = 1 ]; then
+        after=$( { tr -d '\n' <"$path"; } 2>/dev/null || true)
+        if [ "$after" != "$value" ]; then
+            journal mutation failed "$desc (readback: $after)"
+            fail "$desc: read-back of $path is $(sq "$after"), expected $(sq "$value")"
+            return 1
+        fi
+        journal mutation end "$desc ($before -> $after)"
+        ok "$desc"
+    else
+        journal mutation end "$desc (write-only attribute)"
+        ok "$desc (write-only attribute; state verified separately)"
     fi
-    journal mutation end "$desc ($before -> $after)"
-    ok "$desc"
     return 0
 }
 
@@ -983,6 +996,12 @@ bind_device() {
     OVERRIDE_CHANGED=1
     sync_state
     if ! write_attr "$(P "$SPIDEV_DRIVER_DIR")/bind" "$DEV" "bind $DEV to spidev"; then
+        return 1
+    fi
+    # /bind is write-only, so verify the outcome through the device's driver link.
+    if [ "$FIXTURE" != 1 ] && [ "$(driver_of)" != spidev ]; then
+        fail "bind: driver is '$(driver_of)' after writing the bind attribute, expected spidev"
+        journal mutation failed "bind $DEV to spidev (driver=$(driver_of))"
         return 1
     fi
     fixture_apply_bind
