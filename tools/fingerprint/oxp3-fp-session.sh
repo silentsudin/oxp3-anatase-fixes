@@ -651,6 +651,19 @@ extract_crs() { # -> sets CRS_FILE, CRS_METHOD
     local -a tables=()
     if [ -n "$dsdt" ]; then
         tables+=("$dsdt")
+        # The FPRT _CRS is commonly in an SSDT, not the DSDT (on this unit it is in
+        # SSDT1), so scan every table the firmware exposes.
+        local t
+        for t in "$(P /sys/firmware/acpi/tables)"/*; do
+            [ -f "$t" ] || continue
+            case $(basename "$t") in
+                DSDT|data|dynamic) continue ;;
+            esac
+            tables+=("$t")
+        done
+        for t in "$(P /sys/firmware/acpi/tables/dynamic)"/*; do
+            [ -f "$t" ] && tables+=("$t")
+        done
     else
         local f
         for f in "$work"/*.dat "$work"/*.aml; do

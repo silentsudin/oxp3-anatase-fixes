@@ -17,6 +17,16 @@ if [ -z "${id:-}" ]; then
   echo "EQ sink did not appear - check: journalctl --user -u pipewire -n 50" >&2
   exit 1
 fi
-pactl set-default-sink "$id"
-echo "speaker EQ on (sink $id = oxp3_speaker_eq.sink, default now)"
+if ! pactl set-default-sink "$id" 2>/dev/null; then
+  # PipeWire can answer "Not supported" for a filter-chain sink; set the default
+  # through wireplumber's metadata instead.
+  pw-metadata -n default 0 "default.audio.sink" "{\"name\":\"oxp3_speaker_eq.sink\"}" >/dev/null 2>&1 || true
+fi
+cur=$(pactl get-default-sink 2>/dev/null || true)
+if [ "$cur" != "oxp3_speaker_eq.sink" ]; then
+  echo "warning: default sink is '${cur:-?}', not the EQ sink" >&2
+  echo "  set it manually: pw-metadata -n default 0 default.audio.sink '{\"name\":\"oxp3_speaker_eq.sink\"}'" >&2
+else
+  echo "speaker EQ on (default sink = oxp3_speaker_eq.sink)"
+fi
 pactl list sinks short | grep -E 'oxp3_speaker_eq|HiFi__Speaker__sink' || true
