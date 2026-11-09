@@ -45,8 +45,10 @@ STAGE2 = [
 # headroom: -8.0 dB == -(the +7.74 dB peak of stage 1), so the chain never clips.
 # Raise it towards 0 dB (or use the EasyEffects preset, which has a real limiter).
 PREGain_DB = -8.0
-# filter-chain has no plain gain node, so the headroom is a low shelf parked at
-# Nyquist (20 kHz): flat -8 dB across the audio band, 0 dB only above ~21 kHz.
+# filter-chain has no plain gain node on this build, so the headroom is a low
+# shelf parked at 20 kHz: flat -8 dB across the audio band, approaching 0 dB at
+# Nyquist (24 kHz; -7.5 dB at 16 kHz).  Measured against the real graph in
+# docs/audio-validation.md.
 HEADROOM_FREQ = 20000.0
 HEADROOM_Q = 0.7
 

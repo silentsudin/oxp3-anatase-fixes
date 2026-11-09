@@ -23,6 +23,7 @@ tools/repo-test.sh --full          # adds the C/Decky builds and libfprint synta
 tools/repo-test.sh --list          # inventory: mode, tier, timeout, description
 tools/repo-test.sh --json          # machine-readable result
 tools/repo-test.sh --only 'fp-*'   # only matching suites (repeatable glob)
+tools/repo-test.sh --integration   # opt-in integration suites (real daemon + uinput)
 
 make test                          # == tools/repo-test.sh --fast
 make test-full                     # == tools/repo-test.sh --full
@@ -38,20 +39,20 @@ failing command and its log path.
 Recorded on this host (2026-11-09, no root):
 
 ```
-== 34 suite(s): 28 pass, 0 fail, 6 skip -> exit 0      # --fast, ≈ 58 s
+== 36 suite(s): 29 pass, 0 fail, 7 skip -> exit 0      # --fast, ≈ 88 s
 ```
 
 The inventory is the runner's, not a number copied here: `tools/repo-test.sh --list` prints the
-current **34 suites**, of which **29** run in `--fast` and all 34 in `--full`, with each suite's
-mode, tier and timeout. `--full` was not re-run in this round; it is expected to add the two
-build/network rows and keep the two explained skips (§9).
+current **36 suites**, of which **31** run in `--fast` and all 36 in `--full`, with each suite's
+mode, tier and timeout. `--full` was not re-run in this round; it is expected to add the five
+full-only rows and keep the three explained skips (§9).
 
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 29 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 34 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 31 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 36 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
 `--full` still never installs host packages. The one network-dependent suite
 (`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
@@ -100,6 +101,7 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `led-selftest` | fast | fast | 60 s | `python3` | – |
 | `hid-selftest` | fast | fast | 60 s | `python3` | – |
 | `unit` | fast | fast | 120 s | `python3` | – (synthetic sysfs/config fixtures in `$TMPDIR`) |
+| `voltap-integration` | fast | medium | 180 s | `python3-evdev`, `/dev/uinput` + readable event nodes | – (ephemeral uinput devices; opt-in `OXP3_REPO_TEST_INTEGRATION=1`, otherwise `SKIP`) |
 | `gamewrap` | fast | fast | 120 s | `python3` | – (synthetic HOME/config/panel state; stub commands) |
 | `eq-model` | fast | fast | 60 s | `python3` | – |
 | `firstrun` | fast | medium | 120 s | `python3`, `bash` | – (self-test in `$TMPDIR`; the dry run writes nothing) |
@@ -130,6 +132,15 @@ Areas and what is actually proven:
   checkout. Then the 264-test fingerprint protocol + SPI/ACPI suite and the fixture/vector
   drift check (the latter imports the generator and compares in memory, so the
   checked-in fixtures are not rewritten).
+* **volume daemon end to end** — opt-in `voltap-integration`
+  (`tests/integration/volume/`): creates ephemeral uinput devices, drives the
+  real `oxp3-voltap` process through tap / three-tap / 3 s hold / bounce /
+  duplicate storm / orphan / late-release sequences and reads its uinput shim,
+  then exercises the HHD-preferred → AT-fallback topology and the
+  `degraded-busy`/exit-3 grab refusal. It is `SKIP` unless
+  `OXP3_REPO_TEST_INTEGRATION=1` and skips with the exact access command when
+  `/dev/uinput` or the event nodes are not readable; it never touches a real
+  input device (see [hw/volume-buttons.md](hw/volume-buttons.md)).
 * **fingerprint C** — the independent C implementation is compiled with
   `-std=gnu11 -Wall -Wextra -Werror` and run against the same 10 vectors
   (324 checks). `fp-syntax` compiles the libfprint driver against our clearly
@@ -358,17 +369,18 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 | run | result |
 |---|---|
-| `tools/repo-test.sh --fast` | 34 rows: **28 pass, 0 fail, 6 skip**, exit 0, ≈ 58 s (`firstrun` 13.5 s, `health` 7.7 s, `cli-contracts` 6.7 s, `gen-docs` 4.9 s) |
+| `tools/repo-test.sh --fast` | 36 rows: **29 pass, 0 fail, 7 skip**, exit 0, ≈ 88 s (`audio-eq-isolation` 28.1 s, `firstrun` 13.8 s, `health` 8.0 s, `cli-contracts` 6.7 s, `gen-docs` 5.2 s) |
 | `tools/repo-test.sh --only cli-contracts` | 1 row: 1 pass, exit 0, ≈ 6.7 s (`--only` selects only the matching suite) |
-| `tools/repo-test.sh --list` | 34 suites; 29 run in `--fast`, 34 in `--full` |
-| `python3 -m unittest discover -s tests/unit -q` | `Ran 658 tests ... OK (skipped=1)`, ≈ 4.6 s |
+| `tools/repo-test.sh --list` | 36 suites; 31 run in `--fast`, 36 in `--full` |
+| `tools/repo-test.sh --integration` | 1 row: 1 pass, exit 0, ≈ 17.7 s (real daemon + ephemeral uinput devices; the default run reports it as `SKIP`) |
+| `python3 -m unittest discover -s tests/unit -q` | `Ran 682 tests ... OK (skipped=1)`, ≈ 4.9 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
 | deliberately broken copy in `/tmp`, `--only fp-python` (earlier round) | 1 fail, exit 1, failing command + log path printed |
 | root container `--fast` (earlier round) | 15 pass / 0 fail / 10 skip, exit 0 |
 | non-root container `--fast` (earlier round) | 16 pass / 0 fail / 9 skip, exit 0 |
 
-The six fast-mode skips are the five full-only suites plus `shellcheck`; they
-are enumerated in the table on every run, not implied. `--full` was not re-run
+The seven fast-mode skips are the five full-only suites, `shellcheck` and the opt-in
+`voltap-integration` suite; they are enumerated in the table on every run, not implied. `--full` was not re-run
 in this round. The authoritative current numbers are `tools/repo-test.sh --list`
 and the generated `handover-state` block in [HANDOVER.md](HANDOVER.md), not any
 count copied into this document.

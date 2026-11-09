@@ -379,6 +379,75 @@ journalctl -u oxp3-voltap -b --no-pager
 #    last decision without root.
 ```
 
+## Integration test: the daemon against a virtual device (proven end-to-end)
+
+`tests/integration/volume/` is the first check that drives the **real daemon
+process** with real kernel input events. It creates uinput devices, starts
+`tools/oxp3-voltap` against them, injects the event sequences a rocker produces
+and reads the result from the daemon's own uinput shim (`OXP3 volume tap shim`,
+`phys-oxp3-voltap`) - never from the device the daemon grabbed.
+
+```bash
+# direct (uinput access required; SKIPs with instructions otherwise)
+tests/integration/volume/run.sh
+
+# through the repository runner (opt-in; skipped in the default offline run)
+tools/repo-test.sh --integration
+OXP3_REPO_TEST_INTEGRATION=1 tools/repo-test.sh --only voltap-integration
+```
+
+It needs write access to `/dev/uinput` and read access to the event nodes it
+creates. Root is the simple case; as a user it works when `/dev/uinput` has a
+uaccess ACL (Steam's udev rule grants one) and the created devices are
+joystick-tagged, which the test arranges with `BTN_TRIGGER`/`BTN_A` so logind
+also ACLs their event nodes. Without either it exits 77 with:
+
+```
+SKIP: no write access to /dev/uinput (...); run the harness as root:
+sudo tests/integration/volume/run.sh  (or grant your user write access to
+/dev/uinput with a udev rule/ACL)
+```
+
+The same applies to reading the created event nodes; there the exact
+alternative is `sudo usermod -aG input "$USER"` (then log out and in).
+
+Observed on Anatase (2026-11-09, kernel 7.2.7-an28; 37 assertions, ~18 s):
+
+| driven sequence | downstream result |
+|---|---|
+| one tap | exactly `KEY_VOLUMEUP` down + up |
+| three quick taps | exactly three down/up pairs (6 events, no extras) |
+| 3 s hold with 76 `value==2` kernel-style repeats | exactly 2 events total; unchanged at 0.5 s, 1.5 s and after release (no ramp) |
+| rapid bounce inside the 60 ms gap | bounced press/release disappear; a tap after the gap still works |
+| duplicate/repeat/repeated-release storm | exactly one pair (the input core coalesces duplicate presses and up-releases before the daemon sees them) |
+| release with the key already down, daemon attached afterwards (`orphan_tap`) | exactly one pair; counters `orphan_tap=1` |
+| release arriving after the synthetic timeout (`late_release`) | dropped; no second tap; counters `late_release=1` |
+| HHD-shaped device present (sandbox name, our `1209:7657` id) | grabbed with `role=hhd-virtual`, taps forwarded |
+| preferred device removed | `device lost:`, fallback grabs the AT-shaped device `role=at-kbd`, shim recreated with `EV_REP`, taps forwarded |
+| the test itself holds `EVIOCGRAB` first (complete holder scan) | `DEGRADED: every candidate is held or refused (EBUSY)`, status `degraded-busy`, exit 3 |
+
+Hermeticity: every node is created by the test (or by the daemon under test)
+and checked by name + `phys` + `vendor:product`; the automatic-topology phase
+passes synthetic `--proc-root`/`--sys-root` trees that list only the sandbox
+devices, so the host's real `event4`/`event23` are invisible to discovery. The
+HHD-shaped stand-in reuses hhd's *name string* only, with our own vendor/product
+and a `-integration-test` `phys`; the real hhd device is never opened. Teardown
+SIGTERMs the daemon, closes every uinput device, verifies the nodes and the
+shim are gone, and asserts no test process survived.
+
+Two daemon fixes came out of this test:
+
+1. `run` no longer refuses categorically when euid != 0. With an input-group
+   membership or a logind uaccess ACL the daemon can read its device and write
+   `/dev/uinput`; the real refusal (EACCES/EBUSY) is now reported from the
+   open/grab path as the documented degraded state, which is both testable and
+   more informative. The system unit still runs as root.
+2. Automatic discovery with a *complete* holder scan used to report
+   `degraded-empty`/exit 2 when every candidate was visibly held, because the
+   attempt order was empty - contradicting the documented
+   `degraded-busy`/exit 3. `GrabFSM.refused_held()` now produces the busy state
+   from the holder list (unit-tested, and exercised by the last row above).
+
 ## Risks and rollback
 
 * **Risk: volume keys stop completely** (e.g. hhd disabled, no virtual device,
@@ -417,9 +486,12 @@ journalctl -u oxp3-voltap -b --no-pager
    stopped without changing anything else. If hhd ever starts grabbing its own
    uinput device, `voltap` will see it in `/proc/*/fdinfo` and report
    `degraded-busy` instead of failing silently.
-4. **Physical-fallback repeat proxying** could not be exercised in this
-   session (no root). The unit tests cover the state machine and the
-   `EV_REP` capability decision; validation step 5 is the first real run.
+4. **Physical-fallback repeat proxying** is now exercised end to end by
+   `tests/integration/volume/` against an AT-shaped virtual device: the daemon
+   grabs it after the preferred device disappears, recreates the shim with
+   `EV_REP`, and taps still produce one pair. It is still not measured on the
+   real `event4` with a real keyboard (needs root and hhd stopped); validation
+   step 5 remains the on-hardware check.
 5. **Diagnose verdict** is based on a single N-second window with no presses
    unless the operator presses during it; it deliberately falls back to the
    static preference instead of guessing.

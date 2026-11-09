@@ -503,6 +503,24 @@ class GrabFSMTest(unittest.TestCase):
         self.assertEqual(len(result.refused), 2)
         self.assertIn("EBUSY", fsm.describe())
 
+    def test_known_holders_are_degraded_busy_exit_3_not_empty(self):
+        # A complete holder scan can prove EBUSY before any grab attempt, so
+        # the attempt order is empty.  That is the documented busy state, not
+        # "no candidate": status must say degraded-busy/exit 3.
+        class Held:
+            path = "/dev/input/event23"
+            held_by = [6752, 6753]
+
+        fsm = voltap.GrabFSM()
+        result = fsm.refused_held([Held()])
+        self.assertEqual(result.state, "degraded-busy")
+        self.assertEqual(result.exit_code, voltap.EXIT_GRAB_REFUSED)
+        self.assertIsNone(result.selected)
+        self.assertEqual(result.refused[0]["kind"], "busy")
+        self.assertIn("6752, 6753", result.refused[0]["detail"])
+        self.assertTrue(result.changed)
+        self.assertIn("EBUSY", fsm.describe())
+
     def test_no_candidates_is_degraded_empty_exit_2(self):
         fsm = voltap.GrabFSM()
         result = self.scan(fsm, [], {})

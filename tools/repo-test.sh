@@ -9,6 +9,9 @@
 #   tools/repo-test.sh --list          list every suite and exit
 #   tools/repo-test.sh --only GLOB     run only suites whose name matches GLOB
 #                                      (repeatable; shell wildcards)
+#   tools/repo-test.sh --integration   run the opt-in integration suites (sets
+#                                      OXP3_REPO_TEST_INTEGRATION=1; default is
+#                                      to report them as SKIP)
 #
 # Exit codes: 0 = nothing failed (skips allowed and counted), 1 = at least one
 # FAIL or timeout, 2 = usage/configuration error (bad option, no suite matched,
@@ -67,6 +70,7 @@ MODE=fast
 MODE_SET=""
 JSON=0
 LIST=0
+INTEGRATION=0
 ONLY=()
 while [ "$#" -gt 0 ]; do
     case $1 in
@@ -84,11 +88,21 @@ while [ "$#" -gt 0 ]; do
             ONLY+=("$1") ;;
         --only=*)
             ONLY+=("${1#*=}") ;;
+        --integration) INTEGRATION=1 ;;
         -h|--help|help) usage; exit 0 ;;
         *) printf '%s: unknown option: %s (try --help)\n' "$PROG" "$1" >&2; exit 2 ;;
     esac
     shift
 done
+
+# --integration is the explicit opt-in for suites that create ephemeral
+# devices and run real daemons.  With no --only it selects the *-integration
+# suites; the suite itself still re-checks the environment variable so a
+# direct invocation skips cleanly too.
+if [ "$INTEGRATION" -eq 1 ]; then
+    export OXP3_REPO_TEST_INTEGRATION=1
+    [ "${#ONLY[@]}" -eq 0 ] && ONLY+=("*-integration")
+fi
 
 # ------------------------------------------------------------------ helpers
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -493,11 +507,37 @@ suite_gamewrap() {
     tools/oxp3-gamewrap.sh --status --json >/dev/null
 }
 
+suite_voltap_integration() {
+    [ -x "$REPO/tests/integration/volume/run.sh" ] \
+        || skip "tests/integration/volume/run.sh is missing"
+    # Integration suite: creates ephemeral uinput devices and runs the real
+    # daemon, so it is opt-in and never part of the default offline run.
+    if [ "${OXP3_REPO_TEST_INTEGRATION:-0}" != 1 ]; then
+        skip "opt-in integration test (ephemeral uinput devices); set OXP3_REPO_TEST_INTEGRATION=1 to run"
+    fi
+    need python3
+    "$REPO/tests/integration/volume/run.sh"
+}
+
 suite_eq_model() {
     [ -f "$REPO/tools/audio/eq_response.py" ] || skip "tools/audio/eq_response.py is missing"
     need python3
     cd "$REPO" || exit 1
     python3 tools/audio/eq_response.py
+}
+
+suite_audio_eq_isolation() {
+    [ -x "$REPO/tools/audio/test-isolation.sh" ] \
+        || skip "tools/audio/test-isolation.sh is missing"
+    need python3
+    cd "$REPO" || exit 1
+    # A private PipeWire daemon + a hardware-free private WirePlumber.  The
+    # script itself skips (exit 77) when the PipeWire client tooling is not
+    # installed, and never touches the live session: its own runtime dir,
+    # its own config, a null sink, and (on a host with /dev/snd) a bubblewrap
+    # sandbox with an empty /dev/snd.  --quick keeps the offline suite fast;
+    # run tools/audio/test-isolation.sh without it for the hot-tone checks.
+    tools/audio/test-isolation.sh --quick --json "$LOGDIR/audio-eq-isolation.json"
 }
 
 suite_firstrun() {
@@ -770,9 +810,15 @@ def_suite unit fast fast 120 0 \
 def_suite gamewrap fast fast 120 0 \
     "game launch wrapper: feature decisions, HDR gating, argv safety" \
     "python3 -m unittest discover -s tests/unit -p test_gamewrap.py -q"
+def_suite voltap-integration fast medium 180 0 \
+    "end-to-end volume daemon against a virtual uinput device (opt-in: OXP3_REPO_TEST_INTEGRATION=1)" \
+    "OXP3_REPO_TEST_INTEGRATION=1 tests/integration/volume/run.sh"
 def_suite eq-model fast fast 60 0 \
     "speaker EQ biquad model table" \
     "python3 tools/audio/eq_response.py"
+def_suite audio-eq-isolation fast medium 300 0 \
+    "Harman filter-chain loads and measures in a private PipeWire graph (null sink, no live session)" \
+    "tools/audio/test-isolation.sh --quick --json <logs>/audio-eq-isolation.json"
 def_suite firstrun fast medium 120 0 \
     "first-run collector: offline selftest, checklist JSON, dry-run writes nothing" \
     "tools/oxp3-firstrun.sh --selftest && ... --check-only --json && ... --dry-run"

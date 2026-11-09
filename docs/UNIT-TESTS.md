@@ -13,9 +13,9 @@ package installation**, and it writes only to a private temporary directory
 Recorded on this host (Python 3.15, no root):
 
 ```
-python3 -m unittest discover -s tests/unit -q     -> Ran 658 tests ... OK (skipped=1), ~4.5 s
-tools/repo-test.sh --fast  -> 34 suites: 28 pass, 0 fail, 6 skip, exit 0 (~58 s)
-tools/repo-test.sh --full  -> 34 suites expected (build + network rows; not re-run this round)
+python3 -m unittest discover -s tests/unit -q     -> Ran 682 tests ... OK (skipped=1), ~4.9 s
+tools/repo-test.sh --fast  -> 36 suites: 29 pass, 0 fail, 7 skip, exit 0 (~88 s)
+tools/repo-test.sh --full  -> 36 suites expected (build + network rows; not re-run this round)
 ```
 
 ## 1. How to run it

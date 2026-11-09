@@ -39,9 +39,12 @@ Modes
   status    print the daemon's JSON status file
   selftest  create the uinput device and emit two taps (root)
 
-Needs python3-evdev (already installed on Anatase, hhd depends on it) and root
-for run/probe/diagnose/selftest: /dev/input/event* is root:input 0660 and
-/dev/uinput is root:root 0600.
+Needs python3-evdev (already installed on Anatase, hhd depends on it).
+`run` needs read access to the chosen event node and write access to
+/dev/uinput: root (the system unit) is the normal way, but an input-group
+member or a logind uaccess ACL (joystick-tagged virtual devices) is enough.
+probe/diagnose/selftest still expect root.  On a stock host /dev/input/event*
+is root:input 0660 and /dev/uinput is root:root 0600.
 
 Author: silentsudin <25103587+silentsudin@users.noreply.github.com>
 Licence: GPL-2.0-or-later - our own code, no vendor code involved.
@@ -64,7 +67,7 @@ try:
 except ImportError:  # pragma: no cover - dependency is present on Anatase
     sys.exit("oxp3-voltap: python3-evdev is missing (rpm: python3-evdev)")
 
-VERSION = "1.1"
+VERSION = "1.2"
 
 SHIM_NAME = "OXP3 volume tap shim"
 SHIM_PHYS = "phys-oxp3-voltap"
@@ -660,6 +663,24 @@ class GrabFSM:
         else:
             self.state = "degraded-error"
             self.exit_code = EXIT_GRAB_REFUSED
+        return self._result()
+
+    def refused_held(self, held):
+        """Every volume candidate was visible but held by another process.
+
+        A discovery-time holder scan can prove EBUSY without attempting the
+        grab, so `scan()` sees an empty attempt order.  That is *not* "no
+        candidate" (degraded-empty/exit 2): it is the documented busy state
+        (degraded-busy/exit 3).  Held is an iterable of candidates.
+        """
+        self.state = "degraded-busy"
+        self.exit_code = EXIT_GRAB_REFUSED
+        self.selected = None
+        self.refused = [
+            {"path": cand.path, "kind": "busy",
+             "detail": "an EVIOCGRAB is held by pid " +
+                       ", ".join(str(pid) for pid in cand.held_by)}
+            for cand in held]
         return self._result()
 
     def _result(self):
@@ -1303,7 +1324,17 @@ class Runner:
             cand.role == ROLE_HHD for cand in self.plan["candidates"])
         self.hhd["running"] = bool(self.hhd["process"] or
                                    self.hhd["virtual_present"])
-        result = self.fsm.scan(self.plan["ordered"], self._attempt)
+        # A complete holder scan can prove EBUSY without attempting the grab,
+        # leaving the attempt order empty.  Report the documented busy state
+        # directly: calling scan() first would flip the FSM's transition key
+        # between empty and busy on every rescan and log DEGRADED each time.
+        held = [cand for cand in self.plan["candidates"]
+                if cand.held_by and cand.dev.has_volume
+                and cand.role != ROLE_NEVER]
+        if not self.plan["ordered"] and held:
+            result = self.fsm.refused_held(held)
+        else:
+            result = self.fsm.scan(self.plan["ordered"], self._attempt)
         if result.selected is not None:
             dev = self._pending.pop(result.selected.path, None)
             if dev is not None:
@@ -1493,9 +1524,11 @@ def _key_codes(bitmap: int):
 
 
 def cmd_run(cfg) -> int:
-    if not have_root():
-        log("run needs root: /dev/input/event* and /dev/uinput are root-only")
-        return EXIT_USAGE
+    # Do not refuse categorically when euid != 0: an input-group member or a
+    # logind uaccess ACL (granted on joystick-tagged input nodes, which is how
+    # a uinput test device can be read without root) may be enough.  The real
+    # refusal (EACCES/EBUSY) is reported from the open/grab path as
+    # degraded-error/degraded-busy, which is more useful than a blanket exit.
     runner = Runner(cfg)
 
     def stop(signum, frame):

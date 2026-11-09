@@ -263,7 +263,7 @@ the failing command and its log path are printed when something fails. Missing
 optional tools (a C compiler/container image, `shellcheck`, a warm npm cache,
 network) are reported as `SKIP` with a reason, never as a pass. The inventory is
 not copied here: `tools/repo-test.sh --list` prints the current count and the
-`--fast` subset (34 suites, 29 in `--fast` at the time of writing, including the
+`--fast` subset (36 suites, 31 in `--fast` at the time of writing, including the
 `unit`, `gen-docs` and `cli-contracts` suites added after the snapshot above).
 [TESTING.md](TESTING.md) §9 records the last run; the generated `handover-state`
 block in [HANDOVER.md](HANDOVER.md) is the current count.

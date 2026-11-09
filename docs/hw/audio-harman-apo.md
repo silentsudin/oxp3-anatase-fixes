@@ -1,8 +1,10 @@
 # Internal speakers: reproducing the Harman AudioEFX tuning on PipeWire
 
 Status: tuning recovered from the vendor package, reimplemented as a user-scope
-PipeWire filter-chain, and verified against the model to 0.03 dB. Nothing on the
-host was changed (no root, no config in `~/.config`).
+PipeWire filter-chain, and measured end-to-end in an isolated PipeWire graph:
+0.029 dB mean / 0.111 dB max against the model, plus limiter-replacement and
+crossover checks. Nothing on the host was changed (no root, no config in
+`~/.config`); see [`docs/audio-validation.md`](../audio-validation.md).
 
 Target: ONEXPLAYER 3 (`ONE_NETBOOK-ONEXPLAYER3`), Anatase `20261026.3`, kernel
 `7.2.7-an28.fc45.x86_64`, PipeWire 1.6.9, Realtek ALC245 behind Intel SOF
@@ -18,6 +20,9 @@ is brighter/harsher and has no speaker protection.
 - Filter chain: [`tools/audio/oxp3-speaker-eq.conf`](../../tools/audio/oxp3-speaker-eq.conf)
 - Model + config generator: [`tools/audio/eq_response.py`](../../tools/audio/eq_response.py)
 - Measurement: [`tools/audio/measure-speaker.py`](../../tools/audio/measure-speaker.py)
+- Isolated-graph harness / validation: [`tools/audio/test-isolation.sh`](../../tools/audio/test-isolation.sh),
+  [`tools/audio/measure-in-isolation.py`](../../tools/audio/measure-in-isolation.py),
+  [`docs/audio-validation.md`](../audio-validation.md)
 - Install / on / off: `install-user.sh`, `eq-on.sh`, `eq-off.sh` (same directory)
 
 ## TL;DR
@@ -37,9 +42,12 @@ is brighter/harsher and has no speaker protection.
    trades 4.3 dB of headroom for protection of the small drivers.
 5. [`tools/audio/oxp3-speaker-eq.conf`](../../tools/audio/oxp3-speaker-eq.conf)
    reproduces stage 1 as eight `bq_peaking` filters plus a -8 dB headroom stage
-   (the peak boost of stage 1 is +7.74 dB @ 142 Hz). Measured through a real
-   PipeWire 1.6.9 graph it matches the model to **0.03 dB**; stage 2 is included
-   commented out because its role is not proven (see open points).
+   (the peak boost of stage 1 is +7.74 dB @ 142 Hz). Measured in a real,
+   hardware-free PipeWire 1.6.9 graph it matches the model to **0.029 dB mean /
+   0.111 dB max** (20 bands, 100 Hz - 10 kHz); stage 2 is included commented out
+   because its role is not proven (see open points). See
+   [`docs/audio-validation.md`](../audio-validation.md) for the reproducible
+   end-to-end run.
 
 ## 1. What Linux does today (measured)
 
@@ -199,9 +207,12 @@ headroom (-8 dB low shelf @ 20 kHz) -> b1 80 Hz -3 Q0.7 -> b2 140 Hz +6 Q2.0
 ```
 
 Why the odd headroom node: filter-chain has no plain gain element (`label = gain`
-does not exist - it fails with `cannot create label gain`), so a low shelf parked at
-20 kHz acts as a flat -8 dB. -8 dB is the stage-1 peak (+7.74 dB), so the chain
-cannot clip even at 0 dBFS. If you want the vendor's loudness instead of headroom,
+does not exist on this build - it fails with `cannot create label gain`; a newer
+build adds one but the shelf is kept for compatibility), so a low shelf parked at
+20 kHz acts as -8 dB across the audio band and approaches 0 dB at Nyquist (24 kHz).
+-8 dB is the stage-1 peak (+7.74 dB), so the chain cannot clip even at 0 dBFS -
+measured: a 0 dBFS tone leaves -7.38 dBFS at 1 kHz and -0.26 dBFS at the 142 Hz
+worst case (no clipped samples). If you want the vendor's loudness instead of headroom,
 use the EasyEffects route below, which has a real limiter.
 
 Stage 2 is present but commented out: uncomment `s1..s9` and add the links
@@ -238,25 +249,39 @@ Two independent checks, both reproducible:
 1. **Model vs the vendor blob** - `apo_extract.py` re-reads the preset and prints the
    same eight bands; the extractor's factory-table cross-check found the table at
    `0xcf6a0` in the service exe and 1580/1580 values match for untuned endpoints.
-2. **Filter chain vs model, measured** - the chain was loaded in a throwaway PipeWire
-   1.6.9 instance, fed the stepped 1/3-octave signal and recorded at the graph output
-   (`measure-speaker.py --analyze`):
+2. **Filter chain vs model, measured in a real (isolated) PipeWire graph** - the
+   shipped config is loaded unchanged into a private PipeWire 1.6.9 instance
+   (private `XDG_RUNTIME_DIR`, null sink, hardware-free WirePlumber, no ALSA
+   object) and measured with a 50 Hz - 16 kHz log sweep against a reference run
+   with the filter bypassed (`tools/audio/test-isolation.sh`):
 
    ```
         Hz   measured      model     diff
-       125      -2.1      -2.1     +0.0
-       250      -5.3      -5.3     +0.0
-       630      -6.2      -6.2     -0.0
-      1000      -7.4      -7.4     +0.0
-      2000      -8.1      -8.1     -0.0
-      4000     -10.6     -10.6     +0.0
-      6350     -14.8     -14.8     +0.0
-      8000     -13.1     -13.1     +0.0
-      mean abs error 0.00 dB, max 0.03 dB over 19 bands
+       126      -1.88     -1.79    -0.09
+       252      -5.31     -5.31    +0.00
+       635      -6.23     -6.25    +0.02
+      1008      -7.39     -7.39    +0.01
+      2016      -8.15     -8.15    +0.00
+      4032     -10.66    -10.70    +0.04
+      6400     -14.59    -14.63    +0.04
+      8063     -12.40    -12.29    -0.11
+      mean abs error 0.029 dB, max 0.111 dB over 20 bands (100 Hz - 10 kHz)
    ```
 
-   i.e. the emitted `bq_*` parameterisation and `eq_response.py` agree; the numbers in
-   the config are the numbers in the table.
+   i.e. the emitted `bq_*` parameterisation and `eq_response.py` agree, and the
+   numbers in the config are the numbers in the table. The full 26-band table,
+   the raw daemon log and the re-run commands are in
+   [`docs/audio-validation.md`](../audio-validation.md).
+
+3. **Limiter replacement and crossover** - the chain's protection is the static
+   -8 dB headroom (filter-chain has no dynamics builtin): hot 0 dBFS tones are
+   measured at -7.38 dBFS (1 kHz) and -0.26 dBFS (142 Hz) with zero clipped
+   samples, recovering instantly (no detector, no pumping). The vendor limiter's
+   threshold/attack/release are validated only as an offline model (1.90 dB
+   attenuation, -0.08 dB residual after release). An LR4 10.12 kHz crossover
+   built from `bq_lowpass`/`bq_highpass` is real-graph verified: -6.0/-5.8 dB at
+   the corner, each branch passing its side, and a 0.00 dB flat sum. Details in
+   [`docs/audio-validation.md`](../audio-validation.md).
 
 **Acoustic measurement of the real speakers** (what the user should do, since a
 software loopback cannot hear the drivers):
@@ -327,9 +352,13 @@ The Windows side is not modified at all; `GA18v3.reg` was only read.
   `snd_sof` then hit a kernel WARNING in `sof_ipc4_widget_setup` (NULL write,
   `WARNING: CPU ... RIP sof_ipc4_widget_setup+0x205`) and one WirePlumber process is
   stuck in `dpcm_fe_dai_close` (D state), so the card stays busy and the session only
-  shows "Dummy Output". **A reboot is required to get the speakers back** - we may not
-  reboot from here. Lesson: never start a second PipeWire+WirePlumber on a live
-  session; do the loopback test with `node.passive`/manual links only, or on a reboot
-  with `systemctl --user stop wireplumber pipewire`.
+  shows "Dummy Output". A reboot was required to get the speakers back.
+  Lesson: never start a second PipeWire+WirePlumber against the live session.
+  `tools/audio/test-isolation.sh` is the safe way to do a graph test: private
+  runtime/config, only `support.null-audio-sink` and the filter chain, a private
+  WirePlumber with **all hardware monitors disabled** and (on a host with
+  `/dev/snd`) a bubblewrap sandbox with an empty `/dev/snd`, plus a hard check
+  that the private session manager has no `/dev/snd` fd open. See
+  [`docs/audio-validation.md`](../audio-validation.md).
   The kernel warning itself is worth reporting upstream: two clients driving the same
   SOF IPC4 PCM concurrently leaves a widget with a NULL data pointer.

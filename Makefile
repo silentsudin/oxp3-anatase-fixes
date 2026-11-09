@@ -9,7 +9,7 @@
 
 REPO_TEST = tools/repo-test.sh
 
-.PHONY: help test test-full verify preflight health decky install-dry-run units unit clean
+.PHONY: help test test-full verify preflight health decky install-dry-run units unit test-integration clean
 
 help:
 	@printf '%s\n' \
@@ -22,6 +22,7 @@ help:
 		'make install-dry-run - print every hardware-installer command, change nothing' \
 		'make units           - verify systemd units, udev rules and hwdb files' \
 		'make unit            - offline Python unit suite (tests/unit, no root, no hardware)' \
+		'make test-integration - opt-in end-to-end oxp3-voltap test on virtual uinput devices' \
 		'make clean           - remove our build output (Decky node_modules/dist/build, C build)'
 
 test:
@@ -52,6 +53,10 @@ units:
 
 unit:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/unit -q
+
+# Opt-in: creates ephemeral uinput devices and drives the real daemon.
+test-integration:
+	$(REPO_TEST) --integration
 
 clean:
 	rm -rf -- tools/decky-oxp3-status/node_modules

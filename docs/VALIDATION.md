@@ -59,6 +59,36 @@ sudo OXP3_VERIFY_SUSPEND_S=30 OXP3_VERIFY_MEASURE_S=120 tools/oxp3-verify.sh --f
 `--with-changes` requires `--full` (exit 3 otherwise): the harness refuses to make a
 persistent change as a side effect of a "just look" run.
 
+### Volume daemon integration test (opt-in, no hardware)
+
+`vol.hold` only drives the daemon's shim self-test. The end-to-end complement is
+`tests/integration/volume/`: it creates ephemeral uinput devices, starts the
+**real** `tools/oxp3-voltap` process against them, injects a tap, three quick
+taps, a 3 s hold with `value==2` auto-repeat, a bounce, a duplicate storm, an
+orphan release and a late release, and reads the result from the daemon's own
+uinput shim. It also exercises the HHD-preferred / AT-fallback topology decision
+through a synthetic `--proc-root`/`--sys-root`, and the `degraded-busy`/exit-3
+path while the test itself holds `EVIOCGRAB`.
+
+```sh
+# direct; SKIPs with the exact enable command when /dev/uinput or the created
+# event nodes are not accessible (no sudo is run by the test)
+tests/integration/volume/run.sh
+
+# through the repository runner (skipped unless explicitly enabled)
+tools/repo-test.sh --integration
+OXP3_REPO_TEST_INTEGRATION=1 tools/repo-test.sh --only voltap-integration
+make test-integration
+```
+
+It needs write access to `/dev/uinput` and read access to the event nodes it
+creates. Root always works; as a user, `/dev/uinput` must be user-writable
+(udev ACL) and the created event nodes readable (input group or a logind uaccess
+ACL). It never opens a real input device, checks every grabbed path against the sandbox device identity,
+tears the daemon and every virtual device down, and leaves nothing running. The
+proven scenarios and results are recorded in
+[hw/volume-buttons.md](hw/volume-buttons.md#integration-test-the-daemon-against-a-virtual-device-proven-end-to-end).
+
 ## 2. Exit codes and states
 
 | exit | meaning |
@@ -102,6 +132,12 @@ asserts. The ids are stable (they are the `state` keys in `--json`).
 | `vol.holder` | the physical AT keyboard is held only by hhd (or nobody) | `/proc/*/fdinfo` `grab: 1` + `fd` symlink; `SKIP` without root, `UNKNOWN` for a non-hhd holder |
 | `vol.hwdb` | the kernel releases the rocker key at press time, so a hold cannot ramp | `/etc/udev/hwdb.d/84-oxp3-volume-keys*.hwdb` exists, has a `KEYBOARD_KEY_*=<key>` force-release entry, and `/etc/udev/hwdb.bin` is newer than it (compiled) |
 | `vol.hold` (root) | a hold yields exactly one step, not a ramp | `tools/oxp3-voltap/oxp3-voltap selftest`: creates the uinput device and emits taps through the real state machine |
+
+The state machine, discovery and grab FSM are unit-tested by
+`tests/unit/test_voltap.py`; the opt-in integration test above is the
+end-to-end evidence that the real daemon process suppresses a hold to one step
+and emits exactly one pair per tap (see
+[hw/volume-buttons.md](hw/volume-buttons.md#integration-test-the-daemon-against-a-virtual-device-proven-end-to-end)).
 
 ### home button / LEDs / RGB (9 + `led.write` in `--full`)
 
@@ -185,6 +221,7 @@ The contract and the manual suspend/hotplug procedures are in
 | `aud.eq` | the filter-chain sink is loaded | drop-in installed **and** `oxp3_speaker_eq.sink` in `pactl list short sinks`; `SKIP` when the drop-in is not installed |
 | `aud.dummy` | no "Dummy Output" fallback | default sink is a real one; `UNKNOWN` when only `auto_null` exists (no seat here, or the card is wedged — the hint lists the checks) |
 | `aud.model` | the recovered 8-band model is intact | `tools/audio/eq_response.py` |
+| `aud.graph` (repo-test only) | the shipped filter chain **parses, loads into a real private PipeWire graph and measures against the model**; hot-tone and crossover checks | `tools/audio/test-isolation.sh`, suite `audio-eq-isolation`; see [audio-validation.md](audio-validation.md) |
 | `aud.activate` (persistent) | `eq-on.sh` really activates the sink | runs it, then checks the sink appears; one of the two persistent changes the harness can make |
 
 ### display (4)
@@ -266,7 +303,7 @@ manifest and backup images. A `FAIL` is actionable (`adopt`), not a hardware def
 | 5 power envelope / fan | `pwr.zones`, `pwr.pl1`, `pwr.profile`, `pwr.fan`, `pwr.rapl` |
 | 5 adaptive TDP (opt-in) | `pwr.adaptive` |
 | 6 battery care | `bat.threshold`, `bat.behaviour` |
-| 7 speaker EQ | `aud.scripts`, `aud.server`, `aud.eq`, `aud.dummy`, `aud.model`, (`aud.activate`) |
+| 7 speaker EQ | `aud.scripts`, `aud.server`, `aud.eq`, `aud.dummy`, `aud.model`, (`aud.activate`), (`aud.graph` in `repo-test`) |
 | 8 display HDR / ICC / vibrance | `dsp.hdr`, `dsp.icc`, `dsp.panel`, `dsp.vibrance` |
 | 9 Mesa / XMX / sched_ext / xe | `gfx.mesa`, `gfx.xmx.driver`, `gfx.xmx.helper`, `gfx.xmx.igc`, `gfx.xmx.kernels`, `gfx.xmx.icd`, `gfx.xmx.trace`, `gfx.xe`, `gfx.working`, `sched.state`, `sched.scx`, `sched.unit` |
 | 10 Decky plugin | `decky.dir`, `decky.backend`, `decky.status` |
