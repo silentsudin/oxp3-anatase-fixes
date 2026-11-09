@@ -2938,7 +2938,9 @@ check_display() {
             depth=$(printf '%s\n' "$kv" | sed -n 's/^DEPTH=//p')
             vrr=$(printf '%s\n' "$kv" | sed -n 's/^VRR=//p')
             if [ -z "$out" ] || [ -z "$hdr" ]; then
-                if pgrep -x gamescope >/dev/null 2>&1; then
+                # Gamescope's argv can be gamescope-wl / gamescope --...; match the
+                # command line, not just the exact comm name.
+                if pgrep -f '[g]amescope' >/dev/null 2>&1; then
                     record dsp.hdr display "HDR / WCG state" SKIP \
                         "inside Gamemode (gamescope is running): desktop HDR is a Plasma feature; see dsp.gamemodehdr" \
                         "" "check HDR in the desktop session, or dsp.gamemodehdr for Gamemode"
