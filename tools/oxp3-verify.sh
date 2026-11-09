@@ -3004,22 +3004,14 @@ check_graphics() {
     # keep libxess in plugin/ThirdParty directories and only load it when the
     # upscaler is enabled in-game. Check the running game's directory recursively,
     # fall back to the live maps, and treat igdext in the prefix as capability too.
-    if [ -n "${STATUS_JSON:-}" ] && have python3; then
-        game_exe=$(printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: raise SystemExit
-print(((d.get("game") or {}).get("exe") or ""))' 2>/dev/null)
-    fi
+    game_exe=$(status_field game.exe 2>/dev/null || true)
     if [ -n "$game_exe" ] && [ -d "$(dirname "$game_exe")" ]; then
         game_dir=$(dirname "$game_exe")
         find "$game_dir" -maxdepth 12 -iname 'libxess*.dll' -print -quit 2>/dev/null | grep -q . && xess_game=1
     fi
     [ "$xess_game" -eq 0 ] && grep -lsi 'libxess' /proc/[0-9]*/maps 2>/dev/null | head -1 | grep -q . && xess_game=1
-    if [ "$xess_game" -eq 0 ] && [ -n "${STATUS_JSON:-}" ] && have python3; then
-        prefix=$(printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
-try: d=json.load(sys.stdin)
-except Exception: raise SystemExit
-print(((d.get("game") or {}).get("prefix") or ""))' 2>/dev/null)
+    if [ "$xess_game" -eq 0 ]; then
+        prefix=$(status_field game.prefix 2>/dev/null || true)
         [ -n "$prefix" ] && [ -d "$prefix/drive_c" ] && \
             find "$prefix/drive_c" -maxdepth 6 -iname 'igdext*.dll' -print -quit 2>/dev/null | grep -q . && xess_game=1
     fi
@@ -3066,7 +3058,7 @@ print(((d.get("game") or {}).get("prefix") or ""))' 2>/dev/null)
         ok)
             record gfx.xmx.trace graphics "igdext trace" PASS "$tv" "" ""
             ;;
-        warn)
+        warn|na)
             record gfx.xmx.trace graphics "igdext trace" SKIP "trace not present (expected unless tracing is enabled)" "$tv" "enable the shim tracing for a traced launch if you need it; docs/xess-xmx.md"
             ;;
         fail)
