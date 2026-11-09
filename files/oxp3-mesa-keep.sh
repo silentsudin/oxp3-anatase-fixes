@@ -43,10 +43,22 @@ if (( restore_host )); then
     cp -f -- "$host_known" /usr/lib64/libvulkan_intel.so && log "host Mesa restored"
 fi
 if (( restore_runtime )); then
+    # The runtime overlay lowerdir is rebuilt from this overrides tree by
+    # anatase-flatpak-extensions.service; the lib64 directory may not exist yet.
     rt=/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides/lib64
-    if [ -d "$rt" ]; then
-        cp -f -- "$runtime_known" "$rt/libvulkan_intel.so" && log "Flatpak runtime Mesa restored"
+    mkdir -p "$rt" || log "could not create $rt"
+    if cp -f -- "$runtime_known" "$rt/libvulkan_intel.so"; then
+        log "Flatpak runtime Mesa override restored"
         systemctl try-restart anatase-flatpak-extensions.service >/dev/null 2>&1 || true
+        # The service regenerates /run/anatase/flatpak; give the overlay a moment
+        # and confirm the runtime now reports the recorded build.
+        for _ in 1 2 3 4 5; do
+            got=$(sha256sum /run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files/lib64/libvulkan_intel.so 2>/dev/null | cut -d' ' -f1)
+            [ "$got" = "$want_runtime" ] && { log "runtime reports the recorded build"; break; }
+            sleep 1
+        done
+    else
+        log "could not write the runtime override"
     fi
 fi
 exit 0
