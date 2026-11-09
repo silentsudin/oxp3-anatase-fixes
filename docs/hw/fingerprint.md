@@ -215,6 +215,11 @@ Steps 1-2 are read-only. Step 3 is the only state change and it is reversible.
    and the `GpioInt`/`GpioIo` entries with their `PinIndex`/`GpioIo` numbers.
    `ACPI\BF63112:00` may also carry a `_DSD` with `spi-max-frequency`.
 
+   Checked: the kernel exposes **nothing** of this without root - the ACPI node
+   has only `hid/modalias/path/physical_node/status/uevent`, `udevadm info`
+   reports just `DEVPATH`/`MODALIAS`/`SUBSYSTEM`, and the SPI device has no
+   `resource`/`properties` file. So step 1 is genuinely first.
+
 2. **Confirm the controller sees the device** (already true here):
 
    ```bash
@@ -241,6 +246,8 @@ Steps 1-2 are read-only. Step 3 is the only state change and it is reversible.
 
    A healthy answer starts with `0xAA` and shows sensor width x height. All
    `0xFF`/no answer almost always means wrong SPI mode or too high a clock.
+   `cat /sys/bus/spi/devices/spi-BF63112:00/statistics/bytes_tx` tells you
+   whether the transfer happened at all, even when the answer is garbage.
 
 ## Safety
 
