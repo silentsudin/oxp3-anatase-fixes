@@ -85,6 +85,8 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `fp-c-tests` | full | fast | 300 s | host `cc`+`make`, or local `localhost/oxp3-fixes-build:f45` | `tools/fingerprint/build/` |
 | `fp-syntax` | full | fast | 180 s | same C toolchain | `tools/fingerprint/build/` |
 | `fp-libfprint` | full | slow/network | 900 s | libfprint v1.94.9 tree + GLib/GUsb devel, or podman + network | – (syntax only) |
+| `fp-session` | fast | fast | 300 s | `python3`, `bash`, `mkfifo` | – (fake `/sys` trees under `$TMPDIR`) |
+| `fp-session-root` | fast | fast | 120 s | root + the BF63112 device (otherwise SKIP) | – (`--dry-run` only) |
 | `decky-build` | full | fast | 600 s | `node`, `npm`, `python3` | `node_modules/`, `dist/`, `build/` |
 | `decky-package` | full | fast | 120 s | `python3`, `dist/index.js` | `build/*.zip` |
 | `decky-selftest` | fast | fast | 120 s | `python3` | – |
@@ -129,7 +131,7 @@ Areas and what is actually proven:
   shebang (`bash` first, then `sh`, so `#!/usr/bin/env sh` is covered).
 * **Python** — `py_compile` on every tracked `.py` plus the extensionless
   `tools/oxp3-voltap/oxp3-voltap`; bytecode goes to the log dir, never the
-  checkout. Then the 264-test fingerprint protocol + SPI/ACPI suite and the fixture/vector
+  checkout. Then the 289-test fingerprint protocol + SPI/ACPI suite and the fixture/vector
   drift check (the latter imports the generator and compares in memory, so the
   checked-in fixtures are not rewritten).
 * **volume daemon end to end** — opt-in `voltap-integration`

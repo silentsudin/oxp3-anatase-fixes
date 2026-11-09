@@ -3,71 +3,70 @@
  * bf63112.c - libfprint driver for the Betterlife BF63112 fingerprint sensor
  *             (ONEXPLAYER 3, Intel LPSS SPI, ACPI\BF63112).
  *
- * Status: transport, open/close and suspend/resume are implemented against the
- * recovered frame protocol; enrol/verify/identify deliberately refuse with
- * FP_DEVICE_ERROR_NOT_SUPPORTED because the match-in-sensor payloads (template
- * handle, score, phase semantics, SM3 session) are not decoded yet.  See
- * docs/hw/fingerprint.md and tools/fingerprint/README.md for what is proven,
- * what is inferred, and what a maintainer must adapt.
+ * Transport: the ACPI/SPB branch recovered from BetterlifeFingerprintDevice.dll
+ * 9.39.15.26 - a one-byte selector ((opcode & 0x3f) << 1, bit 7 = host write)
+ * followed by the payload or by a receive-only clock, submitted as one
+ * two-entry SPI_IOC_MESSAGE.  See docs/hw/fingerprint-transport.md §4/§8 and
+ * bf63112_spi.c, which is a dependency-free C mirror of fpbf63112/spi.py.
  *
- * It is written against libfprint 1.94.x internal driver API (fpi-device.h,
- * fpi-spi-transfer.h, fpi-ssm.h, fpi-log.h) as shipped in the v1.94.9 source
- * tree.  This file is our own work, not copied from libfprint; it carries the
- * same licence a driver needs to be accepted upstream.
+ * Status: open/close/suspend/resume and the two plaintext queries (sensor info
+ * 0xC1, firmware version 0xA0) are implemented.  Enrol/verify/identify
+ * deliberately refuse with FP_DEVICE_ERROR_NOT_SUPPORTED because the
+ * match-in-sensor payloads (template handle, score, phase semantics, SM3
+ * session) are not decoded yet.  Nothing here has run against the sensor.
  *
- * Hardware facts this file relies on:
- *   - the device is udev/spidev backed, matched by ACPI id "BF63112"
- *     (FpIdEntry.udev_types = FPI_DEVICE_UDEV_SUBTYPE_SPIDEV,
- *      FpIdEntry.spi_acpi_id = "BF63112");
- *   - every host frame is AA | L:u32 | 16x0 | 4C op phase 00 arg:u16 len:u32
- *     data | pad16 | CRC-32, L = 20 + align16 (10 + data_len);
- *   - the module signals "answer ready" on a GPIO the ACPI _CRS describes.
- *     libfprint's fpi_spi_transfer has no GPIO support, so this driver falls
- *     back to re-reading after a delay (the Windows driver instead waits on the
- *     GPIO event and re-sends on timeout).  Getting the GPIO is future work -
- *     see the docs - and the only thing that turns the retry loop below from
- *     "poll" into the vendor behaviour.
+ * This file is written against libfprint 1.94.x internal driver API
+ * (fpi-device.h, fpi-ssm.h, fpi-log.h) as shipped in the v1.94.9 source tree.
+ * It is our own work, not copied from libfprint, and carries the licence a
+ * driver needs to be accepted upstream.
+ *
+ * Bring-up configuration (environment only; libfprint drivers have no config
+ * file).  Every missing piece degrades to a clear error, never a crash:
+ *
+ *   BF63112_SPIDEV        explicit /dev/spidevX.Y (else udev data, else the
+ *                         single spidev class node whose modalias is
+ *                         acpi:BF63112)
+ *   BF63112_SPI_SPEED     controller max speed in Hz (else _CRS if BF63112_CRS)
+ *   BF63112_SPI_MODE      SPI mode 0..3 (else _CRS)
+ *   BF63112_SPI_BITS      bits per word (else _CRS)
+ *   BF63112_CRS           path to a raw _CRS resource-template file
+ *   BF63112_IRQ_GPIO      Linux GPIO line number for GpioInt (no default)
+ *   BF63112_IRQ_ACTIVE_LOW 1/0 (else _CRS polarity)
+ *   BF63112_IRQ_EDGE      rising|falling|both (default rising for edge)
+ *   BF63112_GPIO_CHIP     gpiochip device path (default /dev/gpiochip0)
+ *   BF63112_IRQ_BACKEND   auto|gpiod|sysfs|poll
+ *   BF63112_GPIO_SYSFS    sysfs GPIO base (default /sys/class/gpio)
+ *   BF63112_RESET_GPIO    Linux GPIO line number for the reset line
+ *   BF63112_RESET_ACTIVE_HIGH 1 = active high (default active low)
+ *   BF63112_ALLOW_RESET   1 = actually pulse the reset line on open
+ *
+ * ACPI pin indices are controller-relative, so the driver does not pretend
+ * they are Linux line numbers: set BF63112_IRQ_GPIO/BF63112_RESET_GPIO.
  */
 
 #define FP_COMPONENT "bf63112"
 
 #include "fpi-device.h"
-#include "fpi-spi-transfer.h"
 #include "fpi-ssm.h"
 #include "fpi-log.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <string.h>
-#include <unistd.h>
 
-#include "bf63112_proto.h"
+#include "bf63112_acpi.h"
+#include "bf63112_discover.h"
+#include "bf63112_spi.h"
 
-/*
- * The session layer (SM2/SM3/SM4 handshake, 0xA2) is implemented in
- * bf63112_session_openssl.c and is OPT-IN: nothing there has run against the
- * sensor yet, and it needs an OpenSSL with SM support.  Define
- * BF63112_ENABLE_SESSION to compile the handshake into open(); the derived
- * 16-byte SM4 key then lives in the device context, ready for the secure
- * `0xB0`/`0xB1` frames once those payloads are decoded.
- *
- * The exact experiment plan (and what to do if the module rejects the
- * handshake) is in docs/hw/fingerprint.md.
- */
-#ifdef BF63112_ENABLE_SESSION
-#include "bf63112_session_openssl.h"
-#endif
-
-/* One spidev readback.  The answer to a query fits easily; GET_IMG chunks can
- * be up to 8140 bytes and would need a larger buffer (and a spidev bufsiz
- * change), which this driver does not use. */
-#define BF63112_READ_LEN 512
-
-/* Recovered Windows-driver retry behaviour: re-send on an answer timeout.
- * The per-attempt bound is 1000/5000 ms there; 40 ms is the gap the probe uses
- * between polls and is plenty for a query answer. */
+/* Recovered Windows-driver retry behaviour on an answer timeout. */
 #define BF63112_MAX_ATTEMPTS 3
 #define BF63112_RETRY_DELAY_MS 40
+
+/* Plausibility bound for the image geometry.  The recovered reassembler
+ * refuses a whole image above 0x16829 bytes, so no valid width*height can
+ * exceed that either (docs/hw/fingerprint.md). */
+#define BF63112_MAX_PIXELS 0x16829u
 
 /* ------------------------------------------------------------------ types */
 
@@ -75,29 +74,39 @@ struct _FpDeviceBf63112
 {
   FpDevice parent;
 
-  int spi_fd;
+  struct bf63112_spi spi;
+  struct bf63112_linux_spi linux_spi;
+  struct bf63112_spi_policy policy;
 
-  /* CMD_QUERY_SENSOR_INFO result (field layout inferred, see docs) */
+  struct bf63112_spi_irq irq;
+  struct bf63112_sysfs_irq sysfs_irq;
+  struct bf63112_poll_irq poll_irq;
+  gboolean have_irq;
+
+  struct bf63112_spi_reset reset;
+  struct bf63112_sysfs_reset sysfs_reset;
+  gboolean have_reset;
+
+  /* CMD_QUERY_SENSOR_INFO result (docs/hw/fingerprint.md) */
+  guint16 field0;
+  guint16 field2;
   guint16 width;
   guint16 height;
   guint8 sensor_flags;
 
-  /* CMD_QUERY_FIRMWARE_VER result (informational only) */
-  guint8 fw_mode;
-  guint8 fw_project;
-  guint8 fw_variant;
-  guint8 fw_version[4];
+  /* CMD_QUERY_FIRMWARE_VER result */
+  guint8 fw_state;
+  guint8 fw_project_hi;
+  guint8 fw_project_lo;
+  guint32 fw_version;
 
-  /* bookkeeping for the in-flight command, if any */
+  /* polarity/edge recovered from _CRS, used only when the environment does
+   * not override them (-1 = unknown) */
+  int crs_irq_active_low;
+  int crs_irq_edge;
+
   FpiSsm *active_ssm;
   guint8 active_opcode;
-
-#ifdef BF63112_ENABLE_SESSION
-  /* ephemeral host SM2 keypair for this open, and the derived SM4 key */
-  Bf63112Keypair session_keypair;
-  Bf63112Session session;
-  gboolean session_ready;
-#endif
 };
 
 G_DECLARE_FINAL_TYPE (FpDeviceBf63112, fp_device_bf63112, FP, DEVICE_BF63112,
@@ -106,23 +115,18 @@ G_DEFINE_TYPE (FpDeviceBf63112, fp_device_bf63112, FP_TYPE_DEVICE)
 
 typedef struct
 {
+  gint refcount;
   FpDeviceBf63112 *self;
+  FpiSsm *ssm;
 
   guint8 opcode;
-  guint8 phase;
-  guint16 arg;
-  guint8 *payload;
-  size_t payload_len;
+  guint16 read_len;
+
+  guint8 *answer;
+  size_t answer_len;
 
   guint failures;
   guint max_attempts;
-
-  /* answer, copied out of the transfer buffer before it is freed */
-  guint8 *answer;
-  size_t answer_len;
-  guint8 answer_status;
-  guint8 answer_phase;
-  guint16 answer_arg;
 } Bf63112Request;
 
 typedef void (*Bf63112RequestDone) (FpiSsm *ssm, FpDevice *dev, GError *error);
@@ -130,11 +134,165 @@ typedef void (*Bf63112RequestDone) (FpiSsm *ssm, FpDevice *dev, GError *error);
 static const char *
 bf63112_op_name (guint8 opcode)
 {
-  const char *name = bf63112_opcode_name (opcode);
-  return name != NULL ? name : "unknown opcode";
+  const char *name = bf63112_spi_destructive_name (opcode);
+
+  if (name != NULL)
+    return name;
+  switch (opcode)
+    {
+    case 0xA0:
+      return "QUERY_FIRMWARE_VER";
+    case 0xA1:
+      return "QUERY_MODULE_SCHEME_INFORMATION";
+    case 0xA2:
+      return "QUERY_ROOT_KEY";
+    case 0xB3:
+      return "QUERY_FINGERPRINT_COUNT";
+    case 0xB4:
+      return "GET_IMG_DATA";
+    case 0xB5:
+      return "DETECT_FINGERPRINT_PRESS";
+    case 0xB6:
+      return "SLEEP";
+    case 0xC0:
+      return "QUERY_MODULE_UID";
+    case 0xC1:
+      return "QUERY_SENSOR_INFO";
+    case 0x2D:
+      return "SPI status register";
+    default:
+      return "unknown opcode";
+    }
 }
 
-/* ------------------------------------------------------------- request I/O */
+/* ---------------------------------------------------------------- request */
+
+static Bf63112Request *
+bf63112_request_ref (Bf63112Request *req)
+{
+  g_atomic_int_inc (&req->refcount);
+  return req;
+}
+
+static void
+bf63112_request_unref (Bf63112Request *req)
+{
+  if (req == NULL)
+    return;
+  if (g_atomic_int_dec_and_test (&req->refcount))
+    {
+      g_free (req->answer);
+      g_free (req);
+    }
+}
+
+static Bf63112Request *
+bf63112_request_new (FpDeviceBf63112 *self, guint8 opcode, guint16 read_len)
+{
+  Bf63112Request *req = g_new0 (Bf63112Request, 1);
+
+  req->refcount = 1;
+  req->self = self;
+  req->opcode = opcode;
+  req->read_len = read_len;
+  req->max_attempts = BF63112_MAX_ATTEMPTS;
+  req->answer = g_malloc0 (read_len > 0 ? read_len : 1);
+  return req;
+}
+
+/* -------------------------------------------------------------- worker IO */
+
+static void
+bf63112_transfer_thread (GTask *task, gpointer source_object,
+                         gpointer task_data, GCancellable *cancellable)
+{
+  Bf63112Request *req = task_data;
+  struct bf63112_spi_plan plan;
+  int rc;
+
+  (void) source_object;
+  (void) cancellable;
+
+  if (g_cancellable_is_cancelled (
+        fpi_device_get_cancellable ((FpDevice *) req->self)))
+    {
+      g_task_return_int (task, BF63112_SPI_ERR_CANCELLED);
+      return;
+    }
+
+  rc = bf63112_spi_build_read (&req->self->policy, req->opcode,
+                               req->read_len, 0, 0, &plan);
+  if (rc == 0)
+    rc = bf63112_spi_execute (&req->self->spi, &plan, req->answer,
+                              req->read_len, &req->answer_len);
+  g_task_return_int (task, rc);
+}
+
+static void
+bf63112_request_attempt_failed (FpiSsm *ssm, Bf63112Request *req, int rc)
+{
+  gboolean retryable = rc == BF63112_SPI_ERR_TIMEOUT ||
+                       rc == BF63112_SPI_ERR_IO;
+
+  req->failures++;
+  if (!retryable || req->failures >= req->max_attempts)
+    {
+      fpi_ssm_mark_failed (
+        ssm,
+        fpi_device_error_new_msg (
+          rc == BF63112_SPI_ERR_CANCELLED ? FP_DEVICE_ERROR_GENERAL
+                                          : FP_DEVICE_ERROR_PROTO,
+          "BF63112: %s failed after %u attempt(s): %s",
+          bf63112_op_name (req->opcode), req->failures,
+          bf63112_spi_strerror (rc)));
+      return;
+    }
+  fp_dbg ("BF63112 %s: attempt %u/%u failed (%s), re-sending",
+          bf63112_op_name (req->opcode), req->failures + 1,
+          req->max_attempts, bf63112_spi_strerror (rc));
+  fpi_ssm_jump_to_state_delayed (ssm, 0, BF63112_RETRY_DELAY_MS);
+}
+
+static void
+bf63112_transfer_done (GObject *source_object, GAsyncResult *res,
+                       gpointer user_data)
+{
+  FpDevice *dev = (FpDevice *) source_object;
+  GTask *task = G_TASK (res);
+  Bf63112Request *req = g_task_get_task_data (task);
+  FpiSsm *ssm = req->ssm;
+  GError *error = NULL;
+  int rc;
+
+  (void) user_data;
+  rc = g_task_propagate_int (task, &error);
+  if (ssm == NULL)
+    {
+      /* close() detached the SSM while the blocking transfer was in flight */
+      if (error != NULL)
+        g_error_free (error);
+      return;
+    }
+  if (error != NULL)
+    {
+      fpi_ssm_mark_failed (ssm, error);
+      return;
+    }
+  if (rc == 0)
+    {
+      fpi_ssm_mark_completed (ssm);
+      return;
+    }
+  if (rc == BF63112_SPI_ERR_CANCELLED ||
+      g_cancellable_is_cancelled (fpi_device_get_cancellable (dev)))
+    {
+      fpi_ssm_mark_failed (
+        ssm, g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED,
+                                  "BF63112: operation cancelled"));
+      return;
+    }
+  bf63112_request_attempt_failed (ssm, req, rc);
+}
 
 enum
 {
@@ -144,188 +302,35 @@ enum
 };
 
 static void
-bf63112_request_free (Bf63112Request *req)
-{
-  if (req == NULL)
-    return;
-  g_free (req->payload);
-  g_free (req->answer);
-  g_free (req);
-}
-
-static Bf63112Request *
-bf63112_request_new (FpDeviceBf63112 *self, guint8 opcode, guint8 phase,
-                     guint16 arg, const guint8 *payload, size_t payload_len)
-{
-  Bf63112Request *req = g_new0 (Bf63112Request, 1);
-
-  req->self = self;
-  req->opcode = opcode;
-  req->phase = phase;
-  req->arg = arg;
-  req->max_attempts = BF63112_MAX_ATTEMPTS;
-  if (payload_len > 0)
-    {
-      req->payload = g_malloc (payload_len);
-      memcpy (req->payload, payload, payload_len);
-      req->payload_len = payload_len;
-    }
-  return req;
-}
-
-/* A failed attempt: retry until the budget is gone, then fail the SSM. */
-static void
-bf63112_request_attempt_failed (FpiSsm *ssm, Bf63112Request *req,
-                                GError *error)
-{
-  req->failures++;
-  if (req->failures >= req->max_attempts)
-    {
-      fpi_ssm_mark_failed (ssm, error);
-      return;
-    }
-  fp_dbg ("BF63112 %s: attempt %u/%u failed (%s), re-sending",
-          bf63112_op_name (req->opcode),
-          req->failures + 1, req->max_attempts, error->message);
-  g_error_free (error);
-  fpi_ssm_jump_to_state (ssm, BF63112_XFER_RETRY);
-}
-
-static void
-bf63112_xfer_cb (FpiSpiTransfer *transfer, FpDevice *dev, gpointer user_data,
-                 GError *error)
-{
-  Bf63112Request *req = user_data;
-  FpiSsm *ssm = transfer->ssm;
-  struct bf63112_frame frame;
-  size_t offset = 0;
-  enum bf63112_scan_result scan;
-
-  (void) dev;
-  g_assert (ssm != NULL);
-  g_assert (req != NULL);
-
-  if (error != NULL)
-    {
-      if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-        {
-          fpi_ssm_mark_failed (ssm, error);
-          return;
-        }
-      bf63112_request_attempt_failed (ssm, req, error);
-      return;
-    }
-
-  scan = bf63112_scan_frame (transfer->buffer_rd,
-                             (size_t) transfer->length_rd, &offset, &frame);
-  if (scan != BF63112_SCAN_OK)
-    {
-      const char *why = scan == BF63112_SCAN_TRUNCATED ? "truncated frame" :
-                        scan == BF63112_SCAN_CORRUPT   ? "corrupt frame" :
-                                                         "no frame";
-      bf63112_request_attempt_failed (
-        ssm, req,
-        fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
-                                  "BF63112: no valid answer (%s at %zu, "
-                                  "SPI mode/clock or IRQ timing?)",
-                                  why, offset));
-      return;
-    }
-
-  if (frame.opcode != req->opcode)
-    {
-      bf63112_request_attempt_failed (
-        ssm, req,
-        fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
-                                  "BF63112: answer is %s, expected %s",
-                                  bf63112_op_name (frame.opcode),
-                                  bf63112_op_name (req->opcode)));
-      return;
-    }
-
-  /* The docs do not prove that an answer echoes the phase; accept either. */
-  g_free (req->answer);
-  req->answer = g_malloc (frame.data_len > 0 ? frame.data_len : 1);
-  if (frame.data_len > 0)
-    memcpy (req->answer, frame.data, frame.data_len);
-  req->answer_len = frame.data_len;
-  req->answer_status = frame.status;
-  req->answer_phase = frame.phase;
-  req->answer_arg = frame.arg;
-
-  fpi_ssm_mark_completed (ssm);
-}
-
-static void
 bf63112_xfer_ssm (FpiSsm *ssm, FpDevice *dev)
 {
-  FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
   Bf63112Request *req = fpi_ssm_get_data (ssm);
 
   switch (fpi_ssm_get_cur_state (ssm))
     {
     case BF63112_XFER_SEND:
       {
-        size_t frame_len = bf63112_frame_size (req->payload_len);
-        guint8 *frame = g_malloc0 (frame_len);
-        guint8 *rx = g_malloc0 (BF63112_READ_LEN);
-        FpiSpiTransfer *xfer;
+        GTask *task = g_task_new (G_OBJECT (dev),
+                                  fpi_device_get_cancellable (dev),
+                                  bf63112_transfer_done, NULL);
 
-        if (bf63112_build_frame (req->opcode, req->phase, 0, req->arg,
-                                 req->payload, req->payload_len,
-                                 frame, frame_len) == 0)
-          {
-            g_free (frame);
-            g_free (rx);
-            fpi_ssm_mark_failed (ssm,
-                                 fpi_device_error_new_msg (
-                                   FP_DEVICE_ERROR_GENERAL,
-                                   "BF63112: cannot build %s frame",
-                                   bf63112_op_name (req->opcode)));
-            return;
-          }
-
-        if (self->spi_fd < 0)
-          {
-            g_free (frame);
-            g_free (rx);
-            fpi_ssm_mark_failed (ssm,
-                                 fpi_device_error_new_msg (
-                                   FP_DEVICE_ERROR_NOT_OPEN,
-                                   "BF63112: spidev is not open"));
-            return;
-          }
-
-        xfer = fpi_spi_transfer_new (dev, self->spi_fd);
-        if (xfer == NULL)
-          {
-            g_free (frame);
-            g_free (rx);
-            fpi_ssm_mark_failed (ssm,
-                                 fpi_device_error_new_msg (
-                                   FP_DEVICE_ERROR_GENERAL,
-                                   "BF63112: cannot allocate SPI transfer"));
-            return;
-          }
-
-        /* write the frame, then clock in the answer in the same transfer */
-        fpi_spi_transfer_write_full (xfer, frame, frame_len, g_free);
-        fpi_spi_transfer_read_full (xfer, rx, BF63112_READ_LEN, g_free);
-        xfer->ssm = ssm;
-        fpi_spi_transfer_submit (xfer, fpi_device_get_cancellable (dev),
-                                 bf63112_xfer_cb, req);
+        g_task_set_check_cancellable (task, FALSE);
+        g_task_set_return_on_cancel (task, FALSE);
+        g_task_set_task_data (task, bf63112_request_ref (req),
+                              (GDestroyNotify) bf63112_request_unref);
+        g_task_run_in_thread (task, bf63112_transfer_thread);
+        g_object_unref (task);
         return;
       }
-
     case BF63112_XFER_RETRY:
-      /* No GPIO IRQ support yet: wait a little, then re-send the frame. */
       fpi_ssm_jump_to_state_delayed (ssm, BF63112_XFER_SEND,
                                      BF63112_RETRY_DELAY_MS);
       return;
+    default:
+      g_assert_not_reached ();
     }
 }
 
-/* Start one command; @done receives the request data via fpi_ssm_get_data(). */
 static void
 bf63112_request_start (FpDevice *dev, Bf63112Request *req,
                        Bf63112RequestDone done)
@@ -336,7 +341,8 @@ bf63112_request_start (FpDevice *dev, Bf63112Request *req,
   g_return_if_fail (self->active_ssm == NULL);
 
   ssm = fpi_ssm_new (dev, bf63112_xfer_ssm, BF63112_XFER_NSTATES);
-  fpi_ssm_set_data (ssm, req, (GDestroyNotify) bf63112_request_free);
+  req->ssm = ssm;
+  fpi_ssm_set_data (ssm, req, (GDestroyNotify) bf63112_request_unref);
   self->active_ssm = ssm;
   self->active_opcode = req->opcode;
   fpi_ssm_start (ssm, done);
@@ -344,9 +350,22 @@ bf63112_request_start (FpDevice *dev, Bf63112Request *req,
 
 /* -------------------------------------------------------------- responses */
 
-/* CMD_QUERY_SENSOR_INFO (0xC1) payload: a:u16, b:u16, w:u16, h:u16, flags:u8.
- * Recovered from the Windows driver's handler, which parses four u16 and one u8
- * and rejects anything shorter than 9 bytes (docs/hw/fingerprint.md). */
+static guint16
+le16 (const guint8 *p)
+{
+  return (guint16) (p[0] | (p[1] << 8));
+}
+
+static guint32
+le32 (const guint8 *p)
+{
+  return (guint32) p[0] | ((guint32) p[1] << 8) |
+         ((guint32) p[2] << 16) | ((guint32) p[3] << 24);
+}
+
+/* CMD_QUERY_SENSOR_INFO (0xC1): u16 @0, u16 @2, width:u16 @4, height:u16 @6,
+ * flags:u8 @8; the module rejects anything shorter than 9 bytes.  Width and
+ * height are confirmed by the image path multiplying +4 by +6. */
 static gboolean
 bf63112_parse_sensor_info (FpDeviceBf63112 *self, const guint8 *body,
                            size_t len, GError **error)
@@ -360,13 +379,14 @@ bf63112_parse_sensor_info (FpDeviceBf63112 *self, const guint8 *body,
                    "must be at least 9", len);
       return FALSE;
     }
-
-  self->width = (guint16) (body[4] | (body[5] << 8));
-  self->height = (guint16) (body[6] | (body[7] << 8));
+  self->field0 = le16 (body);
+  self->field2 = le16 (body + 2);
+  self->width = le16 (body + 4);
+  self->height = le16 (body + 6);
   self->sensor_flags = body[8];
   pixels = (guint32) self->width * self->height;
 
-  if (self->width < 8 || self->height < 8 || pixels > 65536)
+  if (self->width < 8 || self->height < 8 || pixels > BF63112_MAX_PIXELS)
     {
       g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
                    "BF63112: implausible geometry %ux%u (%u pixels); the "
@@ -374,97 +394,425 @@ bf63112_parse_sensor_info (FpDeviceBf63112 *self, const guint8 *body,
                    self->width, self->height, pixels);
       return FALSE;
     }
-
-  fp_info ("BF63112: sensor %ux%u, flags 0x%02x", self->width, self->height,
-           self->sensor_flags);
+  fp_info ("BF63112: sensor %ux%u, flags 0x%02x, fields 0x%04x/0x%04x",
+           self->width, self->height, self->sensor_flags, self->field0,
+           self->field2);
   return TRUE;
 }
 
-/* CMD_QUERY_FIRMWARE_VER (0xA0) payload: state, project hi/lo, 4 version
- * bytes; the Windows handler requires at least 7 bytes. */
+/* CMD_QUERY_FIRMWARE_VER (0xA0): state:u8, project hi:u8, project lo:u8,
+ * version:u32 LE @3; the Windows handler rejects anything shorter than 7. */
 static void
 bf63112_parse_firmware (FpDeviceBf63112 *self, const guint8 *body, size_t len)
 {
+  guint16 major, minor;
+
   if (len < 7)
     {
       fp_warn ("BF63112: firmware answer is %zu bytes, expected 7", len);
       return;
     }
-  self->fw_mode = body[0];
-  self->fw_project = body[1];
-  self->fw_variant = body[2];
-  memcpy (self->fw_version, body + 3, 4);
-  fp_info ("BF63112: firmware %u.%u.%u.%u, mode %u, project %u, variant %u",
-           self->fw_version[0], self->fw_version[1], self->fw_version[2],
-           self->fw_version[3], self->fw_mode, self->fw_project,
-           self->fw_variant);
+  self->fw_state = body[0];
+  self->fw_project_hi = body[1];
+  self->fw_project_lo = body[2];
+  self->fw_version = le32 (body + 3);
+  major = (guint16) (self->fw_version >> 16);
+  minor = (guint16) (self->fw_version & 0xFFFFu);
+  fp_info ("BF63112: firmware %u.%u (state %u, project %u/%u)",
+           major, minor, self->fw_state, self->fw_project_hi,
+           self->fw_project_lo);
+}
+
+/* --------------------------------------------------------- configuration */
+
+static gboolean
+env_int (const char *name, int min, int max, int *out)
+{
+  const char *value = g_getenv (name);
+  gchar *end = NULL;
+  gint64 parsed;
+
+  if (value == NULL || *value == '\0')
+    return FALSE;
+  parsed = g_ascii_strtoll (value, &end, 0);
+  if (end == value || (end != NULL && *end != '\0') ||
+      parsed < min || parsed > max)
+    {
+      fp_warn ("BF63112: ignoring invalid %s=%s", name, value);
+      return FALSE;
+    }
+  *out = (int) parsed;
+  return TRUE;
+}
+
+static gboolean
+env_bool (const char *name, gboolean *out)
+{
+  const char *value = g_getenv (name);
+
+  if (value == NULL || *value == '\0')
+    return FALSE;
+  if (g_ascii_strcasecmp (value, "1") == 0 ||
+      g_ascii_strcasecmp (value, "true") == 0 ||
+      g_ascii_strcasecmp (value, "yes") == 0)
+    {
+      *out = TRUE;
+      return TRUE;
+    }
+  if (g_ascii_strcasecmp (value, "0") == 0 ||
+      g_ascii_strcasecmp (value, "false") == 0 ||
+      g_ascii_strcasecmp (value, "no") == 0)
+    {
+      *out = FALSE;
+      return TRUE;
+    }
+  fp_warn ("BF63112: ignoring invalid boolean %s=%s", name, value);
+  return FALSE;
+}
+
+static int
+edge_from_string (const char *value)
+{
+  if (value == NULL || g_ascii_strcasecmp (value, "rising") == 0)
+    return BF63112_SPI_IRQ_RISING;
+  if (g_ascii_strcasecmp (value, "falling") == 0)
+    return BF63112_SPI_IRQ_FALLING;
+  if (g_ascii_strcasecmp (value, "both") == 0)
+    return BF63112_SPI_IRQ_BOTH;
+  fp_warn ("BF63112: unknown BF63112_IRQ_EDGE=%s, using rising", value);
+  return BF63112_SPI_IRQ_RISING;
+}
+
+static gboolean
+load_crs_file (FpDeviceBf63112 *self, struct bf63112_acpi_template *tmpl,
+               GError **error)
+{
+  const char *path = g_getenv ("BF63112_CRS");
+  g_autofree gchar *contents = NULL;
+  gsize length = 0;
+  enum bf63112_acpi_error parse_error = BF63112_ACPI_OK;
+  struct bf63112_acpi_spi_connection connection;
+
+  if (path == NULL || *path == '\0')
+    return FALSE;
+  if (!g_file_get_contents (path, &contents, &length, error))
+    return FALSE;
+  if (bf63112_acpi_parse ((const guint8 *) contents, length, tmpl,
+                          &parse_error) < 0)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                   "BF63112: cannot parse %s: %s", path,
+                   bf63112_acpi_strerror (parse_error));
+      return FALSE;
+    }
+  bf63112_acpi_spi_connection (tmpl, &connection);
+  self->crs_irq_active_low = connection.irq_active_low;
+  self->crs_irq_edge = connection.irq_edge;
+  if (connection.has_speed_hz && self->spi.speed_hz < 0)
+    {
+      self->spi.speed_hz = (int) connection.speed_hz;
+      fp_info ("BF63112: _CRS speed %u Hz", connection.speed_hz);
+    }
+  if (connection.has_mode && self->spi.mode < 0)
+    {
+      self->spi.mode = connection.mode;
+      fp_info ("BF63112: _CRS SPI mode %d", connection.mode);
+    }
+  if (connection.has_bits_per_word && self->spi.bits_per_word < 0)
+    {
+      self->spi.bits_per_word = connection.bits_per_word;
+      fp_info ("BF63112: _CRS %d bits per word",
+               connection.bits_per_word);
+    }
+  if (connection.has_irq_pin || connection.has_reset_pin)
+    fp_info ("BF63112: _CRS GPIO pin indices irq=%s%d reset=%s%d are "
+             "controller-relative; set BF63112_IRQ_GPIO/BF63112_RESET_GPIO "
+             "to the Linux line numbers",
+             connection.has_irq_pin ? "" : "?",
+             connection.has_irq_pin ? connection.irq_pin : -1,
+             connection.has_reset_pin ? "" : "?",
+             connection.has_reset_pin ? connection.reset_pin : -1);
+  return TRUE;
+}
+
+static int
+configure_spi_from_env_and_crs (FpDeviceBf63112 *self, GError **error)
+{
+  struct bf63112_acpi_template tmpl;
+  int value;
+
+  if (env_int ("BF63112_SPI_SPEED", 1, INT_MAX, &value))
+    self->spi.speed_hz = value;
+  if (env_int ("BF63112_SPI_MODE", 0, 3, &value))
+    self->spi.mode = value;
+  if (env_int ("BF63112_SPI_BITS", 4, 32, &value))
+    self->spi.bits_per_word = value;
+  if (!load_crs_file (self, &tmpl, error))
+    return *error != NULL ? -EINVAL : 0;
+  return 0;
+}
+
+/* ------------------------------------------------------------ IRQ/reset */
+
+static gboolean
+setup_irq (FpDeviceBf63112 *self, GError **error)
+{
+  const char *backend = g_getenv ("BF63112_IRQ_BACKEND");
+  const char *chip = g_getenv ("BF63112_GPIO_CHIP");
+  const char *sysfs = g_getenv ("BF63112_GPIO_SYSFS");
+  gboolean active_low = FALSE;
+  int line, edge, rc;
+
+  if (!env_int ("BF63112_IRQ_GPIO", 0, INT_MAX, &line))
+    return TRUE;      /* no IRQ line configured: polling retry loop only */
+  if (chip == NULL || *chip == '\0')
+    chip = "/dev/gpiochip0";
+  if (sysfs == NULL || *sysfs == '\0')
+    sysfs = "/sys/class/gpio";
+
+  if (!env_bool ("BF63112_IRQ_ACTIVE_LOW", &active_low) &&
+      self->crs_irq_active_low >= 0)
+    active_low = self->crs_irq_active_low == 1;
+  if (g_getenv ("BF63112_IRQ_EDGE") != NULL)
+    edge = edge_from_string (g_getenv ("BF63112_IRQ_EDGE"));
+  else
+    edge = self->crs_irq_edge >= 0 ? self->crs_irq_edge
+                                   : BF63112_SPI_IRQ_RISING;
+
+  if (backend == NULL || *backend == '\0')
+    backend = "auto";
+
+#if defined(BF63112_HAVE_GPIOD_V2) || defined(BF63112_HAVE_GPIOD_V1)
+  if (g_ascii_strcasecmp (backend, "gpiod") == 0 ||
+      g_ascii_strcasecmp (backend, "auto") == 0)
+    {
+      struct bf63112_gpiod_irq *state = NULL;
+
+      rc = bf63112_spi_irq_gpiod_init (&self->irq, &state, line, edge,
+                                       active_low, chip);
+      if (rc == 0)
+        rc = self->irq.open (&self->irq);
+      if (rc == 0)
+        {
+          bf63112_spi_set_irq (&self->spi, &self->irq);
+          self->have_irq = TRUE;
+          fp_info ("BF63112: IRQ on %s line %d (gpiod, edge %s%s)",
+                   chip, line, edge == BF63112_SPI_IRQ_BOTH ? "both" :
+                   edge == BF63112_SPI_IRQ_FALLING ? "falling" : "rising",
+                   active_low ? ", active-low" : "");
+          return TRUE;
+        }
+      if (g_ascii_strcasecmp (backend, "gpiod") == 0)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                       "BF63112: cannot request GPIO %d via %s", line, chip);
+          return FALSE;
+        }
+      fp_warn ("BF63112: gpiod IRQ unavailable (%s), trying sysfs",
+               bf63112_spi_strerror (rc));
+    }
+#else
+  if (g_ascii_strcasecmp (backend, "gpiod") == 0)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+                   "BF63112: BF63112_IRQ_BACKEND=gpiod but this build has no "
+                   "libgpiod support");
+      return FALSE;
+    }
+#endif
+
+  if (g_ascii_strcasecmp (backend, "sysfs") == 0 ||
+      g_ascii_strcasecmp (backend, "auto") == 0)
+    {
+      rc = bf63112_spi_irq_sysfs_init (&self->irq, &self->sysfs_irq, line,
+                                       edge, active_low, sysfs);
+      if (rc == 0)
+        rc = self->irq.open (&self->irq);
+      if (rc == 0)
+        {
+          bf63112_spi_set_irq (&self->spi, &self->irq);
+          self->have_irq = TRUE;
+          fp_info ("BF63112: IRQ on sysfs GPIO %d (edge %s%s)", line,
+                   edge == BF63112_SPI_IRQ_BOTH ? "both" :
+                   edge == BF63112_SPI_IRQ_FALLING ? "falling" : "rising",
+                   active_low ? ", active-low" : "");
+          return TRUE;
+        }
+      if (g_ascii_strcasecmp (backend, "sysfs") == 0)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                       "BF63112: cannot open sysfs GPIO %d (export failed): "
+                       "%s", line, bf63112_spi_strerror (rc));
+          return FALSE;
+        }
+      fp_warn ("BF63112: sysfs IRQ unavailable (%s), falling back to a timed "
+               "poll; the interrupt line cannot be observed",
+               bf63112_spi_strerror (rc));
+    }
+
+  if (g_ascii_strcasecmp (backend, "poll") == 0 ||
+      g_ascii_strcasecmp (backend, "auto") == 0)
+    {
+      rc = bf63112_spi_irq_poll_init (&self->irq, &self->poll_irq, NULL, NULL);
+      if (rc != 0)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "BF63112: cannot set up the IRQ fallback");
+          return FALSE;
+        }
+      bf63112_spi_set_irq (&self->spi, &self->irq);
+      self->have_irq = TRUE;
+      fp_warn ("BF63112: using a timed poll for GPIO %d; a timeout does not "
+               "prove the device is idle", line);
+      return TRUE;
+    }
+  g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+               "BF63112: unknown BF63112_IRQ_BACKEND=%s", backend);
+  return FALSE;
+}
+
+static gboolean
+setup_reset (FpDeviceBf63112 *self, GError **error)
+{
+  const char *backend = g_getenv ("BF63112_IRQ_BACKEND");
+  const char *chip = g_getenv ("BF63112_GPIO_CHIP");
+  const char *sysfs = g_getenv ("BF63112_GPIO_SYSFS");
+  gboolean active_high = FALSE;
+  gboolean allow = FALSE;
+  int line, rc;
+
+  if (!env_int ("BF63112_RESET_GPIO", 0, INT_MAX, &line))
+    return TRUE;
+  if (!env_bool ("BF63112_ALLOW_RESET", &allow) || !allow)
+    {
+      fp_warn ("BF63112: BF63112_RESET_GPIO is set but BF63112_ALLOW_RESET "
+               "is not; not driving the reset line (the module must come up "
+               "out of reset)");
+      return TRUE;
+    }
+  if (chip == NULL || *chip == '\0')
+    chip = "/dev/gpiochip0";
+  if (sysfs == NULL || *sysfs == '\0')
+    sysfs = "/sys/class/gpio";
+  (void) env_bool ("BF63112_RESET_ACTIVE_HIGH", &active_high);
+  if (backend == NULL || *backend == '\0')
+    backend = "auto";
+
+#if defined(BF63112_HAVE_GPIOD_V2) || defined(BF63112_HAVE_GPIOD_V1)
+  if (g_ascii_strcasecmp (backend, "gpiod") == 0 ||
+      g_ascii_strcasecmp (backend, "auto") == 0)
+    {
+      struct bf63112_gpiod_reset *state = NULL;
+
+      rc = bf63112_spi_reset_gpiod_init (&self->reset, &state, line,
+                                         !active_high, chip);
+      if (rc == 0)
+        {
+          bf63112_spi_set_reset (&self->spi, &self->reset, TRUE);
+          self->have_reset = TRUE;
+          fp_info ("BF63112: reset on %s line %d (gpiod, %s)", chip, line,
+                   active_high ? "active-high" : "active-low");
+          return TRUE;
+        }
+      if (g_ascii_strcasecmp (backend, "gpiod") == 0)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                       "BF63112: cannot configure reset GPIO %d via %s",
+                       line, chip);
+          return FALSE;
+        }
+    }
+#endif
+  rc = bf63112_spi_reset_sysfs_init (&self->reset, &self->sysfs_reset, line,
+                                     !active_high, sysfs);
+  if (rc == 0)
+    {
+      bf63112_spi_set_reset (&self->spi, &self->reset, TRUE);
+      self->have_reset = TRUE;
+      fp_info ("BF63112: reset on sysfs GPIO %d (%s)", line,
+               active_high ? "active-high" : "active-low");
+      return TRUE;
+    }
+  g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+               "BF63112: cannot configure reset GPIO %d: %s", line,
+               bf63112_spi_strerror (rc));
+  return FALSE;
+}
+
+static gboolean
+resolve_spidev (FpDevice *dev, char *buf, size_t buf_size, GError **error)
+{
+  const char *override = g_getenv ("BF63112_SPIDEV");
+  const char *udev_path;
+  int rc;
+
+  if (override != NULL && *override != '\0')
+    {
+      if (g_strlcpy (buf, override, buf_size) >= buf_size)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                       "BF63112: BF63112_SPIDEV is too long");
+          return FALSE;
+        }
+      return TRUE;
+    }
+  udev_path = fpi_device_get_udev_data (dev, FPI_DEVICE_UDEV_SUBTYPE_SPIDEV);
+  if (udev_path != NULL && *udev_path != '\0')
+    {
+      if (g_strlcpy (buf, udev_path, buf_size) >= buf_size)
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                       "BF63112: udev spidev path is too long");
+          return FALSE;
+        }
+      return TRUE;
+    }
+  rc = bf63112_discover_spidev ("/sys", "/dev", NULL, buf, buf_size);
+  if (rc == 0)
+    {
+      fp_info ("BF63112: discovered spidev node %s (modalias acpi:BF63112)",
+               buf);
+      return TRUE;
+    }
+  if (rc == -ENOTUNIQ)
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                 "BF63112: more than one spidev device matches acpi:BF63112; "
+                 "set BF63112_SPIDEV to the intended /dev/spidevX.Y");
+  else if (rc == -ENAMETOOLONG)
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                 "BF63112: discovered spidev path is too long");
+  else
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                 "BF63112: no spidev node for acpi:BF63112 (bind the spidev "
+                 "driver to the SPI device, or set BF63112_SPIDEV)");
+  return FALSE;
 }
 
 /* --------------------------------------------------------------- FpDevice */
 
-#ifdef BF63112_ENABLE_SESSION
 static void
-bf63112_open_session_done (FpiSsm *ssm, FpDevice *dev, GError *error)
+bf63112_open_info_done (FpiSsm *ssm, FpDevice *dev, GError *error)
 {
   FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
   Bf63112Request *req = fpi_ssm_get_data (ssm);
-  int rc;
+  g_autoptr(GError) local_error = NULL;
 
   self->active_ssm = NULL;
   if (error != NULL)
     {
-      /* A failed handshake must not keep the device closed: queries and
-       * firmware/sensor info still work in plaintext, and the decisive
-       * question (does 0xB0 need the session?) is answered on hardware. */
-      fp_warn ("BF63112: session handshake transport failed: %s",
-               error->message);
-      g_error_free (error);
-      fpi_device_open_complete (dev, NULL);
+      bf63112_spi_close (&self->spi);
+      fpi_device_open_complete (dev, error);
       return;
     }
-
-  rc = bf63112_session_complete (&self->session, &self->session_keypair,
-                                 req->answer, req->answer_len);
-  if (rc != 0)
-    fp_warn ("BF63112: session handshake failed: %s",
-             bf63112_session_strerror (rc));
-  else
+  if (!bf63112_parse_sensor_info (self, req->answer, req->answer_len,
+                                  &local_error))
     {
-      self->session_ready = TRUE;
-      fp_info ("BF63112: session established (SM2-ECDH + GM/T 0003 KDF + SM3 tag)");
+      bf63112_spi_close (&self->spi);
+      fpi_device_open_complete (dev, g_steal_pointer (&local_error));
+      return;
     }
   fpi_device_open_complete (dev, NULL);
 }
-
-/* CMD_QUERY_ROOT_KEY: 65-byte payload 0x04 || host public key (X||Y). */
-static void
-bf63112_open_session_start (FpDevice *dev)
-{
-  FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
-  guint8 payload[BF63112_SESSION_REQUEST_LEN];
-  int rc;
-
-  rc = bf63112_keypair_generate (&self->session_keypair);
-  if (rc == 0)
-    rc = bf63112_rootkey_request (&self->session_keypair, payload);
-  if (rc != 0)
-    {
-      fp_warn ("BF63112: cannot start session: %s",
-               bf63112_session_strerror (rc));
-      bf63112_session_wipe (payload, sizeof payload);
-      fpi_device_open_complete (dev, NULL);
-      return;
-    }
-
-  bf63112_request_start (dev,
-                         bf63112_request_new (self,
-                                              BF63112_OP_QUERY_ROOT_KEY,
-                                              BF63112_PHASE_START, 0, payload,
-                                              sizeof payload),
-                         bf63112_open_session_done);
-  bf63112_session_wipe (payload, sizeof payload);
-}
-#endif /* BF63112_ENABLE_SESSION */
 
 static void
 bf63112_open_fw_done (FpiSsm *ssm, FpDevice *dev, GError *error)
@@ -483,78 +831,69 @@ bf63112_open_fw_done (FpiSsm *ssm, FpDevice *dev, GError *error)
     {
       bf63112_parse_firmware (self, req->answer, req->answer_len);
     }
-
-#ifdef BF63112_ENABLE_SESSION
-  /* The vendor driver always runs 0xA2 right after the firmware query.  The
-   * completion of open() moves into the handshake callback so a refusal is
-   * reported but does not block the plaintext path. */
-  bf63112_open_session_start (dev);
-  return;
-#endif
-  fpi_device_open_complete (dev, NULL);
-}
-
-static void
-bf63112_open_info_done (FpiSsm *ssm, FpDevice *dev, GError *error)
-{
-  FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
-  Bf63112Request *req = fpi_ssm_get_data (ssm);
-  g_autoptr(GError) local_error = NULL;
-
-  self->active_ssm = NULL;
-  if (error != NULL)
-    {
-      fpi_device_open_complete (dev, error);
-      return;
-    }
-  if (!bf63112_parse_sensor_info (self, req->answer, req->answer_len,
-                                  &local_error))
-    {
-      fpi_device_open_complete (dev, g_steal_pointer (&local_error));
-      return;
-    }
-
-  bf63112_request_start (dev,
-                         bf63112_request_new (self,
-                                              BF63112_OP_QUERY_FIRMWARE_VER,
-                                              BF63112_PHASE_START, 0, NULL, 0),
-                         bf63112_open_fw_done);
+  /* The vendor driver queries the firmware first; sensor info is the
+   * mandatory one, so ask for it last. */
+  bf63112_request_start (dev, bf63112_request_new (self, 0xC1, 9),
+                         bf63112_open_info_done);
 }
 
 static void
 bf63112_open (FpDevice *dev)
 {
   FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
-  const gchar *spidev_path;
-  int fd;
+  g_autoptr(GError) error = NULL;
+  char spidev_path[256];
+  int rc;
 
-  spidev_path = fpi_device_get_udev_data (dev, FPI_DEVICE_UDEV_SUBTYPE_SPIDEV);
-  if (spidev_path == NULL)
+  if (!resolve_spidev (dev, spidev_path, sizeof spidev_path, &error))
+    {
+      fpi_device_open_complete (dev, g_steal_pointer (&error));
+      return;
+    }
+  rc = bf63112_spi_linux_init (&self->spi, &self->linux_spi, spidev_path);
+  if (rc != 0)
     {
       fpi_device_open_complete (
         dev, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                       "BF63112: no spidev node; the udev rule "
-                                       "must bind spidev to ACPI BF63112"));
+                                       "BF63112: cannot configure transport "
+                                       "for %s: %s", spidev_path,
+                                       bf63112_spi_strerror (rc)));
       return;
     }
-
-  fd = open (spidev_path, O_RDWR | O_CLOEXEC);
-  if (fd < 0)
+  self->spi.speed_hz = -1;
+  self->spi.mode = -1;
+  self->spi.bits_per_word = -1;
+  if (configure_spi_from_env_and_crs (self, &error) != 0)
     {
-      fpi_device_open_complete (dev,
-                                g_error_new (G_IO_ERROR,
-                                             g_io_error_from_errno (errno),
-                                             "BF63112: cannot open %s: %s",
-                                             spidev_path, g_strerror (errno)));
+      fpi_device_open_complete (
+        dev, error != NULL ? g_steal_pointer (&error)
+                           : fpi_device_error_new_msg (
+                               FP_DEVICE_ERROR_GENERAL,
+                               "BF63112: bad _CRS configuration"));
       return;
     }
-  self->spi_fd = fd;
+  if (!setup_irq (self, &error) || !setup_reset (self, &error))
+    {
+      bf63112_spi_close (&self->spi);
+      fpi_device_open_complete (dev, g_steal_pointer (&error));
+      return;
+    }
+  rc = bf63112_spi_open (&self->spi);
+  if (rc != 0)
+    {
+      fpi_device_open_complete (
+        dev, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
+                                       "BF63112: cannot open %s: %s",
+                                       spidev_path,
+                                       bf63112_spi_strerror (rc)));
+      return;
+    }
+  fp_info ("BF63112: SPI transport open on %s (speed %d, mode %d, bits %d)",
+           spidev_path, self->spi.speed_hz, self->spi.mode,
+           self->spi.bits_per_word);
 
-  bf63112_request_start (dev,
-                         bf63112_request_new (self,
-                                              BF63112_OP_QUERY_SENSOR_INFO,
-                                              BF63112_PHASE_START, 0, NULL, 0),
-                         bf63112_open_info_done);
+  bf63112_request_start (dev, bf63112_request_new (self, 0xA0, 7),
+                         bf63112_open_fw_done);
 }
 
 static void
@@ -562,76 +901,23 @@ bf63112_close (FpDevice *dev)
 {
   FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
 
-  if (self->spi_fd >= 0)
+  if (self->active_ssm != NULL)
     {
-      close (self->spi_fd);
-      self->spi_fd = -1;
+      Bf63112Request *req = fpi_ssm_get_data (self->active_ssm);
+
+      /* The worker may still be inside the (non-interruptible) spidev ioctl;
+       * detach its completion so it cannot touch a freed SSM.  Closing the fd
+       * under it only makes that ioctl return EBADF, which is then dropped. */
+      if (req != NULL)
+        req->ssm = NULL;
+      fpi_ssm_mark_failed (
+        self->active_ssm,
+        fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
+                                  "BF63112: device closed"));
+      self->active_ssm = NULL;
     }
+  bf63112_spi_close (&self->spi);
   fpi_device_close_complete (dev, NULL);
-}
-
-/*
- * Enrol / verify / identify are match-in-sensor commands: the module stores,
- * compares and protects the templates, the host only exchanges opaque handles.
- * The recovered Windows sequences are:
- *
- *   0xB1 phase 0 (start)          -> device waits for a finger
- *   0xB1 phase 1 (each press)     -> 1-byte press counter in the payload
- *   0xB1 phase 2 (fini)           -> device returns a template handle
- *   0xB1 phase 3 (cancel)
- *   0xB2 (identify)               -> module matches, returns handle + score
- *   0xB3 (remove), 0xB4 (count), 0xB6 (press detect)
- *
- * The per-phase payloads, the handle encoding, the score field and whether the
- * module requires the SM3/root-key session first are all undecoded.  Rather
- * than guess at biometric state - and risk destroying templates enrolled from
- * Windows - the actions refuse cleanly.  A store-only print is created with
- * fpi_print_set_type (print, FPI_PRINT_RAW) and
- * fpi_print_set_device_stored (print, TRUE) once the handle can be parsed.
- */
-static void
-bf63112_enroll (FpDevice *dev)
-{
-  fpi_device_enroll_complete (
-    dev, NULL,
-    fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
-                              "BF63112: enrol needs the undecoded 0xB1 "
-                              "payload/handle format (see docs)"));
-}
-
-static void
-bf63112_verify (FpDevice *dev)
-{
-  fpi_device_verify_complete (
-    dev, fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
-                                   "BF63112: verify needs the undecoded 0xB2 "
-                                   "handle/score format (see docs)"));
-}
-
-static void
-bf63112_identify (FpDevice *dev)
-{
-  fpi_device_identify_complete (
-    dev, fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
-                                   "BF63112: identify needs the undecoded 0xB2 "
-                                   "handle/score format (see docs)"));
-}
-
-static void
-bf63112_suspend_done (FpiSsm *ssm, FpDevice *dev, GError *error)
-{
-  FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
-
-  (void) ssm;
-  self->active_ssm = NULL;
-  if (error != NULL)
-    {
-      /* A failed SLEEP is not fatal: the bus is idle anyway. */
-      fp_warn ("BF63112: SLEEP failed: %s", error->message);
-      g_error_free (error);
-      error = NULL;
-    }
-  fpi_device_suspend_complete (dev, error);
 }
 
 static void
@@ -639,14 +925,15 @@ bf63112_suspend (FpDevice *dev)
 {
   FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
 
-  bf63112_request_start (dev,
-                         bf63112_request_new (self, BF63112_OP_SLEEP,
-                                              BF63112_PHASE_START, 0, NULL, 0),
-                         bf63112_suspend_done);
+  /* The SLEEP opcode is not on the read allowlist and its SPI form is not
+   * proven; closing the spidev node is the safe equivalent. */
+  bf63112_spi_close (&self->spi);
+  fp_dbg ("BF63112: suspended (spidev closed)");
+  fpi_device_suspend_complete (dev, NULL);
 }
 
 static void
-bf63112_resume_done (FpiSsm *ssm, FpDevice *dev, GError *error)
+bf63112_resume_info_done (FpiSsm *ssm, FpDevice *dev, GError *error)
 {
   FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
   Bf63112Request *req = fpi_ssm_get_data (ssm);
@@ -655,12 +942,14 @@ bf63112_resume_done (FpiSsm *ssm, FpDevice *dev, GError *error)
   self->active_ssm = NULL;
   if (error != NULL)
     {
+      bf63112_spi_close (&self->spi);
       fpi_device_resume_complete (dev, error);
       return;
     }
   if (!bf63112_parse_sensor_info (self, req->answer, req->answer_len,
                                   &local_error))
     {
+      bf63112_spi_close (&self->spi);
       fpi_device_resume_complete (dev, g_steal_pointer (&local_error));
       return;
     }
@@ -671,12 +960,55 @@ static void
 bf63112_resume (FpDevice *dev)
 {
   FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
+  int rc;
 
-  bf63112_request_start (dev,
-                         bf63112_request_new (self,
-                                              BF63112_OP_QUERY_SENSOR_INFO,
-                                              BF63112_PHASE_START, 0, NULL, 0),
-                         bf63112_resume_done);
+  rc = bf63112_spi_open (&self->spi);
+  if (rc != 0)
+    {
+      fpi_device_resume_complete (
+        dev, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
+                                       "BF63112: cannot reopen SPI: %s",
+                                       bf63112_spi_strerror (rc)));
+      return;
+    }
+  bf63112_request_start (dev, bf63112_request_new (self, 0xC1, 9),
+                         bf63112_resume_info_done);
+}
+
+/*
+ * Enrol / verify / identify are match-in-sensor commands.  The recovered
+ * Windows sequences are 0xB1 phases 0..3 (enrol), 0xB2 (identify/remove) and
+ * 0xB3 (remove/count), but the per-phase payloads, handle encoding, score
+ * field and the SM2/SM3/SM4 session are undecoded.  Rather than guess at
+ * biometric state - and risk destroying templates enrolled from Windows - the
+ * actions refuse cleanly.
+ */
+static void
+bf63112_enroll (FpDevice *dev)
+{
+  fpi_device_enroll_complete (
+    dev, NULL,
+    fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
+                              "BF63112: enrol needs the undecoded 0xB0/0xB1 "
+                              "payload and handle format (see docs)"));
+}
+
+static void
+bf63112_verify (FpDevice *dev)
+{
+  fpi_device_verify_complete (
+    dev, fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
+                                   "BF63112: verify needs the undecoded 0xB1 "
+                                   "handle/score format (see docs)"));
+}
+
+static void
+bf63112_identify (FpDevice *dev)
+{
+  fpi_device_identify_complete (
+    dev, fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
+                                   "BF63112: identify needs the undecoded "
+                                   "0xB1 handle/score format (see docs)"));
 }
 
 /* --------------------------------------------------------------- GObject */
@@ -716,6 +1048,21 @@ fp_device_bf63112_class_init (FpDeviceBf63112Class *klass)
 static void
 fp_device_bf63112_init (FpDeviceBf63112 *self)
 {
-  self->spi_fd = -1;
+  memset (&self->spi, 0, sizeof self->spi);
+  memset (&self->linux_spi, 0, sizeof self->linux_spi);
+  memset (&self->irq, 0, sizeof self->irq);
+  memset (&self->sysfs_irq, 0, sizeof self->sysfs_irq);
+  memset (&self->poll_irq, 0, sizeof self->poll_irq);
+  memset (&self->reset, 0, sizeof self->reset);
+  memset (&self->sysfs_reset, 0, sizeof self->sysfs_reset);
+  bf63112_spi_init (&self->spi, NULL, NULL);
+  bf63112_spi_policy_init (&self->policy);
+  /* The driver is the trusted caller: it opts in to I/O, but only the
+   * read-only opcodes above are allowlisted and no write is ever allowed. */
+  self->policy.allow_io = TRUE;
+  self->crs_irq_active_low = -1;
+  self->crs_irq_edge = -1;
   self->active_ssm = NULL;
+  self->have_irq = FALSE;
+  self->have_reset = FALSE;
 }

@@ -261,6 +261,54 @@ suite_fp_libfprint() {
     PODMAN_IMAGE=$img tools/fingerprint/tests/check-libfprint.sh
 }
 
+# The BF63112 root runbook, offline half: the script's own selftest plus the
+# scenario driver, which builds fake /sys trees with --fixture-init and runs the
+# real script against them (no root, no /sys, no spidev, no sensor).
+suite_fp_session() {
+    local s=$REPO/tools/fingerprint/oxp3-fp-session.sh
+    [ -x "$s" ] || skip "tools/fingerprint/oxp3-fp-session.sh is missing"
+    [ -x "$REPO/tests/fingerprint-session/run.sh" ] \
+        || skip "tests/fingerprint-session/run.sh is missing"
+    need python3
+    need mkfifo
+    cd "$REPO" || exit 1
+    "$s" --selftest
+    "$REPO/tests/fingerprint-session/run.sh"
+}
+
+# The BF63112 root runbook, live half: the same script's read-only plan
+# against the real /sys. It binds nothing (plan mode), reads the DSDT and
+# reports; a host without the sensor is a SKIP, not a failure.
+suite_fp_session_root() {
+    local s=$REPO/tools/fingerprint/oxp3-fp-session.sh
+    [ -x "$s" ] || skip "tools/fingerprint/oxp3-fp-session.sh is missing"
+    [ "$(id -u)" -eq 0 ] \
+        || skip "needs root (reads /sys/firmware/acpi/tables/DSDT, 0400 root); the offline half is suite fp-session"
+    [ -r /sys/firmware/acpi/tables/DSDT ] || skip "no readable ACPI DSDT on this host"
+    cd "$REPO" || exit 1
+    local out=$LOGDIR/fp-session-plan.txt rc=0
+    "$s" --dry-run >"$out" 2>&1 || rc=$?
+    cat "$out"
+    if [ "$rc" -ne 0 ]; then
+        grep -q 'ACPI device .* is not present' "$out" \
+            && skip "no BF63112 ACPI device on this host"
+        grep -q 'cannot read the DSDT' "$out" && skip "the DSDT is not readable here"
+        grep -q 'no usable FPRT _CRS' "$out" \
+            && skip "the FPRT _CRS could not be located in this DSDT (see the plan output)"
+        printf 'FAIL --dry-run exited %d\n' "$rc"
+        exit 1
+    fi
+    grep -q 'Plan (every mutation is listed' "$out" \
+        || { printf 'FAIL the plan section is missing\n'; exit 1; }
+    grep -q 'driver_override' "$out" \
+        || { printf 'FAIL the plan does not name driver_override\n'; exit 1; }
+    grep -q 'Copy/paste sequence' "$out" \
+        || { printf 'FAIL the copy/paste sequence is missing\n'; exit 1; }
+    [ ! -e "$REPO/docs/state/fp-session-$(date -u +%Y%m%d)*" ] \
+        || { printf 'FAIL the plan run wrote a transcript\n'; exit 1; }
+    printf 'plan ok: read-only, no mutation, no transcript\n'
+}
+
 suite_decky_build() {
     local dir=$REPO/tools/decky-oxp3-status
     [ -f "$dir/build.sh" ] || skip "plugin build.sh is missing"
@@ -739,7 +787,7 @@ def_suite python-compile fast fast 120 0 \
     "py_compile every tracked .py plus the extensionless oxp3-voltap" \
     "PYTHONPYCACHEPREFIX=<logs>/pycache python3 -m py_compile <files>"
 def_suite fp-python fast fast 120 0 \
-    "fingerprint protocol + SPI/ACPI + session crypto Python unittest suite (264 tests)" \
+    "fingerprint protocol + SPI/ACPI + AML/_CRS + session crypto Python unittest suite (289 tests)" \
     "python3 -m unittest discover -s tools/fingerprint/tests -q"
 def_suite fp-crypto fast fast 120 0 \
     "session crypto (SM2/SM3/SM4/KDF) against published vectors + benchmark" \
@@ -756,6 +804,12 @@ def_suite fp-syntax full fast 180 0 \
 def_suite fp-libfprint full slow-network 900 1 \
     "compile-check the driver against a real libfprint v1.94.9 tree" \
     "tools/fingerprint/tests/check-libfprint.sh"
+def_suite fp-session fast fast 300 0 \
+    "BF63112 root runbook offline: script selftest + fake-/sys scenarios (bind, rollback, SIGINT, resume)" \
+    "tools/fingerprint/oxp3-fp-session.sh --selftest && tests/fingerprint-session/run.sh"
+def_suite fp-session-root fast fast 120 0 \
+    "BF63112 root runbook live plan: --dry-run against the real /sys (SKIP without root or the device)" \
+    "tools/fingerprint/oxp3-fp-session.sh --dry-run"
 def_suite decky-build full fast 600 0 \
     "Decky plugin: typecheck, rollup, smoke test, backend selftest" \
     "cd tools/decky-oxp3-status && ./build.sh --offline (or --no-install)"

@@ -7,7 +7,7 @@ library (`tools/fingerprint/fpbf63112/`), the recovered SPI/SPB transport
 (`fpbf63112/spi.py`), a `_CRS` parser (`fpbf63112/acpi.py`) and a probe with
 `--transport spi --spidev --allow-writes --dry-run` and `acpi_info`, plus a
 driver that compiles against libfprint 1.94's internal driver API. The Python
-suite is now 264 tests and all SPI/ACPI behaviour is exercised offline, but
+suite is now 289 tests and all SPI/ACPI behaviour is exercised offline, but
 **nothing has run against the sensor** (see
 `tools/fingerprint/README.md`). The remaining unknowns are listed in
 [Open points](#open-points); two of them need root on this unit.
@@ -258,8 +258,9 @@ recovered down to the byte: no fixed key, no DPAPI blob, and no ambiguity left
 in the KDF or the tag. The Python implementation
 (`tools/fingerprint/fpbf63112/crypto.py`) reproduces it step by step and is
 vector-tested; the driver-side C equivalent is
-`tools/fingerprint/bf63112_session_openssl.c`, opt-in behind
-`BF63112_ENABLE_SESSION`.
+`tools/fingerprint/bf63112_session_openssl.c`.  It is a standalone compile
+check: the SPI driver does not wire it, because the handshake starts with a
+0xA2 write and no write opcode is on the SPI allowlist.
 
 1. At open the driver runs `0xA0` (fw version) -> `0xA1` (scheme) ->
    **key generation** -> `0xA2` (root key) -> `0xC0` (UID) -> `0xC1` (sensor
@@ -402,12 +403,14 @@ driver cannot start.
 | `tools/fingerprint/oxp3-fp-probe.py` | bring-up probe. Default `--transport spi` sends the recovered selector + two-entry SPB transaction (`--spidev` and `--allow-writes` required for I/O); `--dry-run` prints exact plans with no I/O; `acpi_info --crs FILE` parses an extracted `_CRS` offline. `--transport frame` keeps the old `0xAA`/CRC experiment. Refuses destructive opcodes by opcode *and* selector. Stdlib only. |
 | `tools/fingerprint/fpbf63112/spi.py` | recovered SPI/SPB transport: selector computation, two `spi_ioc_transfer` entries per command, recovered 1000/2030 (5000/10010 image, 2000/4016 restore) timeouts, IRQ waiters (gpiod v1/v2, sysfs, poll), reset pulse, cancel settle, and the allowlist/destructive gates |
 | `tools/fingerprint/fpbf63112/acpi.py` | raw `_CRS` resource-template parser for `SpiSerialBus`, `GpioInt`, `GpioIo`, I2C and IRQ items; validates lengths/offsets and reduces them to `SpiConnection` (speed, mode, bits, CS, IRQ, reset) |
+| `tools/fingerprint/fpbf63112/aml.py` | finds and validates the FPRT `_CRS` resource template in the raw DSDT AML, so the runbook does not depend on `iasl` or on copying bytes out of ASL by hand |
+| `tools/fingerprint/oxp3-fp-session.sh` | the guided, reversible root runbook: preconditions, `_CRS` extraction + parse, one confirmation per mutation, guarded read-only probe, rollback on exit/error/Ctrl-C with verification, transcript + `summary.json`; `--dry-run`, `--non-interactive`, `--resume`; docs in [`fingerprint-session.md`](fingerprint-session.md) |
 | `tools/fingerprint/fpbf63112/` | protocol library (stdlib only): frame build/parse, CRC-32, offset arithmetic, command table, GET_IMG reassembly, retry state machine, `Session`/`open_session` |
 | `tools/fingerprint/fpbf63112/crypto.py` | session crypto (stdlib only): SM3, SM4 (ECB/CBC), SM2 over sm2p256v1, GM/T 0003 KDF, the 0xA2 handshake, the secure-frame transform, a bounded variant search, vector self-test and benchmark |
-| `tools/fingerprint/bf63112_session_openssl.c/.h` | the same handshake for the C driver via OpenSSL (EVP SM3/SM4 + `EC_POINT_mul` for the shared point), opt-in behind `BF63112_ENABLE_SESSION` |
-| `tools/fingerprint/tests/` | 264 unittest tests incl. fuzz/property round-trips, synthetic device transcripts, the SM2/SM3/SM4 vectors and a synthetic end-to-end handshake, `test_driver_derived.py` (layouts recovered from the driver), `test_spi.py` (spidev ABI, selectors, timeouts, IRQ/reset, gates, probe dry-run/refusals) and `test_acpi.py` (constructed `_CRS` buffers and malformed cases); shared frame vectors for the C implementation |
+| `tools/fingerprint/bf63112_session_openssl.c/.h` | the same handshake in C via OpenSSL (EVP SM3/SM4 + `EC_POINT_mul` for the shared point); standalone compile check, not wired into the SPI driver (0xA2 is a write and is not allowlisted) |
+| `tools/fingerprint/tests/` | 289 unittest tests incl. fuzz/property round-trips, synthetic device transcripts, the SM2/SM3/SM4 vectors and a synthetic end-to-end handshake, `test_driver_derived.py` (layouts recovered from the driver), `test_spi.py` (spidev ABI, selectors, timeouts, IRQ/reset, gates, probe dry-run/refusals) and `test_acpi.py` (constructed `_CRS` buffers and malformed cases); shared frame vectors for the C implementation |
 | `tools/fingerprint/bf63112_proto.h/.c` | dependency-free C11 protocol core shared with the driver |
-| `tools/fingerprint/libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; enrol/verify/identify refuse with `NOT_SUPPORTED` until the payloads are decoded. Syntax-checked (`-Wall -Wextra -Werror`) against libfprint v1.94.9 headers; see `tools/fingerprint/README.md` |
+| `tools/fingerprint/libfprint-bf63112.c` | libfprint driver: selector/two-entry SPI transport, open/close/suspend/resume, 0xC1 sensor info and 0xA0 firmware query, optional reset/IRQ from the environment; enrol/verify/identify refuse with `NOT_SUPPORTED` until the payloads are decoded. Syntax-checked (`-Wall -Wextra -Werror`) against libfprint v1.94.9 headers; see `tools/fingerprint/README.md` |
 | `tools/fingerprint/README.md` | proven vs inferred vs unknown, test commands, privileged probe steps, upstreaming path |
 | `docs/hw/fingerprint-transport.md` | USB-vs-SPI transport RE: how the driver chooses, both stacks, per-SKU verdict, what each path needs |
 | `tools/fingerprint/usb_probe.py` | read-only 347D enumerator (pyusb if present, else sysfs); reports interfaces/endpoints/driver claim, sends no vendor command |
@@ -419,6 +422,13 @@ sensor: it needs root to bind `spidev`, which this session did not have. Treat
 its first run as a bring-up experiment.
 
 ## Bringing it up by hand (privileged steps, exact commands)
+
+> **Prefer the runbook.** `sudo tools/fingerprint/oxp3-fp-session.sh` performs
+> steps 1-5 below, asks before each mutation, records what was bound before it
+> changed anything, restores it on exit, on error and on Ctrl-C, verifies the
+> restore and writes a transcript + `summary.json`. The manual sequence below
+> remains as the explanation of what the runbook does, and as the fallback if
+> the script cannot run. See [`fingerprint-session.md`](fingerprint-session.md).
 
 Nothing below is executed by this repo; they are the commands to run yourself.
 Steps 1, 2, 4 and 5 are read-only; step 3 is the only state change (the
@@ -515,6 +525,10 @@ Steps 1, 2, 4 and 5 are read-only; step 3 is the only state change (the
 
 ## Rollback
 
+`tools/fingerprint/oxp3-fp-session.sh` does this itself (from its `EXIT` and
+`INT/TERM/HUP` traps) and then verifies it; the commands below are the manual
+equivalent and what the runbook prints at the end of a plan.
+
 ```bash
 echo spi-BF63112:00 | sudo tee /sys/bus/spi/drivers/spidev/unbind
 sudo rm -f /sys/bus/spi/devices/spi-BF63112:00/driver_override
@@ -553,7 +567,7 @@ what is left needs the hardware.
    an unpopulated second source or a phantom node; harmless, but a driver
    should match `BF63112:00`-style enumeration rather than assume one device.
 6. **The probe has never run** - the SPI transport, ACPI parser and CLI are
-   implemented and offline-tested (264 tests), and the first execution is the
+   implemented and offline-tested (289 tests), and the first execution is the
    bring-up itself; expect to tune `--speed`/`--mode`/`--irq-edge` and to
    discover whether the device clocks the answer in the first transfer or
    raises `GpioInt` first.

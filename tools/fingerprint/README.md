@@ -16,18 +16,24 @@ See [`docs/hw/fingerprint.md`](../../docs/hw/fingerprint.md) for the hardware ev
 | `fpbf63112/protocol.py` | Python protocol library (stdlib only): frame build/parse, CRC-32, length/offset arithmetic, chunk sums, command table, image reassembly, retry state machine |
 | `fpbf63112/spi.py` | recovered SPI/SPB transport (stdlib only): selector `(opcode & 0x3f) << 1`, two-entry `spi_ioc_transfer` sequence, 1000/2030 (5000/10010 image, 2000/4016 restore) deadlines, gpiod/sysfs/poll IRQ waiters, reset pulse, cancel settle, allowlist/destructive gates |
 | `fpbf63112/acpi.py` | raw `_CRS` resource-template parser for `SpiSerialBus`, `GpioInt`, `GpioIo`, I2C and IRQ items; validates lengths/offsets and reduces them to the driver parameters |
+| `fpbf63112/aml.py` | locates the FPRT `_CRS` in raw DSDT/SSDT AML (`14 <PkgLength> "_CRS"` + `A4 11 <PkgLength>` buffer), validates the result with `acpi.py`, prefers the `SPI1` scope, and reports ambiguity instead of guessing |
 | `fpbf63112/crypto.py` | session crypto (stdlib only): SM3, SM4 (ECB/CBC), SM2 over sm2p256v1, GM/T 0003 KDF, the 0xA2 handshake, the secure-frame transform, a bounded variant search, `selftest()`/`benchmark()` |
-| `tests/` | unittest suite (264 tests), synthetic fixtures, generated frame vectors, replay helpers, the SM vector + handshake tests, and `test_spi.py` + `test_acpi.py` for the transport/parser |
+| `tests/` | unittest suite, synthetic fixtures, generated frame vectors, replay helpers, the SM vector + handshake tests, `test_spi.py` + `test_acpi.py` for the transport/parser, and `test_aml.py` for the `_CRS` AML scan |
 | `tests/fixtures/*.json` | small device transcripts: clean answers, noise, truncation, bad CRC, wrong opcode, retry exhaustion, GET_IMG good/partial/bad-sum/retried/oversized |
 | `tests/vectors.json`, `tests/vectors.h` | one set of frame vectors shared by the Python and C implementations |
 | `tests/generate_fixtures.py` | regenerates all fixtures/vectors (checked in; a test fails if they drift) |
 | `bf63112_proto.h/.c` | dependency-free C11 protocol core (no allocation, `<stdint.h>` only) used by the driver and its tests |
 | `tests/test_proto.c` | C tests against the same vectors + rejection/scan/image paths |
-| `libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; the 0xA2 handshake is compiled in only with `BF63112_ENABLE_SESSION`; enrol/verify refuse with `NOT_SUPPORTED` |
+| `bf63112_spi.h/.c` | dependency-free C11 SPI/SPB transport: selector, destructive/alias gate, read/write allowlists, two-entry `SPI_IOC_MESSAGE`, spidev ioctls, recovered deadlines/cancel/settle, sysfs IRQ/reset + optional libgpiod v2/v1, timed-poll fallback |
+| `bf63112_acpi.h/.c` | C11 `_CRS` parser: SpiSerialBus, GpioInt/GpioIo (IO restriction bits 5-6), small/extended IRQ, opaque items; bounds-checked |
+| `bf63112_discover.h/.c` | resolves the unique `/sys/class/spidev/*` with modalias `acpi:BF63112` (explicit/udev path wins) |
+| `tests/test_spi.c` | standalone C tests for the frame builder, selector, allowlist, deadlines, execute/cancel/reset/IRQ budget, ACPI parser and discovery; injects the I/O vtable and never opens `/dev/spidev` |
+| `libfprint-bf63112.c` | libfprint driver: SPI open/close/suspend/resume, 0xC1 sensor info + 0xA0 firmware query, optional reset/IRQ from environment; enrol/verify refuse with `NOT_SUPPORTED` (no write opcode is allowlisted) |
 | `bf63112_session_openssl.c/.h` | the driver-side session crypto (OpenSSL EVP SM3/SM4 + `EC_POINT_mul`), compile-checked but not enabled by default |
 | `stub/` | **offline syntax-check shim only** - fake `fpi-*.h` + minimal GLib declarations, clearly marked "not libfprint"; never installed or linked |
-| `Makefile` | `py-test`, `proto-test`, `syntax`, `syntax-real` targets |
+| `Makefile` | `py-test`, `proto-test`, `spi-test`, `syntax`, `gpiod-syntax`, `syntax-real` targets |
 | `tests/run-c-tests.sh`, `tests/check-libfprint.sh` | run the C targets here without a host compiler (ephemeral podman) |
+| `oxp3-fp-session.sh` | the guided root runbook: preconditions, `_CRS` extraction/parse, confirmation before each mutation, guarded read-only probe, trap-driven rollback with verification, `--dry-run`/`--non-interactive`/`--resume`, `summary.json` transcript. `--selftest` is offline; `--fixture-init` builds fake `/sys` trees for the tests |
 | `oxp3-fp-probe.py` | the standalone `sudo` bring-up probe: `--transport spi` (default) or the old `--transport frame`; `--dry-run` and `acpi_info --crs` do no I/O; a real transfer needs `--spidev PATH` and `--allow-writes`; destructive opcodes are refused by opcode and selector |
 
 ## What is proven, inferred, and unknown
@@ -97,6 +103,13 @@ sudo python3 tools/fingerprint/oxp3-fp-probe.py --crs /tmp/fprt-crs.bin \
     fw info
 ```
 
+The whole root sequence above - preconditions, `_CRS` extraction and parse, the
+`driver_override`/bind step, the dry run, the guarded reads and the rollback -
+is automated with confirmations and a verified restore by
+`tools/fingerprint/oxp3-fp-session.sh`
+([docs/hw/fingerprint-session.md](../../docs/hw/fingerprint-session.md)); the
+commands here are what it runs, and the manual fallback.
+
 `--crs` fills in speed, mode, bits and the IRQ/reset pins when the CLI does not
 override them. `--allow-op` can add one raw *read* byte; no destructive opcode
 can be enabled. `--transport frame` remains only as the old experiment. See
@@ -110,7 +123,7 @@ The host has Python 3 but no C compiler and no `make`, so:
 ```sh
 # Python protocol + transcript + fuzz tests (this is the full behavioural suite)
 python3 -m unittest discover -s tools/fingerprint/tests -v
-#   -> Ran 264 tests ... OK
+#   -> Ran 289 tests ... OK
 
 # C protocol tests (same vectors, independent implementation)
 tools/fingerprint/tests/run-c-tests.sh
@@ -123,8 +136,8 @@ git clone --depth 1 --branch v1.94.9 \
 LIBFPRINT_SRC=/tmp/libfprint-1.94.9 tools/fingerprint/tests/check-libfprint.sh
 #   -> exit 0, -fsyntax-only with -Wall -Wextra -Werror
 
-# Driver against the offline shim headers (no libfprint/GLib at all), plain
-# and with BF63112_ENABLE_SESSION:
+# Driver and transport modules against the offline shim headers
+# (no libfprint/GLib at all):
 podman run --rm -v "$PWD":/w:z -w /w/tools/fingerprint \
   localhost/oxp3-fixes-build:f45 make syntax
 

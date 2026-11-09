@@ -1,7 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
-# Build and run the standalone C protocol tests (tests/test_proto.c).
+# Build and run the standalone C tests: tests/test_proto.c (frames) and
+# tests/test_spi.c (SPI transport, ACPI parser, discovery).
 #
 # The ONEXPLAYER 3 host has no C compiler, so this falls back to an ephemeral
 # container (podman).  Nothing is installed on the host and the container is
@@ -21,7 +22,7 @@ repo=$(CDPATH= cd -- "$root/../.." && pwd)
 if command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || \
    command -v clang >/dev/null 2>&1; then
   echo "== host compiler: building the C protocol tests" >&2
-  exec make -C "$root" proto-test
+  exec make -C "$root" proto-test spi-test
 fi
 
 if command -v podman >/dev/null 2>&1; then
@@ -42,7 +43,7 @@ if command -v podman >/dev/null 2>&1; then
   exec podman run --rm --security-opt label=disable \
     -v "$repo":/w:z -w /w/tools/fingerprint "$img" \
     sh -c "if [ -n '$pkg' ]; then dnf -y -q install $pkg >/dev/null || exit 3; fi; \
-           make proto-test; \
+           make proto-test spi-test; \
            if [ -f /usr/include/openssl/evp.h ]; then \
              make session-syntax; \
            else echo 'session-syntax: skipped (no openssl-devel in the image)'; fi"

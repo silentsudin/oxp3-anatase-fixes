@@ -284,7 +284,7 @@ This is a separate implementation, not a port of the USB one:
   hub. On Linux the equivalent is a `GpioIo` in `_CRS` (or a `reset-gpios`
   property) toggled from the driver; if the platform exposes none, the module
   must come up already out of reset.
-* **Wire format**: the selector form is implemented in `fpbf63112/spi.py` (§8) but is still unproven on hardware; see §9.
+* **Wire format**: the selector form is implemented in `fpbf63112/spi.py` (§8) and in the C/libfprint driver (`bf63112_spi.c`, §8.5) but is still unproven on hardware; see §9.
 * **Timings**: 200 ms per transfer / 1000-2030 ms per ordinary command /
   5000-10010 ms for GET_IMG / 2000-4016 ms for restore / 150 ms cancel settle /
   50 ms after reset / 5 s device idle.
@@ -473,11 +473,97 @@ by opcode *and* selector; no write opcode is allowlisted; a device path and
 I/O at all; nothing here installs a driver, writes firmware, enrols, deletes a
 template or touches the module's stored data.
 
+### 8.5 C implementation in the libfprint driver (2026-11-09)
+
+Status: **code and offline tests only; like §8.1 this has never run against the
+sensor.** It is a C mirror of `spi.py`/`acpi.py`, written so the libfprint
+driver does not need libgpiod or a spidev helper library.
+
+| file | contents |
+|---|---|
+| `bf63112_spi.h/.c` | selector `(opcode & 0x3f) << 1` (bit 7 = write), the destructive/alias gate, the 256-bit read/write allowlists, the two-entry `SPI_IOC_MESSAGE` plan, `SPI_IOC_WR_MODE`/`WR_BITS_PER_WORD`/`WR_MAX_SPEED_HZ`, the recovered timeouts and deadline arithmetic, cancel/settle, sysfs IRQ + reset backends, optional libgpiod v2/v1 IRQ/reset backends, and a timed-poll fallback that is reported as unobserved |
+| `bf63112_acpi.h/.c` | `_CRS` walker: SpiSerialBus (speed, bits, phase/polarity, CS, source, SPI type flags), GpioInt/GpioIo (pins, triggering/polarity, IO restriction bits 5-6), small/extended IRQ, opaque items; every read is bounds-checked and malformed input returns a typed error |
+| `bf63112_discover.h/.c` | resolves `/dev/spidevX.Y` from the single `/sys/class/spidev/*` whose `device/modalias` is `acpi:BF63112` (an explicit path/udev path wins); refuses to guess when several match |
+| `libfprint-bf63112.c` | opens/configures the spidev node, optionally pulses reset (5 ms/10 ms, then 50 ms), runs 0xA0 then 0xC1 on open (vendor query order, session steps omitted), re-queries 0xC1 on resume, closes the transport on suspend/close, and keeps enrol/verify/identify `FP_DEVICE_ERROR_NOT_SUPPORTED` |
+| `tests/test_spi.c` | standalone unit test: frame builder, selector, allowlist refusal, timeout arithmetic, plan/execute, cancel, reset timing, IRQ budget, ACPI parser and discovery; injects the I/O vtable, clock, sleep, IRQ and reset line, so it never opens `/dev/spidev` or a GPIO |
+
+The read length is the caller's fixed answer size - there is no length field
+and no leading status byte on the wire: 0xA0 = 7, 0xC1 = 9 (what the driver
+uses), and 0xA1 = 64, 0xB3 = 4, 0xC0 = 16, 0x2D = 1 for the other allowlisted
+reads.  The C driver never builds a write plan: the session handshake (0xA2)
+and every other write are outside the allowlist, so the OpenSSL session module
+remains a standalone compile check rather than an open()-time handshake. Reads
+still require an explicit caller opt-in (`policy.allow_io`, set only by the
+driver), exactly like the Python `allow_writes` gate; destructive opcodes and
+their selector aliases are refused even if a caller allowlists them.
+
+**Build and test commands** (all offline; the driver itself is never loaded):
+
+```sh
+# C protocol + SPI/ACPI unit tests; on a host without a compiler this script
+# runs the same targets in the documented ephemeral podman image
+tools/fingerprint/tests/run-c-tests.sh
+# equivalent:
+make -C tools/fingerprint proto-test spi-test
+make -C tools/fingerprint syntax        # stub headers, not libfprint
+make -C tools/fingerprint gpiod-syntax  # optional libgpiod v2 compile check
+
+# authoritative API check against a real libfprint 1.94.9 source tree
+tools/fingerprint/tests/check-libfprint.sh
+# equivalent (the script also creates the meson-generated fp-enums.h /
+# fpi-enums.h placeholders that a bare make syntax-real needs):
+mkdir -p /tmp/enums && : > /tmp/enums/fp-enums.h && : > /tmp/enums/fpi-enums.h
+make -C tools/fingerprint syntax-real LIBFPRINT_SRC=/tmp/libfprint-1.94.9 \
+    ENUMS_INCLUDE=/tmp/enums
+```
+
+**Actual results on this host (2026-11-09, no host C compiler):**
+
+* `spi-test`: `test_spi: 225 checks, 0 failures` (gcc 16.2.1 in
+  `localhost/oxp3-fixes-build:f45`).
+* `proto-test`: `ok: 324 checks, 10 vectors` (unchanged).
+* Python suite: `Ran 289 tests ... OK`.
+* `syntax` (stub): OK; `syntax-real` against v1.94.9: `syntax-real: OK`
+  (only `fp-enums.h`/`fpi-enums.h` empty placeholders, as the script documents).
+* `gpiod-syntax`: `OK (libgpiod v2)` with libgpiod-devel 2.3.1. The v1
+  backend is compiled only when `BF63112_HAVE_GPIOD_V1` is defined and was not
+  available in this image, so it is source-reviewed but not compile-checked
+  here.
+* No test opened `/dev/spidev`, requested a GPIO, or sent anything to the
+  sensor.
+
+**What still requires the hardware:**
+
+* whether a read really is "selector, then clock the answer in the same
+  `SPI_IOC_MESSAGE(2)`" (what both implementations do) or the module raises
+  `GpioInt` first and expects the read only after the interrupt. **This is the
+  main remaining risk:** the current implementation performs the IRQ wait
+  *after* the transfer and does not gate the read on it, so if the module
+  clocks the answer only after the IRQ, the second transfer will read
+  `0xFF`/zeros and the plan must be split into "selector write, wait, read";
+* the real SPI opcode set: 0xA0/0xA1/0xB3/0xC0/0xC1 are read-only experiments
+  borrowed from the USB dispatch table, and 0xC1's 9-byte answer is not proven
+  on SPI;
+* the `_CRS` values (speed, mode, bits, chip select) and whether the PXA2xx PIO
+  path at that clock behaves; the `_CRS` is root-only and this session forbids
+  privilege escalation, so it was not read here;
+* the `GpioInt` edge/level/polarity and the mapping from the ACPI pin index to
+  a Linux line number (why the driver takes `BF63112_IRQ_GPIO` explicitly);
+* whether `_CRS` exposes a `GpioIo` reset line, its polarity, and whether the
+  module needs a reset pulse at all;
+* suspend/resume semantics: the driver closes the spidev node instead of
+  sending the unproven 0xB6 SLEEP selector;
+* the answer length/record layouts for `0xA1` and the UID/count queries.
+
 ## 9. Next steps
 
 **If the goal is this unit (SPI-only, the realistic path).** This is the exact
 root-time order; steps 1-3 are read-only, step 4 changes only the `spidev` bind,
-and every step is reversible:
+and every step is reversible. **All of it is automated, with confirmations,
+write-ahead logging and a verified rollback, by
+`tools/fingerprint/oxp3-fp-session.sh`** (docs:
+[`fingerprint-session.md`](fingerprint-session.md)) - the steps below stay as the
+explanation and as the fallback if the script cannot run.
 
 1. **Extract the `_CRS` (root, read-only).**
 
@@ -540,10 +626,13 @@ and every step is reversible:
    `sudo modprobe -r spidev`.
 
 6. **Only after a read answers**, the libfprint SPI driver
-   (`tools/fingerprint/libfprint-bf63112.c`) can be validated with an
-   IRQ-driven wait instead of polling; keep the 1000/2030 ms timeouts. Mirror
-   the reset behaviour only if `_CRS` really exposes a `GpioIo` - Windows itself
-   drives it through the resource hub, so the line exists on some units.
+   (`tools/fingerprint/libfprint-bf63112.c`, §8.5) can be validated. It already
+   carries the selector/two-entry transfer, the IRQ waiter, the optional reset
+   pulse and the 1000/2030 ms deadlines; the first hardware question is whether
+   the answer arrives in the same message or only after the IRQ (see §8.5).
+   Mirror the reset behaviour only if `_CRS` really exposes a `GpioIo` -
+   Windows itself drives it through the resource hub, so the line exists on
+   some units.
 
 **Still unknown until hardware answers:**
 

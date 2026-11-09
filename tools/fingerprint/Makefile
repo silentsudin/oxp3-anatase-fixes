@@ -33,12 +33,14 @@ PROTO_HDR  = bf63112_proto.h
 DRIVER_SRC = libfprint-bf63112.c
 SESSION_SRC = bf63112_session_openssl.c
 TEST_SRC   = tests/test_proto.c
+SPI_SRC    = bf63112_spi.c bf63112_acpi.c bf63112_discover.c
+SPI_TEST   = tests/test_spi.c
 
-.PHONY: all check py-test proto-test syntax session-syntax syntax-real clean
+.PHONY: all check py-test proto-test spi-test syntax gpiod-syntax session-syntax syntax-real clean
 
 all: check
 
-check: py-test proto-test syntax
+check: py-test proto-test spi-test syntax
 	@echo "bf63112: all checks passed"
 
 py-test:
@@ -51,12 +53,30 @@ proto-test: $(BUILD_DIR)
 	$(CC) $(WARN) -I. -Itests -o $(BUILD_DIR)/test_proto $(TEST_SRC) $(PROTO_SRC)
 	$(BUILD_DIR)/test_proto
 
+# Standalone SPI/ACPI transport tests: no libfprint, no GLib, no hardware.
+# Everything touching /dev/spidev or GPIO is behind an injected vtable.
+spi-test: $(BUILD_DIR)
+	$(CC) $(WARN) -I. -Itests -o $(BUILD_DIR)/test_spi $(SPI_TEST) $(SPI_SRC) $(PROTO_SRC)
+	$(BUILD_DIR)/test_spi
+
 # Offline syntax check against our own shim headers (stub/, clearly marked
 # "not libfprint").  Proves our C is well-formed; not API compatibility.
 syntax: $(BUILD_DIR)
 	$(CC) $(WARN) -Istub -c -fsyntax-only $(DRIVER_SRC)
-	$(CC) $(WARN) -Istub -DBF63112_ENABLE_SESSION -c -fsyntax-only $(DRIVER_SRC)
-	@echo "syntax: OK (stub headers, not libfprint; plain + session build)"
+	$(CC) $(WARN) -Istub -c -fsyntax-only bf63112_spi.c
+	$(CC) $(WARN) -Istub -c -fsyntax-only bf63112_acpi.c
+	$(CC) $(WARN) -Istub -c -fsyntax-only bf63112_discover.c
+	@echo "syntax: OK (stub headers, not libfprint)"
+
+# Optional: compile the libgpiod v2 GPIO backend.  This is off by default
+# because libfprint does not depend on libgpiod; the runtime fallback is the
+# sysfs GPIO ABI (see docs/hw/fingerprint-transport.md).
+gpiod-syntax:
+	@if pkg-config --exists libgpiod; then \
+	  $(CC) $(WARN) -DBF63112_HAVE_GPIOD_V2 \
+	    $(shell pkg-config --cflags libgpiod) -c -fsyntax-only bf63112_spi.c && \
+	  echo "gpiod-syntax: OK (libgpiod v2)"; \
+	else echo "gpiod-syntax: skipped (libgpiod headers not installed)"; fi
 
 # The session crypto module is the only file that needs OpenSSL headers.  This
 # is a compile check, not a capability check: a build without SM2/SM3/SM4 in its
