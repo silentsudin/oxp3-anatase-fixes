@@ -8,12 +8,13 @@ Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/h
 # because resume can reset the codec volume.
 
 [Service]
-Type=oneshot
-# Not RemainAfterExit: the timer re-arms from inactivity (OnUnitInactiveSec) and
-# UCM resets the codec volume after login/resume, so this must be able to run again.
-RemainAfterExit=no
-ExecStart=%h/.local/libexec/oxp3-speaker-gain apply
-ExecStart=/bin/sh -c 'sleep 10; exec %h/.local/libexec/oxp3-speaker-gain apply' 
+Type=simple
+# UCM re-runs when PipeWire opens the card (session start, resume, some game
+# launches) and resets Speaker to 82/87. A one-shot or timer was reset by that;
+# this tiny loop re-applies the maximum every 15 s and is idempotent.
+Restart=always
+RestartSec=5
+ExecStart=/bin/sh -c 'while :; do %h/.local/libexec/oxp3-speaker-gain apply >/dev/null 2>&1 || true; sleep 15; done' 
 
 [Install]
 WantedBy=default.target

@@ -3,14 +3,16 @@ Description=OneXPlayer 3 home button -> KEY_HOMEPAGE
 Documentation=file:///var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/DAEMONS.md
 Documentation=file:///var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/hw/home-button-leds.md
 # The vendor hidraw node must be usable (see tools/oxp3-hid.rules).
-After=graphical-session.target
-PartOf=graphical-session.target
+After=default.target
 # The daemon survives a missing device or a resume by itself (docs/DAEMONS.md);
 # never let the start rate limit turn a crash loop into a silent dead unit.
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+# The daemon survives device loss/resume itself; don't let a session switch leave it dead.
+Restart=always
+RestartSec=2
 # Adjust the path if the checkout lives elsewhere.
 ExecStart=%h/git/linux_scratch/oxp3-anatase-fixes/tools/oxp3-homebtn.py --key homepage
 # always, not on-failure: a transient hidraw/uinput error that makes the
