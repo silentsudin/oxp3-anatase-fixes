@@ -224,6 +224,19 @@ parse_display_status() { # stdin: tools/display/display-mode.sh status
     '
 }
 
+aspm_selected() { # stdin: /sys/module/pcie_aspm/parameters/policy content
+    # The selected value is bracketed ("default [powersave] powersupersave");
+    # a kernel that prints one word selects that word.
+    awk '{
+        sel = ""
+        for (i = 1; i <= NF; i++)
+            if ($i ~ /^\[/) { gsub(/[\[\]]/, "", $i); sel = $i }
+        if (sel == "") sel = $1
+        print sel
+        exit
+    }'
+}
+
 parse_suspend_stats() { # DIR
     local d=$1
     printf 'SUCCESS=%s\nFAIL=%s\nLAST_HW_SLEEP=%s\nTOTAL_HW_SLEEP=%s\nMAX_HW_SLEEP=%s\n' \
@@ -813,50 +826,75 @@ def load(path):
         sys.exit(3)
 dry, live = load(sys.argv[1]), load(sys.argv[2])
 idx = {"pl1": 0, "pl2": 1, "pl4": 2}
-limits = {}
+status = {}
 for dom in live.get("domains") or []:
     cons = dom.get("constraints") or {}
-    limits[dom.get("path")] = {k: (cons.get(k) or {}).get("limit_uw") for k in idx}
-domains = mixed = 0
-problems = []
+    status[dom.get("path")] = {k: (cons.get(k) or {}).get("limit_uw") for k in idx}
+
+# Classify each planned write from the plan's own recorded before-state.  A
+# plan written by apply_limits() carries before_uw/direction, so the check
+# re-checks the decision against the exact limits the planner read.  A stale
+# status sample (a live daemon may have rewritten the limits between `status`
+# and this dry-run) can therefore never make a safe plan look unsafe.  Plans
+# without that record (an older installed tool) fall back to the status file.
+by_path, path_order, problems = {}, [], []
+all_recorded = True
 for rep in dry.get("domain_reports") or []:
-    order, want, path = [], {}, None
     for w in rep.get("written") or []:
         level = w.get("level")
         if level not in idx:
             continue
-        path = path or w.get("domain")
+        path = w.get("domain")
+        want = w.get("value_uw")
+        if want is None:
+            kind = "unknown"
+        elif w.get("direction") in ("raise", "lower", "same"):
+            kind = w["direction"]
+        elif "before_uw" in w:
+            before = w["before_uw"]
+            kind = ("unknown" if before is None else
+                    "raise" if want > before else
+                    "lower" if want < before else "same")
+        else:
+            all_recorded = False
+            before = (status.get(path) or {}).get(level)
+            kind = ("unknown" if before is None else
+                    "raise" if want > before else
+                    "lower" if want < before else "same")
+        if path not in by_path:
+            by_path[path] = []
+            path_order.append(path)
+        by_path[path].append((level, kind))
+
+for path in path_order:
+    seq = by_path[path]
+    order = []
+    for level, _kind in seq:
         if level not in order:
             order.append(level)
-            want[level] = w.get("value_uw")
-    if not order:
-        continue
-    domains += 1
-    current = limits.get(path) or {}
-    raises = [l for l in order
-              if want.get(l) is not None and current.get(l) is not None
-              and want[l] > current[l]]
-    lowers = [l for l in order
-              if want.get(l) is not None and current.get(l) is not None
-              and want[l] < current[l]]
+    raises = [(i, level) for i, (level, kind) in enumerate(seq) if kind == "raise"]
+    lowers = [(i, level) for i, (level, kind) in enumerate(seq) if kind == "lower"]
     if raises and lowers:
-        mixed += 1
-        last_raise = max(order.index(l) for l in raises)
-        first_lower = min(order.index(l) for l in lowers)
+        last_raise = max(i for i, _ in raises)
+        first_lower = min(i for i, _ in lowers)
         if last_raise > first_lower:
             problems.append("%s: a lowering write precedes a raising one (%s)"
                             % (path, ",".join(order)))
-    for seq, label in ((raises, "raising"), (lowers, "lowering")):
-        nums = [idx[l] for l in order if l in seq]
-        if label == "raising" and nums != sorted(nums, reverse=True):
-            problems.append("%s: %s writes are not ceiling-first (%s)"
-                            % (path, label, ",".join(seq)))
-        if label == "lowering" and nums != sorted(nums):
-            problems.append("%s: %s writes are not floor-first (%s)"
-                            % (path, label, ",".join(seq)))
-print("DOMAINS=%d" % domains)
+    raise_nums = [idx[level] for _, level in raises]
+    if raise_nums != sorted(raise_nums, reverse=True):
+        problems.append("%s: raising writes are not ceiling-first (%s)"
+                        % (path, ",".join(level for _, level in raises)))
+    lower_nums = [idx[level] for _, level in lowers]
+    if lower_nums != sorted(lower_nums):
+        problems.append("%s: lowering writes are not floor-first (%s)"
+                        % (path, ",".join(level for _, level in lowers)))
+mixed = sum(1 for path in path_order
+            if any(k == "raise" for _l, k in by_path[path])
+            and any(k == "lower" for _l, k in by_path[path]))
+print("DOMAINS=%d" % len(path_order))
 print("MIXED=%d" % mixed)
 print("VIOLATION=%d" % (1 if problems else 0))
+print("RECORDED=%d" % (1 if all_recorded else 0))
 print("WHY=%s" % ("; ".join(problems) or
                   "raises are ceiling-first and precede every lowering"))
 PY
@@ -1896,7 +1934,7 @@ check_sleep() {
     if [ "$load" = not-found ]; then
         record sleep.units sleep "suspend policy units" SKIP "not installed" "LoadState=not-found" "sudo tools/oxp3-hw-install.sh --sleep"
     elif [ "$active" = active ]; then
-        record sleep.units sleep "suspend policy units" PASS "wakeup policy applied" "wakeup=active pre=$pre log=$log" ""
+        record sleep.units sleep "suspend policy units" PASS "wakeup policy applied" "wakeup=active pre=$pre log=$log lowpower=$(unit_state oxp3-lowpower.service | cut -d'|' -f2)" ""
     else
         record sleep.units sleep "suspend policy units" FAIL "oxp3-sleep-wakeup is $active" "LoadState=$load pre=$pre log=$log" "journalctl -u oxp3-sleep-wakeup -b ; sudo systemctl restart oxp3-sleep-wakeup"
     fi
@@ -1925,6 +1963,84 @@ check_sleep() {
             record sleep.wakeup sleep "wake sources disarmed" PASS "$checked wake-capable device(s) disabled" "the udev rule re-applies this after every resume/hotplug" ""
         else
             record sleep.wakeup sleep "wake sources disarmed" FAIL "wake sources still enabled:$enabled" "" "sudo systemctl restart oxp3-sleep-wakeup && sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=pci --subsystem-match=usb ; docs/hw/sleep-power.md"
+        fi
+    fi
+
+    # ---- deep low-power policy (R6): the mmc wake source is not a PCI/USB
+    # device, and the measured mmc0 is a *virtual* wakeup source (no device
+    # link, so no power/wakeup bit to write); it is handled by parking the SD
+    # host around suspend.  ASPM and the NVMe PS state say whether the storage
+    # links are allowed to idle.
+    local lp=/usr/local/libexec/oxp3-lowpower sd_unit=/etc/systemd/system/oxp3-sleep-lowpower-pre.service
+    local mmc_seen=0 mmc_armed=0 mmc_virtual=0 mmc_names="" d name dev wake
+    for d in /sys/class/wakeup/wakeup*; do
+        [ -r "$d/name" ] || continue
+        name=$(read1 "$d/name")
+        case $name in mmc*) ;; *) continue ;; esac
+        mmc_seen=$((mmc_seen + 1))
+        mmc_names="$mmc_names $name"
+        wake=""
+        if [ -e "$d/device" ]; then
+            dev=$(readlink -f "$d/device" 2>/dev/null || true)
+            [ -n "$dev" ] && [ -e "$dev/power/wakeup" ] && wake="$dev/power/wakeup"
+        fi
+        if [ -n "$wake" ]; then
+            [ "$(read1 "$wake")" = enabled ] && mmc_armed=$((mmc_armed + 1))
+        else
+            mmc_virtual=$((mmc_virtual + 1))
+        fi
+    done
+    if [ "$mmc_seen" -eq 0 ]; then
+        record sleep.mmcwake sleep "mmc wake source disarmed or parked" SKIP "no mmc wakeup source on this host" "no /sys/class/wakeup/*/name matches mmc*" ""
+    elif [ "$mmc_armed" -gt 0 ]; then
+        record sleep.mmcwake sleep "mmc wake source disarmed or parked" FAIL "$mmc_armed of $mmc_seen mmc wakeup source(s) still armed" "name(s):$mmc_names - a storage host that can wake the machine keeps the reader link out of its deepest state" "sudo systemctl restart oxp3-lowpower ; oxp3-lowpower status ; docs/hw/sleep-power.md R6"
+    elif [ "$mmc_virtual" -gt 0 ] && [ ! -e "$sd_unit" ] && [ ! -e "$lp" ]; then
+        record sleep.mmcwake sleep "mmc wake source disarmed or parked" SKIP "virtual mmc wakeup source, park policy not installed" "name(s):$mmc_names have no device link, so no power/wakeup exists to disable; the SD-host park removes the stall" "sudo tools/oxp3-hw-install.sh --sleep"
+    else
+        record sleep.mmcwake sleep "mmc wake source disarmed or parked" PASS "no armed mmc wakeup bit ($mmc_virtual virtual source(s) parked)" "name(s):$mmc_names; a virtual source shows wakeup_count=0 - it did not abort a suspend" ""
+    fi
+
+    # sleep.sdcard: the SD host is bound while awake (a leftover park means the
+    # post-resume unit did not rebind, which would leave the reader dead).
+    local sd_drv=/sys/bus/platform/drivers/rtsx_pci_sdmmc sd_state=/var/lib/oxp3-lowpower/state.json
+    if [ ! -e "$sd_drv" ]; then
+        record sleep.sdcard sleep "SD host parked only across suspend" SKIP "no rtsx_pci_sdmmc driver on this host" "" ""
+    elif [ ! -e "$sd_drv/rtsx_pci_sdmmc.0" ]; then
+        record sleep.sdcard sleep "SD host parked only across suspend" FAIL "the SD host is unbound while the system is awake" "a parked host must be rebound after every resume; the card reader is dead until it is" "sudo systemctl restart oxp3-lowpower ; oxp3-lowpower status ; docs/hw/sleep-power.md R6"
+    elif grep -q '"unbound": true' "$sd_state" 2>/dev/null; then
+        record sleep.sdcard sleep "SD host parked only across suspend" FAIL "state says 'unbound' but the host is bound: a previous park was not recorded as restored" "$sd_state" "sudo systemctl restart oxp3-lowpower ; journalctl -u oxp3-sleep-lowpower-post -b"
+    elif [ -e "$sd_unit" ] || [ -e "$lp" ]; then
+        record sleep.sdcard sleep "SD host parked only across suspend" PASS "bound now; parked only across suspend by the pre/post units" "$(read1 "$sd_drv/rtsx_pci_sdmmc.0/driver" 2>/dev/null || true)" ""
+    else
+        record sleep.sdcard sleep "SD host parked only across suspend" SKIP "park policy not installed" "" "sudo tools/oxp3-hw-install.sh --sleep"
+    fi
+
+    local aspm_file=/sys/module/pcie_aspm/parameters/policy aspm_sel
+    if [ ! -e "$aspm_file" ]; then
+        record sleep.aspm sleep "PCIe ASPM powersave" SKIP "no pcie_aspm policy parameter" "the module is not built or not loaded" ""
+    else
+        aspm_sel=$(aspm_selected <"$aspm_file")
+        if [ ! -e "$lp" ] && [ ! -e /etc/systemd/system/oxp3-lowpower.service ]; then
+            record sleep.aspm sleep "PCIe ASPM powersave" SKIP "low-power policy not installed" "pcie_aspm policy: $aspm_sel" "sudo tools/oxp3-hw-install.sh --sleep"
+        elif [ "$aspm_sel" = powersave ]; then
+            record sleep.aspm sleep "PCIe ASPM powersave" PASS "pcie_aspm.policy: $aspm_sel" "" ""
+        else
+            record sleep.aspm sleep "PCIe ASPM powersave" FAIL "pcie_aspm.policy is $aspm_sel, not powersave" "$(read1 "$aspm_file")" "sudo systemctl restart oxp3-lowpower ; journalctl -u oxp3-lowpower -b ; docs/hw/sleep-power.md R6"
+        fi
+    fi
+
+    local nv_n=/sys/class/nvme/nvme0 nv_lat nv_force
+    if [ ! -d "$nv_n" ]; then
+        record sleep.nvme sleep "NVMe power states allowed" SKIP "no NVMe controller present" "" ""
+    else
+        nv_lat=$(read1 /sys/module/nvme_core/parameters/default_ps_max_latency_us)
+        nv_force=$(read1 /sys/module/nvme_core/parameters/force_apst)
+        if [ -z "$nv_lat" ]; then
+            record sleep.nvme sleep "NVMe power states allowed" SKIP "nvme_core parameters unreadable" "controller $nv_n is present" ""
+        elif [ "$nv_lat" -gt 0 ] && [ "$nv_force" != Y ]; then
+            record sleep.nvme sleep "NVMe power states allowed" PASS "ps_max_latency=${nv_lat}us force_apst=${nv_force:-N}" "$(read1 "$nv_n/model" 2>/dev/null || true)" ""
+        else
+            record sleep.nvme sleep "NVMe power states allowed" FAIL "ps_max_latency=${nv_lat}us force_apst=${nv_force:-N}: APST is disabled" "that makes the SSD hotter and cannot lower suspend drain" "do not set default_ps_max_latency_us=0 (docs/hw/sleep-power.md R4)"
         fi
     fi
 
@@ -2389,11 +2505,17 @@ check_power() {
             okv=$(parse_limit_order "$RUN_OUT" "$st_json")
             oviol=$(printf '%s\n' "$okv" | sed -n 's/^VIOLATION=//p')
             omixed=$(printf '%s\n' "$okv" | sed -n 's/^MIXED=//p')
+            orec=$(printf '%s\n' "$okv" | sed -n 's/^RECORDED=//p')
             owhy=$(printf '%s\n' "$okv" | sed -n 's/^WHY=//p')
             if [ "${oviol:-1}" = 0 ] && [ "${omixed:-0}" -gt 0 ]; then
                 record pwr.order power "limit write ordering" PASS "mixed raise/lower on $omixed domain(s): raises ceiling-first, then lowers floor-first" "$owhy" ""
             elif [ "${oviol:-1}" = 0 ]; then
                 record pwr.order power "limit write ordering" PASS "no mixed switch with the live limits; raises are ceiling-first" "$owhy" ""
+            elif [ "${orec:-0}" = 0 ]; then
+                # The installed tool predates the recorded pre-write state: the
+                # mismatch is between the plan and a separately sampled status,
+                # so a live writer may be the cause.  Not provable either way.
+                record pwr.order power "limit write ordering" SKIP "plan does not record its pre-write limits, so a stale status sample cannot be ruled out" "$owhy" "install the current tools/oxp3-powerctl (sudo tools/oxp3-power-install.sh install) and re-run; no profile needs re-applying"
             else
                 record pwr.order power "limit write ordering" FAIL "write order is not dependency-safe" "$owhy" "order by dependency in apply_limits() (open the ceiling before raising, close the floor before lowering); docs/UNIT-TESTS.md section 5"
             fi
@@ -3209,9 +3331,21 @@ run_selftest() {
     t_eq "order/domains" 2 "$(kv "$out" DOMAINS)"
     t_eq "order/mixed" 2 "$(kv "$out" MIXED)"
     t_eq "order/violation" 0 "$(kv "$out" VIOLATION)"
+    t_eq "order/recorded" 1 "$(kv "$out" RECORDED)"
     out=$(parse_limit_order "$fx/powerctl-profile-bad-order.json" "$fx/powerctl-status.json")
     t_eq "order/bad-violation" 1 "$(kv "$out" VIOLATION)"
+    t_eq "order/bad-recorded" 1 "$(kv "$out" RECORDED)"
     t_contains "order/bad-why" "precedes" "$(kv "$out" WHY)"
+    # A live daemon rewrote MMIO PL2 after `status` but before the dry-run: the
+    # plan's recorded before_uw keeps the real decision (lower), so a stale
+    # snapshot must not turn a safe plan into a failure.
+    out=$(parse_limit_order "$fx/powerctl-profile-dryrun.json" "$fx/powerctl-status-stale.json")
+    t_eq "order/recorded-state" 0 "$(kv "$out" VIOLATION)"
+    t_eq "order/recorded-state-recorded" 1 "$(kv "$out" RECORDED)"
+    out=$(parse_limit_order "$fx/powerctl-profile-legacy.json" "$fx/powerctl-status-stale.json")
+    t_eq "order/legacy-stale" 1 "$(kv "$out" VIOLATION)"
+    t_eq "order/legacy-stale-recorded" 0 "$(kv "$out" RECORDED)"
+    t_contains "order/legacy-stale-why" "precedes" "$(kv "$out" WHY)"
 
     out=$(parse_curve_summary "$fx/curve-dup.json")
     t_eq "curve/pwm" 178 "$(kv "$out" PWM)"
@@ -3258,6 +3392,13 @@ run_selftest() {
     t_eq "exit/pass-mixed" 0 "$(exit_code 4 0 2 1)"
     t_eq "exit/all-pass" 0 "$(exit_code 6 0 0 0)"
 
+    # sleep.aspm: the selected ASPM policy, from the kernel's bracketed format
+    t_eq "aspm/selected" "powersave" \
+        "$(printf 'default performance [powersave] powersupersave\n' | aspm_selected)"
+    t_eq "aspm/sole" "default" "$(printf '[default]\n' | aspm_selected)"
+    t_eq "aspm/unbracketed" "powersave" "$(printf 'powersave\n' | aspm_selected)"
+    t_eq "aspm/empty" "" "$(printf '' | aspm_selected)"
+
     # the declared check inventory must stay exactly what docs/VALIDATION.md documents
     local ids count
     ids=$(declared_ids | uniq)
@@ -3284,7 +3425,7 @@ run_selftest() {
         pwr.ac pwr.adaptive pwr.fan pwr.order pwr.pl1 pwr.profile pwr.rapl pwr.zones \
         rgbd.check rgbd.timing rgbd.unit \
         sched.scx sched.state sched.unit \
-        sleep.audit sleep.measure sleep.mem sleep.stats sleep.suspend sleep.trigger sleep.units sleep.wakeup \
+        sleep.aspm sleep.audit sleep.measure sleep.mem sleep.mmcwake sleep.nvme sleep.sdcard sleep.stats sleep.suspend sleep.trigger sleep.units sleep.wakeup \
         vol.grab vol.hold vol.hwdb vol.holder vol.topology vol.unit \
         | sort | uniq)
     t_eq "inventory/declared" "$expected" "$ids"

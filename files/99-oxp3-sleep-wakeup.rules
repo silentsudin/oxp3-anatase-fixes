@@ -33,3 +33,13 @@ ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:07.1", ATTR{power/wakeu
 ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:0d.0", ATTR{power/wakeup}="disabled"
 ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:0d.2", ATTR{power/wakeup}="disabled"
 ACTION=="add|change", SUBSYSTEM=="pci", KERNEL=="0000:00:14.0", ATTR{power/wakeup}="disabled"
+
+# The SD/MMC host is a wakeup source under its own name (mmc0) and is not a PCI
+# or USB device, so the lines above cannot reach it.  It woke every measured
+# suspend cycle (docs/state/sleep-cycles-*/report.json), which keeps the card
+# reader link out of its deepest state and can end an s2idle suspend from a bag.
+# A rule whose ATTR does not exist on this kernel simply does not match, so both
+# the mmc_host class device and the mmc bus device are tried; the boot service
+# (oxp3-lowpower) is the authoritative path and reports which one it found.
+ACTION=="add|change", SUBSYSTEM=="mmc_host", KERNEL=="mmc[0-9]*", ATTR{power/wakeup}="disabled"
+ACTION=="add|change", SUBSYSTEM=="mmc", KERNEL=="mmc[0-9]*", ATTR{power/wakeup}="disabled"

@@ -237,19 +237,70 @@ class DomainTest(PowercapCase):
 
 
 class ApplyLimitsTest(PowercapCase):
-    def test_raise_order_is_pl4_pl2_pl1(self):
+    RANK = {"pl1": 0, "pl2": 1, "pl4": 2}
+
+    def assert_dependency_safe(self, rep):
+        """Raises precede every lowering, ceiling-first; lowers floor-first.
+
+        Per zone (the unit the kernel/verify check judge): no "lower" write may
+        appear before a "raise", the raising subsequence must descend by level
+        (PL4 -> PL2 -> PL1) and the lowering one must ascend (PL1 -> PL2 -> PL4).
+        """
+        per_domain = {}
+        for w in rep["written"]:
+            per_domain.setdefault(w["domain"], []).append(w)
+        for path, seq in per_domain.items():
+            kinds = [w["direction"] for w in seq]
+            raises = [i for i, kind in enumerate(kinds) if kind == "raise"]
+            lowers = [i for i, kind in enumerate(kinds) if kind == "lower"]
+            if raises and lowers:
+                self.assertLess(max(raises), min(lowers),
+                                f"{path}: a lowering write precedes a raise: {kinds}")
+            ranks = [self.RANK[w["level"]] for w in seq if w["direction"] == "raise"]
+            self.assertEqual(ranks, sorted(ranks, reverse=True),
+                             f"{path}: raising writes are not ceiling-first: {kinds}")
+            ranks = [self.RANK[w["level"]] for w in seq if w["direction"] == "lower"]
+            self.assertEqual(ranks, sorted(ranks),
+                             f"{path}: lowering writes are not floor-first: {kinds}")
+
+    def test_all_raise_order_is_pl4_pl2_pl1(self):
         self.zone(limits=(10.0, 25.0, 90.0))
         domains, _ = pc.require_domains()
         rep = pc.apply_limits(domains, {"pl1": 35.0, "pl2": 80.0, "pl4": 239.0},
                               dry_run=True)
         self.assertEqual([w["level"] for w in rep["written"]], ["pl4", "pl2", "pl1"])
+        self.assertEqual([w["direction"] for w in rep["written"]], ["raise"] * 3)
+        self.assertEqual([w["value_uw"] for w in rep["written"]],
+                         [239_000_000, 80_000_000, 35_000_000])
+        self.assertEqual([w["before_uw"] for w in rep["written"]],
+                         [90_000_000, 25_000_000, 10_000_000])
+        self.assert_dependency_safe(rep)
 
-    def test_lower_order_is_pl1_pl2_pl4(self):
+    def test_all_lower_order_is_pl1_pl2_pl4(self):
         self.zone(limits=(35.0, 80.0, 239.0))
         domains, _ = pc.require_domains()
         rep = pc.apply_limits(domains, {"pl1": 10.0, "pl2": 25.0, "pl4": 90.0},
                               dry_run=True)
         self.assertEqual([w["level"] for w in rep["written"]], ["pl1", "pl2", "pl4"])
+        self.assertEqual([w["direction"] for w in rep["written"]], ["lower"] * 3)
+        self.assertEqual([w["value_uw"] for w in rep["written"]],
+                         [10_000_000, 25_000_000, 90_000_000])
+        self.assert_dependency_safe(rep)
+
+    def test_mixed_pl1_below_pl2_still_raises_first(self):
+        # New envelope PL1 25 W < PL2 45 W, and PL1 is the *lowering* level
+        # while PL2/PL4 rise.  Sorting by level (or lowest-first) would emit
+        # PL1 first, i.e. a lowering write before both raises.
+        self.zone(limits=(35.0, 37.0, 61.0))
+        domains, _ = pc.require_domains()
+        rep = pc.apply_limits(domains, {"pl1": 25.0, "pl2": 45.0, "pl4": 160.0},
+                              dry_run=True)
+        self.assertEqual([w["level"] for w in rep["written"]], ["pl4", "pl2", "pl1"])
+        self.assertEqual([w["direction"] for w in rep["written"]],
+                         ["raise", "raise", "lower"])
+        self.assertEqual([w["value_uw"] for w in rep["written"]],
+                         [160_000_000, 45_000_000, 25_000_000])
+        self.assert_dependency_safe(rep)
 
     def test_mixed_change_raises_first_then_lowers(self):
         self.zone(limits=(10.0, 80.0, 239.0))
@@ -257,6 +308,57 @@ class ApplyLimitsTest(PowercapCase):
         rep = pc.apply_limits(domains, {"pl1": 25.0, "pl2": 45.0, "pl4": 160.0},
                               dry_run=True)
         self.assertEqual([w["level"] for w in rep["written"]], ["pl1", "pl2", "pl4"])
+        self.assertEqual([w["direction"] for w in rep["written"]],
+                         ["raise", "lower", "lower"])
+        self.assert_dependency_safe(rep)
+
+    def test_single_zone_single_limit(self):
+        self.zone(limits=(35.0, 37.0, 61.0))
+        domains, _ = pc.require_domains()
+        rep = pc.apply_limits(domains, {"pl2": 45.0}, dry_run=True)
+        self.assertEqual([w["level"] for w in rep["written"]], ["pl2"])
+        self.assertEqual(rep["written"][0]["direction"], "raise")
+        self.assertEqual(rep["written"][0]["before_uw"], 37_000_000)
+        rep = pc.apply_limits(domains, {"pl2": 30.0}, dry_run=True)
+        self.assertEqual(rep["written"][0]["direction"], "lower")
+        self.assertEqual(rep["written"][0]["value_uw"], 30_000_000)
+
+    def test_split_direction_across_zones_is_ordered_per_zone(self):
+        # This host's MMIO PL2 is 52 W while the MSR mirror reads 37 W, so the
+        # same level raises on one zone and lowers on the other.  Classifying
+        # the level once for all domains let the MMIO lowering precede the MMIO
+        # floor lowering; each (domain, level) must be classified on its own
+        # read value.
+        self.zone("intel-rapl:0", limits=(35.0, 37.0, 61.0))
+        self.zone("intel-rapl-mmio:0", limits=(35.0, 52.0, 61.0))
+        domains, _ = pc.require_domains()
+        rep = pc.apply_limits(domains, {"pl1": 25.0, "pl2": 45.0, "pl4": 160.0},
+                              dry_run=True)
+        per_zone = {}
+        for w in rep["written"]:
+            per_zone.setdefault(os.path.basename(w["domain"]), []).append(w["level"])
+        self.assertEqual(per_zone["intel-rapl:0"], ["pl4", "pl2", "pl1"])
+        self.assertEqual(per_zone["intel-rapl-mmio:0"], ["pl4", "pl1", "pl2"])
+        self.assertEqual(len(rep["written"]), 6)
+        self.assert_dependency_safe(rep)
+
+    def test_missing_limit_is_skipped_and_keeps_dependency_order(self):
+        self.zone(limits=(35.0, 37.0, 61.0))
+        # A kernel that exposes only long_term/short_term: no PL4 ceiling.
+        self.tree.path("powercap/intel-rapl:0/constraint_2_name").unlink()
+        domains, missing = pc.require_domains(allow_partial=True)
+        self.assertEqual(missing, ["pl4"])
+        rep = pc.apply_limits(domains, {"pl1": 25.0, "pl2": 45.0, "pl4": 160.0},
+                              dry_run=True)
+        self.assertEqual([w["level"] for w in rep["written"]], ["pl2", "pl1"])
+        self.assertEqual([w["value_uw"] for w in rep["written"]],
+                         [45_000_000, 25_000_000])
+        self.assertEqual([s["level"] for s in rep["skipped"]], ["pl4"])
+        self.assert_dependency_safe(rep)
+        # Asking only for the absent level writes nothing instead of raising.
+        rep = pc.apply_limits(domains, {"pl4": 160.0}, dry_run=True)
+        self.assertEqual(rep["written"], [])
+        self.assertEqual([s["level"] for s in rep["skipped"]], ["pl4"])
 
     def test_dry_run_reports_values_without_writing(self):
         self.zone(limits=(10.0, 25.0, 90.0))

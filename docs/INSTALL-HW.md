@@ -297,6 +297,10 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Suspend and wake policy | awaiting-install | `sleep.trigger` | logind drop-in parsed with HandlePowerKey/SuspendKey=suspend, polkit rule present, pkcheck says yes, no sleep block inhibitor | no |
 | Suspend and wake policy | awaiting-install | `sleep.audit` | the capability table and the suspend record block | no |
 | Suspend and wake policy | awaiting-install | `sleep.stats` | the counter tuple (success/fail/last_hw_sleep/total_hw_sleep/max_hw_sleep); PASS on a completed cycle, FAIL on a failed attempt or an abort, UNKNOWN (never PASS/FAIL) when success=0 meets a non-zero hardware-sleep number - max_hw_sleep is a counter ceiling, not a duration | no |
+| Suspend and wake policy | awaiting-install | `sleep.mmcwake` | no armed mmc wakeup bit; the measured mmc0 is a virtual source (no device link, wakeup_count=0) and is parked with the SD host | no |
+| Suspend and wake policy | awaiting-install | `sleep.sdcard` | the SD host is bound while awake and parked only across suspend; a leftover park (unbound, or state says unbound) fails, because the reader would be dead | no |
+| Suspend and wake policy | awaiting-install | `sleep.aspm` | pcie_aspm.policy selects powersave (the storage link is allowed to idle) | no |
+| Suspend and wake policy | awaiting-install | `sleep.nvme` | nvme_core.default_ps_max_latency_us > 0 and force_apst != Y, so APST is not disabled | no |
 | Suspend and wake policy | awaiting-install | `sleep.measure` | PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h | no |
 | Suspend and wake policy | awaiting-install | `sleep.suspend` | one real s2idle cycle (rtcwake) with suspend_stats/success incremented; needs --full --with-changes and OXP3_ALLOW_SUSPEND=1 | yes |
 | Speaker tuning (Harman APO) | working | `aud.scripts` | eq-on.sh and eq-off.sh are executable | no |

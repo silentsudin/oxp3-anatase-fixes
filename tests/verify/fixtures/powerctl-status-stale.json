@@ -1,0 +1,68 @@
+{
+  "version": "1.0.0",
+  "root": false,
+  "acpi_fan_fan1_input": "EIO",
+  "battery": {
+    "charge_control_end_threshold": 80,
+    "charge_behaviour": "auto",
+    "bypass": false
+  },
+  "domains": [
+    {
+      "kind": "msr",
+      "zone": "package-0",
+      "path": "/sys/class/powercap/intel-rapl:0",
+      "enabled": true,
+      "constraints": {
+        "pl1": {
+          "name": "long_term",
+          "limit_uw": 35000000
+        },
+        "pl2": {
+          "name": "short_term",
+          "limit_uw": 37000000
+        },
+        "pl4": {
+          "name": "peak_power",
+          "limit_uw": 122000000
+        }
+      }
+    },
+    {
+      "kind": "mmio",
+      "zone": "package-0",
+      "path": "/sys/class/powercap/intel-rapl-mmio:0",
+      "enabled": true,
+      "constraints": {
+        "pl1": {
+          "name": "long_term",
+          "limit_uw": 35000000
+        },
+        "pl2": {
+          "name": "short_term",
+          "limit_uw": 37000000
+        },
+        "pl4": {
+          "name": "peak_power",
+          "limit_uw": 122000000
+        }
+      }
+    }
+  ],
+  "fan": {
+    "name": "oxp_ec",
+    "mode": "auto",
+    "pwm": 51,
+    "pwm_enable": "2",
+    "rpm": 1396,
+    "ec_duty_0_184": 37
+  },
+  "platform_profile": "balanced",
+  "saved_state": {
+    "profile": "balanced"
+  },
+  "warnings": [
+    "acpi_fan fan1_input returns EIO (known cosmetic bug, not the fan)"
+  ],
+  "errors": []
+}

@@ -1,0 +1,34 @@
+[Unit]
+Description=OneXPlayer 3: s2idle low-power policy (pcie_aspm, mmc wake, card reader)
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/hw/sleep-power.md
+# Early enough that every later suspend inherits the policy, late enough that
+# /sys and the PCI/mmc devices exist.  It never blocks a boot: the script exits 0
+# even when every write is refused.
+After=local-fs.target sysinit.target
+Before=sleep.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/oxp3-lowpower apply
+User=root
+StateDirectory=oxp3-lowpower
+# /sys must stay writable: ProtectKernelTunables would make every write fail.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @swap @reboot
+
+[Install]
+WantedBy=multi-user.target

@@ -321,45 +321,64 @@ def check_root(what="changing the power limits or fan speed"):
 
 
 def apply_limits(domains, values, *, dry_run=False, allow_partial=False):
-    """Write {level: watts} to every domain, ordering writes so a raise opens
-    the ceiling first and a lower closes the floor first."""
+    """Write {level: watts} to every domain, ordering the writes by dependency.
+
+    The invariant (docs/UNIT-TESTS.md section 5) is that a lowering write must
+    never precede a raising one: raising a floor needs the ceiling open first,
+    and lowering a ceiling needs the floor closed first.  So every raise is
+    emitted before *any* lowering, per zone: raises highest-ceiling-first
+    (PL4 -> PL2 -> PL1), then lowers lowest-floor-first (PL1 -> PL2 -> PL4).
+    Direction is decided per (domain, level) against the value read from that
+    same domain, so one level may raise on the MSR zone while it lowers on the
+    MMIO one without either zone getting a bad order.  An unreadable current
+    value is treated as a raise (open the ceiling before touching anything).
+
+    Each planned entry records ``before_uw``/``direction``: the pre-write value
+    and the decision derived from it.  Auditors (tools/oxp3-verify.sh pwr.order)
+    re-check the plan against that recorded state, not against a separately
+    sampled one that a live daemon may have changed in between.
+    """
     report = {"written": [], "skipped": [], "errors": [], "readback": []}
-    present = {level for d in domains for level in d.constraints}
-
-    # Decide write order: raising -> pl4, pl2, pl1; lowering -> pl1, pl2, pl4.
-    order = []
-    for level, _ in LEVELS:
-        if level in values and level in present:
-            current = [d.get(level) for d in domains if d.get(level) is not None]
-            want = int(round(values[level] * 1_000_000))
-            raising = any(want > c for c in current) if current else True
-            order.append((level, raising))
     idx = {"pl1": 0, "pl2": 1, "pl4": 2}
-    # raising: PL4 first (open the ceiling); lowering: PL1 first (close the floor)
-    order.sort(key=lambda lr: (0, -idx[lr[0]]) if lr[1] else (1, idx[lr[0]]))
-    ordered = [level for level, _ in order]
-
-    for level in ordered:
-        if level not in present:
-            report["skipped"].append({"level": level, "why": "not exposed"})
-            continue
-        uw = int(round(values[level] * 1_000_000))
-        for domain in domains:
+    plan = []
+    for domain_index, domain in enumerate(domains):
+        for level, _ in LEVELS:
+            if level not in values:
+                continue
             if level not in domain.constraints:
                 report["skipped"].append({"domain": domain.path, "level": level,
                                           "why": "not exposed"})
                 continue
-            if dry_run:
-                report["written"].append({"domain": domain.path, "level": level,
-                                          "value_uw": uw, "dry_run": True})
-                continue
-            try:
-                domain.set(level, uw)
-            except ControlError as exc:
-                report["errors"].append({"domain": domain.path, "level": level,
-                                         "error": str(exc), "hint": exc.hint})
-                continue
-            report["written"].append({"domain": domain.path, "level": level, "value_uw": uw})
+            want = int(round(values[level] * 1_000_000))
+            before = domain.get(level)
+            if before is None or want > before:
+                phase, direction = 0, "raise"
+            elif want < before:
+                phase, direction = 1, "lower"
+            else:
+                phase, direction = 2, "same"
+            # raises: PL4(-2), PL2(-1), PL1(0); lowering/unchanged: PL1, PL2, PL4
+            rank = -idx[level] if phase == 0 else idx[level]
+            plan.append((phase, rank, domain_index, domain, level, want, before,
+                         direction))
+    # A flat sort keeps every domain's subsequence raises-then-lowers, while
+    # also never letting a lowering on one zone precede a raise on another.
+    plan.sort(key=lambda entry: (entry[0], entry[1], entry[2]))
+
+    for _phase, _rank, _di, domain, level, uw, before, direction in plan:
+        entry = {"domain": domain.path, "level": level, "value_uw": uw,
+                 "before_uw": before, "direction": direction}
+        if dry_run:
+            entry["dry_run"] = True
+            report["written"].append(entry)
+            continue
+        try:
+            domain.set(level, uw)
+        except ControlError as exc:
+            report["errors"].append({"domain": domain.path, "level": level,
+                                     "error": str(exc), "hint": exc.hint})
+            continue
+        report["written"].append(entry)
 
     if dry_run:
         return report

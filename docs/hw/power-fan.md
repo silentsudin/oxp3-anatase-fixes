@@ -214,8 +214,12 @@ address space really is `0x400 + <ACPI-EC offset>`.
 
 - Both zones are always written (MSR first, then MMIO), because either one can be the one the firmware
   honours and the lower of the two wins on this machine (that is also why `oxp3-tdp-sync` exists).
-- Write order is chosen per value: raising writes PL4 → PL2 → PL1 (open the ceiling first), lowering
-  writes PL1 → PL2 → PL4 (close the floor first).
+- Write order is chosen per zone and per value: every raise is written before any lowering. Raises go
+  PL4 → PL2 → PL1 (open the ceiling first), then lowers go PL1 → PL2 → PL4 (close the floor first), so a
+  lowering write never precedes a raising one. Direction is decided against the value read from that same
+  zone, which matters here because MSR PL2 (37 W) and MMIO PL2 (52 W) can move in opposite directions on
+  one apply. `--dry-run --json` records `before_uw` and `direction` per planned write, so
+  `tools/oxp3-verify.sh` (`pwr.order`) re-checks the plan against the limits the planner actually read.
 - `--fan` additionally sets manual PWM to the vendor's `fanSpeed` (only `performance` has one, 200/255
   → EC 144 on this board). It is opt-in because it pins the fan in manual mode.
 - `--platform-profile` (optionally with a name) also writes the ACPI platform profile; this is what the

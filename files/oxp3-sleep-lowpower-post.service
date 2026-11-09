@@ -1,0 +1,32 @@
+[Unit]
+Description=OneXPlayer 3: latch the low-power policy off if a suspend failed
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/hw/sleep-power.md
+# Ordered after suspend.target, so this runs on resume with the counters of the
+# cycle that just ended.  A growth in fail/failed_* while pcie_aspm=powersave
+# was active records a latch; the next boot's apply then leaves ASPM alone
+# (docs/hw/sleep-power.md R6).  A failure here must never affect resume.
+After=suspend.target
+JobTimeoutSec=10s
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-lowpower post
+User=root
+StateDirectory=oxp3-lowpower
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @swap @reboot
+
+[Install]
+WantedBy=suspend.target

@@ -458,14 +458,18 @@ components:
       - files/oxp3-sleep-wakeup.service
       - files/oxp3-sleep-pre.service
       - files/oxp3-sleep-log.service
+      - files/oxp3-lowpower.service
+      - files/oxp3-sleep-lowpower-pre.service
+      - files/oxp3-sleep-lowpower-post.service
       - files/99-oxp3-sleep-wakeup.rules
       - files/logind-oxp3.conf
       - files/49-oxp3-suspend.rules
       - tools/sleep-power-measure.sh
+      - tools/oxp3_lowpower.py
     doc: docs/hw/sleep-power.md
     root_required: "yes"
     install:
-      summary: "three units, the wake-source rule, the logind/polkit trigger policy and the measurement tool"
+      summary: "five units, the wake-source rule, the logind/polkit trigger policy, the reversible low-power policy and the measurement tool"
       entrypoint: "sudo tools/oxp3-hw-install.sh --sleep"
     verify:
       - id: sleep.mem
@@ -480,6 +484,14 @@ components:
         expect: "the capability table and the suspend record block"
       - id: sleep.stats
         expect: "the counter tuple (success/fail/last_hw_sleep/total_hw_sleep/max_hw_sleep); PASS on a completed cycle, FAIL on a failed attempt or an abort, UNKNOWN (never PASS/FAIL) when success=0 meets a non-zero hardware-sleep number - max_hw_sleep is a counter ceiling, not a duration"
+      - id: sleep.mmcwake
+        expect: "no armed mmc wakeup bit; the measured mmc0 is a virtual source (no device link, wakeup_count=0) and is parked with the SD host"
+      - id: sleep.sdcard
+        expect: "the SD host is bound while awake and parked only across suspend; a leftover park (unbound, or state says unbound) fails, because the reader would be dead"
+      - id: sleep.aspm
+        expect: "pcie_aspm.policy selects powersave (the storage link is allowed to idle)"
+      - id: sleep.nvme
+        expect: "nvme_core.default_ps_max_latency_us > 0 and force_apst != Y, so APST is not disabled"
       - id: sleep.measure
         expect: "PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h"
       - id: sleep.suspend

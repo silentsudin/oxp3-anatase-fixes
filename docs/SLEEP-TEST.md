@@ -31,7 +31,10 @@ docs/state/sleep-cycles-<utc>/report.txt   # plus report.json and capture.json
 A **GOOD** run means: three real s2idle cycles completed, the machine woke only
 on our RTC alarm, the battery drained **under 1 %/h while suspended**, and the
 package temperature rose **under 2 °C** across each sleep. Anything else is
-printed with its cause; the report never invents a number.
+printed with its cause; the report never invents a number. Two extra lines
+decide whether a change actually helped: `sleep-only` (the s2idle floor, with
+the wake/settle tail removed) and the `changed:` rows from the low-power policy.
+For a before/after comparison use `--sleep 300`, not the 60 s screening run.
 
 ## 1. What it measures, and why each number is trustworthy
 
@@ -177,6 +180,44 @@ run is reported as **INVESTIGATE** at best with the source named — never
 GOOD — even if the number happens to be under 1 %/h. That is deliberate: the
 verdict is about sleep behaviour, not just about one ratio.
 
+### 3.6 The sleep floor vs the awake tail (added 2026-11-09)
+
+The energy is read around the whole cycle, so the awake part of the cycle is
+inside the measured `Wh` and inside the `%/h`. On the first real run
+(`docs/state/sleep-cycles-20261109T133333Z/`) that mattered more than anything
+else:
+
+```
+   totals: 164.2 usable s suspended (164.2 s completed), 26.8 s awake, 0.070 Wh => 1.75 %/h (1.53 W)
+   awake tail: 26.8 s at 5.50 W = 0.041 Wh (58% of the 0.070 Wh measured; included in the %/h above)
+   sleep-only: 0.029 Wh over 164.2 s => 0.73 %/h (0.64 W) with the awake tail removed
+   device time: suspend 5.29 s + resume 2.28 s per cycle (kernel journal), spent at awake power
+```
+
+* **the tail is the kernel's own device walk**, not a mystery: `PM: suspend
+  devices took 5.29 s` and `PM: resume devices took 2.28 s` per cycle, both at
+  full power, plus the settle window. A 60 s cycle is 30-40 % overhead by
+  construction.
+* **verdict stays on the measured rate** (tail included): that is what the
+  machine actually costs per suspend. `sleep-only` is the number that answers
+  "what does it draw in a bag, where wakes are rare".
+* **use both when comparing policy changes.** A change that removes a wake
+  source or a suspend-entry stall (like parking the SD host, `docs/hw/sleep-power.md`
+  R6) shows up in `sleep-only`, in the `device time:` line (`PM: suspend devices
+  took` / `PM: resume devices took`), in the wake attribution, and in the policy
+  block (`changed: ...`, `SD host park: ...`, `mmc note: ...`); a 60 s run cannot
+  resolve less than ±0.23 %/h, so use `--sleep 300`.
+* **the measured `mmc0` is not a wake.** Its counters say `wakeup_count = 0` and
+  `prevent_suspend_time_ms = 0`, while `max_time_ms = 5495` and
+  `total_time_ms = 15946` match the three `PM: suspend devices took` windows: it
+  is a wakelock held during the device-suspend walk. The report prints that as
+  `mmc note:` instead of leaving it as an unexplained extra wake source; the
+  verdict still counts an unexpected *source*, which is honest - the counter did
+  move - and the park policy is what removes it.
+* the report prints an explicit warning when the tail is as large as the whole
+  measured energy - that means the settle window is too short to separate them,
+  not that the machine drew nothing.
+
 ## 4. Interpreting the wake attribution
 
 The primary evidence is the per-source event-count delta from
@@ -221,7 +262,13 @@ Rules of interpretation:
    ...
    totals: 180.3 usable s suspended (180.3 s completed), 31.2 s awake, 0.036 Wh => 0.82 %/h (0.72 W)
    gauge: +/- 0.23 %/h from one 0.01 Wh fuel-gauge step over this window
-   residual awake cost: 31.2 s at 6.84 W = 0.059 Wh (not part of %/h)
+   awake tail: 31.2 s at 6.84 W = 0.059 Wh (165% of the 0.036 Wh measured; included in the %/h above)
+   the awake tail is as large as the whole measured energy: the 31 s settle window cannot separate the two, so read the split with --sleep 300 or longer
+   sleep-only: 0.000 Wh over 180.3 s => 0.00 %/h (0.00 W) with the awake tail removed
+   device time: suspend 5.29 s + resume 2.28 s per cycle (kernel journal), spent at awake power
+   deep-sleep policy: aspm=powersave  mmc0 wake=disabled  nvme ps_max_latency=100000 us
+   recorded state: card reader control=auto runtime=suspended; audio (SOF) control=auto runtime=suspended
+   changed: mmc.mmc0.wakeup enabled -> disabled (...; expected: removes a spurious wake source ...)
    S0ix residency: 180.3 s of 180.3 s slept (100%)
    suspend_stats: success +3, failed_suspend +0, failed_resume +0
    wake attribution: ... - the scheduled RTC alarm; expected
@@ -231,9 +278,17 @@ Rules of interpretation:
 * **slept** is the `BOOTTIME − MONOTONIC` figure; **awake** is the monotonic
   (really awake) part of the same interval. `slept + awake` equals the elapsed
   time.
-* **energy** is the *suspend* delta; the **residual awake cost** is reported
-  separately and is **not** part of %/h. A machine that wakes and sits awake
-  for minutes pays that cost too, and the report makes it visible.
+* **energy** is the delta around the whole cycle, so the **awake tail** is
+  inside it and inside `%/h`; **sleep-only** removes it (see §3.6). A machine
+  that wakes and sits awake for minutes pays that cost too, and the report
+  makes both numbers visible instead of hiding one of them.
+* **device time** is the kernel's `PM: suspend devices took` / `PM: resume
+  devices took`, i.e. the part of the tail that is attributable rather than
+  settle noise.
+* **deep-sleep policy / changed** is the machine-readable "what changed and
+  why" block written by `oxp3-lowpower` (docs/hw/sleep-power.md R6): the
+  effective ASPM policy, the mmc wake state, the NVMe PS limit, the recorded
+  device states, and every change with its pre-image, reason and expectation.
 * **usable s suspended** excludes cycles whose energy curve or sleep time was
   unusable; the completed total is shown next to it so the loss is visible.
 * **S0ix residency** is informational (root only): a low ratio while the drain

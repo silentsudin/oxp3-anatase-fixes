@@ -1,0 +1,29 @@
+[Unit]
+Description=OneXPlayer 3: park the SD host before suspend (it stalls the device walk)
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/hw/sleep-power.md
+Before=sleep.target
+JobTimeoutSec=10s
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/oxp3-lowpower pre
+User=root
+StateDirectory=oxp3-lowpower
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @swap @reboot
+
+[Install]
+WantedBy=sleep.target

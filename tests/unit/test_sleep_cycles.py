@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -385,7 +386,7 @@ class RenderTest(unittest.TestCase):
         text = mod.render_text(analyse_fixture("three-good-rtc"))
         self.assertIn("#  slept", text)
         self.assertIn("wake attribution", text)
-        self.assertIn("residual awake cost", text)
+        self.assertIn("awake tail", text)
         self.assertIn("S0ix residency", text)
         self.assertIn("== verdict: GOOD", text)
 
@@ -644,6 +645,202 @@ class SafetyTest(unittest.TestCase):
         self.assertIn("rtcwake -m mem -s 30", text)
         self.assertIn("rtcwake -m disable", text)
         self.assertIn("nothing was armed, suspended or written", text)
+
+
+class SleepOnlySplitTest(unittest.TestCase):
+    """The measured %/h includes the awake tail; the report must show both."""
+
+    def capture(self, cycles=3, energy=0.05, settle_drop=0.005):
+        data = capture_with(cycles=cycles, requested=600,
+                            energy_deltas=[energy] * cycles)
+        for row in data["cycles"]:
+            row["settle"]["energy_wh"] = round(
+                row["after"]["energy_wh"] - settle_drop, 6)
+        return data
+
+    def test_summary_separates_sleep_from_the_awake_tail(self):
+        report = mod.analyse(self.capture())
+        summary = report["summary"]
+        self.assertGreater(summary["awake_cost_wh"], 0)
+        self.assertAlmostEqual(summary["sleep_only_energy_wh"],
+                               summary["energy_wh"] - summary["awake_cost_wh"],
+                               places=5)
+        self.assertLess(summary["sleep_only_pct_per_h"],
+                        summary["drain_pct_per_h"])
+        self.assertGreater(summary["awake_share_pct"], 0)
+        self.assertAlmostEqual(
+            summary["sleep_only_w"],
+            summary["sleep_only_energy_wh"] / (summary["suspended_usable_s"] / 3600),
+            places=2)
+
+    def test_awake_tail_can_dominate_a_short_cycle(self):
+        # 0.019 Wh of awake cost against a 0.012 Wh cycle leaves no sleep energy;
+        # the split must floor at zero instead of reporting a negative rate.
+        report = mod.analyse(capture_with())
+        self.assertEqual(report["summary"]["sleep_only_energy_wh"], 0.0)
+        self.assertEqual(report["summary"]["sleep_only_w"], 0.0)
+
+    def test_missing_settle_window_keeps_the_old_behaviour(self):
+        data = capture_with(cycles=1, energy_deltas=[0.02])
+        for row in data["cycles"]:
+            row.pop("settle", None)
+        summary = mod.analyse(data)["summary"]
+        self.assertIsNone(summary["awake_cost_wh"])
+        self.assertIsNone(summary["sleep_only_pct_per_h"])
+        self.assertGreater(summary["drain_pct_per_h"], 0)
+
+    def test_device_suspend_and_resume_times_are_parsed(self):
+        cycle = {"journal": [
+            "2026-11-09T13:30:55 kernel: PM: suspend devices took 5.159 seconds",
+            "2026-11-09T13:30:55 kernel: PM: resume devices took 2.287 seconds",
+            "2026-11-09T13:30:55 kernel: PM: suspend exit",
+        ]}
+        self.assertEqual(mod.device_seconds(cycle), (5.159, 2.287))
+        self.assertEqual(mod.device_seconds({}), (None, None))
+        self.assertEqual(mod.device_seconds({"journal": ["no timing here"]}),
+                         (None, None))
+
+    def test_row_and_summary_carry_the_device_times(self):
+        data = self.capture(cycles=2)
+        for row in data["cycles"]:
+            row["journal"] = [
+                "kernel: PM: suspend devices took 5.000 seconds",
+                "kernel: PM: resume devices took 2.000 seconds",
+            ]
+        report = mod.analyse(data)
+        self.assertEqual(report["cycles"][0]["suspend_devices_s"], 5.0)
+        self.assertEqual(report["cycles"][0]["resume_devices_s"], 2.0)
+        self.assertEqual(report["summary"]["suspend_devices_s"], 5.0)
+        self.assertEqual(report["summary"]["resume_devices_s"], 2.0)
+
+
+class WakeAttributionLabelTest(unittest.TestCase):
+    def test_mmc_source_is_named_in_the_attribution(self):
+        rows = [{
+            "index": 1,
+            "wake": {
+                "sources": [
+                    {"id": "wakeup49", "name": "rtc_cmos", "delta": 2},
+                    {"id": "wakeup65", "name": "mmc0", "delta": 1,
+                     "device": "sys/class/mmc_host/mmc0"},
+                ],
+            },
+        }]
+        text = mod.aggregate_wakes(rows)["text"]
+        self.assertIn("SD card reader (mmc0) +1", text)
+        self.assertNotIn("(mmc0) (mmc0)", text)
+        self.assertFalse(mod.aggregate_wakes(rows)["expected"])
+
+
+class MmcWakeSourceTest(unittest.TestCase):
+    """The SD host that woke every measured cycle is not a PCI/USB device."""
+
+    def root(self):
+        tmp = tempfile.TemporaryDirectory(prefix="oxp3-mmc-")
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+
+        def write(relative, text):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n", encoding="utf-8")
+
+        write("sys/class/wakeup/wakeup65/name", "mmc0")
+        write("sys/class/wakeup/wakeup65/event_count", "3")
+        # dangling device link, exactly like the captured host
+        os.symlink("/nonexistent/mmc0", root / "sys/class/wakeup/wakeup65/device")
+        (root / "sys/class/mmc_host/mmc0").mkdir(parents=True)
+        return root
+
+    def test_dangling_link_is_resolved_from_the_class_device(self):
+        snap = mod.wakeup_counts(self.root())[0]
+        self.assertEqual(snap["name"], "mmc0")
+        self.assertEqual(snap["device"], "sys/class/mmc_host/mmc0")
+        self.assertEqual(snap["event_count"], 3)
+        self.assertEqual(mod.SOURCE_LABELS["mmc0"], "SD card reader (mmc0)")
+
+    def test_mmc_device_wakeup_bit_is_counted(self):
+        root = self.root()
+        path = root / "sys/bus/mmc/devices/mmc0:aaaa/power/wakeup"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("enabled\n", encoding="utf-8")
+        self.assertEqual(mod.device_wakeups(root),
+                         [{"bus": "mmc", "id": "mmc0:aaaa"}])
+
+
+class PolicyBlockTest(unittest.TestCase):
+    """The report carries what the low-power policy changed and why."""
+
+    def tree(self):
+        tmp = tempfile.TemporaryDirectory(prefix="oxp3-report-policy-")
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+
+        def write(relative, text):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n", encoding="utf-8")
+            return path
+
+        write("sys/module/pcie_aspm/parameters/policy",
+              "default performance [powersave] powersupersave")
+        write("sys/class/wakeup/wakeup65/name", "mmc0")
+        write("sys/class/wakeup/wakeup65/event_count", "0")
+        write("sys/class/mmc_host/mmc0/power/wakeup", "disabled")
+        write("sys/bus/pci/devices/0000:56:00.0/power/control", "auto")
+        write("sys/bus/pci/devices/0000:56:00.0/power/runtime_status", "suspended")
+        write("sys/class/nvme/nvme0/model", "GM7")
+        write("sys/module/nvme_core/parameters/default_ps_max_latency_us", "100000")
+        write("sys/module/nvme_core/parameters/force_apst", "N")
+        write(str(mod.LOWPOWER_STATE), json.dumps({
+            "applied_at": "2026-11-09T13:00:00Z",
+            "changes": [{
+                "id": "mmc.mmc0.wakeup", "kind": "mmc-wake",
+                "target": "mmc0 wakeup", "path": "/sys/x",
+                "before": "enabled", "after": "disabled",
+                "why": "armed storage host can end s2idle",
+                "expected": "removes a spurious wake source",
+                "evidence": "docs/hw/sleep-power.md R6", "applied": True,
+                "detail": "",
+            }],
+            "latch": None,
+        }))
+        return root
+
+    def test_policy_snapshot_reports_state_and_changes(self):
+        policy = mod.policy_snapshot(self.tree())
+        self.assertTrue(policy["available"])
+        self.assertEqual(policy["aspm"]["selected"], "powersave")
+        self.assertEqual(policy["mmc_wake"][0]["name"], "mmc0")
+        self.assertFalse(policy["mmc_wake"][0]["enabled"])
+        self.assertEqual(policy["nvme"]["default_ps_max_latency_us"], 100000)
+        self.assertEqual([row["id"] for row in policy["changes"]],
+                         ["mmc.mmc0.wakeup"])
+
+    def test_render_names_the_change_and_its_expectation(self):
+        report = mod.analyse(capture_with())
+        report["policy"] = mod.policy_snapshot(self.tree())
+        text = mod.render_text(report)
+        self.assertIn("deep-sleep policy: aspm=powersave", text)
+        self.assertIn("mmc0 wake=disabled", text)
+        self.assertIn("changed: mmc.mmc0.wakeup enabled -> disabled", text)
+        self.assertIn("armed storage host can end s2idle", text)
+
+    def test_render_without_the_policy_tool_says_so(self):
+        report = mod.analyse(capture_with())
+        report["policy"] = {"available": False, "changes": []}
+        self.assertIn("deep-sleep policy: not installed",
+                      mod.render_text(report))
+
+    def test_latched_policy_is_visible(self):
+        report = mod.analyse(capture_with())
+        report["policy"] = {
+            "available": True, "changes": [],
+            "aspm": {"selected": "default"}, "mmc_wake": [], "nvme": {},
+            "latch": {"reason": "failed_resume +1 with aspm=powersave"},
+        }
+        self.assertIn("policy latched off: failed_resume +1",
+                      mod.render_text(report))
 
 
 if __name__ == "__main__":

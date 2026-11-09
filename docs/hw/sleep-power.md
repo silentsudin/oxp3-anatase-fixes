@@ -151,6 +151,21 @@ That is the actual bag-drain mechanism on this class of device: anything that nu
 cable or the lid in a bag wakes the machine, and the machine then runs an awake desktop at ~8 W until
 someone notices.
 
+**A third kind of wake source, missed by both tables above (2026-11-09).** `/sys/class/wakeup` also
+contains a source named **`mmc0`** - the SD host behind the RTS525A card reader (`0000:56:00.0`) - whose
+`event_count` rose by exactly **+1 on every one of the three measured cycles** with no `device` link at
+all (`"device": ""` in `capture.json`; live: `/sys/class/wakeup/wakeup65/` contains counters only). It
+is neither a `/proc/acpi/wakeup` entry nor a PCI/USB `.../power/wakeup` attribute, which is why the R2
+policy and the first harness run could not see it. Its other counters (read live 2026-11-09) say what
+it is: `wakeup_count = 0` and `prevent_suspend_time_ms = 0` (it **never** aborted a suspend), while
+`active_count = 3`, `max_time_ms = 5495` and `total_time_ms = 15946` - i.e. it held a **wakelock for
+~5.4 s per cycle**, and the three active windows sum to 15.9 s, matching the measured `PM: suspend
+devices took 5.16 + 5.52 + 5.18 s` almost exactly. So `mmc0` is not a wake at all: it is the **suspend-
+entry stall** of the SD host, and that stall is ~35 % of each short cycle's energy. There is no enable
+bit to write (a virtual wakeup source has no `power/wakeup`); `oxp3-lowpower` (R6) therefore *parks* the
+`rtsx_pci_sdmmc` host around suspend when no card is in use, and the harness labels the source, shows
+the counters, and no longer pretends the empty device path is a mystery.
+
 ### 2.4 Storage, firmware and the EC (what we can and cannot control)
 
 - The kernel states `platform quirk: setting simple suspend` for the NVMe at boot: the platform ACPI
@@ -535,6 +550,96 @@ That is what turns "it woke up in the bag again" into a named wake source.
   awake drain, but `oxp3-tdp-sync` deliberately keeps PL1 at hhd's 35 W while gaming; do not mix the two
   without re-measuring the game benchmarks.
 
+### R6 - where the measured 1.5 W actually goes (2026-11-09, shipped as `oxp3-lowpower`)
+
+The first real three-cycle measurement (`docs/state/sleep-cycles-20261109T133333Z/`,
+`tools/sleep-cycle-test.sh --cycles 3`, battery, screen off) reports **1.73/1.73/1.79 %/h
+= 1.53 W** and verdict INVESTIGATE. Re-analysing that same capture with the split the
+harness now prints is the single most important result in this file:
+
+    totals: 164.2 usable s suspended, 26.8 s awake, 0.070 Wh => 1.75 %/h (1.53 W)
+    awake tail: 26.8 s at 5.50 W = 0.041 Wh (58% of the 0.070 Wh measured)
+    sleep-only: 0.029 Wh over 164.2 s => 0.73 %/h (0.64 W)
+    device time: suspend 5.29 s + resume 2.28 s per cycle (kernel journal)
+
+So of every measured watt, **0.89 W is the wake/settle tail** (5.2 s of `PM: suspend
+devices took` at full power, 2.3 s of `PM: resume devices took`, and the settle window),
+and **0.64 W is the actual s2idle floor**. S0ix residency is 100 % of the slept window,
+so the package did reach S0ix - the tail is not a failed suspend, it is the price of each
+cycle, and a short 60 s cycle is mostly price. The number to beat in a bag (rare wakes)
+is the 0.64 W figure; the number that a short cycle must not hide is the tail.
+
+What the artifacts also prove, and what this policy therefore changes:
+
+| Fact (from the capture, no inference) | Consequence |
+|---|---|
+| `/sys/class/wakeup/wakeup65/name = mmc0` and `event_count +1` on **every** cycle, with a **dangling `device` link** (`"device": ""`) | the SD host is armed, has no PCI/USB identity (so `sleep.wakeup` never saw it), and the harness had no label for it. It is disarmed by *name* and labelled `SD card reader (mmc0)` |
+| `pcie_aspm.policy = [default]`; `nvme 0000:01:00.0: platform quirk: setting simple suspend`; `default_ps_max_latency_us = 100000` | the storage link never had ASPM forced; APST is already permissive (R4 forbids changing it), so ASPM is the lever that is left, and the NVMe knobs are only *verified* |
+| audio is `sof-hda-dsp` (SOF), not `snd_hda_intel` | there is no `power_save` ABI to tune; audio is recorded, not guessed at |
+| the two internal USB HID endpoints are the EC bridge and the mini keyboard, both `removable=fixed` | not autosuspended (R4); the EC bridge re-enumerates after every resume, which is why hhd logs EBUSY - a resume-path cost, not a suspend-drain one |
+
+**The shipped policy** (`tools/oxp3_lowpower.py`, installed as
+`/usr/local/libexec/oxp3-lowpower`, run by `oxp3-lowpower.service` at boot and by
+`oxp3-sleep-lowpower-post.service` on resume):
+
+1. `pcie_aspm.policy` -> `powersave`, **only** if the attribute is writable and the
+   kernel offers it. The pre-image (`default`) is recorded in
+   `/var/lib/oxp3-lowpower/state.json`.
+2. an mmc wake source that *has* its own `device` link -> `power/wakeup = disabled`.
+   The measured `mmc0` is virtual (no link, no bit), so it is only reported; forcing a
+   parent attribute would be a lie. `99-oxp3-sleep-wakeup.rules` disarms the
+   `mmc_host`/`mmc` device bit when the kernel exposes one (a rule whose `ATTR` does not
+   exist simply does not match).
+3. the card reader function `0000:56:00.0` -> `power/control = auto`, so an unused
+   reader can idle in D3 instead of being held at D0.
+4. **the SD-host park** (`oxp3-sleep-lowpower-pre.service` before `sleep.target`,
+   `oxp3-sleep-lowpower-post.service` after `suspend.target`): if `rtsx_pci_sdmmc` is
+   bound and **no `mmcblk*` device exists and nothing is mounted from one**, the host is
+   unbound for the suspend and rebound on resume. That removes the 5.4 s wakelock stall
+   and the virtual wakeup source. A card that is present or mounted is never parked -
+   the decision is recorded and reported instead. If a suspend is aborted or the post
+   unit never runs, the next boot's `apply` rebinds the host (crash safety), and
+   `sleep.sdcard` fails loudly rather than leaving the reader dead silently.
+5. **the safety gate**: `oxp3-lowpower post` compares `suspend_stats`
+   `fail`/`failed_*` with the boot snapshot; if any grew while `powersave` was active it
+   writes a latch, and the next `apply` and `pre` leave ASPM and the park alone and say
+   so in the report. Nothing the tool writes can break resume twice. Clearing the
+   latch is explicit: `oxp3-lowpower undo` (or removing
+   `/var/lib/oxp3-lowpower/state.json`) is a reset, not an automatic retry.
+6. everything is reversible: `oxp3-lowpower undo` rebinds the SD host, restores the
+   recorded pre-images and refuses to overwrite a value someone else changed in the
+   meantime. Restarts and the installer's own backup/undo manifest still cover the
+   files; the sysfs values have their own recorded pre-image because they are not files.
+
+Expected effect, stated as a hypothesis with the test that would confirm it:
+
+| Change | Expected | Confirm with |
+|---|---|---|
+| park the SD host (no card) | removes the **5.2-5.5 s suspend-entry stall**, ~0.008 Wh per cycle (35 % of a 60 s cycle); in a bag (few wakes) it saves nothing | `journalctl -b -k \| grep "PM: suspend devices took"` should drop from ~5.2 s to ~0.1-1 s; the report's `device time:` line and `mmc note:`/`SD host park:` lines show it |
+| `mmc0` wake bit (only if a kernel exposes one) | 0-0.2 W if the reader was held in D0 | `journalctl -t oxp3-sleep -b \| grep "wake source"`; `cat /sys/class/wakeup/wakeup*/wakeup_count` must stay 0 |
+| `pcie_aspm=powersave` | **0-0.4 W** if the storage link was the PC10 blocker; can cost SSD latency | `sudo cat /sys/kernel/debug/pmc_core/ltr_show` before/after (the storage link should disappear from the blocker list), plus `sudo lspci -vv -s 00:06.0 -s 01:00.0 \| grep -E "LnkCap\|LnkCtl\|L1Sub\|LTR"` |
+| NVMe APST | **no change**; already permissive | `sleep.nvme` check (`default_ps_max_latency_us > 0`, `force_apst != Y`) |
+| audio (SOF), iGPU, CNVi Wi-Fi/BT | **unknown**, deliberately not written | `cat /sys/bus/pci/devices/0000:00:1f.3/power/runtime_status` etc. are recorded in the report's `deep-sleep policy` block; for the radios the owners' levers are `iw dev wlo1 get power_save` and `iw phy \| grep -i wowlan` (disable WoWLAN with `sudo iw dev wlo1 wowlan disable` only as a measured experiment) |
+
+**What the owner runs to see the delta** (in this order; nothing else changes):
+
+    sudo tools/oxp3-hw-install.sh --sleep          # installs + applies the policy now
+    /usr/local/libexec/oxp3-lowpower status        # what it changed, with pre-images
+    oxp3-lowpower status | python3 -m json.tool | grep -A3 '"latch"'   # empty = no failure seen
+    tools/oxp3-verify.sh | grep -E 'sleep\.(mmcwake|sdcard|aspm|nvme)' # the new lines
+    # unplug, screen off, then the measurement that separates floor from tail:
+    sudo tools/sleep-cycle-test.sh --cycles 3 --sleep 300
+    # read in report.txt: "sleep-only:" must be <= 0.9 %/h and "changed:" must list the
+    # policy rows; the verdict uses the measured (tail-included) rate by design.
+
+A 60 s cycle cannot show an ASPM or card-reader delta (the gauge is +/-0.25 %/h over the
+window and the tail is 58 % of the energy); **use `--sleep 300` (or 1800) for the
+before/after**, and compare the `sleep-only` line, not the verdict line. If the sleep-only
+number does not move after R6, the remaining suspects are, in order: the panel/PSR rail
+(`/sys/class/backlight/*/bl_power`, `xe` runtime status), the CNVi radio (WoWLAN), the SOF
+DSP, and the always-on rails - all recorded in the report, none of them safely writable
+from here without a measurement that names them.
+
 ## 4. Install
 
 The files are wired into `./oxp3-fixes.sh install` (`EXTRA_UNITS`), which is the supported path:
@@ -546,8 +651,11 @@ Manual equivalent (in case only the suspend part is wanted):
 
     sudo install -D -m 0755 files/oxp3-sleep-wakeup /usr/local/libexec/oxp3-sleep-wakeup
     sudo install -D -m 0755 files/oxp3-sleep-log    /usr/local/libexec/oxp3-sleep-log
+    sudo install -D -m 0755 tools/oxp3_lowpower.py  /usr/local/libexec/oxp3-lowpower
     sudo install -m 0644 files/oxp3-sleep-wakeup.service files/oxp3-sleep-pre.service \
-                        files/oxp3-sleep-log.service /etc/systemd/system/
+                        files/oxp3-sleep-log.service files/oxp3-lowpower.service \
+                        files/oxp3-sleep-lowpower-pre.service \
+                        files/oxp3-sleep-lowpower-post.service /etc/systemd/system/
     sudo install -D -m 0644 files/99-oxp3-sleep-wakeup.rules \
                         /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules
     # the trigger policy (section 2.5.6) - files only, no service is restarted here:
@@ -562,7 +670,10 @@ Manual equivalent (in case only the suspend part is wanted):
     sudo systemctl daemon-reload
     sudo systemctl enable --now oxp3-sleep-wakeup.service
     sudo systemctl enable oxp3-sleep-pre.service oxp3-sleep-log.service
+    sudo systemctl enable --now oxp3-lowpower.service   # R6: records pre-images in /var/lib/oxp3-lowpower/
+    sudo systemctl enable oxp3-sleep-lowpower-pre.service oxp3-sleep-lowpower-post.service
     systemctl status oxp3-sleep-wakeup.service          # must say "policy applied"
+    systemctl status oxp3-lowpower.service              # must say "N change(s) applied"
 
 Optional, if you prefer the classic hook instead of the two units (note: `/usr` is a transient overlay
 on this ostree host, so a hook in `/usr/lib/systemd/system-sleep/` disappears on reboot/update):
@@ -620,6 +731,15 @@ agent workloads running was 7.8 W package / 56 °C, i.e. the machine was very mu
     # 2. did the package reach S0ix (root only)
     sudo cat /sys/kernel/debug/pmc_core/slp_s0_residency_usec    # must grow in s2idle
 
+    # 2b. the deep-sleep policy (R6): mmc wake, ASPM, NVMe PS state
+    oxp3-lowpower status | python3 -m json.tool | head -40   # facts + every change
+    tools/oxp3-verify.sh | grep -E 'sleep\.(mmcwake|sdcard|aspm|nvme)'
+    # what the virtual mmc0 source actually does (no device link, no enable bit):
+    for f in wakeup_count prevent_suspend_time_ms active_count total_time_ms max_time_ms; do
+        printf '%s=%s\n' "$f" "$(cat /sys/class/wakeup/wakeup*/$f 2>/dev/null | tr '\n' ' ')"
+    done
+    journalctl -b -k | grep -E "PM: (suspend|resume) devices took"
+
     # 3. only these may wake it
     awk '$3=="*enabled"' /proc/acpi/wakeup        # expect LID0 PWRB SLPB AWAC (+ XHCI/TXHC if opted in)
     tools/sleep-power-measure.sh audit | sed -n '/device wakeup/,/inhibitors/p'
@@ -632,10 +752,18 @@ agent workloads running was 7.8 W package / 56 °C, i.e. the machine was very mu
 
 ## 7. Rollback
 
-    sudo systemctl disable --now oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service
+    /usr/local/libexec/oxp3-lowpower undo   # R6: restores the recorded ASPM/wakeup/PM values first
+    sudo systemctl disable --now oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service \
+                               oxp3-lowpower.service oxp3-sleep-lowpower-pre.service \
+                               oxp3-sleep-lowpower-post.service
     sudo rm -f /etc/systemd/system/oxp3-sleep-wakeup.service /etc/systemd/system/oxp3-sleep-pre.service \
-               /etc/systemd/system/oxp3-sleep-log.service /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules \
-               /usr/local/libexec/oxp3-sleep-wakeup /usr/local/libexec/oxp3-sleep-log
+               /etc/systemd/system/oxp3-sleep-log.service /etc/systemd/system/oxp3-lowpower.service \
+               /etc/systemd/system/oxp3-sleep-lowpower-pre.service \
+               /etc/systemd/system/oxp3-sleep-lowpower-post.service \
+               /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules \
+               /usr/local/libexec/oxp3-sleep-wakeup /usr/local/libexec/oxp3-sleep-log \
+               /usr/local/libexec/oxp3-lowpower
+    # the recorded state (safe to remove once undone): sudo rm -rf /var/lib/oxp3-lowpower
     # the trigger policy (leaving it installed is harmless: it only makes sleep work):
     sudo rm -f /etc/systemd/logind.conf.d/60-oxp3-sleep.conf /etc/polkit-1/rules.d/49-oxp3-suspend.rules
     sudo systemctl restart systemd-logind.service   # drop-ins are read at start; polkitd re-reads rules

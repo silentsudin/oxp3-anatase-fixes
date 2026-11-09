@@ -625,11 +625,15 @@ comp_leds_install() {
 
 comp_sleep_install() {
     local x
-    say "suspend/resume (wake-source policy + suspend log)"
+    say "suspend/resume (wake-source policy + suspend log + s2idle low-power policy)"
     for x in oxp3-sleep-wakeup oxp3-sleep-log; do
         install_file 0755 "$repo/files/$x" "$(p "/usr/local/libexec/$x")"
     done
-    for x in oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service; do
+    install_file 0755 "$repo/tools/oxp3_lowpower.py" \
+        "$(p /usr/local/libexec/oxp3-lowpower)"
+    for x in oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service \
+             oxp3-lowpower.service oxp3-sleep-lowpower-pre.service \
+             oxp3-sleep-lowpower-post.service; do
         install_file 0644 "$repo/files/$x" "$(p "/etc/systemd/system/$x")"
     done
     install_file 0644 "$repo/files/99-oxp3-sleep-wakeup.rules" \
@@ -642,8 +646,14 @@ comp_sleep_install() {
     run systemctl daemon-reload
     run systemctl enable --now oxp3-sleep-wakeup.service
     run systemctl enable oxp3-sleep-pre.service oxp3-sleep-log.service
+    # Applies ASPM/mmc-wake/card-reader PM now (and at every boot), records the
+    # pre-image in /var/lib/oxp3-lowpower/state.json, and exits 0 even when a
+    # write is refused -- it can never wedge a boot.
+    run systemctl enable --now oxp3-lowpower.service
+    run systemctl enable oxp3-sleep-lowpower-pre.service oxp3-sleep-lowpower-post.service
     run udevadm control --reload-rules
     run udevadm trigger --action=change --subsystem-match=usb --subsystem-match=pci
+    run udevadm trigger --action=change --subsystem-match=mmc_host --subsystem-match=mmc
 }
 
 # The trigger half of --sleep: what makes a *request* reach the kernel at all.
@@ -876,15 +886,23 @@ comp_leds_uninstall() {
 comp_sleep_uninstall() {
     local x spec dst
     say "suspend/resume units"
+    if [[ -z $PREFIX && -x /usr/local/libexec/oxp3-lowpower ]]; then
+        # put the recorded pre-images back before the script disappears
+        run /usr/local/libexec/oxp3-lowpower undo
+    fi
     if [[ -n $PREFIX ]]; then
         skip_prefixed "systemctl disable --now for the sleep units"
     else
-        run systemctl disable --now oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service
+        run systemctl disable --now oxp3-sleep-wakeup.service oxp3-sleep-pre.service \
+            oxp3-sleep-log.service oxp3-lowpower.service oxp3-sleep-lowpower-pre.service \
+            oxp3-sleep-lowpower-post.service
     fi
-    for x in oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service; do
+    for x in oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service \
+             oxp3-lowpower.service oxp3-sleep-lowpower-pre.service \
+             oxp3-sleep-lowpower-post.service; do
         run rm -f "$(p "/etc/systemd/system/$x")"
     done
-    for x in oxp3-sleep-wakeup oxp3-sleep-log; do
+    for x in oxp3-sleep-wakeup oxp3-sleep-log oxp3-lowpower; do
         run rm -f "$(p "/usr/local/libexec/$x")"
     done
     run rm -f "$(p /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules)"
@@ -1165,10 +1183,11 @@ print_status() {
         "$(yes_no "$site/oxp3_hhd_voltap")" \
         "$(prefixed_yes_no /etc/systemd/system/oxp3-voltap.service)" \
         "$(prefixed_yes_no /usr/local/libexec/oxp3-voltap)"
-    printf '  libexec:      vol=%s sleep-wakeup=%s sleep-log=%s powerctl=%s adaptivetdp=%s\n' \
+    printf '  libexec:      vol=%s sleep-wakeup=%s sleep-log=%s lowpower=%s powerctl=%s adaptivetdp=%s\n' \
         "$(prefixed_yes_no /usr/local/libexec/oxp3-voltap)" \
         "$(prefixed_yes_no /usr/local/libexec/oxp3-sleep-wakeup)" \
         "$(prefixed_yes_no /usr/local/libexec/oxp3-sleep-log)" \
+        "$(prefixed_yes_no /usr/local/libexec/oxp3-lowpower)" \
         "$(prefixed_yes_no /usr/local/libexec/oxp3-powerctl)" \
         "$(prefixed_yes_no /usr/local/libexec/oxp3-adaptivetdp)"
     printf '  udev rules:   hid=%s sleep-wakeup=%s volume-hwdb=%s\n' \
@@ -1178,9 +1197,10 @@ print_status() {
     printf '  sleep trigger: logind-drop-in=%s polkit-rule=%s\n' \
         "$(prefixed_yes_no /etc/systemd/logind.conf.d/60-oxp3-sleep.conf)" \
         "$(prefixed_yes_no /etc/polkit-1/rules.d/49-oxp3-suspend.rules)"
-    printf '  units:        vol=%s sleep=%s pre=%s log=%s profile=%s resume=%s fan=%s adaptivetdp=%s\n' \
+    printf '  units:        vol=%s sleep=%s pre=%s log=%s lowpower=%s post=%s profile=%s resume=%s fan=%s adaptivetdp=%s\n' \
         "$(unit_state oxp3-voltap.service)" "$(unit_state oxp3-sleep-wakeup.service)" \
         "$(unit_state oxp3-sleep-pre.service)" "$(unit_state oxp3-sleep-log.service)" \
+        "$(unit_state oxp3-lowpower.service)" "$(unit_state oxp3-sleep-lowpower-post.service)" \
         "$(unit_state oxp3-power-profile.service)" "$(unit_state oxp3-power-resume.service)" \
         "$(unit_state oxp3-fan-curve.service)" "$(unit_state oxp3-adaptivetdp.service)"
     printf '  user units:   homebtn=%s rgbd=%s (user %s)\n' \

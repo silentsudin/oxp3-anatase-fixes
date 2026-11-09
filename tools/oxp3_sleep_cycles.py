@@ -63,6 +63,16 @@ PROG = "sleep-cycle-test"
 VERSION = "1.0.0"
 SCHEMA = 1
 
+# The low-power policy tool is the single source of truth for what the boot
+# service changed; the report re-reads it instead of duplicating the decisions.
+try:
+    import oxp3_lowpower as lowpower
+except Exception:  # pragma: no cover - only when tools/ is not importable
+    lowpower = None
+
+#: Where oxp3-lowpower.service records pre-images and the applied change list.
+LOWPOWER_STATE = "var/lib/oxp3-lowpower/state.json"
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
 STATE_DIR = REPO / "docs" / "state"
 
@@ -116,6 +126,8 @@ SOURCE_LABELS = {
     "GXTP6933:00": "touchpad",
     "3-4": "internal keyboard HID (USB 3-4)",
     "3-5": "EC bridge HID (USB 3-5)",
+    "mmc0": "SD card reader (mmc0)",
+    "mmc1": "SD card reader (mmc1)",
 }
 
 KERNEL_WAKE_KEYWORDS = (
@@ -305,6 +317,17 @@ def wakeup_counts(root="/"):
                 device = _relpath(resolved, root)
         except OSError:
             device = ""
+        if not device and name.startswith("mmc"):
+            # The measured mmc0 source has a dangling `device` link, so the
+            # path is recovered from the class device instead of being lost.
+            for candidate in (
+                root / "sys/class/mmc_host" / name,
+                root / "sys/class/mmc_host" / name / "device",
+                root / "sys/bus/pci/devices/0000:56:00.0",
+            ):
+                if candidate.exists():
+                    device = _relpath(candidate, root)
+                    break
         out.append(
             {
                 "id": d.name,
@@ -338,7 +361,7 @@ def acpi_wakeup_enabled(root="/"):
 def device_wakeups(root="/"):
     root = pathlib.Path(root)
     out = []
-    for bus in ("pci", "usb"):
+    for bus in ("pci", "usb", "mmc"):
         for path in _glob(root / "sys/bus" / bus / "devices", "*/power/wakeup"):
             if (_read(path, "") or "") != "enabled":
                 continue
@@ -371,6 +394,61 @@ def s0ix_us(root="/"):
     )
 
 
+def _mean(values):
+    values = [value for value in values if value is not None]
+    return round(sum(values) / len(values), 3) if values else None
+
+
+def device_seconds(cycle):
+    """``PM: suspend devices took`` / ``PM: resume devices took`` from the journal.
+
+    These are the times the kernel itself spent walking the device tree at full
+    power on both sides of the S0ix window; they are the part of the awake tail
+    that can be attributed, and they are the reason a short cycle measures high.
+    """
+    suspend, resume = None, None
+    for line in cycle.get("journal") or []:
+        if not isinstance(line, str):
+            continue
+        match = re.search(r"PM: suspend devices took ([0-9.]+) seconds", line)
+        if match:
+            suspend = float(match.group(1))
+        match = re.search(r"PM: resume devices took ([0-9.]+) seconds", line)
+        if match:
+            resume = float(match.group(1))
+    return suspend, resume
+
+
+def policy_snapshot(root="/"):
+    """The deep-sleep policy in effect, plus what the boot service changed.
+
+    Read-only: it calls the policy tool's pure ``plan()`` (which only reads) and
+    loads the state file that ``oxp3-lowpower apply`` wrote.  ``available`` is
+    false on a machine without the tool so an old capture still analyses.
+    """
+    if lowpower is None:
+        return {"available": False, "changes": [], "latch": None}
+    try:
+        facts = lowpower.plan(root)["facts"]
+    except Exception:  # pragma: no cover - defensive: never break a measurement
+        return {"available": False, "changes": [], "latch": None}
+    state = lowpower.load_state(pathlib.Path(root) / LOWPOWER_STATE)
+    return {
+        "available": True,
+        "aspm": facts["aspm"],
+        "mmc_wake": facts["mmc_wake"],
+        "nvme": facts["nvme"],
+        "audio": facts["audio"],
+        "devices": facts["devices"],
+        "sd_host": facts.get("sd_host"),
+        "media": facts.get("media"),
+        "park": facts.get("park"),
+        "changes": state.get("changes") or [],
+        "latch": lowpower.latched(state),
+        "applied_at": state.get("applied_at"),
+    }
+
+
 def snapshot(root="/"):
     """One timestamped observation of everything the analyser needs."""
     root = pathlib.Path(root)
@@ -398,6 +476,7 @@ def snapshot(root="/"):
         "rtc_alarm": {d["name"]: d["alarm"] for d in rtc_devices(root)},
         "mem_sleep": mem_sleep(root),
         "s0ix_us": s0ix_us(root),
+        "policy": policy_snapshot(root),
     }
 
 
@@ -843,6 +922,7 @@ def analyse_cycle(cycle, meta, thresholds):
         status = "ok"
 
     wake = classify_cycle_wake(cycle)
+    suspend_devices, resume_devices = device_seconds(cycle)
 
     return {
         "index": cycle.get("index"),
@@ -860,6 +940,8 @@ def analyse_cycle(cycle, meta, thresholds):
         if awake_w is not None and awake is not None
         else None,
         "s0ix_s": s0ix_seconds(cycle),
+        "suspend_devices_s": suspend_devices,
+        "resume_devices_s": resume_devices,
         "wake": wake,
         "suspend_stats": {
             "success": success,
@@ -896,9 +978,18 @@ def aggregate_wakes(rows):
     dominant = ranked[0]
     kind = wake_kind(dominant)
     label = source_label(dominant)
-    parts = ["%s (%s) +%d" % (label, dominant["name"], dominant["delta"])]
+    if dominant["name"] in label:
+        # e.g. "SD card reader (mmc0)" already carries the id
+        parts = ["%s +%d" % (label, dominant["delta"])]
+    else:
+        parts = ["%s (%s) +%d" % (label, dominant["name"], dominant["delta"])]
     for extra in ranked[1:4]:
-        parts.append("%s +%d" % (extra["name"], extra["delta"]))
+        extra_label = source_label(extra)
+        if extra["name"] in extra_label:
+            parts.append("%s +%d" % (extra_label, extra["delta"]))
+        else:
+            parts.append("%s (%s) +%d" % (extra_label, extra["name"],
+                                          extra["delta"]))
     kinds = {wake_kind(source) for source in ranked}
     if kinds == {"rtc"}:
         text = "%s - the scheduled RTC alarm; expected" % " / ".join(parts)
@@ -1094,6 +1185,26 @@ def _run_summary(rows, meta):
         slept_pairs = sum(pair[1] for pair in s0ix_pairs)
         if slept_pairs > 0:
             s0ix_ratio = round(s0ix_total / slept_pairs, 3)
+    # The energy delta is taken around the *whole* cycle, so the measured awake
+    # tail is inside it.  Report both numbers instead of pretending the sleep
+    # rate is the cycle rate: the tail is what a short cycle is made of, and it
+    # is what the suspend/resume device times below are spent on.
+    sleep_energy = (
+        max(0.0, round(energy - awake_cost, 6))
+        if awake_cost is not None and energy is not None
+        else None
+    )
+    sleep_only_w = drain_watts(sleep_energy, hours) if sleep_energy is not None else None
+    sleep_only_rate = (
+        drain_pct_per_h(sleep_energy, full, hours)
+        if sleep_energy is not None
+        else None
+    )
+    awake_share = (
+        round(100.0 * awake_cost / energy, 1)
+        if awake_cost is not None and energy
+        else None
+    )
     return {
         "cycles_completed": len(rows),
         "valid_cycles": len(usable),
@@ -1110,6 +1221,12 @@ def _run_summary(rows, meta):
         "temp_rise_max_c": round(max(rise_values), 2) if rise_values else None,
         "awake_w": awake_w,
         "awake_cost_wh": awake_cost,
+        "awake_share_pct": awake_share,
+        "sleep_only_energy_wh": sleep_energy,
+        "sleep_only_w": sleep_only_w,
+        "sleep_only_pct_per_h": sleep_only_rate,
+        "suspend_devices_s": _mean([row["suspend_devices_s"] for row in rows]),
+        "resume_devices_s": _mean([row["resume_devices_s"] for row in rows]),
         "s0ix_s": s0ix_total,
         "s0ix_ratio": s0ix_ratio,
         "on_ac": meta.get("on_ac"),
@@ -1142,6 +1259,7 @@ def analyse(capture, thresholds=None):
         "cycles": rows,
         "summary": summary,
         "wake": wake,
+        "policy": capture.get("policy") or {},
         "thresholds": report_thresholds,
         "verdict": {},
         "notes": list(capture.get("notes") or []),
@@ -1153,6 +1271,97 @@ def analyse(capture, thresholds=None):
 # ------------------------------------------------------------------ rendering
 def _fmt(value, spec, missing="n/a"):
     return missing if value is None else format(value, spec)
+
+
+def render_policy_lines(policy):
+    """The machine-readable policy block, rendered for a human.
+
+    This is the answer to "what changed and why": every row was written by
+    ``oxp3-lowpower apply``, with its pre-image, its reason and the hypothesis it
+    is testing, so the next run can show whether it helped.
+    """
+    if not policy:
+        return ["   deep-sleep policy: no snapshot in this capture (taken before "
+                "the low-power policy was installed)"]
+    if not policy.get("available"):
+        return ["   deep-sleep policy: not installed (no tools/oxp3_lowpower.py "
+                "state on this host)"]
+    lines = []
+    aspm = policy.get("aspm") or {}
+    mmc = policy.get("mmc_wake") or []
+    nvme = policy.get("nvme") or {}
+    mmc_state = ", ".join(
+        "%s wake=%s" % (entry.get("name"), "disabled" if entry.get("enabled") is False
+                        else ("armed" if entry.get("enabled") else "unknown"))
+        for entry in mmc
+    ) or "none present"
+    park = policy.get("park") or {}
+    if park.get("action"):
+        lines.append(
+            "   SD host park: %s (%s)"
+            % (park.get("action"), park.get("reason") or "no reason recorded")
+        )
+    lines.append(
+        "   deep-sleep policy: aspm=%s  %s  nvme ps_max_latency=%s us%s"
+        % (
+            aspm.get("selected") or "?",
+            mmc_state,
+            nvme.get("default_ps_max_latency_us")
+            if nvme.get("default_ps_max_latency_us") is not None else "?",
+            "  force_apst=%s" % nvme.get("force_apst")
+            if nvme.get("force_apst") else "",
+        )
+    )
+    reader = next(
+        (entry for entry in policy.get("devices") or []
+         if entry.get("addr") == "0000:56:00.0"), None
+    )
+    audio = policy.get("audio") or {}
+    facts = []
+    if reader:
+        facts.append("card reader control=%s runtime=%s"
+                     % (reader.get("control") or "?", reader.get("runtime_status") or "?"))
+    if audio.get("present"):
+        facts.append("audio (SOF) control=%s runtime=%s"
+                     % (audio.get("control") or "?", audio.get("runtime_status") or "?"))
+    if facts:
+        lines.append("   recorded state: %s" % "; ".join(facts))
+    for entry in mmc:
+        stats = entry.get("stats") or {}
+        if (stats.get("event_count") or 0) <= 0:
+            continue
+        if stats.get("wakeup_count") in (0, None):
+            lines.append(
+                "   mmc note: %s counted %s event(s) with wakeup_count=%s - it did "
+                "not abort a suspend; the source was active %s s in total, %s s at "
+                "most, which matches 'PM: suspend devices took'"
+                % (
+                    entry.get("name"),
+                    stats.get("event_count"),
+                    stats.get("wakeup_count"),
+                    _fmt((stats.get("total_time_ms") or 0) / 1000.0, ".1f"),
+                    _fmt((stats.get("max_time_ms") or 0) / 1000.0, ".1f"),
+                )
+            )
+    applied = [row for row in policy.get("changes") or [] if row.get("applied")]
+    if applied:
+        for row in applied:
+            lines.append(
+                "   changed: %s %s -> %s (%s; expected: %s)"
+                % (row.get("id"), row.get("before"), row.get("after"),
+                   row.get("why") or "no reason recorded",
+                   row.get("expected") or "no expectation recorded")
+            )
+    elif policy.get("changes"):
+        lines.append(
+            "   changed: nothing applied this boot (%d decision(s) recorded, all "
+            "skipped or already in place)"
+            % len(policy.get("changes") or [])
+        )
+    latch = policy.get("latch") or {}
+    if latch.get("reason"):
+        lines.append("   policy latched off: %s" % latch["reason"])
+    return lines
 
 
 def render_text(report):
@@ -1249,11 +1458,40 @@ def render_text(report):
             )
         if summary.get("awake_cost_wh") is not None:
             lines.append(
-                "   residual awake cost: %s s at %s W = %s Wh (not part of %%/h)"
+                "   awake tail: %s s at %s W = %s Wh (%s%% of the %s Wh measured; "
+                "included in the %%/h above)"
                 % (
                     _fmt(summary.get("awake_s"), ".1f"),
                     _fmt(summary.get("awake_w"), ".2f"),
                     _fmt(summary.get("awake_cost_wh"), ".3f"),
+                    _fmt(summary.get("awake_share_pct"), ".0f"),
+                    _fmt(summary.get("energy_wh"), ".3f"),
+                )
+            )
+        if (summary.get("awake_share_pct") or 0) >= 100:
+            lines.append(
+                "   the awake tail is as large as the whole measured energy: the "
+                "%s s settle window cannot separate the two, so read the split "
+                "with --sleep 300 or longer" % _fmt(summary.get("awake_s"), ".0f")
+            )
+        if summary.get("sleep_only_pct_per_h") is not None:
+            lines.append(
+                "   sleep-only: %s Wh over %s s => %s %%/h (%s W) with the awake "
+                "tail removed"
+                % (
+                    _fmt(summary.get("sleep_only_energy_wh"), ".3f"),
+                    _fmt(summary.get("suspended_usable_s"), ".1f"),
+                    _fmt(summary.get("sleep_only_pct_per_h"), ".2f"),
+                    _fmt(summary.get("sleep_only_w"), ".2f"),
+                )
+            )
+        if summary.get("suspend_devices_s") is not None:
+            lines.append(
+                "   device time: suspend %s s + resume %s s per cycle (kernel "
+                "journal), spent at awake power"
+                % (
+                    _fmt(summary.get("suspend_devices_s"), ".2f"),
+                    _fmt(summary.get("resume_devices_s"), ".2f"),
                 )
             )
         if summary.get("s0ix_ratio") is not None:
@@ -1285,6 +1523,11 @@ def render_text(report):
                 stats.append("%s +%d" % (label, total))
         if stats:
             lines.append("   suspend_stats: %s" % ", ".join(stats))
+
+    policy_lines = render_policy_lines(report.get("policy") or {})
+    if policy_lines:
+        lines.append("")
+        lines.extend(policy_lines)
 
     wake = report.get("wake") or {}
     if report.get("cycles"):
@@ -1385,6 +1628,10 @@ def render_state_text(report):
                     stats.get("total_hw_sleep", "?"),
                 )
             )
+    policy_lines = render_policy_lines(report.get("policy") or {})
+    if policy_lines:
+        lines.append("")
+        lines.extend(policy_lines)
     lines.append("")
     for note in report.get("notes") or []:
         lines.append("   note: %s" % note)

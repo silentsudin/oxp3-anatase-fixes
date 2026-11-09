@@ -263,7 +263,8 @@ FW_NAME=oxp3-firmware
 # OneXPlayer 3 extras: services and settings in /etc and /usr/local (they survive updates)
 # ---------------------------------------------------------------------------------------------
 EXTRA_UNITS=(oxp3-tdp-sync.service oxp3-xpad-sleep.service oxp3-rapl-pp1.service oxp3-sleep-wakeup.service
-             oxp3-sleep-pre.service oxp3-sleep-log.service)
+             oxp3-sleep-pre.service oxp3-sleep-log.service oxp3-lowpower.service
+             oxp3-sleep-lowpower-pre.service oxp3-sleep-lowpower-post.service)
 EXTRA_STATE=/etc/oxp3-fixes
 
 # Kept local: this variant also installs the suspend units; oxp3-fixes-fast.sh leaves them to
@@ -273,6 +274,8 @@ install_extras() {
     for s in oxp3-tdp-sync oxp3-xpad-sleep oxp3-audio-route oxp3-sleep-wakeup oxp3-sleep-log; do
         sudo install -D -m 0755 "$here/files/$s" "/usr/local/libexec/$s"
     done
+    # the reversible s2idle low-power policy (mmc wake, ASPM, SD-host park)
+    sudo install -D -m 0755 "$here/tools/oxp3_lowpower.py" /usr/local/libexec/oxp3-lowpower
     # suspend: bag-safe wake sources, and the pre/post pair that logs what woke the machine.
     # The pair lives in /etc/systemd/system (not /usr/lib/systemd/system-sleep) so it survives
     # an ostree update; both call the same multi-call script.
@@ -298,10 +301,13 @@ install_extras() {
     fi
     sudo systemctl daemon-reload
     sudo systemctl enable oxp3-xpad-sleep.service oxp3-rapl-pp1.service "oxp3-audio-resume@$me.service" \
-        oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service >/dev/null 2>&1
+        oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service \
+        oxp3-lowpower.service oxp3-sleep-lowpower-pre.service oxp3-sleep-lowpower-post.service \
+        >/dev/null 2>&1
     sudo systemctl enable oxp3-tdp-sync.service >/dev/null 2>&1
     sudo systemctl restart oxp3-tdp-sync.service
     sudo systemctl restart oxp3-sleep-wakeup.service
+    sudo systemctl restart oxp3-lowpower.service
     sudo udevadm control --reload 2>/dev/null || true
     sudo systemctl --global enable oxp3-audio-route.service >/dev/null 2>&1
     systemctl --user daemon-reload
@@ -317,6 +323,8 @@ install_extras() {
 
 uninstall_extras() {
     local u me; me=$(id -un)
+    # put the recorded sysfs pre-images back before the policy script is removed
+    [[ -x /usr/local/libexec/oxp3-lowpower ]] && sudo /usr/local/libexec/oxp3-lowpower undo >/dev/null 2>&1 || true
     sudo systemctl disable --now "${EXTRA_UNITS[@]}" "oxp3-audio-resume@$me.service" >/dev/null 2>&1 || true
     sudo systemctl --global disable oxp3-audio-route.service >/dev/null 2>&1 || true
     for u in "${EXTRA_UNITS[@]}" oxp3-audio-resume@.service; do sudo rm -f "/etc/systemd/system/$u"; done
@@ -330,6 +338,7 @@ uninstall_extras() {
         /etc/wireplumber/wireplumber.conf.d/52-oxp3-speakers.conf \
         /usr/local/libexec/oxp3-tdp-sync /usr/local/libexec/oxp3-xpad-sleep /usr/local/libexec/oxp3-audio-route \
         /usr/local/libexec/oxp3-sleep-wakeup /usr/local/libexec/oxp3-sleep-log \
+        /usr/local/libexec/oxp3-lowpower \
         /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules
     # the wake-source policy is applied at boot, so a plain reboot restores the firmware defaults
     sudo udevadm control --reload 2>/dev/null || true

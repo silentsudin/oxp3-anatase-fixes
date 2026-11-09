@@ -9,19 +9,25 @@
           "domain": "/sys/class/powercap/intel-rapl:0",
           "dry_run": true,
           "level": "pl1",
-          "value_uw": 25000000
+          "value_uw": 25000000,
+          "before_uw": 35000000,
+          "direction": "lower"
         },
         {
           "domain": "/sys/class/powercap/intel-rapl:0",
           "dry_run": true,
           "level": "pl4",
-          "value_uw": 160000000
+          "value_uw": 160000000,
+          "before_uw": 122000000,
+          "direction": "raise"
         },
         {
           "domain": "/sys/class/powercap/intel-rapl:0",
           "dry_run": true,
           "level": "pl2",
-          "value_uw": 45000000
+          "value_uw": 45000000,
+          "before_uw": 37000000,
+          "direction": "raise"
         }
       ]
     },
@@ -34,19 +40,25 @@
           "domain": "/sys/class/powercap/intel-rapl-mmio:0",
           "dry_run": true,
           "level": "pl1",
-          "value_uw": 25000000
+          "value_uw": 25000000,
+          "before_uw": 35000000,
+          "direction": "lower"
         },
         {
           "domain": "/sys/class/powercap/intel-rapl-mmio:0",
           "dry_run": true,
           "level": "pl2",
-          "value_uw": 45000000
+          "value_uw": 45000000,
+          "before_uw": 52000000,
+          "direction": "lower"
         },
         {
           "domain": "/sys/class/powercap/intel-rapl-mmio:0",
           "dry_run": true,
           "level": "pl4",
-          "value_uw": 160000000
+          "value_uw": 160000000,
+          "before_uw": 122000000,
+          "direction": "raise"
         }
       ]
     }
