@@ -827,6 +827,9 @@ comp_xmx_install() {
     # The host environment is written even before a game exists: the "session env
     # not set" state is what the wrapper sources, independent of a per-game shim.
     as_user_run "$repo/tools/xmx-write-env.sh" || warn "could not write ~/.config/xess-xmx/oxp3-env.sh"
+    # Without the session environment, games use the host Mesa and never load the
+    # XMX/CM driver; this is what puts the modified driver in the game's way.
+    as_user_run "$repo/tools/xmx-session.sh" install || warn "could not write the XMX session environment"
     if (( ${#appids[@]} == 0 )); then
         as_user_run "$tool" status | sed 's/^/  /'
         printf '  no Flatpak Steam Proton prefix exists yet, so there is no game shim to place.\n'

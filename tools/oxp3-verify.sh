@@ -2851,13 +2851,13 @@ check_audio() {
 
 # ------------------------------------------------------------------ 8. display
 check_display() {
-    local gm=/usr/libexec/anatase-gamemode
-    if [ ! -r "$gm" ]; then
-        record dsp.gamemodehdr display "Gamemode HDR launcher" SKIP "session launcher not found" "$gm missing" ""
-    elif grep -q -- '--hdr-enabled' "$gm" 2>/dev/null; then
-        record dsp.gamemodehdr display "Gamemode HDR launcher" PASS "HDR/PQ flags present (Gamemode output is PQ)" "$gm" "persist: systemctl status oxp3-gamemode-hdr-keep"
+    local gm=/usr/local/libexec/anatase-gamemode-hdr dropin=/etc/systemd/user/anatase-gamemode.service.d/90-oxp3-hdr.conf
+    if [ ! -r /usr/libexec/anatase-gamemode ]; then
+        record dsp.gamemodehdr display "Gamemode HDR launcher" SKIP "session launcher not found" "/usr/libexec/anatase-gamemode missing" ""
+    elif [ -r "$gm" ] && grep -q -- '--hdr-enabled' "$gm" 2>/dev/null && grep -q "^ExecStart=$gm$" "$dropin" 2>/dev/null; then
+        record dsp.gamemodehdr display "Gamemode HDR launcher" PASS "HDR/PQ flags active through the session override" "$gm + $dropin" "persistent: /usr/local copy + /etc drop-in, no overlay"
     else
-        record dsp.gamemodehdr display "Gamemode HDR launcher" FAIL "launcher lacks --hdr-enabled, so Gamemode is SDR" "$gm" "sudo tools/display/gamemode-hdr.sh install ; docs/hw/hdr-vibrance.md section 5.2"
+        record dsp.gamemodehdr display "Gamemode HDR launcher" FAIL "Gamemode launcher has no HDR/PQ flags (session output is SDR)" "patched copy: $([ -r "$gm" ] && echo yes || echo no); override: $([ -r "$dropin" ] && echo yes || echo no)" "sudo tools/display/gamemode-hdr.sh install ; docs/hw/hdr-vibrance.md section 5.2"
     fi
     local tool=$REPO/tools/display/display-mode.sh kv out hdr wcg icc depth vrr
     if [ ! -x "$tool" ]; then
