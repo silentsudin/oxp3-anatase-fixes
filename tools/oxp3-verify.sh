@@ -2041,6 +2041,25 @@ check_sleep() {
             record sleep.nvme sleep "NVMe power states allowed" PASS "ps_max_latency=${nv_lat}us force_apst=${nv_force:-N}" "$(read1 "$nv_n/model" 2>/dev/null || true)" ""
         else
             record sleep.nvme sleep "NVMe power states allowed" FAIL "ps_max_latency=${nv_lat}us force_apst=${nv_force:-N}: APST is disabled" "that makes the SSD hotter and cannot lower suspend drain" "do not set default_ps_max_latency_us=0 (docs/hw/sleep-power.md R4)"
+
+    # The Predator GM7 / Biwin 1dee:1602 does not resume from s2idle through the
+    # NVMe driver's ACPI simple-suspend path on Panther Lake; nvme.noacpi=1 is the
+    # known fix (same drive and kernel family in the ONEXPLAYER 3 SteamOS fix pack).
+    if lspci -nn 2>/dev/null | grep -qi '1dee:1602'; then
+        if grep -qw 'nvme.noacpi=1' /proc/cmdline 2>/dev/null; then
+            record sleep.nvmeacpi sleep "NVMe ACPI suspend quirk" PASS \
+                "nvme.noacpi=1 active (the 1dee:1602 drive needs it to resume)" \
+                "$(lspci -nn 2>/dev/null | grep -i '1dee:1602' | cut -c1-40)" ""
+        else
+            record sleep.nvmeacpi sleep "NVMe ACPI suspend quirk" SKIP \
+                "1dee:1602 NVMe present without nvme.noacpi=1: this drive has failed to resume from s2idle" \
+                "apply it with sudo tools/oxp3-nvme-suspend.sh apply (persistent, reversible)" \
+                "sudo tools/oxp3-nvme-suspend.sh apply ; reboot"
+        fi
+    else
+        record sleep.nvmeacpi sleep "NVMe ACPI suspend quirk" SKIP \
+            "no 1dee:1602 NVMe (the quirk targets that drive only)" "" ""
+    fi
         fi
     fi
 

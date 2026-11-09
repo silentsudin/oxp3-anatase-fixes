@@ -490,6 +490,7 @@ components:
         expect: "the SD host is bound while awake and parked only across suspend; a leftover park (unbound, or state says unbound) fails, because the reader would be dead"
       - id: sleep.aspm
         expect: "pcie_aspm.policy selects powersave (the storage link is allowed to idle)"
+      - id: sleep.nvmeacpi
       - id: sleep.nvme
         expect: "nvme_core.default_ps_max_latency_us > 0 and force_apst != Y, so APST is not disabled"
       - id: sleep.measure
