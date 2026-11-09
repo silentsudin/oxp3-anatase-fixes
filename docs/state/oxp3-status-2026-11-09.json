@@ -1,0 +1,301 @@
+{
+  "schema": 1,
+  "version": "1.0.0",
+  "generated_at": "2026-11-09T01:36:08Z",
+  "overall": "warn",
+  "counts": {
+    "ok": 23,
+    "warn": 5,
+    "fail": 0,
+    "unknown": 0,
+    "na": 0
+  },
+  "host": {
+    "user": "<redacted-user>",
+    "home": "<redacted-home>",
+    "kernel": "7.2.7-an28.fc45.x86_64",
+    "hostname": "<redacted-host>"
+  },
+  "game": null,
+  "env_sources": [
+    {
+      "name": "Heroic config 1423049311",
+      "live": false,
+      "keys": 8
+    },
+    {
+      "name": "Steam Flatpak override",
+      "live": false,
+      "keys": 3
+    },
+    {
+      "name": ".config/xess-xmx/oxp3-env.sh",
+      "live": false,
+      "keys": 7
+    }
+  ],
+  "groups": [
+    {
+      "id": "mesa",
+      "title": "Mesa driver",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "mesa.host",
+          "label": "host libvulkan_intel.so",
+          "state": "ok",
+          "value": "ec418f04e589965a (match)",
+          "detail": "path: /usr/lib64/libvulkan_intel.so\nsize: 24769032\nfull sha256: ec418f04e589965adeb26da96fb282915e3dfd7ab98b0d6eab69f9878f3578e9",
+          "source": "/usr/lib64/libvulkan_intel.so"
+        },
+        {
+          "id": "mesa.env.vk_driver_files",
+          "label": "driver override (VK_DRIVER_FILES)",
+          "state": "ok",
+          "value": "libvulkan_intel.so -> XMX driver 4b1d55ea9483417f",
+          "detail": "value: /var/home/<user>/.config/xess-xmx/icd-xmx.json\nsource: Heroic config 1423049311",
+          "source": "Heroic config 1423049311"
+        }
+      ]
+    },
+    {
+      "id": "xmx",
+      "title": "XeSS XMX",
+      "state": "warn",
+      "indicators": [
+        {
+          "id": "xmx.icd",
+          "label": "VK_DRIVER_FILES (XMX ICD)",
+          "state": "ok",
+          "value": "icd-xmx.json -> xmx driver",
+          "detail": "value: /var/home/<user>/.config/xess-xmx/icd-xmx.json\nresolved: /var/home/<user>/.config/xess-xmx/icd-xmx.json -> /var/home/<user>/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so\nsource: Heroic config 1423049311",
+          "source": "Heroic config 1423049311"
+        },
+        {
+          "id": "xmx.helper",
+          "label": "ANV_CM_HELPER (128-GRF)",
+          "state": "ok",
+          "value": "xmx-cm-compile-nodgrf.sh",
+          "detail": "value: /var/home/<user>/git/linux_scratch/oxp3-anatase-fixes/tools/xmx-cm-compile-nodgrf.sh\n\nsource: Heroic config 1423049311",
+          "source": "Heroic config 1423049311"
+        },
+        {
+          "id": "xmx.igc",
+          "label": "XMX_IGC_DIR (ocloc)",
+          "state": "ok",
+          "value": "ocloc-25.18.1",
+          "detail": "dir: /var/home/<user>/.local/share/xess-xmx-release/xess-xmx-linux-20261107/igc\nexists: True\nocloc: /var/home/<user>/.local/share/xess-xmx-release/xess-xmx-linux-20261107/igc/neo/bin/ocloc-25.18.1\nsource: Heroic config 1423049311",
+          "source": "Heroic config 1423049311"
+        },
+        {
+          "id": "xmx.shim",
+          "label": "INTC_ALT_DRIVER_EXTENSIONS_PATH",
+          "state": "ok",
+          "value": "igdext64.dll present",
+          "detail": "dir: /var/home/<user>/.local/share/xess-xmx-release/xess-xmx-linux-20261107\nsource: Heroic config 1423049311",
+          "source": "Heroic config 1423049311"
+        },
+        {
+          "id": "xmx.vkd3d",
+          "label": "VKD3D_DISABLE_EXTENSIONS",
+          "state": "ok",
+          "value": "VK_EXT_descriptor_buffer",
+          "detail": "source: Heroic config 1423049311",
+          "source": "Heroic config 1423049311"
+        },
+        {
+          "id": "xmx.driver",
+          "label": "XMX driver build",
+          "state": "ok",
+          "value": "4b1d55ea9483417f (match)",
+          "detail": "path: /var/home/<user>/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so\nsize: 29714032",
+          "source": "/var/home/<user>/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so"
+        },
+        {
+          "id": "xmx.kernels",
+          "label": "CM kernel cache",
+          "state": "ok",
+          "value": "30 kernel(s)",
+          "detail": "dir: /var/home/<user>/.cache/xess-xmx/kernels\nnewest: 2 h ago\ncompile log failures: 0",
+          "source": "/var/home/<user>/.cache/xess-xmx/kernels"
+        },
+        {
+          "id": "xmx.trace",
+          "label": "igdext_trace.log",
+          "state": "warn",
+          "value": "not found in the prefix",
+          "detail": "The shim writes C:\\igdext_trace.log only when tracing is enabled; absence is expected on a plain launch.",
+          "source": "/var/home/<user>/Games/Heroic/Prefixes/Cyberpunk 2077, /var/home/<user>/Games/Heroic/Prefixes/Cyberpunk 2077/pfx, /var/home/<user>/.local/share/Steam/steamapps/compatdata/0/pfx"
+        },
+        {
+          "id": "xmx.benchmark",
+          "label": "latest Cyberpunk benchmark",
+          "state": "ok",
+          "value": "XeSS (upscalingType 5), avg 76.6 FPS",
+          "detail": "file: /var/home/<user>/Games/Heroic/Prefixes/Cyberpunk 2077/pfx/drive_c/users/steamuser/Documents/CD Projekt Red/Cyberpunk 2077/benchmarkResults/benchmark_2026-11-08_23-22-44/summary.json\nrun: benchmark_2026-11-08_23-22-44\navg/min/max: 76.6 / 62.3 / 96.2 FPS\nresolution: 1920x1200\npreset: Custom\nGPU: Intel(R) Arc(tm) B390 (PTL)",
+          "source": "/var/home/<user>/Games/Heroic/Prefixes/Cyberpunk 2077/pfx/drive_c/users/steamuser/Documents/CD Projekt Red/Cyberpunk 2077/benchmarkResults/benchmark_2026-11-08_23-22-44/summary.json"
+        }
+      ]
+    },
+    {
+      "id": "sched",
+      "title": "CPU scheduler",
+      "state": "warn",
+      "indicators": [
+        {
+          "id": "sched.state",
+          "label": "sched_ext state",
+          "state": "warn",
+          "value": "disabled",
+          "detail": "EEVDF is the kernel fallback when nothing is loaded.",
+          "source": "/sys/kernel/sched_ext/state"
+        },
+        {
+          "id": "sched.scx_cosmos",
+          "label": "scx_cosmos running",
+          "state": "warn",
+          "value": "not running",
+          "detail": "Without a loaded scheduler the kernel uses EEVDF.",
+          "source": "/proc"
+        },
+        {
+          "id": "sched.unit",
+          "label": "oxp3-gaming-sched.service",
+          "state": "warn",
+          "value": "not installed",
+          "detail": "LoadState=not-found ActiveState=inactive UnitFileState=-",
+          "source": "systemctl show oxp3-gaming-sched.service"
+        }
+      ]
+    },
+    {
+      "id": "fixes",
+      "title": "Other fixes",
+      "state": "warn",
+      "indicators": [
+        {
+          "id": "xe.module",
+          "label": "patched xe module",
+          "state": "ok",
+          "value": "layered (xe.ko.xz)",
+          "detail": "modinfo -F filename xe: /lib/modules/7.2.7-an28.fc45.x86_64/updates/drivers/gpu/drm/xe/xe.ko.xz",
+          "source": "modinfo"
+        },
+        {
+          "id": "rapl.service",
+          "label": "RAPL powercap service",
+          "state": "ok",
+          "value": "active",
+          "detail": "LoadState=loaded ActiveState=active UnitFileState=enabled",
+          "source": "systemctl show rapl-power.service"
+        },
+        {
+          "id": "rapl.values",
+          "label": "RAPL power now",
+          "state": "ok",
+          "value": "core 4.2 W, package-0 7.2 W, uncore 0.1 W",
+          "detail": "1 s averages published unprivileged by rapl-power.",
+          "source": "/run/rapl-power"
+        },
+        {
+          "id": "rapl.pp1",
+          "label": "oxp3-rapl-pp1.service",
+          "state": "ok",
+          "value": "inactive; uncore zone present",
+          "detail": "LoadState=loaded; unit reloads intel_rapl_msr once at boot when the GPU zone is missing.",
+          "source": "systemctl show oxp3-rapl-pp1.service"
+        },
+        {
+          "id": "power.pl1",
+          "label": "PL1 power limit",
+          "state": "ok",
+          "value": "35.00 W / 35.00 W",
+          "detail": "expected 35 W; MSR=35.00 W, MMIO=35.00 W",
+          "source": "intel-rapl:0 / intel-rapl-mmio:0"
+        },
+        {
+          "id": "power.profile",
+          "label": "platform_profile",
+          "state": "ok",
+          "value": "balanced",
+          "detail": "The recorded working build uses balanced; choices: low-power balanced performance",
+          "source": "/sys/firmware/acpi/platform_profile"
+        },
+        {
+          "id": "heroic.gamemode",
+          "label": "Heroic GameMode",
+          "state": "ok",
+          "value": "off for all 1 game(s)",
+          "detail": "No Heroic game enables GameMode.",
+          "source": "/var/home/<user>/.var/app/com.heroicgameslauncher.hgl/config/heroic/GamesConfig"
+        },
+        {
+          "id": "flatpak.runtime",
+          "label": "Flatpak runtime override",
+          "state": "ok",
+          "value": "4d043cc2851a11fd (recorded)",
+          "detail": "path: /usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides/lib64/libvulkan_intel.so\nlibexpat override present: False\nRestart anatase-flatpak-extensions.service after changing this.",
+          "source": "/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides/lib64/libvulkan_intel.so"
+        },
+        {
+          "id": "flatpak.steam_env",
+          "label": "Steam Flatpak XMX env",
+          "state": "warn",
+          "value": "cm-compile.sh",
+          "detail": "Flatpak Steam is not supported by the XMX project; the override currently uses /var/home/<user>/.local/share/xess-xmx/tools/cm-compile.sh (-doubleGRF kernels) and VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer,VK_EXT_descriptor_heap.",
+          "source": "/var/home/<user>/.local/share/flatpak/overrides/org.anatase.Steam"
+        }
+      ]
+    },
+    {
+      "id": "system",
+      "title": "System",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "sys.kernel",
+          "label": "kernel",
+          "state": "ok",
+          "value": "7.2.7-an28.fc45.x86_64",
+          "detail": "os: Anatase",
+          "source": "uname"
+        },
+        {
+          "id": "sys.cpu",
+          "label": "CPU governor / EPP",
+          "state": "ok",
+          "value": "governor powersave x14; EPP balance_power x14",
+          "detail": "Recorded good config: powersave + balance_power (per-cluster EPP measured worse).\npolicy0: governor=powersave epp=balance_power\npolicy1: governor=powersave epp=balance_power\npolicy10: governor=powersave epp=balance_power\npolicy11: governor=powersave epp=balance_power\npolicy12: governor=powersave epp=balance_power\npolicy13: governor=powersave epp=balance_power\npolicy2: governor=powersave epp=balance_power\npolicy3: governor=powersave epp=balance_power\npolicy4: governor=powersave epp=balance_power\npolicy5: governor=powersave epp=balance_power\npolicy6: governor=powersave epp=balance_power\npolicy7: governor=powersave epp=balance_power\npolicy8: governor=powersave epp=balance_power\npolicy9: governor=powersave epp=balance_power",
+          "source": "/sys/devices/system/cpu/cpufreq"
+        },
+        {
+          "id": "sys.gpu",
+          "label": "GPU / Mesa",
+          "state": "ok",
+          "value": "8086:B080 (xe), Mesa 27.0.0",
+          "detail": "host driver reports Mesa 27.0.0; rpm mesa-vulkan-drivers=26.2.426.2.4 (the runtime/host override is why these differ)",
+          "source": "/usr/lib64/libvulkan_intel.so"
+        },
+        {
+          "id": "sys.thermal",
+          "label": "temperature",
+          "state": "ok",
+          "value": "CPU package 55°C, max 55°C",
+          "detail": "acpitz acpitz: 27.8°C\ncoretemp Core 8: 48.0°C\ncoretemp Core 9: 48.0°C\ncoretemp Core 10: 48.0°C\ncoretemp Core 11: 48.0°C\ncoretemp Core 12: 49.0°C\ncoretemp Core 13: 49.0°C\ncoretemp Core 14: 49.0°C\ncoretemp Core 15: 49.0°C\ncoretemp Package id 0: 55.0°C\ncoretemp Core 0: 52.0°C\ncoretemp Core 32: 39.0°C",
+          "source": "/sys/class/hwmon"
+        },
+        {
+          "id": "sys.battery",
+          "label": "battery",
+          "state": "ok",
+          "value": "80%, Charging",
+          "detail": "path: /sys/class/power_supply/BAT0",
+          "source": "/sys/class/power_supply/BAT0"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "no live game process visible; XMX environment is reported from the configured launcher (a pressure-vessel Flatpak game may live in another PID namespace)"
+  ]
+}

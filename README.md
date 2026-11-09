@@ -55,7 +55,8 @@ What moved, and with which patch:
   measured upstream's 512 marginally ahead of 1024.
 * **compute raster**: already at parity, unchanged by the patches.
 * **hardware raster**: unchanged. Every driver-side and compiler-side lever tested was neutral or
-  worse; this is documented in `docs/BEYOND-PARITY.md` sections 137-153 and is the remaining 7.7 %.
+  worse; this is documented in the out-of-tree `BEYOND-PARITY` notes, sections 137-153, and is the
+  remaining 7.7 %.
 
 Measurement provenance: the "after" figures were taken on a Mesa **main-27** tree at commit
 `ea40598`, which is now the tree the installer pins. This repository now builds **the same main commit** (`ea40598`), so the figures above are what

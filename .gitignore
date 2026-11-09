@@ -9,6 +9,14 @@ vkd3d-proton.cache
 
 # python bytecode from the tooling helpers
 __pycache__/
+*.pyc
+*.pyo
+
+# generic build output (the Decky plugin also has its own .gitignore)
+dist/
+build/
+node_modules/
+*.zip
 
 # C test/build output of the fingerprint protocol library
 tools/fingerprint/build/

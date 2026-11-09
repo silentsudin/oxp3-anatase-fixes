@@ -204,7 +204,7 @@ Run everything as your user unless marked root. `sudo` is only needed where show
 | suspend policy | `systemctl status oxp3-sleep-wakeup` | `active (exited)`; journal has `policy applied` or `policy already in place` |
 | | `tools/sleep-power-measure.sh audit` | `mem_sleep : [s2idle] deep`, wake-source table; no `enabled` for pad/storage/USB4 |
 | | `sudo tools/sleep-power-measure.sh suspend -w 600` | a real suspend; PASS/WARN/FAIL against the %/h thresholds |
-| Bluetooth | `tools/oxp3-bt-firmware.sh --check` | exit 0, files present with the pinned hashes |
+| Bluetooth | `tools/oxp3-bt-firmware.sh --check` | files present with the pinned hashes; exit 0 only when this boot also loaded the firmware, exit 1 with the fix commands when the running boot still has no firmware |
 | | `ls /sys/class/bluetooth` | `hci0` |
 | | `bluetoothctl show` | a `Controller …` block with a `Powered: yes`-able radio |
 | | `journalctl -k -b \| grep 'Bluetooth: hci0'` | `Firmware timestamp …`; **no** `Failed to load Intel firmware file` |
@@ -285,7 +285,8 @@ the orchestrator warns if it sees them.
   Success 1, Fail 0.
 * `systemd-hwdb --root=<tmp> update` on the volume hwdb: compiles to `hwdb.bin`.
 * `tools/oxp3-hw-install.sh --dry-run --all`: prints the full command plan, exit 0, writes nothing.
-* Simulated install into `--root /tmp/oxp3-sim` (sleep, leds, rgb, imu, audio), a second idempotent
+* Simulated install into `--root /tmp/oxp3-sim` (create the directory first; sleep, leds, rgb, imu,
+  audio), a second idempotent
   run, then `--uninstall`: the expected files appear, stay unchanged, and are removed; user config is
   kept. The component installers that write to `/` correctly report `[root-prefix] skipped`.
 * `shellcheck` is not installed on this host; the scripts pass `bash -n` and the runtime paths above.
