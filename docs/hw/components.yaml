@@ -790,6 +790,7 @@ components:
         - "tools/display/vibrance.sh install && tools/display/vibrance.sh set 35"
         - "install -m 0644 tools/oxp3-gamewrap.toml.example ~/.config/oxp3-gamewrap.toml (then opt games in; docs/LAUNCH.md)"
     verify:
+      - id: dsp.gamemodehdr
       - id: dsp.hdr
         expect: "HDR/WCG/depth/VRR reported for eDP-1 (HDR off is a valid state)"
       - id: dsp.icc

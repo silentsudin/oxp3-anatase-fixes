@@ -2851,6 +2851,14 @@ check_audio() {
 
 # ------------------------------------------------------------------ 8. display
 check_display() {
+    local gm=/usr/libexec/anatase-gamemode
+    if [ ! -r "$gm" ]; then
+        record dsp.gamemodehdr display "Gamemode HDR launcher" SKIP "session launcher not found" "$gm missing" ""
+    elif grep -q -- '--hdr-enabled' "$gm" 2>/dev/null; then
+        record dsp.gamemodehdr display "Gamemode HDR launcher" PASS "HDR/PQ flags present (Gamemode output is PQ)" "$gm" "persist: systemctl status oxp3-gamemode-hdr-keep"
+    else
+        record dsp.gamemodehdr display "Gamemode HDR launcher" FAIL "launcher lacks --hdr-enabled, so Gamemode is SDR" "$gm" "sudo tools/display/gamemode-hdr.sh install ; docs/hw/hdr-vibrance.md section 5.2"
+    fi
     local tool=$REPO/tools/display/display-mode.sh kv out hdr wcg icc depth vrr
     if [ ! -x "$tool" ]; then
         record dsp.hdr display "HDR / WCG state" SKIP "display-mode.sh missing" "$tool" ""
@@ -3593,7 +3601,7 @@ run_selftest() {
         bat.behaviour bat.limit bat.threshold \
         bt.controller bt.diag bt.dracut bt.files bt.journal \
         decky.backend decky.dir decky.loaded decky.status \
-        dsp.hdr dsp.icc dsp.panel dsp.vibrance \
+        dsp.hdr dsp.gamemodehdr dsp.icc dsp.panel dsp.vibrance \
         fan.curvedup fan.savemode \
         gfx.mesa gfx.working gfx.xe gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc \
         gfx.xmx.icd gfx.xmx.kernels gfx.xmx.trace \

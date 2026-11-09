@@ -70,8 +70,8 @@ OK = "OK"
 WARN = "WARN"
 FAIL = "FAIL"
 
-COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "audio", "sched", "gfx", "xmx", "mango", "decky")
-ROOT_COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "sched", "gfx", "mango", "decky")
+COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "audio", "sched", "gfx", "hdr", "xmx", "mango", "decky")
+ROOT_COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "sched", "gfx", "hdr", "mango", "decky")
 USER_COMPONENTS = ("leds", "rgb", "audio", "xmx")
 DAEMON_COMPONENTS = ("volume", "leds", "rgb", "power")
 HID_COMPONENTS = ("leds", "rgb")
@@ -165,6 +165,11 @@ COMPONENT_FILES = {
         "{home}/.local/share/xess-xmx-release",
         "{home}/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so",
         "{home}/.config/xess-xmx",
+    ),
+    "hdr": (
+        "/usr/libexec/anatase-gamemode",
+        "/etc/systemd/system/oxp3-gamemode-hdr-keep.service",
+        "/usr/local/libexec/oxp3-gamemode-hdr-keep",
     ),
     "mango": (
         "/usr/bin/mangohud",

@@ -330,6 +330,7 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Adaptive TDP | awaiting-install | `pwr.adaptive` | inactive and disabled after install; FAIL when enabled but dead | no |
 | Adaptive TDP | awaiting-install | `pwr.ac` | on_ac is detected (so the battery clamps are live); SKIP with no AC/Mains node | no |
 | SAGV / memory frequency | blocked | cmd: `tools/oxp3-sagv.sh status` | display v30, enable_sagv 0400, no point interface, MCHBAR unreadable, RAPL domains listed | no |
+| Display HDR / vibrance / colour | working | `dsp.gamemodehdr` | PASS in `tools/oxp3-verify.sh --json` | no |
 | Display HDR / vibrance / colour | working | `dsp.hdr` | HDR/WCG/depth/VRR reported for eDP-1 (HDR off is a valid state) | no |
 | Display HDR / vibrance / colour | working | `dsp.icc` | the ICC profile state is reported | no |
 | Display HDR / vibrance / colour | working | `dsp.panel` | the EDID verdict has 10-bit, PQ/HDR10 and BT.2020 | no |

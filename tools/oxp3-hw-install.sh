@@ -74,7 +74,7 @@ ORIG_ARGS=("$@")
 SUDO_SHIM_DIR=""
 
 # fixed component order: root-heavy first, user scope last
-ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio sched gfx xmx mango decky)
+ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio sched gfx hdr xmx mango decky)
 
 say() { printf '\n== %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -86,7 +86,7 @@ usage() {
 
 Options:
   --all                     every component (volume sleep bluetooth power imu leds rgb audio decky)
-  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --sched --gfx --xmx --mango --decky
+  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --sched --gfx --hdr --xmx --mango --decky
                             select components (repeatable; --all selects every one)
   --volume-daemon           with --volume: install the LEGACY oxp3-voltap daemon
                             (grabs an input device; with hhd running it only
@@ -886,6 +886,17 @@ comp_mango_install() {
     fi
 }
 
+comp_hdr_install() {
+    say "Gamemode HDR/PQ output (launcher flags, persistent)"
+    local tool=$repo/tools/display/gamemode-hdr.sh
+    [[ -x $tool ]] || { warn "missing $tool"; return 0; }
+    if (( DRY_RUN )); then
+        printf '  [dry-run] %s status ; %s install\n' "$tool" "$tool"
+        return 0
+    fi
+    "$tool" install
+}
+
 comp_decky_install() {
     say "Decky status plugin (verified zip -> the Decky plugins directory)"
     local target artifact out
@@ -1366,7 +1377,7 @@ add_component() {
 
 while (( $# )); do
     case $1 in
-        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--sched|--gfx|--xmx|--mango|--decky)
+        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--sched|--gfx|--hdr|--xmx|--mango|--decky)
             add_component "${1#--}"
             [[ $1 == --volume ]] && VOLUME_MODE=plugin ;;
         --volume-daemon)
