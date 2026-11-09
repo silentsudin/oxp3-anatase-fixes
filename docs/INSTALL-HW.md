@@ -224,14 +224,17 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Volume keys | awaiting-install | `vol.hold` | a hold yields exactly one step, not a ramp | yes |
 | Home button and top LEDs | awaiting-install | `hid.rule` | /etc/udev/rules.d/90-oxp3-hid.rules present | no |
 | Home button and top LEDs | awaiting-install | `hid.access` | the vendor hidraw node is writable by the invoking user | no |
+| Home button and top LEDs | awaiting-install | `hid.node` | the selected node is the one whose report descriptor claims usage page 0xFF00 | no |
 | Home button and top LEDs | awaiting-install | `led.status` | oxp3-led.py status lists the device, zones and presets | no |
 | Home button and top LEDs | awaiting-install | `led.zones` | all 5 zones and 11 presets are addressable | no |
+| Home button and top LEDs | awaiting-install | `led.sides` | empty --sides encodes 0 frames and a real selection still encodes them (dry-run) | no |
 | Home button and top LEDs | awaiting-install | `homebtn.unit` | oxp3-homebtn.service is active (running) | no |
 | Home button and top LEDs | awaiting-install | `homebtn.mapping` | a press becomes KEY_HOMEPAGE | no |
 | Home button and top LEDs | awaiting-install | `homebtn.press` | this boot's user journal has listening and pressed lines | no |
 | Home button and top LEDs | awaiting-install | `led.write` | one solid frame is accepted by the device | no |
 | Body RGB zones | awaiting-install | `rgbd.unit` | oxp3-rgbd.service active and ~/.config/oxp3-rgb.toml present | no |
 | Body RGB zones | awaiting-install | `rgbd.check` | PASS config parses (5 zones, N frames) | no |
+| Body RGB zones | awaiting-install | `rgbd.timing` | the hhd journal is readable (the settle/debounce watcher path) and the example config encodes frames | no |
 | Suspend and wake policy | awaiting-install | `sleep.mem` | /sys/power/mem_sleep selects [s2idle] | no |
 | Suspend and wake policy | awaiting-install | `sleep.units` | oxp3-sleep-wakeup is active and reports the pre/log units | no |
 | Suspend and wake policy | awaiting-install | `sleep.wakeup` | every listed USB id / PCI address has wakeup disabled | no |
@@ -253,16 +256,22 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Power envelope (PL1/PL2/PL4) | working | `pwr.zones` | both intel-rapl:0 and intel-rapl-mmio:0 report PL1/PL2/PL4 | no |
 | Power envelope (PL1/PL2/PL4) | working | `pwr.pl1` | MSR PL1 equals MMIO PL1 (tdp-sync invariant) | no |
 | Power envelope (PL1/PL2/PL4) | working | `pwr.profile` | the saved profile maps to the live platform_profile | no |
+| Power envelope (PL1/PL2/PL4) | working | `pwr.order` | a dry-run profile switch orders raises ceiling-first and puts every lowering last | no |
 | Fan curve | partial | `pwr.fan` | fan1_input 1-12000 rpm and pwm1_enable 1 or 2 | no |
+| Fan curve | partial | `fan.curvedup` | a curve file with duplicate temperature points is accepted (dry-run, one step) | no |
+| Fan curve | partial | `fan.savemode` | the state file records mode=manual after pwm1_enable was written | yes |
 | Battery care | partial | `bat.threshold` | a readable charge_control_end_threshold (80 when limited) | no |
 | Battery care | partial | `bat.behaviour` | charge_behaviour lists inhibit-charge | no |
+| Battery care | partial | `bat.limit` | no argument resolves to 100 % ('off') in a dry run and the real call is refused without root | no |
 | Adaptive TDP | awaiting-install | `pwr.adaptive` | inactive and disabled after install; FAIL when enabled but dead | no |
+| Adaptive TDP | awaiting-install | `pwr.ac` | on_ac is detected (so the battery clamps are live); SKIP with no AC/Mains node | no |
 | SAGV / memory frequency | blocked | cmd: `tools/oxp3-sagv.sh status` | display v30, enable_sagv 0400, no point interface, MCHBAR unreadable, RAPL domains listed | no |
 | Display HDR / vibrance / colour | working | `dsp.hdr` | HDR/WCG/depth/VRR reported for eDP-1 (HDR off is a valid state) | no |
 | Display HDR / vibrance / colour | working | `dsp.icc` | the ICC profile state is reported | no |
 | Display HDR / vibrance / colour | working | `dsp.panel` | the EDID verdict has 10-bit, PQ/HDR10 and BT.2020 | no |
 | Display HDR / vibrance / colour | working | `dsp.vibrance` | the saturation shader tooling is present | no |
 | IMU / gyro | not-a-gap | `imu.selftest` | RESULT: PASS (0 warning(s)) - IMU usable, gyro exposed to Steam | no |
+| IMU / gyro | not-a-gap | `imu.iio` | the ACPI-id/label device is selected, not the i2c in_anglvel_x_raw fallback | no |
 | Camera / IPU7 | not-a-gap | cmd: `grep -H . /sys/bus/acpi/devices/OVTI*/status /sys/bus/acpi/devices/INT3472*/status` | 0 on every listed device (camera function disabled / absent) | no |
 | Fingerprint reader | partial | cmd: `python3 -m unittest discover -s tools/fingerprint/tests` | Ran 85 tests ... OK | no |
 | Fingerprint reader | partial | cmd: `tools/fingerprint/tests/run-c-tests.sh` | ok: 324 checks, 10 vectors (podman fallback when no host compiler) | no |

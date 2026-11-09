@@ -27,8 +27,15 @@
 #     ~/.config/oxp3-rgb.toml when present (otherwise leaves that zone off)
 #   * a real s2idle suspend via tools/sleep-power-measure.sh suspend (needs
 #     root; default 60 s, override OXP3_VERIFY_SUSPEND_S)
-# Persistent configuration is changed only with --with-changes, which currently
-# only means "activate the speaker EQ drop-in" (tools/audio/eq-on.sh).
+# Persistent configuration is changed only with --with-changes, which runs the
+# two opt-in writes: activating the speaker EQ drop-in (tools/audio/eq-on.sh) and
+# the saved fan-mode probe (fan.savemode), which snapshots and restores
+# /etc/oxp3/power.json and pwm1_enable around the one write it needs.
+#
+# The deferred risks listed in docs/UNIT-TESTS.md section 5 are covered by
+# read-only probes in the default mode (hid.node, led.sides, rgbd.timing,
+# imu.iio, pwr.ac, pwr.order, fan.curvedup, bat.limit, inst.paths); fan.savemode
+# is the only one that needs --full --with-changes.
 #
 # States and exit code:
 #   PASS    the fix is present and the probe proved it
@@ -272,6 +279,13 @@ parse_led_status() { # stdin: tools/oxp3-led.py status
 
 parse_rgbd_check() { # stdin: tools/oxp3-rgbd.py --check
     awk '
+        /^device[[:space:]]*:/ {
+            line = $0; sub(/^[^:]*:[[:space:]]*/, "", line); dev = line
+        }
+        /^journal[[:space:]]*:/ {
+            line = $0; sub(/^[^:]*:[[:space:]]*/, "", line)
+            journal = (line ~ /^readable/) ? "readable" : "fallback"
+        }
         /^config[[:space:]]*:/ {
             line = $0; sub(/^[^:]*:[[:space:]]*/, "", line); cfg = line
         }
@@ -279,7 +293,10 @@ parse_rgbd_check() { # stdin: tools/oxp3-rgbd.py --check
             line = $0; sub(/^[^:]*:[[:space:]]*/, "", line); split(line, a, /[[:space:]]+/); frames = a[1]
         }
         /^[[:space:]]*zone / { zones++ }
-        END { printf "CONFIG=%s\nFRAMES=%s\nZONES=%d\n", cfg, frames, zones + 0 }
+        END {
+            printf "DEVICE=%s\nJOURNAL=%s\nCONFIG=%s\nFRAMES=%s\nZONES=%d\n",
+                dev, journal, cfg, frames, zones + 0
+        }
     '
 }
 
@@ -317,6 +334,287 @@ parse_sleep_audit() { # stdin: tools/sleep-power-measure.sh audit
         /device wakeup \/ runtime PM/ { wake = 1 }
         END { printf "MEM=%s\nRECORD=%d\nWAKE_TABLE=%d\n", mem, record + 0, wake + 0 }
     '
+}
+
+# --- deferred-risk probes (docs/UNIT-TESTS.md section 5) --------------------
+# Each of these is a pure function over a fixture so --selftest can pin every
+# branch, including the SKIP paths; the checks below only gather the real input.
+
+hid_vendor_node() { # DEVICE dir with a uevent file; true for 1a86:fe00
+    awk -F'[=:]' '
+        /^HID_ID=/ { v = $3; p = $4; sub(/^0+/, "", v); sub(/^0+/, "", p)
+                     if (toupper(v) == "1A86" && toupper(p) == "FE00") found = 1
+                     exit }
+        END { exit !found }
+    ' "$1/uevent" 2>/dev/null
+}
+
+hid_report() { # DIR (default /sys/class/hidraw) -> candidate map
+    # Every 1a86:fe00 hidraw node without an input child, and whether its
+    # report descriptor advertises usage page 0xFF00 (HID item 06 00 ff).
+    local root=${1:-/sys/class/hidraw} d node hex total=0 vendor=0 nodes="" vnodes=""
+    for d in "$root"/hidraw*; do
+        [ -d "$d/device" ] || continue
+        hid_vendor_node "$d/device" || continue
+        [ -d "$d/device/input" ] && continue
+        node=/dev/$(basename "$d")
+        hex=$(od -An -v -tx1 "$d/device/report_descriptor" 2>/dev/null | tr -d ' \n')
+        total=$((total + 1)); nodes="$nodes $node"
+        case $hex in
+            *0600ff*) vendor=$((vendor + 1)); vnodes="$vnodes $node" ;;
+        esac
+    done
+    printf 'TOTAL=%d\nVENDOR=%d\nNODES=%s\nVENDOR_NODES=%s\n' \
+        "$total" "$vendor" "${nodes# }" "${vnodes# }"
+}
+
+parse_hid_verdict() { # stdin: SELECTED, SEL_VENDOR + hid_report
+    local selected="" sel_vendor=0 total=0 vendor=0 vnodes="" key val verdict why
+    while IFS='=' read -r key val; do
+        case $key in
+            SELECTED) selected=$val ;;
+            SEL_VENDOR) sel_vendor=$val ;;
+            TOTAL) total=$val ;;
+            VENDOR) vendor=$val ;;
+            VENDOR_NODES) vnodes=$val ;;
+        esac
+    done
+    case $total in ''|*[!0-9]*) total=0 ;; esac
+    case $vendor in ''|*[!0-9]*) vendor=0 ;; esac
+    if [ "$total" -eq 0 ]; then
+        verdict=skip
+        why="no 1a86:fe00 hidraw node without an input child (device absent or the rule/install is missing)"
+    elif [ -z "$selected" ]; then
+        verdict=fail
+        why="oxp3_hid.find_vendor_hidraw() returned nothing although $total candidate node(s) exist"
+    elif [ "$sel_vendor" = 1 ]; then
+        verdict=pass
+        if [ "$vendor" -gt 1 ]; then
+            why="selected $selected advertises usage page 0xFF00; $vendor candidates do, so the first-match choice is ambiguous"
+        else
+            why="selected $selected is the only candidate and advertises usage page 0xFF00"
+        fi
+    elif [ "$vendor" -gt 0 ]; then
+        verdict=fail
+        why="selected $selected does not advertise usage page 0xFF00, but$vnodes does: the descriptor is ignored"
+    else
+        verdict=unknown
+        why="no candidate descriptor advertises usage page 0xFF00; decide with od -An -tx1"
+    fi
+    printf 'VERDICT=%s\nWHY=%s\nTOTAL=%d\nVENDOR=%d\n' "$verdict" "$why" "$total" "$vendor"
+}
+
+parse_dry_frames() { # stdin: oxp3-led.py --dry-run output
+    awk '
+        /^dry-run / { dry++ }
+        /^send / { send++ }
+        END { printf "FRAMES=%d\nSENT=%d\n", dry + 0, send + 0 }
+    '
+}
+
+parse_adaptive_decision() { # FILE: oxp3-adaptivetdp.py --dry-run --once --json
+    have python3 || return 3
+    python3 - "$1" <<'PY'
+import json, sys
+# run_tool merges stderr into the same file, and the daemon always prints its
+# human-readable change line there: decode the first JSON document only.
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    data = json.JSONDecoder().raw_decode(text.lstrip())[0]
+except Exception:
+    sys.exit(3)
+battery = data.get("battery") or {}
+on_ac = data.get("on_ac")
+capacity = battery.get("capacity_pct")
+print("ON_AC=%s" % ("" if on_ac is None else ("true" if on_ac else "false")))
+print("WANT=%s" % (data.get("want") or ""))
+print("CAPACITY=%s" % ("" if capacity is None else capacity))
+print("BAT_STATUS=%s" % (battery.get("status") or ""))
+print("POLICY=%s" % (data.get("policy") or ""))
+PY
+}
+
+parse_ac_verdict() { # stdin: ON_AC WANT CAPACITY BAT_STATUS FLOOR ALLOW
+    local on_ac="" want="" capacity="" status="" floor=20 allow=false key val
+    while IFS='=' read -r key val; do
+        case $key in
+            ON_AC) on_ac=$val ;;
+            WANT) want=$val ;;
+            CAPACITY) capacity=$val ;;
+            BAT_STATUS) status=$val ;;
+            FLOOR) floor=$val ;;
+            ALLOW) allow=$val ;;
+        esac
+    done
+    local numeric=1
+    case $capacity in ''|*[!0-9]*) numeric=0 ;; esac
+    local verdict why
+    if [ "$on_ac" = true ] || [ "$on_ac" = false ]; then
+        # The AC/Mains node exists, so read_ac_online() never returns None and
+        # both battery clamps in Policy.target() are live.
+        if [ "$on_ac" = false ] && [ "$want" = performance ] && [ "$allow" != true ]; then
+            verdict=fail
+            why="AC state is readable (on_ac=false) but performance was chosen on battery: the clamp is broken"
+        else
+            verdict=pass
+            why="AC state detected (on_ac=$on_ac): the battery clamp in the policy is live"
+        fi
+    elif [ "$status" = Discharging ]; then
+        # No AC node: on_ac is None and both clamps are skipped. Only a policy
+        # that stays at balanced or below is safe here.
+        if [ "$want" = performance ] && [ "$allow" != true ]; then
+            verdict=fail
+            why="no AC/Mains node (on_ac unknown) and the battery is discharging, but performance was allowed: both battery clamps are skipped"
+        elif [ "$numeric" = 1 ] && [ "$capacity" -le "$floor" ] && [ "$want" != quiet ]; then
+            verdict=fail
+            why="no AC/Mains node and the battery is at ${capacity} % (floor ${floor} %), but the policy did not force quiet"
+        else
+            verdict=skip
+            why="no AC/Mains node: on_ac is unknown, so both battery clamps are skipped (deferred risk); battery ${capacity:-?} % ${status:-?}"
+        fi
+    else
+        verdict=skip
+        why="no AC/Mains node: on_ac is unknown, so both battery clamps are skipped (deferred risk); battery status=${status:-?}"
+    fi
+    printf 'VERDICT=%s\nWHY=%s\n' "$verdict" "$why"
+}
+
+parse_limit_order() { # DRYRUN_JSON STATUS_JSON -> order invariant per domain
+    have python3 || return 3
+    python3 - "$1" "$2" <<'PY'
+import json, sys
+def load(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return json.load(fh)
+    except Exception:
+        sys.exit(3)
+dry, live = load(sys.argv[1]), load(sys.argv[2])
+idx = {"pl1": 0, "pl2": 1, "pl4": 2}
+limits = {}
+for dom in live.get("domains") or []:
+    cons = dom.get("constraints") or {}
+    limits[dom.get("path")] = {k: (cons.get(k) or {}).get("limit_uw") for k in idx}
+domains = mixed = 0
+problems = []
+for rep in dry.get("domain_reports") or []:
+    order, want, path = [], {}, None
+    for w in rep.get("written") or []:
+        level = w.get("level")
+        if level not in idx:
+            continue
+        path = path or w.get("domain")
+        if level not in order:
+            order.append(level)
+            want[level] = w.get("value_uw")
+    if not order:
+        continue
+    domains += 1
+    current = limits.get(path) or {}
+    raises = [l for l in order
+              if want.get(l) is not None and current.get(l) is not None
+              and want[l] > current[l]]
+    lowers = [l for l in order
+              if want.get(l) is not None and current.get(l) is not None
+              and want[l] < current[l]]
+    if raises and lowers:
+        mixed += 1
+        last_raise = max(order.index(l) for l in raises)
+        first_lower = min(order.index(l) for l in lowers)
+        if last_raise > first_lower:
+            problems.append("%s: a lowering write precedes a raising one (%s)"
+                            % (path, ",".join(order)))
+    for seq, label in ((raises, "raising"), (lowers, "lowering")):
+        nums = [idx[l] for l in order if l in seq]
+        if label == "raising" and nums != sorted(nums, reverse=True):
+            problems.append("%s: %s writes are not ceiling-first (%s)"
+                            % (path, label, ",".join(seq)))
+        if label == "lowering" and nums != sorted(nums):
+            problems.append("%s: %s writes are not floor-first (%s)"
+                            % (path, label, ",".join(seq)))
+print("DOMAINS=%d" % domains)
+print("MIXED=%d" % mixed)
+print("VIOLATION=%d" % (1 if problems else 0))
+print("WHY=%s" % ("; ".join(problems) or
+                  "raises are ceiling-first and precede every lowering"))
+PY
+}
+
+parse_curve_summary() { # FILE: oxp3-powerctl.py fan curve --dry-run --once --json
+    have python3 || return 3
+    python3 - "$1" <<'PY'
+import json, os, sys
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(3)
+pwm = data.get("last_pwm")
+print("OK=%s" % ("true" if data.get("ok") else "false"))
+print("PWM=%s" % ("" if pwm is None else pwm))
+print("STEPS=%s" % (data.get("steps", "")))
+print("DRY=%s" % ("true" if data.get("dry_run") else "false"))
+print("CURVE=%s" % os.path.basename(data.get("curve") or ""))
+PY
+}
+
+parse_battery_limit_dry() { # FILE: oxp3-powerctl.py battery limit --dry-run --json
+    have python3 || return 3
+    python3 - "$1" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(3)
+print("REQUESTED=%s" % data.get("requested", ""))
+print("APPLIED=%s" % data.get("applied", ""))
+print("DRY=%s" % ("true" if data.get("dry_run") else "false"))
+print("CAPABILITY=%s" % (data.get("capability") or ""))
+PY
+}
+
+parse_inst_paths() { # stdin: SYS_FW, HOST_MESA, FLATPAK_MESA from install-common.sh
+    awk '
+        /^SYS_FW=/ { fw = substr($0, 8) }
+        /^HOST_MESA=/ { mesa = substr($0, 11) }
+        /^FLATPAK_MESA=/ { flat = substr($0, 14) }
+        END {
+            verdict = "pass"; why = "helpers resolve against the live host paths"
+            if (mesa == "") {
+                verdict = "fail"; why = "host_mesa found no /usr/lib64/libgallium-*.so"
+            } else if (mesa !~ /^[0-9]/) {
+                verdict = "fail"; why = "host_mesa returned an implausible version '" mesa "'"
+            } else if (flat != "same as the host" && flat != "Anatase'\''s (not ours)") {
+                verdict = "fail"; why = "flatpak_mesa returned an unknown verdict '" flat "'"
+            } else if (fw != "" && fw !~ /^\/usr\/lib\/firmware\//) {
+                verdict = "fail"; why = "sys_fw returned a path outside /usr/lib/firmware: " fw
+            }
+            printf "VERDICT=%s\nWHY=%s\nSYS_FW=%s\nHOST_MESA=%s\nFLATPAK_MESA=%s\n",
+                verdict, why, fw, mesa, flat
+        }
+    '
+}
+
+parse_iio_devices() { # DIR (default /sys/bus/iio/devices) -> primary/fallback map
+    local root=${1:-/sys/bus/iio/devices} d name label gyro
+    local primary="" fallback="" pcount=0 fcount=0
+    for d in "$root"/iio:device*; do
+        [ -d "$d" ] || continue
+        name=$(read1 "$d/name" || true)
+        label=$(read1 "$d/label" || true)
+        gyro=$(read1 "$d/in_anglvel_x_raw" || true)
+        if printf '%s' "$name" | grep -q '10EC5280' || [ "$label" = accel-display ]; then
+            pcount=$((pcount + 1))
+            [ -z "$primary" ] && primary=$(basename "$d")
+        elif printf '%s' "$name" | grep -q '^i2c-' && [ -n "$gyro" ]; then
+            fcount=$((fcount + 1))
+            [ -z "$fallback" ] && fallback=$(basename "$d")
+        fi
+    done
+    printf 'PRIMARY=%s\nPRIMARY_COUNT=%d\nFALLBACK=%s\nFALLBACK_COUNT=%d\n' \
+        "$primary" "$pcount" "$fallback" "$fcount"
 }
 
 status_indicator() { # FILE ID -> "state<TAB>value"
@@ -431,6 +729,10 @@ powerctl_cmd() {
     fi
 }
 
+# oxp3-powerctl's saved state (profile/limits/fan). --with-changes snapshots
+# and restores this file; no default or --full run ever writes it.
+POWER_STATE=/etc/oxp3/power.json
+
 watts() { awk -v u="${1:-0}" 'BEGIN{printf "%.2f", u / 1000000}'; }
 
 # ------------------------------------------------------------------ 1. volume
@@ -537,6 +839,39 @@ check_leds() {
         record hid.access leds "hidraw node writable by user" FAIL "rule installed but node is still not writable by $(id -un)" "$node (permissions ${perm:-?})" "sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw --action=change ; then re-plug the device"
     fi
 
+    # Deferred risk (docs/UNIT-TESTS.md section 5): find_vendor_hidraw() ignores
+    # the report descriptor and takes the first input-less 1a86:fe00 node. The
+    # descriptor is the only thing that proves the node is the vendor collection
+    # (usage page 0xFF00), so compare the tool's choice with every candidate.
+    local hrep hsel hselv hvn hver hwhy n
+    if [ ! -f "$REPO/tools/oxp3_hid.py" ] || ! have python3; then
+        record hid.node leds "vendor hidraw node selection" SKIP "oxp3_hid.py or python3 missing" "$REPO/tools/oxp3_hid.py" ""
+    else
+        hrep=$(hid_report /sys/class/hidraw)
+        hsel=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import oxp3_hid
+print(oxp3_hid.find_vendor_hidraw() or "")' "$REPO/tools" 2>/dev/null) || hsel=""
+        hselv=0
+        hvn=$(printf '%s\n' "$hrep" | sed -n 's/^VENDOR_NODES=//p')
+        for n in $hvn; do [ "$n" = "$hsel" ] && hselv=1; done
+        hrep=$(printf 'SELECTED=%s\nSEL_VENDOR=%s\n%s\n' "$hsel" "$hselv" "$hrep" | parse_hid_verdict)
+        hver=$(printf '%s\n' "$hrep" | sed -n 's/^VERDICT=//p')
+        hwhy=$(printf '%s\n' "$hrep" | sed -n 's/^WHY=//p')
+        case $hver in
+            pass)
+                record hid.node leds "vendor hidraw node selection" PASS "$hwhy" "candidates: $(printf '%s\n' "$hrep" | sed -n 's/^VENDOR=//p') of $(printf '%s\n' "$hrep" | sed -n 's/^TOTAL=//p') advertise usage page 0xFF00" ""
+                ;;
+            fail)
+                record hid.node leds "vendor hidraw node selection" FAIL "$hwhy" "the firmware accepts frames on the node with usage page 0xFF00" "od -An -tx1 /sys/class/hidraw/hidraw*/device/report_descriptor | grep -n '06 00 ff' ; then make the descriptor authoritative in oxp3_hid.find_vendor_hidraw() and update docs/UNIT-TESTS.md"
+                ;;
+            skip)
+                record hid.node leds "vendor hidraw node selection" SKIP "$hwhy" "hidraw nodes for 1a86:fe00: $(printf '%s\n' "$hrep" | sed -n 's/^TOTAL=//p')" "install the udev rule / connect the device, then re-run: tools/oxp3-led.py status"
+                ;;
+            *)
+                record hid.node leds "vendor hidraw node selection" UNKNOWN "$hwhy" "$hsel" "od -An -tx1 /sys/class/hidraw/hidraw*/device/report_descriptor ; docs/hw/home-button-leds.md"
+                ;;
+        esac
+    fi
+
     local hb=oxp3-homebtn.service
     st=$(unit_state "$hb" --user)
     local u_load u_active u_file
@@ -616,6 +951,54 @@ check_leds() {
         fi
     fi
 
+    # Deferred risk (docs/UNIT-TESTS.md section 5): parse_sides([""]) selects
+    # nothing, so --sides "" emits zero frames and exits 0. Prove the empty
+    # selection is a no-op that never widens to "all zones", and that a real
+    # selection still encodes frames -- both with --dry-run, so nothing is sent.
+    if [ ! -x "$led" ] || ! have python3; then
+        record led.sides leds "empty --sides is a no-op" SKIP "oxp3-led.py or python3 missing" "$led" ""
+    else
+        local eframes oframes empty_rc one_rc
+        run_tool led-sides-empty 30 "$led" --dry-run solid 0000ff --sides ''
+        empty_rc=$RUN_RC
+        eframes=$(parse_dry_frames <"$RUN_OUT" | sed -n 's/^FRAMES=//p')
+        run_tool led-sides-one 30 "$led" --dry-run solid 0000ff --sides 6
+        one_rc=$RUN_RC
+        oframes=$(parse_dry_frames <"$RUN_OUT" | sed -n 's/^FRAMES=//p')
+        if [ "$empty_rc" -eq 0 ] && [ "${eframes:-x}" = 0 ] && [ "$one_rc" -eq 0 ] && [ "${oframes:-0}" -gt 0 ]; then
+            record led.sides leds "empty --sides is a no-op" PASS "empty selection: 0 frames; --sides 6: $oframes frame(s) (dry-run)" "a non-empty operand that selects nothing is also silent (deferred: raise instead)" ""
+        elif [ "$empty_rc" -eq 0 ] && [ "${eframes:-x}" != 0 ]; then
+            record led.sides leds "empty --sides is a no-op" FAIL "empty --sides emitted ${eframes:-?} frame(s)" "an empty operand must not select every zone" "python3 tools/oxp3-led.py --dry-run solid 0000ff --sides '' ; fix parse_sides() in tools/oxp3_hid.py"
+        else
+            record led.sides leds "empty --sides is a no-op" FAIL "dry-run failed (empty rc=$empty_rc, real rc=$one_rc)" "$(tail_flat "$RUN_OUT" 2)" "python3 tools/oxp3-led.py --dry-run solid 0000ff --sides 6"
+        fi
+    fi
+
+    # Deferred risk (docs/UNIT-TESTS.md section 5): the rgbd journal watcher,
+    # its settle window and the debounce are event-driven. The one precondition
+    # that is observable read-only is whether the hhd journal is readable at
+    # all; without it the daemon silently falls back to hhdctl polling.
+    local rgbdex=$REPO/tools/oxp3-rgbd.toml.example
+    if [ ! -x "$REPO/tools/oxp3-rgbd.py" ] || ! have python3 || [ ! -f "$rgbdex" ]; then
+        record rgbd.timing leds "rgbd journal/settle path" SKIP "oxp3-rgbd.py, python3 or the example config missing" "$rgbdex" ""
+    else
+        local tdev tjournal tframes
+        run_tool rgbd-timing 30 "$REPO/tools/oxp3-rgbd.py" --config "$rgbdex" --check
+        kv=$(parse_rgbd_check <"$RUN_OUT")
+        tdev=$(printf '%s\n' "$kv" | sed -n 's/^DEVICE=//p')
+        tjournal=$(printf '%s\n' "$kv" | sed -n 's/^JOURNAL=//p')
+        tframes=$(printf '%s\n' "$kv" | sed -n 's/^FRAMES=//p')
+        if [ -n "$tdev" ] && [ "$tjournal" = readable ] && [ "${tframes:-0}" -gt 0 ]; then
+            record rgbd.timing leds "rgbd journal/settle path" PASS "hhd journal readable, vendor node $tdev, example config encodes ${tframes} frame(s)" "settle/debounce re-applies are logged by the daemon; check journalctl --user -u oxp3-rgbd after a resume" ""
+        elif [ -z "$tdev" ]; then
+            record rgbd.timing leds "rgbd journal/settle path" SKIP "vendor hidraw node absent" "$(tail_flat "$RUN_OUT" 1)" "install the udev rule / connect the device, then: tools/oxp3-rgbd.py --config $rgbdex --check"
+        elif [ "$tjournal" != readable ]; then
+            record rgbd.timing leds "rgbd journal/settle path" SKIP "hhd journal not readable: the daemon would poll hhdctl instead" "journal: ${tjournal:-?}" "sudo systemctl status hhd ; journalctl -u hhd -n 5 ; then re-run tools/oxp3-rgbd.py --config $rgbdex --check"
+        else
+            record rgbd.timing leds "rgbd journal/settle path" FAIL "check failed (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "tools/oxp3-rgbd.py --config $rgbdex --check"
+        fi
+    fi
+
     [ "$FULL" -eq 1 ] || return 0
     if [ -z "$node" ] || { [ ! -w "$node" ] && ! is_root; }; then
         record led.write leds "LED write test" SKIP "hidraw node not writable" "${node:-no vendor node}" "install the udev rule, or run: sudo tools/oxp3-verify.sh --full"
@@ -657,6 +1040,33 @@ check_imu() {
         record imu.selftest imu "IMU usable, gyro to Steam" SKIP "IMU not found" "$(tail_flat "$RUN_OUT" 2)" "docs/hw/camera-imu.md"
     else
         record imu.selftest imu "IMU usable, gyro to Steam" FAIL "selftest failed (rc=$RUN_RC)" "${res:-$(tail_flat "$RUN_OUT" 2)}" "tools/oxp3-imu.py info ; docs/hw/camera-imu.md"
+    fi
+
+    # Deferred risk (docs/UNIT-TESTS.md section 5): find_iio()'s fallback takes
+    # the first i2c-* node with any non-empty in_anglvel_x_raw, so a different
+    # IIO device could win. On hardware, prove the primary key (ACPI id
+    # 10EC5280 / label accel-display) is what the tool actually selected.
+    local imap iprim ipc ifbc isel
+    imap=$(parse_iio_devices /sys/bus/iio/devices)
+    iprim=$(printf '%s\n' "$imap" | sed -n 's/^PRIMARY=//p')
+    ipc=$(printf '%s\n' "$imap" | sed -n 's/^PRIMARY_COUNT=//p')
+    ifbc=$(printf '%s\n' "$imap" | sed -n 's/^FALLBACK_COUNT=//p')
+    if [ "${ipc:-0}" -eq 0 ]; then
+        if [ "${ifbc:-0}" -gt 0 ]; then
+            record imu.iio imu "IIO primary-key selection" SKIP "no ACPI-id/label match; the i2c fallback would be used" "fallback candidates: ${ifbc}" "docs/hw/camera-imu.md ; check /sys/bus/iio/devices/iio:device*/name and label"
+        else
+            record imu.iio imu "IIO primary-key selection" SKIP "no IIO device" "" "docs/hw/camera-imu.md"
+        fi
+    else
+        run_tool imu-info 30 "$tool" -j info
+        isel=$(json_get "$RUN_OUT" sysfs 2>/dev/null) || isel=""
+        if [ -n "$isel" ] && [ "$(basename "$isel")" = "$iprim" ]; then
+            record imu.iio imu "IIO primary-key selection" PASS "selected $iprim by ACPI id/label, not the i2c fallback" "fallback candidates present: ${ifbc}" ""
+        elif [ -n "$isel" ]; then
+            record imu.iio imu "IIO primary-key selection" FAIL "selected $(basename "$isel") while $iprim matches the primary key" "the fallback accepted a different device (a non-numeric in_anglvel_x_raw counts)" "tools/oxp3-imu.py -j info ; check name/label of /sys/bus/iio/devices/iio:device*/ ; see docs/UNIT-TESTS.md section 5"
+        else
+            record imu.iio imu "IIO primary-key selection" UNKNOWN "imu info gave no sysfs path (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "tools/oxp3-imu.py -j info"
+        fi
     fi
 }
 
@@ -887,6 +1297,65 @@ check_pwr_rapl() {
 }
 
 # ------------------------------------------------------------------ 5. power / fan
+# --with-changes only: this writes pwm1_enable and /etc/oxp3/power.json, so it
+# runs only when the caller explicitly accepted persistent changes. Everything
+# it touches is snapshotted first and restored (and verified) before the row is
+# recorded, so a failed check never leaves the fan in manual mode.
+check_fan_savemode() { # PC
+    local pc=$1 fan="" h
+    for h in /sys/class/hwmon/hwmon*; do
+        [ "$(read1 "$h/name")" = oxp_ec ] && { fan=$h; break; }
+    done
+    if [ -z "$fan" ]; then
+        record fan.savemode power "saved fan mode after --save" SKIP "no oxp_ec hwmon fan node" "" "sudo modprobe oxpec ; tools/oxp3-powerctl.py fan status"
+        return 0
+    fi
+    if ! is_root; then
+        record fan.savemode power "saved fan mode after --save" SKIP "needs root (writes pwm1_enable and $POWER_STATE)" "" "sudo tools/oxp3-verify.sh --full --with-changes"
+        return 0
+    fi
+    local prev prev_pwm had_state=1 mode save_rc=0 restored=1 now
+    prev=$(read1 "$fan/pwm1_enable" || true)
+    prev_pwm=$(read1 "$fan/pwm1" || true)
+    if [ -f "$POWER_STATE" ]; then
+        cp -p -- "$POWER_STATE" "$WORK/power.json.snapshot" 2>/dev/null || had_state=-1
+    else
+        had_state=0
+    fi
+    if [ "$had_state" -eq -1 ]; then
+        record fan.savemode power "saved fan mode after --save" SKIP "cannot snapshot $POWER_STATE; refusing to write" "" "check permissions on /etc/oxp3, then re-run"
+        return 0
+    fi
+
+    run_tool fan-manual-save 40 "$pc" fan manual --save
+    save_rc=$RUN_RC
+    mode=$(json_get "$POWER_STATE" fan.mode 2>/dev/null) || mode=""
+
+    # Restore first, judge afterwards: never leave the fan forced.
+    if [ -n "$prev" ]; then
+        printf '%s\n' "$prev" >"$fan/pwm1_enable" 2>/dev/null || restored=0
+    fi
+    if [ "$prev" = 1 ] && [ -n "$prev_pwm" ]; then
+        printf '%s\n' "$prev_pwm" >"$fan/pwm1" 2>/dev/null || restored=0
+    fi
+    if [ "$had_state" -eq 1 ]; then
+        cp -p -- "$WORK/power.json.snapshot" "$POWER_STATE" 2>/dev/null || restored=0
+    else
+        rm -f -- "$POWER_STATE" 2>/dev/null || restored=0
+    fi
+    now=$(read1 "$fan/pwm1_enable" || true)
+    if [ -n "$prev" ] && [ "$now" != "$prev" ]; then restored=0; fi
+    if [ "$restored" -ne 1 ]; then
+        record fan.savemode power "saved fan mode after --save" FAIL "could not restore the live fan mode (was $prev, now ${now:-?})" "state file restored: $([ "$had_state" -eq 1 ] && echo yes || echo removed)" "echo ${prev:-2} | sudo tee $fan/pwm1_enable ; restore $POWER_STATE from your backup"
+    elif [ "$save_rc" -ne 0 ]; then
+        record fan.savemode power "saved fan mode after --save" FAIL "fan manual --save failed (rc=$save_rc)" "$(tail_flat "$RUN_OUT" 2)" "sudo tools/oxp3-powerctl.py fan manual --save"
+    elif [ "$mode" = manual ]; then
+        record fan.savemode power "saved fan mode after --save" PASS "saved state records mode=manual after pwm1_enable was written" "restored pwm1_enable=$prev and the previous state file" ""
+    else
+        record fan.savemode power "saved fan mode after --save" FAIL "saved state records mode='${mode:-missing}' although manual mode was written" "a later 'restore' would therefore select auto (deferred risk, docs/UNIT-TESTS.md section 5)" "store mode=manual in cmd_fan when pwm1_enable was written, then update docs/UNIT-TESTS.md"
+    fi
+}
+
 check_power() {
     local pc st_json="" have_json=0
     pc=$(powerctl_cmd)
@@ -904,6 +1373,12 @@ check_power() {
         record pwr.profile power "saved profile applied" SKIP "no powerctl status" "" "same"
         record pwr.fan power "fan sane" SKIP "no powerctl status" "" "same"
         record pwr.adaptive power "adaptive TDP opt-in" SKIP "no powerctl status" "" "same"
+        record pwr.ac power "adaptive AC/battery clamp" SKIP "no powerctl status" "" "same"
+        record pwr.order power "limit write ordering" SKIP "no powerctl status" "" "same"
+        record fan.curvedup power "fan curve duplicate points" SKIP "no powerctl status" "" "same"
+        if [ "$FULL" -eq 1 ] && [ "$WITH_CHANGES" -eq 1 ]; then
+            record fan.savemode power "saved fan mode after --save" SKIP "no powerctl status" "" "same"
+        fi
         check_pwr_rapl
         return 0
     fi
@@ -989,7 +1464,84 @@ check_power() {
         record pwr.adaptive power "adaptive TDP opt-in" PASS "inactive as installed (opt-in)" "UnitFileState=$t_file" ""
     fi
 
+    # Deferred risk (docs/UNIT-TESTS.md section 5): read_ac_online() returns None
+    # when there is no AC/Mains node, and Policy.target() then skips BOTH battery
+    # clamps. Decide from one real unprivileged --dry-run sample, plus the
+    # battery's own status, whether that could allow performance on battery.
+    local atd=$REPO/tools/oxp3-adaptivetdp.py
+    if [ ! -x "$atd" ] || ! have python3; then
+        record pwr.ac power "adaptive AC/battery clamp" SKIP "oxp3-adaptivetdp.py or python3 missing" "$atd" ""
+    else
+        run_tool adaptive-decide 40 "$atd" --dry-run --once --json --log-file ''
+        if [ "$RUN_RC" -ne 0 ]; then
+            record pwr.ac power "adaptive AC/battery clamp" SKIP "dry-run decision unavailable (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "python3 tools/oxp3-adaptivetdp.py --dry-run --once --json --log-file '' ; docs/hw/battery-tdp.md"
+        else
+            local adec acv averdict awhy
+            adec=$(parse_adaptive_decision "$RUN_OUT")
+            acv=$(printf '%s\nFLOOR=20\nALLOW=false\n' "$adec" | parse_ac_verdict)
+            averdict=$(printf '%s\n' "$acv" | sed -n 's/^VERDICT=//p')
+            awhy=$(printf '%s\n' "$acv" | sed -n 's/^WHY=//p')
+            case $averdict in
+                pass) record pwr.ac power "adaptive AC/battery clamp" PASS "$awhy" "$(printf '%s\n' "$adec" | sed -n 's/^POLICY=//p')" "" ;;
+                fail) record pwr.ac power "adaptive AC/battery clamp" FAIL "$awhy" "$(printf '%s\n' "$adec" | sed -n 's/^POLICY=//p')" "no ADP1/Mains node: either set on_ac=False when unknown or refuse to raise above balanced; then update docs/UNIT-TESTS.md section 5" ;;
+                *) record pwr.ac power "adaptive AC/battery clamp" SKIP "$awhy" "$(printf '%s\n' "$adec" | sed -n 's/^POLICY=//p')" "on this unit there is no AC/Mains node; validate the clamp fix on a unit that has/lacks ADP1 (docs/hw/battery-tdp.md)" ;;
+            esac
+        fi
+    fi
+
+    # Deferred risk (docs/UNIT-TESTS.md section 5): a mixed raise/lower switch is
+    # ordered "all raises, then all lowers" rather than per-level. That path is
+    # reachable whenever the live limits sit between two presets (this host:
+    # MMIO PL2 52 W > balanced's 45 W), so a read-only dry-run shows the order.
+    if ! have python3; then
+        record pwr.order power "limit write ordering" SKIP "python3 missing" "" ""
+    else
+        run_tool profile-dry 40 "$pc" profile balanced --dry-run --json
+        if [ "$RUN_RC" -ne 0 ] || ! json_ok "$RUN_OUT"; then
+            record pwr.order power "limit write ordering" SKIP "profile --dry-run unavailable (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "tools/oxp3-powerctl.py profile balanced --dry-run --json"
+        else
+            local okv oviol omixed owhy
+            okv=$(parse_limit_order "$RUN_OUT" "$st_json")
+            oviol=$(printf '%s\n' "$okv" | sed -n 's/^VIOLATION=//p')
+            omixed=$(printf '%s\n' "$okv" | sed -n 's/^MIXED=//p')
+            owhy=$(printf '%s\n' "$okv" | sed -n 's/^WHY=//p')
+            if [ "${oviol:-1}" = 0 ] && [ "${omixed:-0}" -gt 0 ]; then
+                record pwr.order power "limit write ordering" PASS "mixed raise/lower on $omixed domain(s): raises ceiling-first, then lowers floor-first" "$owhy" ""
+            elif [ "${oviol:-1}" = 0 ]; then
+                record pwr.order power "limit write ordering" PASS "no mixed switch with the live limits; raises are ceiling-first" "$owhy" ""
+            else
+                record pwr.order power "limit write ordering" FAIL "write order is not dependency-safe" "$owhy" "order by dependency in apply_limits() (open the ceiling before raising, close the floor before lowering); docs/UNIT-TESTS.md section 5"
+            fi
+        fi
+    fi
+
+    # Deferred risk (docs/UNIT-TESTS.md section 5): curve_pwm()'s t1 == t0 branch
+    # is unreachable for sorted points (the first matching pair wins). Prove on
+    # hardware that a curve file WITH duplicate points is accepted and still
+    # yields a defined pwm -- dry-run, one step, no write.
+    if [ ! -x "$pc" ] || ! have python3; then
+        record fan.curvedup power "fan curve duplicate points" SKIP "oxp3-powerctl missing" "$pc" ""
+    else
+        printf '40 60\n60 100\n60 140\n90 255\n' >"$WORK/dup.curve"
+        run_tool curve-dup 40 "$pc" fan curve --file "$WORK/dup.curve" --dry-run --once --json
+        local ckv cpwm cok
+        ckv=$(parse_curve_summary "$RUN_OUT")
+        cpwm=$(printf '%s\n' "$ckv" | sed -n 's/^PWM=//p')
+        cok=$(printf '%s\n' "$ckv" | sed -n 's/^OK=//p')
+        if [ "$RUN_RC" -eq 2 ]; then
+            record fan.curvedup power "fan curve duplicate points" SKIP "no fan node or temperature sensor" "$(tail_flat "$RUN_OUT" 2)" "tools/oxp3-powerctl.py fan status ; docs/hw/power-fan.md"
+        elif [ "$RUN_RC" -eq 0 ] && [ "$cok" = true ] && printf '%s' "$cpwm" | grep -qE '^[0-9]+$' && [ "$cpwm" -ge 0 ] && [ "$cpwm" -le 255 ]; then
+            record fan.curvedup power "fan curve duplicate points" PASS "curve with a duplicate 60 C point accepted (pwm $cpwm, 1 dry-run step)" "first matching pair wins; the t1 == t0 branch stays unreachable for sorted points" ""
+        else
+            record fan.curvedup power "fan curve duplicate points" FAIL "duplicate-point curve was not accepted (rc=$RUN_RC, pwm '${cpwm:-?}')" "$(tail_flat "$RUN_OUT" 2)" "tools/oxp3-powerctl.py fan curve --file $WORK/dup.curve --dry-run --once ; docs/UNIT-TESTS.md section 5"
+        fi
+    fi
+
     check_pwr_rapl
+
+    if [ "$FULL" -eq 1 ] && [ "$WITH_CHANGES" -eq 1 ]; then
+        check_fan_savemode "$pc"
+    fi
 }
 
 # ------------------------------------------------------------------ 6. battery
@@ -1011,6 +1563,43 @@ check_battery() {
         record bat.behaviour battery "charge behaviour reachable" PASS "charge_behaviour: $bv" "$bf" ""
     else
         record bat.behaviour battery "charge behaviour reachable" FAIL "charge_behaviour not exposed" "" "docs/hw/battery-tdp.md"
+    fi
+
+    # Deferred risk (docs/UNIT-TESTS.md section 5): 'battery limit' with no
+    # percentage resolves to 100 ("off"), so a script that forgot the argument
+    # would clear a saved limit. Prove the contract read-only (--dry-run) and
+    # prove the real no-argument form is refused without root.
+    local pc
+    pc=$(powerctl_cmd)
+    if [ -z "$t" ] || [ -z "$pc" ] || ! have python3; then
+        record bat.limit battery "battery limit default argument" SKIP "no readable charge limit or no oxp3-powerctl" "$pc" "docs/hw/battery-tdp.md"
+        return 0
+    fi
+    local before after lkv lreq lapp ldry drc=0 rrc=0 refuse="" live_ok=1
+    before=$(read1 "$t" || true)
+    run_tool battery-limit-dry 30 "$pc" battery limit --dry-run --json
+    drc=$RUN_RC
+    lkv=$(parse_battery_limit_dry "$RUN_OUT") || lkv=""
+    lreq=$(printf '%s\n' "$lkv" | sed -n 's/^REQUESTED=//p')
+    lapp=$(printf '%s\n' "$lkv" | sed -n 's/^APPLIED=//p')
+    ldry=$(printf '%s\n' "$lkv" | sed -n 's/^DRY=//p')
+    if ! is_root; then
+        run_tool battery-limit-refused 30 "$pc" battery limit
+        rrc=$RUN_RC
+        refuse="unprivileged no-argument call exits $rrc"
+        [ "$(read1 "$t" || true)" = "$before" ] || { refuse="$refuse, THRESHOLD CHANGED"; live_ok=0; }
+    fi
+    after=$(read1 "$t" || true)
+    if [ "$drc" -ne 0 ]; then
+        record bat.limit battery "battery limit default argument" FAIL "dry-run failed (rc=$drc)" "$(tail_flat "$RUN_OUT" 2)" "tools/oxp3-powerctl.py battery limit --dry-run --json"
+    elif [ "$ldry" != true ] || [ "$lapp" != "$before" ] || [ "$after" != "$before" ]; then
+        record bat.limit battery "battery limit default argument" FAIL "dry-run wrote or reported a different live limit" "requested=${lreq:-?} applied=${lapp:-?} dry=${ldry:-?} live=${before:-?}->$after" "tools/oxp3-powerctl.py battery limit --dry-run --json ; docs/hw/battery-tdp.md"
+    elif [ "$live_ok" -ne 1 ] || { [ -n "$refuse" ] && [ "$rrc" -ne 2 ]; }; then
+        record bat.limit battery "battery limit default argument" FAIL "no-argument form is not refused without root" "$refuse" "sudo tools/oxp3-powerctl.py battery limit   (this clears the limit to 100 %)"
+    elif [ "$lreq" = 100 ]; then
+        record bat.limit battery "battery limit default argument" PASS "no argument resolves to 100 % ('off') in a dry run; nothing written${refuse:+; $refuse}" "deferred contract: an explicit 50-100 or 'off' is required to be safe" ""
+    else
+        record bat.limit battery "battery limit default argument" PASS "no argument reports requested=${lreq:-?} (prints instead of writing)" "${refuse:-not executed: running as root}" ""
     fi
 }
 
@@ -1244,7 +1833,45 @@ check_graphics() {
     fi
 }
 
-# ------------------------------------------------------------------ 10. decky
+# ------------------------------------------------------------------ 10b. install helpers
+# Deferred risk (docs/UNIT-TESTS.md section 5): sys_fw/host_mesa/flatpak_mesa
+# hard-code /usr paths, so the unit tests cannot exercise them. Source the
+# library the way its callers do and resolve them against the live host.
+check_install() {
+    local lib=$REPO/tools/lib/install-common.sh kv verdict why fw hmesa fmesa rt
+    if [ ! -f "$lib" ] || ! have bash; then
+        record inst.paths install "install-common host helpers" SKIP "tools/lib/install-common.sh or bash missing" "$lib" ""
+        return 0
+    fi
+    rt=/run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files
+    [ -d "$rt" ] || rt=/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files
+    run_tool install-helpers 20 bash -c '
+        source "$1" || exit 2
+        FLATPAK_RT_FILES=$2
+        echo "SYS_FW=$(sys_fw i915/tgl_dmc_ver2_12.bin)"
+        echo "HOST_MESA=$(host_mesa)"
+        echo "FLATPAK_MESA=$(flatpak_mesa)"
+    ' bash "$lib" "$rt"
+    if [ "$RUN_RC" -ne 0 ]; then
+        record inst.paths install "install-common host helpers" FAIL "sourcing install-common.sh failed (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "bash -c 'source tools/lib/install-common.sh; host_mesa; flatpak_mesa' ; docs/MAINTAINABILITY.md"
+        return 0
+    fi
+    kv=$(parse_inst_paths <"$RUN_OUT")
+    verdict=$(printf '%s\n' "$kv" | sed -n 's/^VERDICT=//p')
+    why=$(printf '%s\n' "$kv" | sed -n 's/^WHY=//p')
+    fw=$(printf '%s\n' "$kv" | sed -n 's/^SYS_FW=//p')
+    hmesa=$(printf '%s\n' "$kv" | sed -n 's/^HOST_MESA=//p')
+    fmesa=$(printf '%s\n' "$kv" | sed -n 's/^FLATPAK_MESA=//p')
+    if [ -n "$fw" ] && [ ! -e "$fw" ]; then
+        record inst.paths install "install-common host helpers" FAIL "sys_fw returned a path that does not exist" "$fw" "check /usr/lib/firmware/$fw ; docs/hw/bluetooth.md firmware section"
+    elif [ "$verdict" != pass ]; then
+        record inst.paths install "install-common host helpers" FAIL "$why" "fw=${fw:-none} host_mesa=${hmesa:-?} flatpak=${fmesa:-?}" "bash -c 'source tools/lib/install-common.sh; host_mesa; flatpak_mesa' ; docs/MAINTAINABILITY.md"
+    else
+        record inst.paths install "install-common host helpers" PASS "sys_fw/host_mesa/flatpak_mesa resolve against the live host" "fw=${fw:-none} host_mesa=$hmesa flatpak=$fmesa" ""
+    fi
+}
+
+# ------------------------------------------------------------------ 11. decky
 check_decky() {
     local dir="" d
     for d in "$HOME/homebrew/plugins/oxp3-status" "$HOME/homebrew/plugins/OXP3 Status"; do
@@ -1413,6 +2040,89 @@ run_selftest() {
     t_contains "sleep/audit-mem" "[s2idle]" "$(kv "$out" MEM)"
     t_eq "sleep/audit-record" 1 "$(kv "$out" RECORD)"
 
+    # deferred-risk probes (docs/UNIT-TESTS.md section 5)
+    out=$(hid_report "$fx/hidraw")
+    t_eq "hid/candidates-total" 1 "$(kv "$out" TOTAL)"
+    t_eq "hid/candidates-vendor" 1 "$(kv "$out" VENDOR)"
+    t_eq "hid/candidates-vendor-node" /dev/hidraw0 "$(kv "$out" VENDOR_NODES)"
+    out=$({ printf 'SELECTED=/dev/hidraw0\nSEL_VENDOR=1\n'; hid_report "$fx/hidraw"; } | parse_hid_verdict)
+    t_eq "hid/composed-pass" pass "$(kv "$out" VERDICT)"
+    out=$(parse_hid_verdict <"$fx/hid-verdict-pass.txt")
+    t_eq "hid/verdict-pass" pass "$(kv "$out" VERDICT)"
+    out=$(parse_hid_verdict <"$fx/hid-verdict-wrong.txt")
+    t_eq "hid/verdict-wrong" fail "$(kv "$out" VERDICT)"
+    t_contains "hid/wrong-why" "does not advertise usage page 0xFF00" "$(kv "$out" WHY)"
+    out=$(parse_hid_verdict <"$fx/hid-verdict-ambiguous.txt")
+    t_eq "hid/verdict-ambiguous" pass "$(kv "$out" VERDICT)"
+    t_contains "hid/ambiguous-why" "ambiguous" "$(kv "$out" WHY)"
+    out=$(parse_hid_verdict <"$fx/hid-verdict-none.txt")
+    t_eq "hid/verdict-none" skip "$(kv "$out" VERDICT)"
+    out=$(parse_hid_verdict <"$fx/hid-verdict-noselect.txt")
+    t_eq "hid/verdict-noselect" fail "$(kv "$out" VERDICT)"
+
+    out=$(parse_dry_frames <"$fx/led-dry-frames.txt")
+    t_eq "led/sides-frames" 2 "$(kv "$out" FRAMES)"
+    out=$(parse_dry_frames <"$fx/led-dry-empty.txt")
+    t_eq "led/sides-empty" 0 "$(kv "$out" FRAMES)"
+
+    out=$(parse_adaptive_decision "$fx/adaptive-ac.json")
+    t_eq "ac/on-ac" true "$(kv "$out" ON_AC)"
+    t_eq "ac/want" quiet "$(kv "$out" WANT)"
+    out=$(parse_adaptive_decision "$fx/adaptive-noac-perf.json")
+    t_eq "ac/on-ac-unknown" "" "$(kv "$out" ON_AC)"
+    t_eq "ac/noac-status" Discharging "$(kv "$out" BAT_STATUS)"
+    av=$(parse_adaptive_decision "$fx/adaptive-ac.json")
+    out=$(printf '%s\nFLOOR=20\nALLOW=false\n' "$av" | parse_ac_verdict)
+    t_eq "ac/ac-pass" pass "$(kv "$out" VERDICT)"
+    av=$(parse_adaptive_decision "$fx/adaptive-ac-perf.json")
+    out=$(printf '%s\nFLOOR=20\nALLOW=false\n' "$av" | parse_ac_verdict)
+    t_eq "ac/ac-perf-fail" fail "$(kv "$out" VERDICT)"
+    av=$(parse_adaptive_decision "$fx/adaptive-noac-perf.json")
+    out=$(printf '%s\nFLOOR=20\nALLOW=false\n' "$av" | parse_ac_verdict)
+    t_eq "ac/noac-perf-fail" fail "$(kv "$out" VERDICT)"
+    av=$(parse_adaptive_decision "$fx/adaptive-noac-quiet.json")
+    out=$(printf '%s\nFLOOR=20\nALLOW=false\n' "$av" | parse_ac_verdict)
+    t_eq "ac/noac-quiet-skip" skip "$(kv "$out" VERDICT)"
+    av=$(parse_adaptive_decision "$fx/adaptive-noac-floor.json")
+    out=$(printf '%s\nFLOOR=20\nALLOW=false\n' "$av" | parse_ac_verdict)
+    t_eq "ac/noac-floor-fail" fail "$(kv "$out" VERDICT)"
+
+    out=$(parse_limit_order "$fx/powerctl-profile-dryrun.json" "$fx/powerctl-status.json")
+    t_eq "order/domains" 2 "$(kv "$out" DOMAINS)"
+    t_eq "order/mixed" 2 "$(kv "$out" MIXED)"
+    t_eq "order/violation" 0 "$(kv "$out" VIOLATION)"
+    out=$(parse_limit_order "$fx/powerctl-profile-bad-order.json" "$fx/powerctl-status.json")
+    t_eq "order/bad-violation" 1 "$(kv "$out" VIOLATION)"
+    t_contains "order/bad-why" "precedes" "$(kv "$out" WHY)"
+
+    out=$(parse_curve_summary "$fx/curve-dup.json")
+    t_eq "curve/pwm" 178 "$(kv "$out" PWM)"
+    t_eq "curve/ok" true "$(kv "$out" OK)"
+    t_eq "curve/dry" true "$(kv "$out" DRY)"
+
+    out=$(parse_battery_limit_dry "$fx/battery-limit-dry.json")
+    t_eq "batlimit/requested" 100 "$(kv "$out" REQUESTED)"
+    t_eq "batlimit/applied" 80 "$(kv "$out" APPLIED)"
+    t_eq "batlimit/dry" true "$(kv "$out" DRY)"
+
+    out=$(parse_inst_paths <"$fx/inst-paths.txt")
+    t_eq "inst/verdict" pass "$(kv "$out" VERDICT)"
+    t_eq "inst/host-mesa" 26.2.4 "$(kv "$out" HOST_MESA)"
+    out=$(parse_inst_paths <"$fx/inst-paths-bad.txt")
+    t_eq "inst/bad-verdict" fail "$(kv "$out" VERDICT)"
+
+    out=$(parse_iio_devices "$fx/iio")
+    t_eq "iio/primary" iio:device0 "$(kv "$out" PRIMARY)"
+    t_eq "iio/primary-count" 1 "$(kv "$out" PRIMARY_COUNT)"
+    t_eq "iio/fallback-count" 1 "$(kv "$out" FALLBACK_COUNT)"
+
+    out=$(parse_rgbd_check <"$fx/rgbd-check.txt")
+    t_eq "rgbd/timing-device" /dev/hidraw4 "$(kv "$out" DEVICE)"
+    t_eq "rgbd/timing-journal" readable "$(kv "$out" JOURNAL)"
+    out=$(parse_rgbd_check <"$fx/rgbd-check-nojournal.txt")
+    t_eq "rgbd/timing-nojournal" fallback "$(kv "$out" JOURNAL)"
+    t_eq "rgbd/timing-nojournal-device" /dev/hidraw4 "$(kv "$out" DEVICE)"
+
     # exit-code mapping
     t_eq "exit/fail" 1 "$(exit_code 10 1 2 0)"
     t_eq "exit/skips-only" 2 "$(exit_code 0 0 3 1)"
@@ -1423,22 +2133,24 @@ run_selftest() {
     local ids count
     ids=$(declared_ids | uniq)
     count=$(printf '%s\n' "$ids" | grep -c .)
-    if [ "$count" -ge 55 ]; then ST_PASS=$((ST_PASS + 1)); else ST_FAIL=$((ST_FAIL + 1)); printf 'FAIL inventory: only %s distinct declared checks\n' "$count"; fi
+    if [ "$count" -ge 65 ]; then ST_PASS=$((ST_PASS + 1)); else ST_FAIL=$((ST_FAIL + 1)); printf 'FAIL inventory: only %s distinct declared checks\n' "$count"; fi
     local expected
     expected=$(printf '%s\n' \
         aud.activate aud.dummy aud.eq aud.model aud.scripts aud.server \
-        bat.behaviour bat.threshold \
+        bat.behaviour bat.limit bat.threshold \
         bt.controller bt.diag bt.dracut bt.files bt.journal \
         decky.backend decky.dir decky.status \
         dsp.hdr dsp.icc dsp.panel dsp.vibrance \
+        fan.curvedup fan.savemode \
         gfx.mesa gfx.working gfx.xe gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc \
         gfx.xmx.icd gfx.xmx.kernels gfx.xmx.trace \
-        hid.access hid.rule \
+        hid.access hid.node hid.rule \
         homebtn.mapping homebtn.press homebtn.unit \
-        imu.selftest \
-        led.status led.write led.zones \
-        pwr.adaptive pwr.fan pwr.pl1 pwr.profile pwr.rapl pwr.zones \
-        rgbd.check rgbd.unit \
+        imu.iio imu.selftest \
+        inst.paths \
+        led.sides led.status led.write led.zones \
+        pwr.ac pwr.adaptive pwr.fan pwr.order pwr.pl1 pwr.profile pwr.rapl pwr.zones \
+        rgbd.check rgbd.timing rgbd.unit \
         sched.scx sched.state sched.unit \
         sleep.audit sleep.measure sleep.mem sleep.stats sleep.suspend sleep.units sleep.wakeup \
         vol.grab vol.hold vol.hwdb vol.unit | sort | uniq)
@@ -1555,6 +2267,7 @@ check_battery
 check_audio
 check_display
 check_graphics
+check_install
 check_decky
 
 CODE=$(exit_code "$PASS_N" "$FAIL_N" "$SKIP_N" "$UNKNOWN_N")

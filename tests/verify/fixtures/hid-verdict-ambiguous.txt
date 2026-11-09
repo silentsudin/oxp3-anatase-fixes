@@ -1,0 +1,6 @@
+SELECTED=/dev/hidraw0
+SEL_VENDOR=1
+TOTAL=2
+VENDOR=2
+NODES=/dev/hidraw0 /dev/hidraw1
+VENDOR_NODES=/dev/hidraw0 /dev/hidraw1

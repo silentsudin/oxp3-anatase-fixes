@@ -8,7 +8,10 @@ cannot drift apart.
 
 Design rules:
 
-- **read-only** — nothing is written, started, stopped or reconfigured;
+- **read-only by default** — status collection writes nothing, starts/stops
+  nothing and reconfigures nothing. The one action, *Run verification*, is
+  opt-in, runs `tools/oxp3-verify.sh` as the desktop user, and keeps its
+  state-changing `full`/`changes` modes behind a confirmation step;
 - **no network** — no HTTP, no store lookups, no update checks;
 - **defensive** — every probe may fail; a failed probe becomes `unknown`/`warn`
   with an explanation, never an exception in the panel;
@@ -55,9 +58,64 @@ Decky methods exposed by `Plugin`:
 |---|---|
 | `get_status()` | the report above (runs off the loader event loop) |
 | `get_info()` | version, resolved home, recorded expected hashes/PL1 |
+| `run_verification(mode, confirm)` | compact result of one `tools/oxp3-verify.sh` run (see below) |
+| `get_verification()` | the last compact result, so the panel keeps it across a remount |
 
 The frontend calls `call("get_status")` every 5 s while the panel is mounted and
 stops on unmount; there is no background/global polling.
+
+## Run verification from the panel
+
+The QAM panel has a **Verification** row with *Run quick verification* and —
+behind *More verification modes…* — *full* and *full + changes*. It calls
+`run_verification(mode, confirm)`, which runs `tools/oxp3-verify.sh` and returns
+a compact result: `ok`, `mode`, `overall` (`pass`/`fail`/`skip`/`error`), the
+`counts`, the process `exit_code`, up to eight failing and eight skipped check
+ids with their summaries and remediation hints, `duration_s` and
+`output_truncated`. `get_verification()` returns the same object for the last
+run, and the panel refreshes `get_status` once the run finishes.
+
+| mode | command | hard timeout |
+|---|---|---|
+| `quick` | `tools/oxp3-verify.sh --json` | 180 s |
+| `full` | `tools/oxp3-verify.sh --full --json` | 900 s |
+| `changes` | `tools/oxp3-verify.sh --full --with-changes --json` | 1200 s |
+
+Safety model:
+
+- **desktop user, not root.** The loader backend normally runs as root; this
+  action drops privileges to `DECKY_USER`, `SUDO_USER` or the owner of the
+  resolved home (`user=`/`group=`), and refuses with `no-deck-user` when no
+  unprivileged identity can be resolved. Root-only checks therefore report
+  SKIP with their normal hints instead of being run.
+- **no shell.** The harness is executed from an argv list with a minimal
+  environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `LC_ALL`, `XDG_RUNTIME_DIR`)
+  and the checkout as `cwd`; nothing is interpolated into a shell.
+- **bounded.** One run at a time (a concurrent call returns `busy`), a hard
+  per-mode timeout, stdout capped at 1 MiB / 20 000 lines and stderr at 8 KiB.
+  Excess bytes are read and discarded, so a hung or chatty tool cannot block on
+  a full pipe or grow the loader's memory.
+- **never raises.** Failures come back as `{ok: false, error: {code,
+  message}}` with a code: `busy`, `timeout`, `bad-json`, `missing-verifier`,
+  `no-deck-user`, `escalation-required`, `verifier-error`, `spawn-failed`,
+  `bad-mode` or `internal`. The panel toasts the message and keeps rendering.
+- **escalation gate.** `full` and `changes` are refused unless the UI sent
+  `confirm=True` after its second click or the operator set
+  `OXP3_STATUS_ALLOW_ESCALATION=1`. `changes` also implies `--full`.
+- **checkout discovery.** The backend uses the checkout containing `main.py`,
+  then `OXP3_STATUS_REPO`, then `~/git/linux_scratch/oxp3-anatase-fixes`,
+  `~/oxp3-anatase-fixes` and `~/.local/share/oxp3-anatase-fixes`. An installed
+  plugin copy without the repository returns `missing-verifier` with a hint.
+
+What it does **not** do: it never reboots or suspends the machine itself (the
+real-suspend step needs root and stays SKIP; the battery measurement is
+read-only and may run), never installs
+packages, firmware or services, never writes system configuration, never asks
+for sudo and never runs `--with-changes` without the confirmation step. The one
+persistent effect it can have — `changes` re-applying the speaker EQ drop-in —
+is the documented purpose of that mode, and `tools/audio/eq-off.sh` removes it.
+For the root-only checks use a terminal:
+`sudo tools/oxp3-verify.sh --full`.
 
 ## Indicators
 
@@ -186,8 +244,8 @@ cd tools/decky-oxp3-status
 ```
 
 `build.sh` writes `build/oxp3-status-<version>.zip` and prints its size and
-sha256. The current artifact is **33,843 bytes**, sha256
-`896ccee7d3c4220fd9b85c459a0a79666424f69b042f7434175198b1bda70eaa`
+sha256. The current artifact is **43,386 bytes**, sha256
+`5d0ec4ef346beb40924d2fe06cbc4fb1c8b9d7207172110fce7a7343fc1e3866`
 (deterministic: fixed zip timestamps, sorted entries; rebuilding from the same
 `src/` reproduces the same hash). The individual steps are also available as
 `npm run typecheck`, `npm run build`, `npm run smoke`, `npm run selftest` and
@@ -260,7 +318,7 @@ the module is already imported in the loader process.
 ```sh
 # backend + synthetic fixture suite (no hardware, no root)
 python3 -m py_compile tools/decky-oxp3-status/main.py
-tools/oxp3-status.sh --selftest      # 60 checks against a temp /sys,/proc,HOME
+tools/oxp3-status.sh --selftest      # 90 checks against a temp /sys,/proc,HOME
 tools/oxp3-status.sh                 # human readable
 tools/oxp3-status.sh --json | python3 -m json.tool >/dev/null
 tools/oxp3-status.sh --strict        # exit code 2 while anything is warn
@@ -279,10 +337,12 @@ sh -n tools/oxp3-status.sh
 sudo journalctl -u plugin_loader.service -b --no-pager | grep -i -E "oxp3|error"
 ```
 
-The last recorded run: `--selftest` 60/60 checks, `--json` valid JSON,
-`--strict` exit 2, `overall=warn`, `23 ok / 5 warn / 0 fail / 0 unknown`,
-`smoke` loaded and rendered `dist/index.js` with the api handshake, and the
-zip hash above was reproduced by both the online and `--offline` builds.
+The last recorded run: `--selftest` 90/90 checks (including the stub-verifier
+fixtures for `run_verification_once`: pass, fail, skip, timeout, bad JSON,
+capped output, escalation refusal and busy), `--json` valid JSON, `--strict`
+exit 2, `smoke` loaded and rendered `dist/index.js` with the api handshake and
+drove the 30 backend verification checks, and the zip hash above was
+reproduced by the `--offline` build.
 
 ### `--selftest`
 
@@ -333,9 +393,24 @@ absent (tracing off), and the Steam Flatpak override still uses
   that the clipboard is unavailable; the CLI `--json` is the reliable export.
 - Battery/temperature/PL1 rows depend on host sensors and can be `unknown`
   when a sensor is missing or restricted; they never fail the panel.
-- The plugin cannot fix anything: every action it offers is read-only. The
-  repair commands stay in `README.md`, `docs/WORKING-BUILD-2026-11-08.md` and
-  the scripts, and require sudo once at install time.
+- The plugin cannot fix anything: status collection is read-only and *Run
+  verification* only reports the harness result. The repair commands stay in
+  `README.md`, `docs/WORKING-BUILD-2026-11-08.md` and the scripts, and require
+  sudo once at install time.
+- The verification button needs a repository checkout on the same host (see
+  *checkout discovery* above). The zip alone does not contain the harness: it
+  would duplicate the repository tools in the bundle, and `main.py` is the only
+  shared implementation.
+- The privilege drop to the desktop user is only exercised on the device: in a
+  non-root checkout the backend runs as the current user, and the offline
+  fixtures run with `run_as_deck_user=False`. The refusal path
+  (`no-deck-user`, no unprivileged identity found while root) is unit-tested;
+  the actual `user=`/`group=` switch needs the installed loader.
+- `full` and `changes` are covered by stub fixtures only (flag assembly, the
+  escalation gate and the parsers). Their live effects — one LED frame, a real
+  suspend attempt and the speaker-EQ drop-in — are not run by the build; the
+  first two stay SKIP because the harness runs as the deck user. Validate them
+  once on the unit with `sudo tools/oxp3-verify.sh --full` in a terminal.
 
 ## Open points
 

@@ -1,0 +1,26 @@
+{
+  "applied": false,
+  "battery": {
+    "capacity_pct": 80,
+    "power_now_w": 0.0,
+    "status": "Discharging"
+  },
+  "dry_run": true,
+  "errors": null,
+  "event": "change",
+  "from_profile": "custom",
+  "limits": {
+    "pl1": 10.0,
+    "pl2": 25.0,
+    "pl4": 90.0
+  },
+  "load_cpu_pct": 7.7,
+  "load_gpu_pct": null,
+  "load_pct": 7.7,
+  "on_ac": false,
+  "policy": "load 8 % < 30 %",
+  "rung": "performance",
+  "temp_c": 60.0,
+  "to_profile": "performance",
+  "want": "performance"
+}

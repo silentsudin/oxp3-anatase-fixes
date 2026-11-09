@@ -1,9 +1,11 @@
 # OXP3 Status — Decky Loader plugin
 
 Live, **read-only** status of the OneXPlayer 3 ("OXP3") Anatase fixes for the
-game that is running now, in the Steam Quick Access Menu. The headless CLI
-(`tools/oxp3-status.sh`) runs the same checks and is the fallback whenever the
-Steam UI or Decky is not available.
+game that is running now, in the Steam Quick Access Menu, plus a **Run
+verification** action that executes the acceptance harness
+(`tools/oxp3-verify.sh`) on demand. The headless CLI (`tools/oxp3-status.sh`)
+runs the same status checks and is the fallback whenever the Steam UI or Decky
+is not available.
 
 The plugin backend (`main.py`) does all the work: it finds the running game,
 collects the configured launch environment, hashes the drivers, reads the
@@ -101,6 +103,18 @@ changed `main.py` needs the service restart because the module is already
 imported in the loader process. Uninstall: remove
 `~/homebrew/plugins/oxp3-status` and restart the loader.
 
+## Verification action
+
+The panel's **Verification** row runs `tools/oxp3-verify.sh --json` (quick),
+`--full --json` or `--full --with-changes --json` and shows `overall`, the
+counts and the top failing/skipped checks. Full and full+changes always need a
+second confirmation click. The backend runs the harness as the desktop user
+with a minimal environment, one run at a time, a hard timeout (180/900/1200 s),
+stdout capped at 1 MiB / 20 000 lines and stderr at 8 KiB; errors are returned
+as `{ok: false, error: {code, message}}` and never raised into the loader.
+Root-only steps stay SKIP — use `sudo tools/oxp3-verify.sh --full` in a
+terminal for those. It never reboots, installs or asks for sudo.
+
 ## Headless CLI (same checks)
 
 ```sh
@@ -121,13 +135,13 @@ environment internally.
 
 ```sh
 python3 -m py_compile main.py
-python3 main.py --selftest          # 60 checks, synthetic fixtures, exit 0
+python3 main.py --selftest          # 90 checks, synthetic fixtures, exit 0
 ./build.sh                          # typecheck + build + smoke + selftest + zip
 python3 -m json.tool plugin.json >/dev/null
 sh -n ../oxp3-status.sh
 ```
 
-Last recorded run on this host: `--selftest` 60/60, `npm run smoke` ok,
+Last recorded run on this host: `--selftest` 90/90, `npm run smoke` ok,
 `--json` valid, `--strict` exit 2, `overall=warn` with
 `23 ok / 5 warn / 0 fail / 0 unknown`. The five warnings are the machine's
 honest state: `sched_ext` disabled / no `scx_cosmos` / `oxp3-gaming-sched.service`

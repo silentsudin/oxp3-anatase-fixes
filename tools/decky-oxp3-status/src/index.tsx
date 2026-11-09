@@ -16,6 +16,7 @@ import {
   Focusable,
   PanelSection,
   PanelSectionRow,
+  Spinner,
   definePlugin,
   staticClasses,
 } from "@decky/ui";
@@ -182,6 +183,286 @@ function GroupSection({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Verification action: one request to the backend, which runs
+// tools/oxp3-verify.sh with a hard timeout and capped output. "full" and
+// "changes" always need an extra confirmation click; the backend refuses them
+// without it unless the operator set OXP3_STATUS_ALLOW_ESCALATION=1.
+// ---------------------------------------------------------------------------
+type VerifyMode = "quick" | "full" | "changes";
+type VerifyOverall = "pass" | "fail" | "skip" | "error";
+
+interface VerifyItem {
+  id: string;
+  title?: string;
+  summary?: string;
+  hint?: string;
+}
+
+interface VerifyCounts {
+  total?: number;
+  pass?: number;
+  fail?: number;
+  skip?: number;
+  unknown?: number;
+}
+
+interface VerificationResult {
+  ok?: boolean;
+  mode?: string;
+  overall?: string;
+  counts?: VerifyCounts;
+  exit_code?: number | null;
+  failures?: VerifyItem[];
+  skips?: VerifyItem[];
+  error?: { code?: string; message?: string } | null;
+  started_at?: string;
+  finished_at?: string;
+  duration_s?: number;
+  output_truncated?: boolean;
+}
+
+const VERIFY_BADGE: Record<VerifyOverall, string> = {
+  pass: "PASS",
+  fail: "FAIL",
+  skip: "SKIP",
+  error: "ERROR",
+};
+
+const VERIFY_STATE: Record<VerifyOverall, StatusState> = {
+  pass: "ok",
+  fail: "fail",
+  skip: "warn",
+  error: "fail",
+};
+
+const VERIFY_CONFIRM: Record<Exclude<VerifyMode, "quick">, string> = {
+  full:
+    "Runs the invasive checks: one solid LED frame and the suspend/battery attempts, which report SKIP without root. It can change live state until the RGB keeper re-applies its config.",
+  changes:
+    "Full, plus re-applies the speaker EQ drop-in in ~/.config/pipewire (persistent until eq-off.sh).",
+};
+
+function asVerifyOverall(value: unknown): VerifyOverall {
+  return value === "pass" || value === "fail" || value === "skip" ? value : "error";
+}
+
+function verifyCountsText(result: VerificationResult): string {
+  const counts = result.counts ?? {};
+  return `${counts.total ?? 0} checks · ${counts.pass ?? 0} pass · ${
+    counts.fail ?? 0
+  } fail · ${counts.skip ?? 0} skip · ${counts.unknown ?? 0} unknown`;
+}
+
+/** The last result (or the error), rendered as compact rows. */
+function VerificationSummary({ result }: { result: VerificationResult }) {
+  const overall = asVerifyOverall(result.overall);
+  const counts = result.counts ?? {};
+  const failures = (result.failures ?? []).slice(0, 3);
+  const skips = (result.skips ?? []).slice(0, 4);
+  const timing =
+    typeof result.duration_s === "number" ? ` · ${result.duration_s.toFixed(1)} s` : "";
+
+  return (
+    <>
+      <PanelSectionRow>
+        <Field
+          label="Last verification"
+          description={
+            result.error
+              ? `error: ${result.error.message ?? "unknown error"}`
+              : `${verifyCountsText(result)}${timing}`
+          }
+        >
+          <StateBadge state={VERIFY_STATE[overall]} text={VERIFY_BADGE[overall]} />
+        </Field>
+      </PanelSectionRow>
+      {failures.map((failure) => (
+        <PanelSectionRow key={`verify-fail-${failure.id}`}>
+          <Field
+            label={failure.id}
+            description={failure.hint || failure.summary || failure.title || undefined}
+          >
+            <span style={{ color: STATE_COLOR.fail }}>{failure.summary || "failed"}</span>
+          </Field>
+        </PanelSectionRow>
+      ))}
+      {skips.length > 0 && (
+        <PanelSectionRow>
+          <Field
+            label="skipped"
+            description={`${counts.skip ?? 0} check(s): ${skips
+              .map((skip) => skip.id)
+              .join(" · ")}`}
+          >
+            <span style={{ opacity: 0.8 }}>SKIP</span>
+          </Field>
+        </PanelSectionRow>
+      )}
+      {result.output_truncated && (
+        <PanelSectionRow>
+          <Field label="note" description="the harness output was capped; re-run it from a terminal for the full report.">
+            <span style={{ opacity: 0.8 }}>truncated</span>
+          </Field>
+        </PanelSectionRow>
+      )}
+    </>
+  );
+}
+
+function VerificationSection({ onFinished }: { onFinished: () => void }) {
+  const [result, setResult] = useState<VerificationResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<Exclude<VerifyMode, "quick"> | null>(null);
+  const [showModes, setShowModes] = useState(false);
+  const mounted = useRef(true);
+  const running = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    void call<[], { available?: boolean; last?: VerificationResult }>("get_verification")
+      .then((payload) => {
+        if (mounted.current && payload?.available && payload.last) {
+          setResult(payload.last);
+        }
+      })
+      .catch(() => {
+        // The section still works: the next run reports its own errors.
+      });
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const run = useCallback(
+    async (mode: VerifyMode, confirm: boolean) => {
+      if (running.current) return;
+      running.current = true;
+      setBusy(true);
+      setPending(null);
+      try {
+        const next = await call<[VerifyMode, boolean], VerificationResult>(
+          "run_verification",
+          mode,
+          confirm
+        );
+        if (mounted.current && next && typeof next === "object") {
+          setResult(next);
+        }
+        onFinished();
+        const body =
+          next?.ok === true
+            ? `${VERIFY_BADGE[asVerifyOverall(next.overall)]} · ${verifyCountsText(next)}`
+            : `not run: ${next?.error?.message ?? "unknown error"}`;
+        toaster.toast({ title: "OXP3 verification", body });
+      } catch (err) {
+        toaster.toast({
+          title: "OXP3 verification",
+          body: `call failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      } finally {
+        running.current = false;
+        if (mounted.current) setBusy(false);
+      }
+    },
+    [onFinished]
+  );
+
+  const overall = result ? asVerifyOverall(result.overall) : null;
+
+  return (
+    <>
+      <PanelSectionRow>
+        <Field
+          label="Verification"
+          description={
+            busy
+              ? "running tools/oxp3-verify.sh as the desktop user; output and time are capped"
+              : result
+              ? undefined
+              : "runs the acceptance harness tools/oxp3-verify.sh (offline, capped, never reboots)"
+          }
+        >
+          {busy ? (
+            <span style={{ display: "inline-flex", gap: 6, alignItems: "center", opacity: 0.9 }}>
+              <Spinner /> running…
+            </span>
+          ) : overall ? (
+            <StateBadge state={VERIFY_STATE[overall]} text={VERIFY_BADGE[overall]} />
+          ) : (
+            <span style={{ opacity: 0.75 }}>not run</span>
+          )}
+        </Field>
+      </PanelSectionRow>
+
+      {!busy && result && <VerificationSummary result={result} />}
+
+      <PanelSectionRow>
+        <ButtonItem layout="below" onClick={() => void run("quick", false)} disabled={busy}>
+          {busy ? "Verifying…" : "Run quick verification"}
+        </ButtonItem>
+      </PanelSectionRow>
+
+      {!busy && !showModes && !pending && (
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => setShowModes(true)}>
+            More verification modes…
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
+
+      {!busy && showModes && !pending && (
+        <>
+          <PanelSectionRow>
+            <Field
+              label="Invasive modes"
+              description="Confirmation is required. Root-only suspend steps are skipped because the harness runs as the deck user."
+              childrenLayout="below"
+            >
+              <span style={{ opacity: 0.8, fontSize: "0.85em" }}>
+                The plugin never reboots, installs or asks for sudo.
+              </span>
+            </Field>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => setPending("full")}>
+              Run full verification…
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => setPending("changes")}>
+              Run full + changes…
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => setShowModes(false)}>
+              Hide modes
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
+
+      {pending && (
+        <>
+          <PanelSectionRow>
+            <Field label={`Confirm ${pending} run`} description={VERIFY_CONFIRM[pending]} />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => void run(pending, true)}>
+              Confirm and run {pending}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => setPending(null)}>
+              Cancel
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
+    </>
+  );
+}
+
 function useStatusReport(intervalMs: number) {
   const [report, setReport] = useState<StatusReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -344,6 +625,8 @@ function StatusPanel() {
             {busy ? "Refreshing…" : "Refresh now"}
           </ButtonItem>
         </PanelSectionRow>
+
+        <VerificationSection onFinished={reload} />
 
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => setProblemsOnly((value) => !value)}>

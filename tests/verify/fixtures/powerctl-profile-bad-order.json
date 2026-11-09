@@ -1,0 +1,65 @@
+{
+  "domain_reports": [
+    {
+      "errors": [],
+      "readback": [],
+      "skipped": [],
+      "written": [
+        {
+          "domain": "/sys/class/powercap/intel-rapl:0",
+          "dry_run": true,
+          "level": "pl1",
+          "value_uw": 25000000
+        },
+        {
+          "domain": "/sys/class/powercap/intel-rapl:0",
+          "dry_run": true,
+          "level": "pl4",
+          "value_uw": 160000000
+        },
+        {
+          "domain": "/sys/class/powercap/intel-rapl:0",
+          "dry_run": true,
+          "level": "pl2",
+          "value_uw": 45000000
+        }
+      ]
+    },
+    {
+      "errors": [],
+      "readback": [],
+      "skipped": [],
+      "written": [
+        {
+          "domain": "/sys/class/powercap/intel-rapl-mmio:0",
+          "dry_run": true,
+          "level": "pl1",
+          "value_uw": 25000000
+        },
+        {
+          "domain": "/sys/class/powercap/intel-rapl-mmio:0",
+          "dry_run": true,
+          "level": "pl2",
+          "value_uw": 45000000
+        },
+        {
+          "domain": "/sys/class/powercap/intel-rapl-mmio:0",
+          "dry_run": true,
+          "level": "pl4",
+          "value_uw": 160000000
+        }
+      ]
+    }
+  ],
+  "dry_run": true,
+  "errors": [],
+  "ok": true,
+  "profile": "balanced",
+  "readback": {},
+  "values": {
+    "pl1": 25.0,
+    "pl2": 45.0,
+    "pl4": 160.0
+  },
+  "warnings": []
+}

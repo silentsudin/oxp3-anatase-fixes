@@ -1,0 +1,4 @@
+DRIVER=hid-generic
+HID_ID=0003:00001A86:0000FE00
+HID_NAME=OneXPlayer consumer
+HID_PHYS=

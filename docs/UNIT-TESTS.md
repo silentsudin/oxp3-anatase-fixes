@@ -87,7 +87,9 @@ These need the device (and most are already covered by
 * **hidraw and uinput I/O.** Frame *encoding* is proven against captured HHD
   frames; whether the firmware accepts a frame, whether the node is really
   usage page 0xFF00, and whether uinput delivers `KEY_HOMEPAGE` are device
-  facts. Writes also depend on the udev rule (`tools/oxp3-hid.rules`).
+  facts. Writes also depend on the udev rule (`tools/oxp3-hid.rules`). The
+  descriptor question is now observed read-only by `hid.node`, and the empty
+  `--sides` no-op by `led.sides`.
 * **RAPL and hwmon writes.** The tests prove the write order, the quantisation
   tolerance and the classification of a refused write, but not that the
   kernel/BIOS accepts a value or that `pwm1` moves the EC fan. Kernel
@@ -109,7 +111,8 @@ These need the device (and most are already covered by
   `sudo` writes and MOK enrolment are not reachable without changing the host.
   The contract, the parsing helpers and the certificate classification are
   tested; `sys_fw`, `host_mesa` and `flatpak_mesa` are not (hard-coded host
-  paths, untestable without a path override).
+  paths, untestable without a path override) — `inst.paths` now sources the
+  library on the live host and calls all three.
 * **Display integration.** `display-mode.sh` and `vibrance.sh` wrap
   `kscreen-doctor`/vulkan state; the EDID and ICC *inputs* they consume are
   tested, the compositor side is not.
@@ -141,21 +144,49 @@ press sequence that used to be swallowed). It is unit-proven and strictly
 closer to the documented rule, but re-run `sudo tools/oxp3-voltap/oxp3-voltap
 probe` / one tap test on the unit.
 
-## 5. Deferred risks (not changed: need device validation or a design call)
+## 5. Deferred risks (device-validated or still deferred)
 
-| risk | why it was not changed | recommendation |
+Each row now says how the risk is validated on the unit. The harness checks are in
+[tools/oxp3-verify.sh](../tools/oxp3-verify.sh); read-only ones run in the default
+mode, `fan.savemode` only with `--full --with-changes` because it writes live and
+persistent state (and restores both).
+
+| risk | status | how it is validated / what remains |
 |---|---|---|
-| `oxp3_hid.find_vendor_hidraw()` ignores the report descriptor (the `if b"\x06\x00\xff" in desc` branch is dead): the first input-less 1a86:fe00 node wins. | Choosing a node by descriptor could select a different `/dev/hidrawN` than the one the firmware uses; needs a check of all three interfaces on the unit. | skipped test `test_descriptor_is_authoritative`; verify `report_descriptor` for hidraw0/1/2 with `od -An -tx1`, then make the descriptor authoritative. |
-| `oxp3-adaptivetdp`: `on_ac is None` (no AC/Mains node) skips **both** battery clamps, so performance stays allowed on battery. | A safer default ("unknown = battery") changes the live policy; validate on a unit with and without `ADP1`. | pinned test; consider `on_ac = False` when unknown, or refuse to raise above balanced with a warning. |
-| `oxp3_hid.parse_sides([""])` selects nothing; `oxp3-led.py --sides ""` emits zero frames and exits 0. | Changing library semantics affects both callers; degenerate input only. | pinned test; raise `SystemExit("no sides selected")` when a non-empty operand yields no ids. |
-| `oxp3-powerctl battery limit` with **no** percentage sets the limit to 100 ("off") instead of printing the current value. | Existing CLI contract; a change is user-visible. | require the argument, or make no-argument print the current threshold. |
-| `oxp3-powerctl fan manual` (no speed) stores `mode="auto"` in the state file even though manual mode was written. | Not exercised by the documented flows; `restore` would then select auto. | store `mode="manual"` when `pwm1_enable` was written. |
-| `oxp3-powerctl.apply_limits` mixed raise/lower: all raising levels are written before lowering ones, not per-level ceiling-first. | A profile switch is always all-raise or all-lower, so the mixed order is unreachable from the CLI today. | if arbitrary per-level writes are added, order by dependency (open the ceiling before raising any limit). |
-| `curve_pwm()`'s `t1 == t0` branch is effectively unreachable for sorted points (the first matching pair wins). | Harmless duplicate-point handling; no incorrect output found. | pinned test; document duplicate points as "last slope wins above the duplicate". |
-| `voltap.release_all()` marks the released codes as a synthetic tail, so a real release from a freshly re-grabbed device could be dropped once. | Device replacement mid-press is rare and the daemon re-scans; needs a real hhd restart to observe. | keep an eye on the `late_release` counter in `--stats` after a hhd restart. |
-| `rgbd --settle`/debounce/HHD journal parsing. | Threads + external journal; a mock would not prove the real line format. | covered by `oxp3-verify.sh` with HHD running; the journal parser itself (`_check_frames`) only accepts `b83f01…` 64-byte envelopes. |
-| `install-common.sh`: `sys_fw`, `host_mesa`, `flatpak_mesa` hard-code `/usr` paths. | They are host-inspection helpers by design; no seam to inject a root. | if they grow logic, add an override variable (`OXP3_USR_PREFIX`) and unit-test it. |
-| `oxp3-imu.find_iio` fallback accepts any non-empty `in_anglvel_x_raw` (a `"0"` counts). | Not wrong on this unit; a different IIO device could match first. | check the `name`/`label` first (already the primary path); a stricter fallback could require a numeric parse. |
+| `oxp3_hid.find_vendor_hidraw()` ignores the report descriptor (the `if b"\x06\x00\xff" in desc` branch is dead): the first input-less 1a86:fe00 node wins. | **covered: `hid.node`** (default) | reads the `report_descriptor` of every 1a86:fe00 node without an input child, checks for usage page `0xFF00` (`06 00 ff`), and compares it with the tool's choice. PASS on this unit (only `/dev/hidraw4` is a candidate); FAIL if the heuristic ever picks a node without the vendor page. The fix (make the descriptor authoritative) is still a design call. |
+| `oxp3-adaptivetdp`: `on_ac is None` (no AC/Mains node) skips **both** battery clamps, so performance stays allowed on battery. | **covered: `pwr.ac`** (default) | one unprivileged `--dry-run --once` sample plus the battery's own `status`: PASS when `on_ac` is readable (this unit: `on_ac=true`), FAIL if performance is allowed while the battery is discharging on a unit without `ADP1`, SKIP otherwise. A safer default is still a design call. |
+| `oxp3_hid.parse_sides([""])` selects nothing; `oxp3-led.py --sides ""` emits zero frames and exits 0. | **covered: `led.sides`** (default) | `--dry-run` proves the empty selection encodes 0 frames (never "all zones") while `--sides 6` still encodes 2; no device access. Raising on a non-empty operand that selects nothing is still a design call. |
+| `oxp3-powerctl battery limit` with **no** percentage sets the limit to 100 ("off") instead of printing the current value. | **covered: `bat.limit`** (default) | `--dry-run --json` shows `requested=100` with the live threshold unchanged, and the real no-argument call is refused without root (exit 2). If the CLI is ever changed to print the current value the row must change with it. |
+| `oxp3-powerctl fan manual` (no speed) stores `mode="auto"` in the state file even though manual mode was written. | **covered: `fan.savemode`** (`--full --with-changes`) | writes manual mode with `--save`, reads `fan.mode` back (PASS only for `manual`), then restores `pwm1_enable`, the previous `pwm` and `/etc/oxp3/power.json` (verified). FAILs loudly if a restore does not take. |
+| `oxp3-powerctl.apply_limits` mixed raise/lower: all raising levels are written before lowering ones, not per-level ceiling-first. | **covered: `pwr.order`** (default) | `profile balanced --dry-run --json` against the live limits; both domains here are genuinely mixed (MMIO PL2 52 W > 45 W), so the row checks the real order: raises ceiling-first, every lowering last. The CLI still cannot emit an arbitrary per-level mixed write. |
+| `curve_pwm()`'s `t1 == t0` branch is effectively unreachable for sorted points (the first matching pair wins). | **covered: `fan.curvedup`** (default) | a curve file with a duplicate 60 C point is accepted and yields a defined pwm in one dry-run step. Duplicate points are documented as "the first matching slope wins". |
+| `voltap.release_all()` marks the released codes as a synthetic tail, so a real release from a freshly re-grabbed device could be dropped once. | **still deferred: manual step** | needs an HHD restart plus one physical rocker press while the daemon re-scans; synthesising it would race the daemon. Procedure below. |
+| `rgbd --settle`/debounce/HHD journal parsing. | **covered: `rgbd.timing`** for the precondition; re-apply still event-driven | proves the vendor node is openable and the hhd journal is readable (without it the daemon silently polls `hhdctl`), and that the example config encodes frames. The settle/debounce re-apply itself is only visible as `HHD settle +Ns` lines in `journalctl --user -u oxp3-rgbd` after a resume. |
+| `install-common.sh`: `sys_fw`, `host_mesa`, `flatpak_mesa` hard-code `/usr` paths. | **covered: `inst.paths`** (default) | sources the library the way its callers do and calls all three against the live host (this unit: `tgl_dmc_ver2_12.bin.xz`, Mesa `26.2.4`, Flatpak "same as the host"). |
+| `oxp3-imu.find_iio` fallback accepts any non-empty `in_anglvel_x_raw` (a `"0"` counts). | **covered: `imu.iio`** (default) | enumerates every `iio:device*` and proves the ACPI-id/label device (`iio:device0`, `10EC5280`/`accel-display`) is what `oxp3-imu.py -j info` selected; FAILs if a fallback device wins while a primary match exists. |
+
+### 5.1 The one remaining manual step: voltap release-all tail
+
+This is the only deferred item that no read-only probe can settle. On the unit, with
+the standalone daemon installed and the rocker working:
+
+```sh
+# 1. restart HHD (the device the daemon re-grabs) and watch our daemon re-scan
+sudo systemctl restart hhd
+journalctl -u oxp3-voltap -b -n 20 | grep 'grabbed /dev/input/event'
+
+# 2. press the rocker volume-up exactly once, then check one step happened
+journalctl -u oxp3-voltap -b | tail -n 5
+
+# 3. read the counters (printed on daemon stop, or with --stats <seconds>)
+sudo systemctl restart oxp3-voltap
+journalctl -u oxp3-voltap -b | grep 'exit stats'
+```
+
+Expected: exactly one OSD step for the press, and `late_release` stays 0 (or grows by
+at most 1 for the press whose own release we synthesised). A second tap for one press,
+or `late_release` growing on *every* press after a restart, is the dropped-release tail
+the risk describes; report it with the journal lines.
 
 ## 6. Integration
 
@@ -175,4 +206,10 @@ probe` / one tap test on the unit.
   `git add tests/unit docs/UNIT-TESTS.md` is deliberate step when committing.
   Until then the `python-compile` suite does not see the new files, but the
   `unit` suite imports every one of them, so a syntax error still fails the run.
+* The ten deferred-risk probes added their own parser fixtures under
+  `tests/verify/fixtures/`; `tools/oxp3-verify.sh --selftest` went from 52 to **95**
+  assertions and the declared check inventory from 60 to **70 ids** (64 rows in the
+  default mode, 68 with `--full`, 70 with `--with-changes`). `tools/repo-test.sh` runs
+  the selftest through the `verify-selftest` and `verify-fixtures` suites, so the
+  offline `--fast` run covers every new parser and every SKIP path.
 * Fast-mode contract holds: no root, no network, no write outside `$TMPDIR`.

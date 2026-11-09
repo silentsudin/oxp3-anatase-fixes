@@ -1,0 +1,8 @@
+device        : /dev/hidraw4
+permissions   : 0o600 uid=0 gid=0
+journal       : NOT readable (poll fallback)
+hhd rgb mode  : None
+config        : /home/user/.config/oxp3-rgb.toml brightness=high
+  zone left_stick   side=0x01 effect=solid  level=high color=ff6600
+  zone top          side=0x06 effect=preset level=high preset=aurora
+frames        : 4 (dry-run with --once --dry-run)

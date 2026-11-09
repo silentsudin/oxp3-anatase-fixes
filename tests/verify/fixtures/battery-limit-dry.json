@@ -1,0 +1,8 @@
+{
+  "applied": 80,
+  "capability": "root-only",
+  "dry_run": true,
+  "ok": true,
+  "path": "/sys/class/power_supply/BAT0/charge_control_end_threshold",
+  "requested": 100
+}

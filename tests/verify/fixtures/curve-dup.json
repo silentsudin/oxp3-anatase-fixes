@@ -1,0 +1,8 @@
+{
+  "curve": "/tmp/dup.curve",
+  "dry_run": true,
+  "last_pwm": 178,
+  "ok": true,
+  "sensor": "/sys/class/hwmon/hwmon7/temp1_input",
+  "steps": 1
+}

@@ -7,6 +7,15 @@ check and a machine-readable `--json` mode. The default run is read-only and nee
 root; `--full` adds the functional tests that are invasive or need root (volume
 tap/hold, one LED write, a real suspend, a battery-drain measurement).
 
+It also carries the *deferred-risk probes* from
+[UNIT-TESTS.md §5](UNIT-TESTS.md#5-deferred-risks-device-validated-or-still-deferred):
+ten checks that turn "needs on-device validation" into an observable row (HID report
+descriptor, unknown-AC battery clamp, empty `--sides`, battery-limit default, fan save
+mode, mixed write order, duplicate curve points, rgbd journal timing, install-common
+host-path helpers, IMU IIO fallback). All but `fan.savemode` are read-only and run in
+the default mode; `fan.savemode` writes live/persistent state and therefore only runs
+with `--full --with-changes`, restoring everything it touched.
+
 Nothing here changes the host: default mode only reads sysfs/procfs/units/journals and
 runs the repository's own read-only tools; `--full` changes live state but never
 persistent configuration; only `--with-changes` touches persistent files (currently
@@ -27,7 +36,8 @@ tools/oxp3-verify.sh --json
 # battery-drain measurement. Run it from the desktop session; suspend part uses sudo.
 sudo tools/oxp3-verify.sh --full
 
-# the opt-in activation that changes persistent user config (speaker EQ drop-in)
+# the opt-in persistent changes: speaker EQ drop-in + one saved fan-mode write
+# (fan.savemode snapshots and restores /etc/oxp3/power.json and pwm1_enable)
 tools/oxp3-verify.sh --full --with-changes
 
 # offline unit tests of the parsers (no hardware; synthetic fixtures)
@@ -64,8 +74,9 @@ scheduler or adaptive TDP, and a plain game launch leaves no igdext trace.
 
 ## 3. Check inventory — what each check proves
 
-Default mode runs **55 checks**; `--full` adds 4 (**59**); `--with-changes` adds
-`aud.activate` (**60**). The ids are stable (they are the `state` keys in `--json`).
+Default mode runs **64 checks**; `--full` adds 4 (**68**); `--with-changes` adds
+`aud.activate` and `fan.savemode` (**70**). The ids are stable (they are the `state`
+keys in `--json`).
 
 ### volume (4; `vol.hold` only in `--full`)
 
@@ -146,7 +157,7 @@ Default mode runs **55 checks**; `--full` adds 4 (**59**); `--with-changes` adds
 | `aud.eq` | the filter-chain sink is loaded | drop-in installed **and** `oxp3_speaker_eq.sink` in `pactl list short sinks`; `SKIP` when the drop-in is not installed |
 | `aud.dummy` | no "Dummy Output" fallback | default sink is a real one; `UNKNOWN` when only `auto_null` exists (no seat here, or the card is wedged — the hint lists the checks) |
 | `aud.model` | the recovered 8-band model is intact | `tools/audio/eq_response.py` |
-| `aud.activate` (persistent) | `eq-on.sh` really activates the sink | runs it, then checks the sink appears; the only persistent change the harness can make |
+| `aud.activate` (persistent) | `eq-on.sh` really activates the sink | runs it, then checks the sink appears; one of the two persistent changes the harness can make |
 
 ### display (4)
 
@@ -182,6 +193,26 @@ Default mode runs **55 checks**; `--full` adds 4 (**59**); `--with-changes` adds
 | `decky.backend` | the backend imports | `python3 -c 'import main'` in the plugin directory |
 | `decky.status` | the status backend agrees the machine is usable | `tools/oxp3-status.sh --json` `overall`; `warn` is reported, `fail` fails this check |
 
+### deferred tooling risks (10, from UNIT-TESTS §5)
+
+| id | proves | how | gate |
+|---|---|---|---|
+| `hid.node` | the selected `/dev/hidrawN` is the node whose report descriptor advertises usage page 0xFF00, not just the first input-less 1a86:fe00 node | scans every candidate, `od`s its `report_descriptor` for `06 00 ff`, compares with `oxp3_hid.find_vendor_hidraw()` | default; `SKIP` with no candidate node |
+| `led.sides` | an empty `--sides` encodes nothing and never widens to "all zones"; a real selection still encodes | `oxp3-led.py --dry-run solid 0000ff --sides ''` (0 frames) vs `--sides 6` (>0 frames) | default; no device access |
+| `rgbd.timing` | the hhd journal the settle/debounce watcher depends on is readable, and the example config encodes frames | `oxp3-rgbd.py --config tools/oxp3-rgbd.toml.example --check` | default; `SKIP` when the node is absent or the journal is not readable (poll fallback) |
+| `imu.iio` | the ACPI-id/label device is selected instead of the permissive `i2c-*` + non-empty `in_anglvel_x_raw` fallback | compares `oxp3-imu.py -j info` `sysfs` with every `iio:device*` name/label | default; `SKIP` when only fallback candidates exist |
+| `pwr.ac` | `read_ac_online()` is not `None`, so both battery clamps in `Policy.target()` are live (or, with no AC node, performance is not allowed on battery) | one unprivileged `oxp3-adaptivetdp.py --dry-run --once --json` sample + the battery's own `status` | default; `SKIP` with no AC node and a safe rung |
+| `pwr.order` | a mixed raise/lower switch orders writes ceiling-first and puts every lowering last | `oxp3-powerctl.py profile balanced --dry-run --json` (the live 35/37/122 vs 35/52/122 limits make this genuinely mixed) | default; read-only |
+| `fan.curvedup` | a curve file **with duplicate temperature points** is accepted and yields a defined pwm | `oxp3-powerctl.py fan curve --file <dup> --dry-run --once --json` | default; `SKIP` when no fan node/temperature sensor |
+| `bat.limit` | `battery limit` with no argument resolves to 100 % ("off") only as a dry run, and the real no-argument call is refused without root | `battery limit --dry-run --json` + the real no-argument call as the invoking user | default; `SKIP` without a readable charge limit |
+| `inst.paths` | `install-common.sh`'s `sys_fw`, `host_mesa`, `flatpak_mesa` resolve against the live `/usr` paths | sources the library and calls the three helpers | default |
+| `fan.savemode` | the state file records `mode=manual` after `pwm1_enable` was written | `fan manual --save`, read `/etc/oxp3/power.json`, then restore the fan mode and the state file | `--full --with-changes` only (writes live + persistent state); `SKIP` without root or fan node |
+
+`rgbd.timing` covers the *precondition* of the daemon-timing risk; the settle/debounce
+re-apply itself is event-driven and is only visible as `HHD settle +Ns` / re-apply
+lines in `journalctl --user -u oxp3-rgbd` after a resume. The `voltap` release-all tail
+remains a manual step (see §9).
+
 ## 4. Fix → check map
 
 | fix (INSTALL-HW.md §) | checks |
@@ -198,7 +229,8 @@ Default mode runs **55 checks**; `--full` adds 4 (**59**); `--with-changes` adds
 | 8 display HDR / ICC / vibrance | `dsp.hdr`, `dsp.icc`, `dsp.panel`, `dsp.vibrance` |
 | 9 Mesa / XMX / sched_ext / xe | `gfx.mesa`, `gfx.xmx.driver`, `gfx.xmx.helper`, `gfx.xmx.igc`, `gfx.xmx.kernels`, `gfx.xmx.icd`, `gfx.xmx.trace`, `gfx.xe`, `gfx.working`, `sched.state`, `sched.scx`, `sched.unit` |
 | 10 Decky plugin | `decky.dir`, `decky.backend`, `decky.status` |
-| (bonus) IMU | `imu.selftest` |
+| (bonus) IMU | `imu.selftest`, `imu.iio` |
+| (deferred, UNIT-TESTS §5) | `hid.node`, `led.sides`, `rgbd.timing`, `pwr.ac`, `pwr.order`, `fan.curvedup`, `bat.limit`, `inst.paths`, (`fan.savemode`) |
 
 ## 5. Expected output on a healthy machine
 
@@ -211,16 +243,18 @@ oxp3-verify 1.0.0  mode=default  kernel=7.2.7-an28.fc45.x86_64  root=no
 
 [PASS ] volume     ...
 ...
-== summary: 55 checks: 47 pass, 0 fail, 8 skip, 0 unknown -> exit 0
+== summary: 64 checks: 56 pass, 0 fail, 8 skip, 0 unknown -> exit 0
 ```
 
 * 8 `SKIP` rows are the documented opt-ins: `vol.*` (3, only when the hhd volume
   patch is used instead of the standalone daemon), `pwr.adaptive` (1), `gfx.xmx.trace`
   (1), `sched.*` (3).
 * Without the Decky plugin, `decky.dir`/`decky.backend` also `SKIP`: 45 pass / 10 skip.
-* `--full` on the same machine: `59 checks: 51 pass, 0 fail, 8 skip` (adds
+* `--full` on the same machine: `68 checks: 60 pass, 0 fail, 8 skip` (adds
   `vol.hold`, `led.write`, `sleep.measure`, `sleep.suspend`). Run it on battery;
   `sleep.measure` is `SKIP` on AC by design.
+* `--full --with-changes`: `70 checks` — the two extra rows are `aud.activate` and
+  `fan.savemode`, the only checks that may change persistent state.
 
 Representative passing lines:
 
@@ -251,6 +285,12 @@ Representative passing lines:
 | `pwr.adaptive` | adaptive TDP is opt-in and not installed | `sudo tools/oxp3-power-install.sh install --adaptive-tdp` |
 | `pwr.profile` | no `/etc/oxp3/power.json`, so no profile is asserted | `sudo /usr/local/libexec/oxp3-powerctl profile balanced --save` |
 | `decky.*` | the Decky plugin was not installed (the `decky.status` row still passes) | `cp -r tools/decky-oxp3-status ~/homebrew/plugins/oxp3-status` |
+| `hid.node` | no 1a86:fe00 hidraw node without an input child: the vendor device (or the udev rule/install) is not present | `tools/oxp3-led.py status`; `od -An -tx1 /sys/class/hidraw/hidraw*/device/report_descriptor` and look for `06 00 ff` |
+| `rgbd.timing` | the vendor node is absent, or the hhd journal is not readable so the daemon would poll `hhdctl` instead of following frames | `journalctl -u hhd -n 5`; `tools/oxp3-rgbd.py --config tools/oxp3-rgbd.toml.example --check` |
+| `imu.iio` | no IIO device matches 10EC5280 / `accel-display`, so only the `i2c-*` fallback could match | `tools/oxp3-imu.py -j info`; `cat /sys/bus/iio/devices/iio:device*/name` |
+| `pwr.ac` | there is no AC/Mains node, so `on_ac` is unknown and both battery clamps are skipped (the deferred policy risk) | this row FAILs if the policy ever allows performance on battery in that state |
+| `fan.curvedup` | no oxp_ec fan node or no temperature sensor to evaluate the curve against | `tools/oxp3-powerctl.py fan status` |
+| `fan.savemode` | not root, no fan node, or not `--with-changes` (it writes `pwm1_enable` and `/etc/oxp3/power.json`) | `sudo tools/oxp3-verify.sh --full --with-changes` |
 
 ## 7. Recorded result on this host (2026-11-09, stock/partial install)
 
@@ -258,9 +298,19 @@ Default mode, no root, in an SSH/desktop session on `anatase-oxp3`, kernel
 `7.2.7-an28.fc45.x86_64`:
 
 ```
-== summary: 55 checks: 28 pass, 3 fail, 23 skip, 1 unknown -> exit 1
+== summary: 64 checks: 39 pass, 3 fail, 22 skip, 0 unknown -> exit 1
    failing: bt.journal bt.controller bt.diag
 ```
+
+The exact pass/skip split moves with what is installed at the moment (optional pieces
+were being installed while this run was taken); the three failures and the ten new
+rows' outcomes are stable.
+
+The ten deferred-risk rows measured on this host: `hid.node`, `led.sides`,
+`rgbd.timing`, `imu.iio`, `pwr.ac` (`on_ac=true`), `pwr.order` (both domains are a
+genuinely mixed raise/lower switch), `fan.curvedup` (duplicate 60 C point accepted),
+`bat.limit` and `inst.paths` **PASS**; `fan.savemode` **SKIP** (needs root and
+`--with-changes`).
 
 This is the honest state of this machine, not a harness problem:
 
@@ -271,42 +321,52 @@ This is the honest state of this machine, not a harness problem:
   `btmgmt` lists 0 controllers. That is exactly what `--check` reports with exit 1
   (see [QA.md](QA.md) row 47); the fix is the initramfs step + reboot
   (`sudo tools/oxp3-bt-firmware.sh`), which this repository does not run automatically.
-* 23 `SKIP`: none of the hardware fixes/units are installed on this stock host (volume,
+* 22 `SKIP`: the hardware fixes/units that are not installed on this stock host (volume,
   LEDs, home button, RGB keeper, sleep units, adaptive TDP, Decky plugin, no saved power
   profile), plus the documented opt-ins (trace, gaming scheduler, EQ drop-in).
 * 1 `UNKNOWN`: `aud.dummy` — this shell sees only `auto_null`, so "no audio seat here"
   and "SOF card wedged" cannot be distinguished; the hint lists the two commands.
-* 28 `PASS`: IMU, s2idle/mem_sleep, suspend audit, power zones/PL1/fan/RAPL, battery
-  limit and behaviour, audio server/model/scripts, display HDR/ICC/EDID/vibrance,
-  Mesa/XMX/xe/working-build, status overview.
-* `--full` here (non-root, 1 s measurement) = 59 checks: adds `vol.hold` SKIP
+* 39 `PASS`: IMU and its IIO selection, s2idle/mem_sleep, suspend audit, power
+  zones/PL1/fan/RAPL/ordering, adaptive AC detection, battery limit/behaviour/default,
+  audio server/model/scripts, display HDR/ICC/EDID/vibrance, Mesa/XMX/xe/working-build,
+  HID node/empty-sides, rgbd timing, install-common helpers, status overview.
+* `--full` here (non-root, 1 s measurement) = 68 checks: adds `vol.hold` SKIP
   (`needs root`), `led.write` SKIP (hidraw 0600), `sleep.measure` SKIP (on AC),
   `sleep.suspend` SKIP (`needs root`); still exit 1 for the same three Bluetooth rows.
+  `--full --with-changes` = 70 checks and additionally SKIPs `fan.savemode` (`needs
+  root`); `aud.activate` was attempted as the documented opt-in.
   The root-only paths (`vol.hold`, `sleep.suspend`) were **not** executed here: this
   repository's rules forbid `sudo`, so they are device-side acceptance steps.
 
 Verbatim evidence (never overwritten, regenerate when the machine changes):
 
 * [`docs/state/verify-default-2026-11-09.txt`](state/verify-default-2026-11-09.txt) — 108 lines, the run above.
-* [`docs/state/verify-default-2026-11-09.json`](state/verify-default-2026-11-09.json) — `--json`, 55 checks, schema 1, exit 1.
-* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed`.
+* [`docs/state/verify-default-2026-11-09.json`](state/verify-default-2026-11-09.json) — `--json`, 55 checks (pre-deferred-risk inventory), schema 1, exit 1.
+* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 95).
 
 ## 8. Offline validation performed (no root, no host change)
 
 * `bash -n tools/oxp3-verify.sh` and `sh -n tests/verify/run.sh`: clean.
-* `tools/oxp3-verify.sh --selftest`: **52 assertions / 0 failures** over the parsers
+* `tools/oxp3-verify.sh --selftest`: **95 assertions / 0 failures** over the parsers
   (`display-mode` ANSI output, `powerctl` domains/fan/profile, `status` indicators,
   `suspend_stats`, `bt --check`, `led status`, `rgbd --check`, `pactl` sinks,
-  the two journals, `sleep-audit`), the exit-code mapping, and a fixed inventory check
-  that the 60 declared check ids are exactly the documented set (no typos, no drops).
-* `tools/oxp3-verify.sh`: 55 checks, exit 1, 3.7 s wall clock. Two consecutive
+  the two journals, `sleep-audit`), the ten deferred-risk probes -- HID candidate map
+  and verdicts, dry-run frame counts, adaptive decision/AC verdict, per-domain limit
+  ordering, curve summary, battery-limit dry run, install-common helper output, IIO
+  primary/fallback map, rgbd timing -- the exit-code mapping, and a fixed inventory
+  check that the 70 declared check ids are exactly the documented set (no typos, no
+  drops). New fixtures live under `tests/verify/fixtures/` (`hidraw/`, `iio/`,
+  `adaptive-*.json`, `hid-verdict-*.txt`, `led-dry-*.txt`, `battery-limit-dry.json`,
+  `powerctl-profile-*.json`, `curve-dup.json`, `rgbd-check-nojournal.txt`,
+  `inst-paths*.txt`), including the SKIP paths.
+* `tools/oxp3-verify.sh`: 64 checks, exit 1, ~4 s wall clock. Two consecutive
   `--json` runs were identical apart from `generated_at` (volatile values such as fan
   rpm can legitimately differ between runs).
 * `tools/oxp3-verify.sh --json | python3 -m json.tool`: valid; `counts`, `exit_code`,
   lowercase states, unique ids and a non-empty `remediation` for every non-pass row.
 * `tools/oxp3-verify.sh --with-changes` without `--full`: exit 3 with the reason.
 * `tools/oxp3-verify.sh --help`: renders the whole header.
-* `--full` (non-root): 59 checks, exit 1; the four functional checks degrade to `SKIP`
+* `--full` (non-root): 68 checks, exit 1; the four functional checks degrade to `SKIP`
   with actionable hints instead of failing. The LED write command shape was validated
   without device access via `tools/oxp3-led.py --dry-run solid 0000ff --sides 6`
   (two 64-byte frames, exit 0).
@@ -326,9 +386,23 @@ Verbatim evidence (never overwritten, regenerate when the machine changes):
 * **Root-only functional paths were not executed in this round** (no `sudo` policy):
   `vol.hold` and `sleep.suspend`. They are exercised as `SKIP` with the exact command;
   `--full` with `sudo` is the device-side acceptance step.
-* `--with-changes` intentionally has exactly one effect (speaker EQ activation). If a
-  fix ever needs a persistent install step in the harness, add it there, not in
-  `--full`.
+* `--with-changes` has exactly two effects: speaker EQ activation (`aud.activate`) and
+  the saved fan-mode write (`fan.savemode`, which snapshots and restores
+  `/etc/oxp3/power.json` and `pwm1_enable`). If a fix ever needs a persistent install
+  step in the harness, add it there, not in `--full`.
+* **The `voltap` release-all tail is still a manual step.** Verifying that a real
+  release from a freshly re-grabbed device is not dropped needs an HHD restart and one
+  physical rocker press while the daemon is re-scanning; synthesising that would race
+  the daemon, so no check was added. Command and expected output are in
+  [UNIT-TESTS.md §5](UNIT-TESTS.md#5-deferred-risks-device-validated-or-still-deferred).
+* `fan.savemode` cannot be exercised in the default or plain `--full` run by design: it
+  writes a live fan mode and a persistent state file. It restores both, and FAILs
+  loudly (with the exact `tee` command) if a restore did not take.
+* The deferred-risk rows are pinned to today's *documented* behaviour: for
+  `bat.limit` (no argument = 100 %), `fan.curvedup` (duplicate points: first slope
+  wins) and `fan.savemode` (mode=manual) the docs and the check must change together,
+  otherwise the row FAILs. That is intentional -- it is how a behaviour change becomes
+  visible on real hardware.
 * `sleep.measure` refuses to report on AC (by design of `sleep-power-measure.sh`);
   the harness surfaces that as `SKIP`, so a docked verification run cannot prove the
   drain figure.

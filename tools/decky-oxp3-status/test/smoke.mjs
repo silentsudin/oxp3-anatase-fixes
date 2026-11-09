@@ -11,7 +11,9 @@
  * It is a build-time check only; the shim is not shipped in the plugin zip.
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const React = require("react");
@@ -58,6 +60,7 @@ globalThis.SP_REACTDOM = require("react-dom/client");
 
 const passthrough = (props) => jsxRuntime.jsx("div", { children: props.children });
 globalThis.DFL = {
+  Spinner: () => jsxRuntime.jsx("span", { children: "spinner" }),
   PanelSection: (props) =>
     jsxRuntime.jsxs("div", { children: [props.title ?? null, props.children] }),
   PanelSectionRow: passthrough,
@@ -101,8 +104,73 @@ assert.match(title, /OXP3 Status/);
 const html = ReactDOMServer.renderToStaticMarkup(plugin.content);
 assert.match(html, /OXP3 Status/, "panel must render its section title");
 assert.match(html, /loading/, "effect has not run under server rendering: loading row expected");
+assert.match(html, /Verification/, "panel must render the verification row");
+assert.match(html, /Run quick verification/, "the quick verification button must be present");
+assert.match(html, /More verification modes/, "the invasive modes must stay behind a second step");
+assert.ok(
+  !/Run full verification/.test(html),
+  "invasive mode buttons must stay hidden until More verification modes is opened"
+);
+assert.ok(
+  !/Confirm and run/.test(html),
+  "no invasive confirm action may be reachable without the explicit step"
+);
+
+// --- backend verification action: stub verifier fixtures -------------------
+// The Python fixture suite creates throw-away harness scripts that emit
+// synthetic schema-1 reports (pass / fail / skip / timeout / bad JSON / capped
+// output / escalation refusal / busy) and drives run_verification_once against
+// them. Running it from the smoke gate keeps the new Decky method covered by
+// the same build step. A full run of tools/oxp3-verify.sh is never performed.
+const pluginDir = fileURLToPath(new URL("..", import.meta.url));
+const driver = `
+import asyncio, importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("decky_main", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+sys.modules["decky_main"] = mod
+spec.loader.exec_module(mod)
+total, failures = mod.verification_selftest()
+plugin = mod.Plugin()
+last = asyncio.run(plugin.get_verification())
+bad = asyncio.run(plugin.run_verification("bogus", False))
+print(json.dumps({
+    "total": total,
+    "failures": failures,
+    "lastAvailable": bool(last.get("available")),
+    "methods": sorted(name for name in dir(plugin) if not name.startswith("_")),
+    "badMode": (bad.get("error") or {}).get("code"),
+}))
+`;
+const backend = spawnSync(
+  "python3",
+  ["-c", driver, fileURLToPath(new URL("../main.py", import.meta.url))],
+  {
+    cwd: pluginDir,
+    encoding: "utf8",
+    timeout: 120000,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  }
+);
+if (backend.status !== 0) {
+  process.stderr.write(backend.stdout ?? "");
+  process.stderr.write(backend.stderr ?? "");
+}
+assert.equal(backend.status, 0, "the stub-verifier fixture driver must exit 0");
+const fixtures = JSON.parse(backend.stdout.trim());
+assert.deepEqual(
+  fixtures.failures,
+  [],
+  `stub-verifier fixtures failed: ${JSON.stringify(fixtures.failures)}`
+);
+assert.ok(fixtures.total >= 20, `expected >=20 fixture checks, got ${fixtures.total}`);
+assert.equal(fixtures.lastAvailable, true, "get_verification must report the last run");
+assert.ok(fixtures.methods.includes("run_verification"), "Plugin.run_verification must exist");
+assert.ok(fixtures.methods.includes("get_verification"), "Plugin.get_verification must exist");
+assert.equal(fixtures.badMode, "bad-mode", "the backend must return an error object, not raise");
 
 console.log(
-  "smoke: dist/index.js loaded and rendered (%d bytes of markup, api handshake ok)",
+  "smoke: dist/index.js loaded and rendered (%d bytes of markup, api handshake ok), " +
+    "%d stub-verifier backend checks passed",
   html.length,
+  fixtures.total
 );

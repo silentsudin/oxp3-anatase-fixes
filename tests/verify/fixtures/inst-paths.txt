@@ -1,0 +1,3 @@
+SYS_FW=/usr/lib/firmware/i915/tgl_dmc_ver2_12.bin.xz
+HOST_MESA=26.2.4
+FLATPAK_MESA=same as the host

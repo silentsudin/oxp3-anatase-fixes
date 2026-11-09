@@ -84,6 +84,8 @@ components:
         expect: "the host driver prefix matches the recorded build"
       - id: gfx.working
         expect: "tools/check-working.sh finds the recorded working build"
+      - id: inst.paths
+        expect: "install-common.sh sys_fw/host_mesa/flatpak_mesa resolve against the live host paths"
     dependencies: []
     caveats:
       - "only the Intel Vulkan driver is replaced; GL stays stock"
@@ -330,10 +332,14 @@ components:
         expect: "/etc/udev/rules.d/90-oxp3-hid.rules present"
       - id: hid.access
         expect: "the vendor hidraw node is writable by the invoking user"
+      - id: hid.node
+        expect: "the selected node is the one whose report descriptor claims usage page 0xFF00"
       - id: led.status
         expect: "oxp3-led.py status lists the device, zones and presets"
       - id: led.zones
         expect: "all 5 zones and 11 presets are addressable"
+      - id: led.sides
+        expect: "empty --sides encodes 0 frames and a real selection still encodes them (dry-run)"
       - id: homebtn.unit
         expect: "oxp3-homebtn.service is active (running)"
       - id: homebtn.mapping
@@ -374,6 +380,8 @@ components:
         expect: "oxp3-rgbd.service active and ~/.config/oxp3-rgb.toml present"
       - id: rgbd.check
         expect: "PASS config parses (5 zones, N frames)"
+      - id: rgbd.timing
+        expect: "the hhd journal is readable (the settle/debounce watcher path) and the example config encodes frames"
     dependencies:
       - leds
     caveats:
@@ -522,6 +530,8 @@ components:
         expect: "MSR PL1 equals MMIO PL1 (tdp-sync invariant)"
       - id: pwr.profile
         expect: "the saved profile maps to the live platform_profile"
+      - id: pwr.order
+        expect: "a dry-run profile switch orders raises ceiling-first and puts every lowering last"
     dependencies: []
     caveats:
       - "the units are inert until a profile is saved"
@@ -547,6 +557,11 @@ components:
     verify:
       - id: pwr.fan
         expect: "fan1_input 1-12000 rpm and pwm1_enable 1 or 2"
+      - id: fan.curvedup
+        expect: "a curve file with duplicate temperature points is accepted (dry-run, one step)"
+      - id: fan.savemode
+        expect: "the state file records mode=manual after pwm1_enable was written"
+        root: true
     dependencies:
       - power
     caveats:
@@ -575,6 +590,8 @@ components:
         expect: "a readable charge_control_end_threshold (80 when limited)"
       - id: bat.behaviour
         expect: "charge_behaviour lists inhibit-charge"
+      - id: bat.limit
+        expect: "no argument resolves to 100 % ('off') in a dry run and the real call is refused without root"
     dependencies:
       - power
     caveats:
@@ -603,6 +620,8 @@ components:
     verify:
       - id: pwr.adaptive
         expect: "inactive and disabled after install; FAIL when enabled but dead"
+      - id: pwr.ac
+        expect: "on_ac is detected (so the battery clamps are live); SKIP with no AC/Mains node"
     dependencies:
       - power
     caveats:
@@ -687,6 +706,8 @@ components:
     verify:
       - id: imu.selftest
         expect: "RESULT: PASS (0 warning(s)) - IMU usable, gyro exposed to Steam"
+      - id: imu.iio
+        expect: "the ACPI-id/label device is selected, not the i2c in_anglvel_x_raw fallback"
     dependencies: []
     caveats:
       - "HHD must be running for the gyro-to-Steam path"

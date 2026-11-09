@@ -506,13 +506,13 @@ def_suite decky-package full fast 120 0 \
     "Decky plugin package: byte-identical zip on a second run" \
     "python3 tools/decky-oxp3-status/package.py (twice)"
 def_suite decky-selftest fast fast 120 0 \
-    "Decky backend --selftest against synthetic /sys, /proc, HOME" \
+    "Decky backend --selftest (synthetic /sys, /proc, HOME + stub verifier)" \
     "python3 tools/decky-oxp3-status/main.py --selftest"
 def_suite decky-cli fast fast 120 0 \
     "Decky CLI --json emits valid JSON (live exit code not asserted)" \
     "python3 tools/decky-oxp3-status/main.py --json --no-color"
 def_suite verify-selftest fast fast 120 0 \
-    "oxp3-verify parser unit tests against synthetic fixtures (52 checks)" \
+    "oxp3-verify parser unit tests against synthetic fixtures (95 checks)" \
     "tools/oxp3-verify.sh --selftest"
 def_suite verify-fixtures fast fast 120 0 \
     "the tests/verify/run.sh fixture runner (same selftest entrypoint)" \
@@ -536,7 +536,7 @@ def_suite shellcheck fast fast 180 0 \
     "shellcheck -x on every shell script (SKIP when not installed)" \
     "shellcheck -x <tracked shell scripts>"
 def_suite status-selftest fast fast 120 0 \
-    "headless status backend self-test (60 checks)" \
+    "headless status backend self-test (90 checks)" \
     "tools/oxp3-status.sh --selftest"
 def_suite led-selftest fast fast 60 0 \
     "RGB encoder self-test against captured frames" \

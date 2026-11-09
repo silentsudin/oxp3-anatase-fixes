@@ -24,9 +24,11 @@ import json
 import os
 import pwd
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1935,6 +1937,510 @@ def collect_status(home_override: Optional[str] = None) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Verification action: run tools/oxp3-verify.sh on demand.
+#
+# The Decky backend normally runs as root under plugin_loader.service. This
+# action deliberately drops to the desktop user, uses a minimal environment,
+# passes an argv list (never a shell string), serialises runs and caps both
+# output and wall-clock time. It never reboots, installs or escalates itself:
+# "full"/"changes" are refused unless the caller explicitly confirmed in the
+# panel or the operator set OXP3_STATUS_ALLOW_ESCALATION=1.
+# ---------------------------------------------------------------------------
+VERIFY_MODES: Dict[str, Tuple[Tuple[str, ...], int]] = {
+    "quick": (("--json",), 180),
+    "full": (("--full", "--json"), 900),
+    "changes": (("--full", "--with-changes", "--json"), 1200),
+}
+VERIFY_ESCALATING = ("full", "changes")
+_VERIFY_MAX_BYTES = 1024 * 1024
+_VERIFY_MAX_LINES = 20000
+_VERIFY_MAX_ITEMS = 8
+_VERIFY_TEXT_CAP = 240
+_VERIFY_STDERR_CAP = 8192
+_VERIFY_LOCK = threading.Lock()
+_VERIFY_LAST: Optional[Dict[str, Any]] = None
+
+
+def _verify_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _verify_text(value: Any, limit: int = _VERIFY_TEXT_CAP) -> str:
+    text = _as_text(value).replace("\r", " ").replace("\n", " ").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _verify_zero_counts() -> Dict[str, int]:
+    return {"total": 0, "pass": 0, "fail": 0, "skip": 0, "unknown": 0}
+
+
+def _verify_error(
+    mode: str,
+    code: str,
+    message: str,
+    *,
+    started_ts: float,
+    duration: float,
+    output_truncated: bool = False,
+) -> Dict[str, Any]:
+    now = _verify_now()
+    return {
+        "schema": 1,
+        "ok": False,
+        "mode": mode,
+        "overall": "error",
+        "counts": _verify_zero_counts(),
+        "exit_code": None,
+        "failures": [],
+        "skips": [],
+        "error": {"code": code, "message": _verify_text(message, 400)},
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_ts)),
+        "finished_at": now,
+        "duration_s": round(duration, 3),
+        "root": False,
+        "with_changes": False,
+        "output_truncated": bool(output_truncated),
+    }
+
+
+def _remember_verification(result: Dict[str, Any]) -> Dict[str, Any]:
+    global _VERIFY_LAST
+    _VERIFY_LAST = result
+    return result
+
+
+def _verification_env(
+    home: Path, uid: Optional[int], user: Optional[str]
+) -> Dict[str, str]:
+    paths = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"]
+    local_bin = home / ".local/bin"
+    try:
+        if local_bin.is_dir():
+            paths.insert(0, str(local_bin))
+    except OSError:
+        pass
+    env = {
+        "PATH": ":".join(paths),
+        "HOME": str(home),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "SHELL": "/bin/bash",
+    }
+    if user:
+        env["USER"] = user
+        env["LOGNAME"] = user
+    if uid is not None:
+        runtime = Path("/run/user/%d" % uid)
+        try:
+            if runtime.is_dir():
+                env["XDG_RUNTIME_DIR"] = str(runtime)
+        except OSError:
+            pass
+    return env
+
+
+def _deck_identity(home: Path) -> Optional[Tuple[int, int, str]]:
+    """The unprivileged desktop identity the harness should run as."""
+    for var in ("DECKY_USER", "SUDO_USER", "USER", "LOGNAME"):
+        name = os.environ.get(var, "").strip()
+        if not name:
+            continue
+        try:
+            pw = pwd.getpwnam(name)
+        except KeyError:
+            continue
+        if pw.pw_uid != 0:
+            return pw.pw_uid, pw.pw_gid, pw.pw_name
+    try:
+        pw = pwd.getpwuid(os.stat(str(home)).st_uid)
+    except (KeyError, OSError):
+        return None
+    if pw.pw_uid == 0:
+        return None
+    return pw.pw_uid, pw.pw_gid, pw.pw_name
+
+
+def _verification_script(home: Path) -> Optional[Path]:
+    """Locate tools/oxp3-verify.sh: the checkout itself, an explicit
+    OXP3_STATUS_REPO, or the usual desktop checkout locations."""
+    roots: List[Path] = []
+    explicit = os.environ.get("OXP3_STATUS_REPO", "").strip()
+    if explicit:
+        roots.append(Path(explicit))
+    roots.append(Path(__file__).resolve().parent.parent.parent)
+    roots.append(home / "git/linux_scratch/oxp3-anatase-fixes")
+    roots.append(home / "oxp3-anatase-fixes")
+    roots.append(home / ".local/share/oxp3-anatase-fixes")
+    for root in roots:
+        script = root / "tools/oxp3-verify.sh"
+        try:
+            if script.is_file() and os.access(str(script), os.X_OK):
+                return script
+        except OSError:
+            continue
+    return None
+
+
+def _drain_stream(stream: Any, cap: int, keep_tail: bool = False) -> Tuple[bytes, bool, int]:
+    """Read a child pipe while keeping at most ``cap`` bytes in memory.
+
+    Bytes beyond the cap are read and discarded so a chatty tool can never
+    block on a full pipe or grow our memory; ``keep_tail`` retains the last
+    bytes (stderr diagnostics) instead of the first ones (JSON payload).
+    """
+    kept = bytearray() if keep_tail else []
+    kept_len = 0
+    total = 0
+    try:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if keep_tail:
+                kept.extend(chunk)
+                kept_len = len(kept)
+                if kept_len > cap:
+                    del kept[: kept_len - cap]
+                    kept_len = cap
+            elif kept_len < cap:
+                take = chunk[: cap - kept_len]
+                kept.append(take)
+                kept_len += len(take)
+    except (OSError, ValueError):
+        pass
+    if keep_tail:
+        return bytes(kept), total > cap, total
+    return b"".join(kept), total > cap, total
+
+
+def _parse_verification(report: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(report, dict):
+        return None
+    if not isinstance(report.get("schema"), int):
+        return None
+    if not isinstance(report.get("checks"), list):
+        return None
+    if not isinstance(report.get("counts"), dict):
+        return None
+    return report
+
+
+def _verification_items(report: Dict[str, Any]) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    failures: List[Dict[str, str]] = []
+    skips: List[Dict[str, str]] = []
+    for check in report.get("checks") or []:
+        if not isinstance(check, dict):
+            continue
+        state = str(check.get("state") or "").lower()
+        if state not in ("fail", "skip"):
+            continue
+        item = {
+            "id": _verify_text(check.get("id") or "?", 80),
+            "title": _verify_text(check.get("title") or "", 120),
+            "summary": _verify_text(check.get("summary") or "", 160),
+            "hint": _verify_text(check.get("remediation") or "", _VERIFY_TEXT_CAP),
+        }
+        (failures if state == "fail" else skips).append(item)
+    return failures[:_VERIFY_MAX_ITEMS], skips[:_VERIFY_MAX_ITEMS]
+
+
+def _verification_counts(report: Dict[str, Any]) -> Dict[str, int]:
+    tally = {"pass": 0, "fail": 0, "skip": 0, "unknown": 0}
+    for check in report.get("checks") or []:
+        if not isinstance(check, dict):
+            continue
+        state = str(check.get("state") or "").lower()
+        if state in tally:
+            tally[state] += 1
+    declared = report.get("counts") or {}
+    counts: Dict[str, int] = {}
+    for key in ("pass", "fail", "skip", "unknown"):
+        value = declared.get(key)
+        counts[key] = value if isinstance(value, int) and value >= 0 else tally[key]
+    counts["total"] = counts["pass"] + counts["fail"] + counts["skip"] + counts["unknown"]
+    return counts
+
+
+def run_verification_once(
+    mode: str = "quick",
+    confirm: bool = False,
+    *,
+    verifier: Optional[str] = None,
+    timeout: Optional[float] = None,
+    run_as_deck_user: bool = True,
+    allow_escalation: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Run the verification harness once and return a compact, JSON-safe result.
+
+    ``verifier``/``timeout``/``run_as_deck_user``/``allow_escalation`` are test
+    seams; the Decky method only passes ``mode`` and ``confirm``. Never raises.
+    """
+    global _VERIFY_LAST
+
+    started_ts = time.time()
+    started = time.monotonic()
+    mode = (mode or "quick").strip().lower()
+    if mode not in VERIFY_MODES:
+        return _remember_verification(
+            _verify_error(
+                mode,
+                "bad-mode",
+                "unknown verification mode %r (use quick, full or changes)" % mode,
+                started_ts=started_ts,
+                duration=time.monotonic() - started,
+            )
+        )
+    flags, default_timeout = VERIFY_MODES[mode]
+    if allow_escalation is None:
+        allow_escalation = os.environ.get("OXP3_STATUS_ALLOW_ESCALATION", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+    if mode in VERIFY_ESCALATING and not (confirm or allow_escalation):
+        return _remember_verification(
+            _verify_error(
+                mode,
+                "escalation-required",
+                "%s can change live state; confirm it in the panel or set "
+                "OXP3_STATUS_ALLOW_ESCALATION=1" % mode,
+                started_ts=started_ts,
+                duration=time.monotonic() - started,
+            )
+        )
+
+    try:
+        run_timeout = float(timeout) if timeout is not None else float(default_timeout)
+    except (TypeError, ValueError):
+        run_timeout = float(default_timeout)
+    run_timeout = max(1.0, min(run_timeout, 3600.0))
+    timeout_s = run_timeout
+
+    if not _VERIFY_LOCK.acquire(blocking=False):
+        return _remember_verification(
+            _verify_error(
+                mode,
+                "busy",
+                "another verification run is already in progress",
+                started_ts=started_ts,
+                duration=time.monotonic() - started,
+            )
+        )
+
+    try:
+        home, _notes = resolve_home()
+        script: Optional[Path]
+        if verifier:
+            script = Path(verifier)
+        else:
+            script = _verification_script(home)
+        if script is None or not script.is_file() or not os.access(str(script), os.X_OK):
+            return _remember_verification(
+                _verify_error(
+                    mode,
+                    "missing-verifier",
+                    "tools/oxp3-verify.sh was not found or is not executable; set "
+                    "OXP3_STATUS_REPO to the repository checkout",
+                    started_ts=started_ts,
+                    duration=time.monotonic() - started,
+                )
+            )
+
+        identity: Optional[Tuple[int, int, str]] = None
+        popen_kwargs: Dict[str, Any] = {}
+        if run_as_deck_user and os.geteuid() == 0:
+            identity = _deck_identity(home)
+            if identity is None:
+                return _remember_verification(
+                    _verify_error(
+                        mode,
+                        "no-deck-user",
+                        "refusing to run the harness as root; could not resolve an "
+                        "unprivileged desktop user for %s" % home,
+                        started_ts=started_ts,
+                        duration=time.monotonic() - started,
+                    )
+                )
+            uid, gid, name = identity
+            popen_kwargs = {"user": uid, "group": gid, "extra_groups": []}
+        else:
+            name = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+
+        child_env = _verification_env(
+            home,
+            identity[0] if identity else None,
+            identity[2] if identity else (name or None),
+        )
+        repo_dir = script.resolve().parent.parent
+        argv = [str(script)] + list(flags)
+
+        timed_out = False
+        rc: Optional[int] = None
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                cwd=str(repo_dir),
+                env=child_env,
+                start_new_session=True,
+                close_fds=True,
+                **popen_kwargs,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            return _remember_verification(
+                _verify_error(
+                    mode,
+                    "spawn-failed",
+                    "could not start the verification harness: %s" % exc,
+                    started_ts=started_ts,
+                    duration=time.monotonic() - started,
+                )
+            )
+
+        drained: Dict[str, Tuple[bytes, bool]] = {}
+
+        def _collect(key: str, stream: Any, cap: int, keep_tail: bool) -> None:
+            data, capped, _total = _drain_stream(stream, cap, keep_tail)
+            drained[key] = (data, capped)
+
+        readers = [
+            threading.Thread(
+                target=_collect,
+                args=("stdout", proc.stdout, _VERIFY_MAX_BYTES, False),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=_collect,
+                args=("stderr", proc.stderr, _VERIFY_STDERR_CAP, True),
+                daemon=True,
+            ),
+        ]
+        for reader in readers:
+            reader.start()
+        try:
+            rc = proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                proc.wait(timeout=5)
+        for reader in readers:
+            reader.join(timeout=5)
+        raw, out_capped = drained.get("stdout", (b"", False))
+        err_raw, err_capped = drained.get("stderr", (b"", False))
+        output_truncated = bool(
+            out_capped or err_capped or raw.count(b"\n") > _VERIFY_MAX_LINES
+        )
+        stderr_text = err_raw.decode("utf-8", "replace")
+
+        duration = time.monotonic() - started
+        stderr_tail = _verify_text(stderr_text[-400:], 400)
+        if timed_out:
+            return _remember_verification(
+                _verify_error(
+                    mode,
+                    "timeout",
+                    "the verification harness did not finish within %.0f s and was "
+                    "killed%s" % (timeout_s, (": " + stderr_tail) if stderr_tail else ""),
+                    started_ts=started_ts,
+                    duration=duration,
+                    output_truncated=output_truncated,
+                )
+            )
+
+        report = None
+        try:
+            report = _parse_verification(json.loads(raw.decode("utf-8", "replace")))
+        except (ValueError, UnicodeDecodeError):
+            report = None
+
+        if rc == 3:
+            return _remember_verification(
+                _verify_error(
+                    mode,
+                    "verifier-error",
+                    "the verification harness exited 3 (usage or internal error)%s"
+                    % ((": " + stderr_tail) if stderr_tail else ""),
+                    started_ts=started_ts,
+                    duration=duration,
+                    output_truncated=output_truncated,
+                )
+            )
+        if report is None:
+            message = "the harness did not emit the schema-1 JSON report (exit %s)" % rc
+            if stderr_tail:
+                message += ": " + stderr_tail
+            return _remember_verification(
+                _verify_error(
+                    mode,
+                    "bad-json",
+                    message,
+                    started_ts=started_ts,
+                    duration=duration,
+                    output_truncated=output_truncated,
+                )
+            )
+
+        counts = _verification_counts(report)
+        failures, skips = _verification_items(report)
+        if rc == 1 or counts["fail"]:
+            overall = "fail"
+        elif rc == 2 or counts["pass"] == 0:
+            overall = "skip"
+        else:
+            overall = "pass"
+        reported = report.get("exit_code")
+        result = {
+            "schema": 1,
+            "ok": True,
+            "mode": mode,
+            "overall": overall,
+            "counts": counts,
+            "exit_code": rc,
+            "reported_exit_code": reported if isinstance(reported, int) else None,
+            "failures": failures,
+            "skips": skips,
+            "error": None,
+            "started_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_ts)
+            ),
+            "finished_at": _verify_now(),
+            "duration_s": round(duration, 3),
+            "root": bool(report.get("root")),
+            "with_changes": bool(report.get("with_changes")) or mode == "changes",
+            "output_truncated": output_truncated,
+        }
+        return _remember_verification(result)
+    except Exception as exc:  # never take the plugin host down
+        return _remember_verification(
+            _verify_error(
+                mode,
+                "internal",
+                "verification failed unexpectedly: %s" % exc,
+                started_ts=started_ts,
+                duration=time.monotonic() - started,
+            )
+        )
+    finally:
+        _VERIFY_LOCK.release()
+
+
+def get_last_verification() -> Dict[str, Any]:
+    """Last compact result (or available=False); safe to call at any time."""
+    last = _VERIFY_LAST
+    return {
+        "available": last is not None,
+        "running": _VERIFY_LOCK.locked(),
+        "last": dict(last) if last is not None else None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Decky Loader backend
 # ---------------------------------------------------------------------------
 class Plugin:
@@ -1986,6 +2492,42 @@ class Plugin:
                 "pl1_watts": EXPECTED_PL1_W,
             },
         }
+
+    async def run_verification(
+        self, mode: str = "quick", confirm: bool = False
+    ) -> Dict[str, Any]:
+        """Run tools/oxp3-verify.sh and return the compact result.
+
+        Off the loader event loop; the backend caps output/time, serialises
+        runs and refuses full/changes unless the caller confirmed in the UI or
+        the operator enabled OXP3_STATUS_ALLOW_ESCALATION=1.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None, lambda: run_verification_once(mode, confirm)
+            )
+        except Exception as exc:  # never crash the plugin host
+            return {
+                "schema": 1,
+                "ok": False,
+                "mode": str(mode),
+                "overall": "error",
+                "counts": _verify_zero_counts(),
+                "exit_code": None,
+                "failures": [],
+                "skips": [],
+                "error": {"code": "internal", "message": _verify_text(exc, 400)},
+                "started_at": _verify_now(),
+                "finished_at": _verify_now(),
+                "duration_s": 0.0,
+                "root": False,
+                "with_changes": False,
+                "output_truncated": False,
+            }
+
+    async def get_verification(self) -> Dict[str, Any]:
+        return get_last_verification()
 
 
 # ---------------------------------------------------------------------------
@@ -2288,6 +2830,179 @@ def _indicator_map(report: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return {item["id"]: item for grp in report["groups"] for item in grp["indicators"]}
 
 
+def verification_selftest() -> Tuple[int, List[str]]:
+    """Stub-verifier coverage for run_verification_once. No hardware, root or
+    network: each fixture is a throw-away executable that prints a synthetic
+    schema-1 report (or misbehaves) and exits with the documented code."""
+    global _VERIFY_LAST
+    checks = _Checks()
+    _VERIFY_LAST = None
+
+    def entry(cid: str, state: str, summary: str = "", remediation: str = "") -> Dict[str, Any]:
+        return {
+            "id": cid,
+            "group": "demo",
+            "title": "demo " + cid,
+            "state": state,
+            "summary": summary,
+            "detail": "",
+            "remediation": remediation,
+        }
+
+    def report(counts: Dict[str, int], entries: List[Dict[str, Any]], exit_code: int,
+               mode: str = "quick") -> str:
+        return json.dumps(
+            {
+                "schema": 1,
+                "tool": "oxp3-verify",
+                "version": "1.0.0",
+                "generated_at": "2026-11-09T00:00:00Z",
+                "mode": mode,
+                "root": False,
+                "with_changes": mode == "changes",
+                "kernel": "fixture",
+                "counts": counts,
+                "exit_code": exit_code,
+                "checks": entries,
+            }
+        )
+
+    with tempfile.TemporaryDirectory(prefix="oxp3-verifysel-") as tmp:
+        stubs = Path(tmp)
+
+        def stub(name: str, payload: Optional[str], rc: int = 0, sleep: float = 0.0,
+                 argv_log: Optional[Path] = None, junk: int = 0) -> Path:
+            lines = ["#!/usr/bin/env python3", "import sys, time"]
+            if argv_log is not None:
+                lines.append(
+                    "open(%r, 'a').write(' '.join(sys.argv[1:]) + '\\n')" % str(argv_log)
+                )
+            if junk:
+                lines.append("sys.stdout.write('x' * %d)" % junk)
+            if sleep:
+                lines.append("time.sleep(%r)" % sleep)
+            if payload is not None:
+                lines.append("sys.stdout.write(%r)" % payload)
+            lines.append("sys.exit(%d)" % rc)
+            path = stubs / name
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            os.chmod(path, 0o755)
+            return path
+
+        def run(script: Any, mode: str = "quick", confirm: bool = False,
+                timeout: Optional[float] = None, allow: Optional[bool] = None) -> Dict[str, Any]:
+            return run_verification_once(
+                mode,
+                confirm,
+                verifier=str(script),
+                timeout=timeout,
+                run_as_deck_user=False,
+                allow_escalation=allow,
+            )
+
+        ok = report(
+            {"total": 2, "pass": 2, "fail": 0, "skip": 0, "unknown": 0},
+            [entry("demo.ok", "pass"), entry("demo.two", "pass")],
+            0,
+        )
+        res = run(stub("pass.py", ok, 0))
+        checks.eq("verify: pass overall", res["overall"], "pass")
+        checks.check("verify: pass ok", res["ok"] is True)
+        checks.eq("verify: pass counts", res["counts"]["pass"], 2)
+        checks.eq("verify: pass failures", res["failures"], [])
+        checks.eq("verify: process exit", res["exit_code"], 0)
+        checks.check("verify: result is JSON", bool(json.dumps(res)))
+        last = get_last_verification()
+        checks.check("verify: last available", last["available"] is True)
+        checks.eq("verify: last overall", (last["last"] or {}).get("overall"), "pass")
+
+        bad = report(
+            {"total": 2, "pass": 1, "fail": 1, "skip": 0, "unknown": 0},
+            [entry("demo.ok", "pass"), entry("demo.bad", "fail", "broken", "fix it now")],
+            1,
+        )
+        res = run(stub("fail.py", bad, 1))
+        checks.eq("verify: fail overall", res["overall"], "fail")
+        checks.eq("verify: failing id", res["failures"][0]["id"], "demo.bad")
+        checks.eq("verify: failing hint", res["failures"][0]["hint"], "fix it now")
+        checks.eq("verify: fail counts", res["counts"]["fail"], 1)
+
+        skipped = report(
+            {"total": 2, "pass": 0, "fail": 0, "skip": 2, "unknown": 0},
+            [entry("vol.unit", "skip", "not installed"), entry("bt.files", "skip")],
+            2,
+        )
+        res = run(stub("skip.py", skipped, 2))
+        checks.eq("verify: skip overall", res["overall"], "skip")
+        checks.eq("verify: skip id", res["skips"][0]["id"], "vol.unit")
+        checks.eq("verify: skip counts", res["counts"]["skip"], 2)
+
+        slow = stub("slow.py", ok, 0, sleep=5.0)
+        started = time.monotonic()
+        res = run(slow, timeout=0.5)
+        elapsed = time.monotonic() - started
+        checks.eq("verify: timeout code", (res.get("error") or {}).get("code"), "timeout")
+        checks.check("verify: timeout is bounded", elapsed < 4.5, "%.2fs" % elapsed)
+
+        res = run(stub("badjson.py", "this is not json", 0))
+        checks.eq("verify: bad-json code", (res.get("error") or {}).get("code"), "bad-json")
+        res = run(stub("huge.py", None, 0, junk=1200000))
+        checks.eq("verify: capped output code", (res.get("error") or {}).get("code"), "bad-json")
+        checks.check("verify: capped output flagged", res["output_truncated"] is True)
+
+        argv_log = stubs / "argv.log"
+        flags_py = stub("flags.py", ok, 0, argv_log=argv_log)
+        run(flags_py, "quick", timeout=5)
+        checks.eq("verify: quick argv", argv_log.read_text(encoding="utf-8").strip(), "--json")
+        argv_log.unlink()
+        res = run(flags_py, "full", confirm=True, timeout=5)
+        checks.eq(
+            "verify: full argv",
+            argv_log.read_text(encoding="utf-8").strip(),
+            "--full --json",
+        )
+        checks.eq("verify: full mode", res["mode"], "full")
+        argv_log.unlink()
+        res = run(flags_py, "changes", confirm=True, timeout=5)
+        checks.eq(
+            "verify: changes argv",
+            argv_log.read_text(encoding="utf-8").strip(),
+            "--full --with-changes --json",
+        )
+        checks.eq("verify: changes overall", res["overall"], "pass")
+
+        res = run(flags_py, "full", confirm=False, allow=False, timeout=5)
+        checks.eq(
+            "verify: escalation refused",
+            (res.get("error") or {}).get("code"),
+            "escalation-required",
+        )
+        old = os.environ.get("OXP3_STATUS_ALLOW_ESCALATION")
+        os.environ["OXP3_STATUS_ALLOW_ESCALATION"] = "1"
+        try:
+            res = run(flags_py, "full", confirm=False, allow=None, timeout=5)
+        finally:
+            if old is None:
+                os.environ.pop("OXP3_STATUS_ALLOW_ESCALATION", None)
+            else:
+                os.environ["OXP3_STATUS_ALLOW_ESCALATION"] = old
+        checks.eq("verify: setting allows escalation", res["overall"], "pass")
+
+        with _VERIFY_LOCK:
+            res = run(flags_py, "quick", timeout=5)
+        checks.eq("verify: busy code", (res.get("error") or {}).get("code"), "busy")
+
+        res = run(stubs / "missing.sh")
+        checks.eq(
+            "verify: missing-verifier code", (res.get("error") or {}).get("code"),
+            "missing-verifier",
+        )
+        res = run(flags_py, "bogus")
+        checks.eq("verify: bad-mode code", (res.get("error") or {}).get("code"), "bad-mode")
+
+    return checks.total, checks.failures
+
+
 def run_selftest() -> int:
     """Exercise every probe against synthetic fixtures. Returns 0/1."""
     checks = _Checks()
@@ -2424,6 +3139,11 @@ def run_selftest() -> int:
         "sanitize: cmdline", sanitize_cmdline("game.exe --api_token=abc --normal=1"),
         "game.exe --api_token=<redacted> --normal=1",
     )
+
+    # -- verification action (stub verifier, no subprocess privileges) ---
+    verify_total, verify_failures = verification_selftest()
+    checks.total += verify_total
+    checks.failures.extend(verify_failures)
 
     if checks.failures:
         print("selftest: %d check(s), %d FAILED" % (checks.total, len(checks.failures)))
