@@ -17,10 +17,10 @@ Machine: OneXPlayer 3 (DMI `ONEXPLAYER 3`, BIOS 5.09), Arc B390 (8086:b080) Pant
 | keep units (reboot-safe) | `oxp3-mesa-keep`, `oxp3-gamescope-keep`, `oxp3-mangohud-keep` enabled, re-applied before the display manager | `check-working.sh` |
 | XMX / XeSS | per-game only (`tools/xmx-run.sh`, `tools/oxp3-flatpak-xmx.sh install --appid`); **no session-wide `VK_DRIVER_FILES`** - that put gamescope on the CM driver and broke PQ HDR | `gfx.xmx.*` |
 | scheduler | `oxp3-gaming-sched` (scx_cosmos) active; with the patched gamescope this is the measured-good state. `sudo systemctl disable --now oxp3-gaming-sched` returns to the stock scheduler for A/B | `systemctl is-active` |
-| power | PL1 35 W both zones, `platform_profile=balanced`, fan auto | `pwr.*` |
+| power | PL1 **25 W long_term on both RAPL zones** (HHD owns the profile; MSR follows MMIO), `platform_profile=balanced`, fan auto | `pwr.*` |
 | audio | ALSA `Speaker` 87/87, sink `oxp3_speaker_eq.sink` at 130 %, loud EQ profile | `aud.level`, `aud.model` |
 | Bluetooth | pinned `ibt-00a0-0291-*.sfi` in `/usr/lib/firmware/updates/intel/`, initramfs items + boot reload | `bt.*` |
-| suspend | `nvme.noacpi=1` for the Predator GM7 (`1dee:1602`), s2idle policy units | `sleep.nvmeacpi` |
+| suspend | `nvme.noacpi=1` for the Predator GM7 (`1dee:1602`), s2idle policy units. Measured: **0.68 W asleep, 0.77 %/h** for a 60 s cycle; the platform PMC's `hw_sleep` counter stays near 0 on s2idle, so battery + wall clock are the evidence | `sleep.nvmeacpi`, `sleep.stats` |
 
 ## How this state is installed from scratch
 
@@ -57,6 +57,25 @@ tools/check-working.sh          # this file's table, hashes and units
 tools/oxp3-verify.sh            # full 80+ check matrix
 ```
 
-In Gamemode, the Decky panel's **Save report JSON** button now writes
-`~/oxp3-reports/oxp3-report-<UTC>.json` (and `~/oxp3-reports/latest.json`) instead of using the clipboard, so the report can
-be handed to an agent or attached to an issue.
+In Gamemode, the Decky panel's **Save report JSON** button writes `~/oxp3-reports/oxp3-report-<UTC>.json` (and
+`~/oxp3-reports/latest.json`) instead of using the clipboard, so the report can be handed to an agent or attached to an issue.
+Decky plugin **1.3.0** (`build/oxp3-status-1.3.0.zip`) also exposes the runtime XeSS state: `xess-on-xmx` (PASS), 
+`xess-on-standard` (FAIL with the launcher hint), `xess-off`/`no-game` (SKIP), derived from mapped `libxess` plus the XMX
+driver/shim in the launch, not from directory guesses.
+
+## State of the report semantics (what the panel means today)
+
+* desktop rows (`dsp.hdr`, `dsp.icc`) are SKIP without a KWin compositor (Gamemode/tty) instead of UNKNOWN;
+* `gfx.xmx.helper/igc/icd` are SKIP when the running game loads no XeSS, and the runtime row is the authoritative one;
+* `sleep.stats` reports UNKNOWN for a completed cycle when the PMC counter is stuck (this platform) with the measurement
+  command, never a false "returned immediately";
+* `check-working.sh` accepts any HHD TDP profile as long as MSR == MMIO long_term, and verifies patched gamescope, the HDR
+  launcher override and the three keep units.
+
+## XeSS XMX on native Steam (Hogwarts Legacy / 990080)
+
+The game keeps XeSS in `Engine/Plugins/Runtime/Intel/XeSS/Binaries/ThirdParty/Win64`, so it is enabled with
+`tools/xmx-steam-enable.sh --appid 990080`: it finds that directory, swaps the libraries (originals in `.xmx-orig`) and writes
+the XMX environment (both ICD variables, `ANV_CM_KERNEL_DIR`, `XMX_IGC_DIR`, the 128-GRF helper, the shim path) into the
+app's Steam LaunchOptions after backing up `localconfig.vdf`. Verified live: `xess-on-xmx`, `libxess.dll` + `libxess_fg.dll`
+mapped with `icd-xmx.json`.
