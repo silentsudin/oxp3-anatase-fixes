@@ -6,6 +6,12 @@ guide and a status snapshot, not a new source of truth: **component state lives 
 traceable to a repo file or to a read-only command whose output is quoted. Nothing privileged was
 executed for this document.
 
+> **Start here: `tools/oxp3-health.sh`** (or `make health`) — one read-only command (~7 s) that
+> answers "can I install / is it working / what is left" by composing preflight, verify, the
+> firstrun checklist and status, printing only the non-`PASS` rows plus the next 1-3 commands.
+> `--json` for machines, `--quiet` for one line, `--verbose` for the raw reports; the section
+> contract is in [`HEALTH.md`](HEALTH.md).
+
 > **Audit update, 2026-11-09 06:00 UTC (HEAD `cfad8fb`).** The live numbers below have
 > moved again: `repo-test.sh --fast` is **32 suites: 26 pass, 0 fail, 6 skip** (~36 s) and
 > `--full` **32: 30 pass, 2 skip**; the unit suite is **634 tests**, the fingerprint suite

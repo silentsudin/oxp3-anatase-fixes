@@ -1,0 +1,80 @@
+{
+  "name": "tool-crash",
+  "description": "Verify crashes (rc 3, no JSON); the remaining stages still aggregate.",
+  "expect": {
+    "ready_to_install": true,
+    "verdict": "attention",
+    "exit_code": 1,
+    "installed_done": 1,
+    "installed_total": 2,
+    "missing_step_ids": ["hw-install"],
+    "blocker_ids": [],
+    "failing_ids": [],
+    "problem_stages": ["verify"],
+    "components_installed": 0,
+    "components_total": 0
+  },
+  "stages": {
+    "preflight": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 17,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-preflight",
+        "safe": true,
+        "verdict": "safe",
+        "counts": {"total": 2, "ok": 1, "warn": 1, "fail": 0},
+        "components": {},
+        "checks": [
+          {"id": "core.user", "group": "core", "title": "unprivileged target user", "state": "OK", "summary": "unit (uid 1000)", "remediation": "", "components": ["leds"]},
+          {"id": "dir.logind-conf-d", "group": "dir", "title": "logind drop-ins", "state": "WARN", "summary": "/etc/systemd/logind.conf.d is missing", "remediation": "create it: sudo install -d -m 0755 /etc/systemd/logind.conf.d", "components": ["sleep"]}
+        ]
+      }
+    },
+    "verify": {
+      "status": "error",
+      "rc": 3,
+      "duration_ms": 40,
+      "stdout": "",
+      "stderr": "oxp3-verify: cannot create a temporary directory",
+      "error": "backend could not start (rc=3): oxp3-verify: cannot create a temporary directory"
+    },
+    "firstrun": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 290,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-firstrun",
+        "mode": "check-only",
+        "counts": {"ok": 1, "pending": 0, "partial": 0, "todo": 1, "unknown": 0, "n/a": 0},
+        "steps": [
+          {"id": "driver-stack", "title": "driver stack", "state": "ok", "detail": "installed", "command": "./oxp3-fixes-fast.sh build"},
+          {"id": "hw-install", "title": "hardware install", "state": "todo", "detail": "0/5 helpers installed", "command": "sudo tools/oxp3-hw-install.sh --all"}
+        ]
+      }
+    },
+    "status": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 120,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "overall": "warn",
+        "counts": {"ok": 1, "warn": 1, "fail": 0, "unknown": 0, "na": 0},
+        "groups": [
+          {"id": "sched", "title": "scheduler", "state": "warn", "indicators": [
+            {"id": "sched.unit", "label": "oxp3-gaming-sched.service", "state": "warn", "value": "not installed", "detail": "LoadState=not-found ActiveState=inactive UnitFileState=-", "source": "systemctl show oxp3-gaming-sched.service"}
+          ]}
+        ]
+      }
+    }
+  }
+}

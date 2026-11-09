@@ -7,6 +7,12 @@ check and a machine-readable `--json` mode. The default run is read-only and nee
 root; `--full` adds the functional tests that are invasive or need root (volume
 tap/hold, one LED write, a real suspend, a battery-drain measurement).
 
+> **Start here: `tools/oxp3-health.sh`** — the one-command front-end for this document's question
+> ("is it working?"). It runs preflight, verify (read-only unless you pass `--full`), the
+> firstrun checklist and status, prints only the non-`PASS` rows with their remediation and the
+> next 1-3 commands. This page stays the per-check reference; the summary contract is in
+> [`HEALTH.md`](HEALTH.md).
+
 It also carries the *deferred-risk probes* from
 [UNIT-TESTS.md §5](UNIT-TESTS.md#5-deferred-risks-device-validated-or-still-deferred):
 ten checks that turn "needs on-device validation" into an observable row (HID report

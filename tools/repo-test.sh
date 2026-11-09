@@ -624,6 +624,47 @@ suite_gen_docs() {
     python3 tools/gen-docs.py --check
 }
 
+suite_health() {
+    [ -x "$REPO/tools/oxp3-health.sh" ] || skip "tools/oxp3-health.sh is missing"
+    [ -f "$REPO/tools/oxp3_health.py" ] || skip "tools/oxp3_health.py is missing"
+    [ -d "$REPO/tests/fixtures/health" ] || skip "tests/fixtures/health is missing"
+    need python3
+    cd "$REPO" || exit 1
+    # 1. Offline aggregation/verdict self-test over the five fixtures (no host access).
+    tools/oxp3-health.sh --selftest
+    # 2. A live report is read-only data: exit 0/1 is the verdict, 3 means no
+    #    reporter could run here (environment, not a contract failure).
+    local out=$LOGDIR/health.json rc=0
+    tools/oxp3-health.sh --json --log "$LOGDIR/health.log" >"$out" || rc=$?
+    case $rc in
+        0|1) ;;
+        3) skip "no health reporter produced a report in this environment" ;;
+        *) printf 'FAIL health --json exited %s\n' "$rc"; exit 1 ;;
+    esac
+    [ -s "$out" ] || { printf 'FAIL health wrote no JSON\n'; exit 1; }
+    python3 - "$out" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+assert data.get("schema") == 1, data.get("schema")
+assert data.get("tool") == "oxp3-health", data.get("tool")
+assert set(data.get("stages", {})) == {"preflight", "verify", "firstrun", "status"}, data.get("stages")
+assert isinstance(data.get("exit_code"), int), data.get("exit_code")
+assert isinstance(data.get("next_commands"), list) and 1 <= len(data["next_commands"]) <= 3, data.get("next_commands")
+PY
+    # 3. --quiet prints exactly one verdict line (verify skipped to keep it fast).
+    local quiet=$LOGDIR/health-quiet.txt qrc=0
+    tools/oxp3-health.sh --quiet --no-verify --log "$LOGDIR/health-quiet.log" >"$quiet" || qrc=$?
+    case $qrc in
+        0|1) ;;
+        3) skip "no health reporter produced a report in this environment" ;;
+        *) printf 'FAIL health --quiet exited %s\n' "$qrc"; exit 1 ;;
+    esac
+    [ "$(grep -c . "$quiet")" -eq 1 ] || { printf 'FAIL --quiet did not print one line\n'; exit 1; }
+    grep -q '^health: READY ' "$quiet" || { printf 'FAIL --quiet verdict line has the wrong shape\n'; exit 1; }
+    printf 'selftest ok; live JSON schema ok; quiet one-line ok\n'
+}
+
 # ------------------------------------------------------------------ registry
 # name | mode (fast/full) | tier (fast/medium/slow-network) | timeout s |
 # network (0/1) | one-line description | command shown when it fails
@@ -737,6 +778,9 @@ def_suite preflight fast fast 120 0 \
 def_suite gen-docs fast fast 60 0 \
     "generated component tables match docs/hw/components.yaml" \
     "python3 tools/gen-docs.py --check"
+def_suite health fast medium 180 0 \
+    "one-command health front-end: offline verdict selftest + live JSON/quiet contract" \
+    "tools/oxp3-health.sh --selftest && ... --json && ... --quiet"
 
 # ------------------------------------------------------------------ selection
 # Fail fast on a registry typo instead of reporting a confusing FAIL at run time.

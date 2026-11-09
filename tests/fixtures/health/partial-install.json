@@ -1,0 +1,106 @@
+{
+  "name": "partial-install",
+  "description": "Nothing is broken, but several install steps are still missing.",
+  "expect": {
+    "ready_to_install": true,
+    "verdict": "ok",
+    "exit_code": 0,
+    "installed_done": 2,
+    "installed_total": 5,
+    "missing_step_ids": ["hw-install", "udev-rules", "bluetooth"],
+    "blocker_ids": [],
+    "failing_ids": [],
+    "problem_stages": [],
+    "components_installed": 1,
+    "components_total": 3
+  },
+  "stages": {
+    "preflight": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 16,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-preflight",
+        "safe": true,
+        "verdict": "safe",
+        "counts": {"total": 4, "ok": 2, "warn": 2, "fail": 0},
+        "components": {
+          "volume": {"state": "degraded", "blockers": [], "warnings": ["core.root"]},
+          "bluetooth": {"state": "degraded", "blockers": [], "warnings": ["state.bluetooth"]},
+          "imu": {"state": "ready", "blockers": [], "warnings": []}
+        },
+        "checks": [
+          {"id": "core.root", "group": "core", "title": "root privilege", "state": "WARN", "summary": "running as user unit, not root", "remediation": "sudo tools/oxp3-hw-install.sh <components>", "components": ["*"]},
+          {"id": "state.volume", "group": "state", "title": "volume install state", "state": "OK", "summary": "not installed (0/4 artefacts)", "remediation": "", "components": ["volume"]},
+          {"id": "state.bluetooth", "group": "state", "title": "bluetooth install state", "state": "WARN", "summary": "half-install: 2/3 artefacts; missing 60-oxp3-bt-firmware.conf", "remediation": "re-run the installer to converge: sudo tools/oxp3-hw-install.sh --bluetooth", "components": ["bluetooth"]},
+          {"id": "state.imu", "group": "state", "title": "imu install state", "state": "OK", "summary": "installed (1/1 artefacts)", "remediation": "", "components": ["imu"]}
+        ]
+      }
+    },
+    "verify": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 3100,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-verify",
+        "mode": "default",
+        "counts": {"total": 4, "pass": 3, "fail": 0, "skip": 1, "unknown": 0},
+        "exit_code": 0,
+        "checks": [
+          {"id": "preflight.verdict", "group": "preflight", "title": "preflight verdict", "state": "pass", "summary": "safe", "detail": "", "remediation": ""},
+          {"id": "gfx.mesa", "group": "graphics", "title": "host Mesa", "state": "pass", "summary": "ec418f04e589965a", "detail": "", "remediation": ""},
+          {"id": "imu.iio", "group": "imu", "title": "IMU IIO device", "state": "pass", "summary": "bmi260 present", "detail": "", "remediation": ""},
+          {"id": "vol.unit", "group": "volume", "title": "oxp3-voltap service", "state": "skip", "summary": "not installed", "detail": "LoadState=not-found", "remediation": "sudo tools/oxp3-voltap/install.sh install --hwdb"}
+        ]
+      }
+    },
+    "firstrun": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 310,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-firstrun",
+        "mode": "check-only",
+        "counts": {"ok": 2, "pending": 0, "partial": 1, "todo": 2, "unknown": 0, "n/a": 0},
+        "steps": [
+          {"id": "driver-stack", "title": "driver stack", "state": "ok", "detail": "mesa + kernel installed", "command": "./oxp3-fixes-fast.sh build"},
+          {"id": "hw-install", "title": "hardware install", "state": "todo", "detail": "0/5 helpers installed", "command": "sudo tools/oxp3-hw-install.sh --all"},
+          {"id": "udev-rules", "title": "udev rules", "state": "todo", "detail": "0/2 rules, hwdb missing", "command": "sudo tools/oxp3-hw-install.sh --leds --sleep"},
+          {"id": "bluetooth", "title": "Bluetooth firmware", "state": "partial", "detail": "firmware 2/2, dracut missing", "command": "sudo tools/oxp3-bt-firmware.sh   # then reboot"},
+          {"id": "imu-blacklist", "title": "IMU blacklist", "state": "ok", "detail": "present", "command": "sudo tools/oxp3-hw-install.sh --imu"}
+        ]
+      }
+    },
+    "status": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 130,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "overall": "warn",
+        "counts": {"ok": 3, "warn": 1, "fail": 0, "unknown": 0, "na": 0},
+        "groups": [
+          {"id": "sched", "title": "scheduler", "state": "warn", "indicators": [
+            {"id": "sched.state", "label": "sched_ext state", "state": "warn", "value": "disabled", "detail": "EEVDF is the kernel fallback when nothing is loaded.", "source": "/sys/kernel/sched_ext/state"}
+          ]},
+          {"id": "fixes", "title": "fixes", "state": "ok", "indicators": [
+            {"id": "xe.module", "label": "xe module", "state": "ok", "value": "loaded", "detail": "", "source": "/sys/module/xe"},
+            {"id": "rapl.values", "label": "RAPL values", "state": "ok", "value": "35/37/122 W", "detail": "", "source": "/sys/class/powercap"},
+            {"id": "power.pl1", "label": "PL1", "state": "ok", "value": "35 W", "detail": "", "source": "/sys/class/powercap"}
+          ]}
+        ]
+      }
+    }
+  }
+}

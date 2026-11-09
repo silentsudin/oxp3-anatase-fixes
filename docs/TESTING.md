@@ -42,12 +42,17 @@ Recorded on this host (2026-11-09, no root):
 == 32 suite(s): 30 pass, 0 fail, 2 skip -> exit 0      # --full (expected; see §9)
 ```
 
+*Later round:* the `health` suite (one-command front-end, [HEALTH.md](HEALTH.md)) was added
+after this snapshot. It makes that **33 suites**: **27 pass, 0 fail, 6 skip** in `--fast` (≈ 46 s,
+it adds a live `--json`/`--quiet` contract check) and **31 pass, 2 skip** in `--full`;
+`repo-test.sh --list` reports 28 suites run in `--fast`, 33 in `--full`.
+
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 27 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 32 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 28 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 33 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
 `--full` still never installs host packages. The one network-dependent suite
 (`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
@@ -104,6 +109,7 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `preflight` | fast | fast | 120 s | `python3`, `bash` | – (fixtures in memory; the live `--json` is read-only) |
 | `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check) |
 | `rollback` | fast | fast | 120 s | `bash`, `python3` | – (`--root` prefix + private state dir in `$TMPDIR`) |
+| `health` | fast | medium | 180 s | `python3`, `bash` | – (fixture selftest; the live runs are read-only and write only `<log>/health*.log`) |
 
 Areas and what is actually proven:
 
@@ -179,8 +185,8 @@ Measured per suite in the recorded `--fast` run (wall clock, this host):
 
 | tier | definition | suites here |
 |---|---|---|
-| fast | < 5 s | the per-suite largest are `python-compile` ≈ 2.9 s (26 Python processes), `unit` ≈ 3.0 s and `unit-verify` ≈ 1.3 s (17 units); the total `--fast` run is ≈ 36 s, including the one medium suite |
-| medium | 5–60 s | `firstrun` ≈ 15 s (it runs `oxp3-verify` twice; timeout stays 120 s); a cold `npm ci` or a first container `dnf install` would also land here |
+| fast | < 5 s | the per-suite largest are `python-compile` ≈ 2.9 s (26 Python processes), `unit` ≈ 4.9 s and `unit-verify` ≈ 1.3 s (17 units); the total `--fast` run is ≈ 46 s, including the two medium suites |
+| medium | 5–60 s | `firstrun` ≈ 15 s (it runs `oxp3-verify` twice; timeout stays 120 s), `health` ≈ 8 s (one live verify); a cold `npm ci` or a first container `dnf install` would also land here |
 | slow / network | > 60 s or requires the network | `fp-libfprint` only (skipped by default; with `OXP3_REPO_TEST_NETWORK=1` the container fallback installs `glib2-devel libgusb-devel` first) |
 
 The tier is documentation in `--list`; the timeout is what actually bounds a
@@ -340,10 +346,10 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 | run | result |
 |---|---|
-| `tools/repo-test.sh --fast` | 32 rows: **26 pass, 0 fail, 6 skip**, exit 0, ≈ 36 s (the `firstrun` suite runs the verifier twice, hence the jump) |
-| `tools/repo-test.sh --full` | 32 rows expected: **30 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
-| `tools/repo-test.sh --list` | 32 suites; 27 run in `--fast`, 32 in `--full` |
-| `python3 -m unittest discover -s tests/unit -q` | `Ran 634 tests ... OK (skipped=1)`, ≈ 3.0 s |
+| `tools/repo-test.sh --fast` | 33 rows: **27 pass, 0 fail, 6 skip**, exit 0, ≈ 46 s (`firstrun` runs the verifier twice and `health` runs it once more) |
+| `tools/repo-test.sh --full` | 33 rows expected: **31 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
+| `tools/repo-test.sh --list` | 33 suites; 28 run in `--fast`, 33 in `--full` |
+| `python3 -m unittest discover -s tests/unit -q` | `Ran 658 tests ... OK (skipped=1)`, ≈ 4.5 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
 | deliberately broken copy in `/tmp`, `--only fp-python` | 1 fail, exit 1, failing command + log path printed |
 | root container `--fast` | 15 pass / 0 fail / 10 skip, exit 0 |

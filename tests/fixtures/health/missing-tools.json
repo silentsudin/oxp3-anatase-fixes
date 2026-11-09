@@ -1,0 +1,57 @@
+{
+  "name": "missing-tools",
+  "description": "Three reporters are absent; the one that answered still produces a report.",
+  "expect": {
+    "ready_to_install": null,
+    "verdict": "attention",
+    "exit_code": 1,
+    "installed_done": 0,
+    "installed_total": 0,
+    "missing_step_ids": [],
+    "blocker_ids": [],
+    "failing_ids": [],
+    "problem_stages": ["preflight", "firstrun", "status"],
+    "components_installed": 0,
+    "components_total": 0
+  },
+  "stages": {
+    "preflight": {
+      "status": "missing",
+      "rc": null,
+      "duration_ms": 0,
+      "stderr": "",
+      "error": "tools/oxp3-preflight.sh not found or not executable"
+    },
+    "verify": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 2800,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-verify",
+        "mode": "default",
+        "counts": {"total": 1, "pass": 1, "fail": 0, "skip": 0, "unknown": 0},
+        "exit_code": 0,
+        "checks": [
+          {"id": "gfx.mesa", "group": "graphics", "title": "host Mesa", "state": "pass", "summary": "ec418f04e589965a", "detail": "", "remediation": ""}
+        ]
+      }
+    },
+    "firstrun": {
+      "status": "missing",
+      "rc": null,
+      "duration_ms": 0,
+      "stderr": "",
+      "error": "tools/oxp3-firstrun.sh not found or not executable"
+    },
+    "status": {
+      "status": "missing",
+      "rc": null,
+      "duration_ms": 0,
+      "stderr": "",
+      "error": "tools/oxp3-status.sh not found or not executable"
+    }
+  }
+}

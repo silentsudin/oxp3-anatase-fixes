@@ -13,9 +13,9 @@ package installation**, and it writes only to a private temporary directory
 Recorded on this host (Python 3.15, no root):
 
 ```
-python3 -m unittest discover -s tests/unit -q     -> Ran 634 tests ... OK (skipped=1), ~3.0 s
-tools/repo-test.sh --fast  -> 32 suites: 26 pass, 0 fail, 6 skip, exit 0
-tools/repo-test.sh --full  -> 32 suites: 30 pass, 0 fail, 2 skip, exit 0 (expected)
+python3 -m unittest discover -s tests/unit -q     -> Ran 658 tests ... OK (skipped=1), ~4.5 s
+tools/repo-test.sh --fast  -> 33 suites: 27 pass, 0 fail, 6 skip, exit 0
+tools/repo-test.sh --full  -> 33 suites: 31 pass, 0 fail, 2 skip, exit 0 (expected)
 ```
 
 ## 1. How to run it
@@ -64,6 +64,7 @@ install-common tests run the shell tools in a stub `PATH` and a private
 | `test_sleep_trigger.py` | `files/logind-oxp3.conf`, `files/49-oxp3-suspend.rules`, `tools/oxp3-hw-install.sh`, `tools/oxp3-verify.sh` | 23 | the drop-in parses as one `[Login]` section with the documented `Handle*` values (power/suspend key = suspend, lid = suspend AC+battery, docked = ignore, long-press = poweroff), no key wired to hibernate, no duplicate keys; the polkit rule is one `addRule`, balanced, limited to the four suspend/hibernate actions, guarded on `subject.local && subject.active && isInGroup("wheel")`, and never grants `suspend-ignore-inhibit` (comments stripped first); installer wiring (TRIGGER_FILES table used by both install and uninstall, status lines, no logind restart behind the user's session); verify wiring (`record sleep.trigger`, the three-way `--full`/`--with-changes`/`OXP3_ALLOW_SUSPEND` gate, one and only one suspend call site, every `trigger_verdict` outcome present) |
 | `test_preflight.py` | `tools/oxp3_preflight.py` | 17 | parser units (systemd version, passwd, kernel options, unit `Restart=` sections, logind defaults/overrides, hhd version, stale checkout references), the vendor-HID selection rule, component artefact counts, the safe/degraded/unsafe verdict matrix, seven fixture verdicts through `FixtureHost` (sane host, missing directory, old systemd, missing evdev, conflicting volume daemon, Bluetooth half-install, unprivileged), the `--component` filter, JSON schema 1 and the text verdict/remediation rendering |
 | `test_firstrun.py` | `tools/oxp3_firstrun.py` | 68 | redaction rules and their idempotency (identity, MAC → vendor OUI, serial/UUID incl. bare UUIDs, e-mail, PulseAudio cookie, token families, secret assignments), sha256 left intact, per-file line cap, total byte cap (truncate vs. skip, JSON never corrupted), manifest accounting and redaction of the manifest/README themselves, bundle idempotency and `--force` semantics, checklist state transitions against a synthetic system prefix (partial/pending/ok/unknown), degraded collection statuses, the `session/power.txt` artifact (logind show-session fallback, PowerDevil keys, powerdevilrc excerpt, polkit-agent probe, tool-missing degradation, redaction), and the CLI contract |
+| `test_health.py` | `tools/oxp3_health.py` | 24 | the health front-end's pure aggregation: the five stage fixtures (all-pass, blockers, partial install, missing tools, crashing tool), READY/INSTALLED/WORKING verdict and exit codes, non-PASS-only rendering, next-command selection (dedupe, cap, comment/path cleaning), JSON schema, the stage runner against stub scripts (missing, crash, garbage JSON, verdict exit, backend-start exit, timeout) and the log writer |
 
 Shared fixtures live in `tests/unit/support.py`: module-by-path loader,
 `TmpTree`, and builders for synthetic powercap zones, batteries, AC nodes and
@@ -202,7 +203,7 @@ the risk describes; report it with the journal lines.
   through `repo-test.sh --fast`.
 * `make unit` was verified in the local build container
   (`localhost/oxp3-fixes-build:f45`, the host has no `make`). Its count is
-  lower than the host's 634 because `python3-evdev` is missing there:
+  lower than the host's 658 because `python3-evdev` is missing there:
   `test_voltap` then skips at import with that reason (one module-level skip
   instead of 17 tests). Install `python3-evdev` in a CI image to run them.
 * `tests/unit` is untracked in this round (the working tree is left for review);

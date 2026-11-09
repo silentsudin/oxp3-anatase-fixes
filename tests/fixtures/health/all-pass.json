@@ -1,0 +1,101 @@
+{
+  "name": "all-pass",
+  "description": "Every reporter answered and no row is non-PASS.",
+  "expect": {
+    "ready_to_install": true,
+    "verdict": "ok",
+    "exit_code": 0,
+    "installed_done": 3,
+    "installed_total": 3,
+    "missing_step_ids": [],
+    "blocker_ids": [],
+    "failing_ids": [],
+    "problem_stages": [],
+    "components_installed": 2,
+    "components_total": 2
+  },
+  "stages": {
+    "preflight": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 14,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-preflight",
+        "safe": true,
+        "verdict": "safe",
+        "counts": {"total": 3, "ok": 3, "warn": 0, "fail": 0},
+        "components": {
+          "volume": {"state": "ready", "blockers": [], "warnings": []}
+        },
+        "checks": [
+          {"id": "core.user", "group": "core", "title": "unprivileged target user", "state": "OK", "summary": "unit (uid 1000)", "remediation": "", "components": ["leds"]},
+          {"id": "state.volume", "group": "state", "title": "volume install state", "state": "OK", "summary": "installed (1/1 artefacts)", "remediation": "", "components": ["volume"]},
+          {"id": "state.leds", "group": "state", "title": "leds install state", "state": "OK", "summary": "installed (2/2 artefacts)", "remediation": "", "components": ["leds"]}
+        ]
+      }
+    },
+    "verify": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 3200,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-verify",
+        "mode": "default",
+        "counts": {"total": 3, "pass": 3, "fail": 0, "skip": 0, "unknown": 0},
+        "exit_code": 0,
+        "checks": [
+          {"id": "preflight.verdict", "group": "preflight", "title": "preflight verdict", "state": "pass", "summary": "safe", "detail": "", "remediation": ""},
+          {"id": "gfx.mesa", "group": "graphics", "title": "host Mesa", "state": "pass", "summary": "ec418f04e589965a", "detail": "", "remediation": ""},
+          {"id": "vol.unit", "group": "volume", "title": "oxp3-voltap service", "state": "pass", "summary": "active", "detail": "", "remediation": ""}
+        ]
+      }
+    },
+    "firstrun": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 280,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "tool": "oxp3-firstrun",
+        "mode": "check-only",
+        "counts": {"ok": 3, "pending": 0, "partial": 0, "todo": 0, "unknown": 0, "n/a": 0},
+        "steps": [
+          {"id": "driver-stack", "title": "driver stack", "state": "ok", "detail": "mesa + kernel installed", "command": "./oxp3-fixes-fast.sh build"},
+          {"id": "hw-install", "title": "hardware install", "state": "ok", "detail": "5/5 helpers", "command": "sudo tools/oxp3-hw-install.sh --all"},
+          {"id": "ime-blacklist", "title": "IMU blacklist", "state": "ok", "detail": "present", "command": "sudo tools/oxp3-hw-install.sh --imu"}
+        ]
+      }
+    },
+    "status": {
+      "status": "ok",
+      "rc": 0,
+      "duration_ms": 120,
+      "stderr": "",
+      "error": "",
+      "data": {
+        "schema": 1,
+        "overall": "ok",
+        "counts": {"ok": 2, "warn": 0, "fail": 0, "unknown": 0, "na": 0},
+        "groups": [
+          {
+            "id": "fixes",
+            "title": "fixes",
+            "state": "ok",
+            "indicators": [
+              {"id": "xe.module", "label": "xe module", "state": "ok", "value": "loaded", "detail": "", "source": "/sys/module/xe"},
+              {"id": "rapl.values", "label": "RAPL values", "state": "ok", "value": "35/37/122 W", "detail": "", "source": "/sys/class/powercap"}
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
