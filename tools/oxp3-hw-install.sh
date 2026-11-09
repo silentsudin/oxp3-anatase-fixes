@@ -901,13 +901,22 @@ comp_gamescope_install() {
         printf '  [dry-run] extract the cached gamescope oxp3 RPMs into the /usr overlay + enable oxp3-gamescope-keep.service\n'
         return 0
     fi
-    install -D -m0755 "$repo/files/oxp3-gamescope-keep.sh" "$PREFIX/usr/local/libexec/oxp3-gamescope-keep"
-    install -D -m0644 "$repo/files/oxp3-gamescope-keep.service" \
+    run install -D -m0755 "$repo/files/oxp3-gamescope-keep.sh" "$PREFIX/usr/local/libexec/oxp3-gamescope-keep"
+    run install -D -m0644 "$repo/files/oxp3-gamescope-keep.service" \
         "$PREFIX/etc/systemd/system/oxp3-gamescope-keep.service"
-    systemctl daemon-reload
-    systemctl enable oxp3-gamescope-keep.service
+    if [ ! -x "$PREFIX/usr/local/libexec/oxp3-gamescope-keep" ]; then
+        die "the keep script was not written; check permissions on /usr/local/libexec"
+    fi
+    run systemctl daemon-reload
+    run systemctl enable oxp3-gamescope-keep.service
     if "$PREFIX/usr/local/libexec/oxp3-gamescope-keep"; then
-        printf '  patched gamescope installed; oxp3-gamescope-keep.service re-applies it on every boot\n'
+        run systemctl restart oxp3-gamescope-keep.service
+        if [ -r /var/lib/oxp3-fixes/gamescope.sha256 ]; then
+            printf '  patched gamescope installed (%s); keep unit re-applies it on every boot\n' \
+                "$(cut -c1-16 /var/lib/oxp3-fixes/gamescope.sha256)"
+        else
+            warn "extraction reported success but no digest was recorded"
+        fi
     else
         warn "gamescope extraction failed"
     fi
