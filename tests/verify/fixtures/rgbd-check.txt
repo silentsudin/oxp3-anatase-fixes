@@ -1,0 +1,11 @@
+device        : /dev/hidraw4
+permissions   : 0o600 uid=0 gid=0
+journal       : readable
+hhd rgb mode  : 'solid'
+config        : /home/user/.config/oxp3-rgb.toml brightness=high
+  zone left_stick   side=0x01 effect=solid  level=high color=ff6600
+  zone right_stick  side=0x02 effect=solid  level=high color=ff6600
+  zone gkey         side=0x05 effect=breath level=high color=3050ff
+  zone top          side=0x06 effect=preset level=high preset=aurora
+  zone connector    side=0x07 effect=solid  level=medium color=ff6600
+frames        : 10 (dry-run with --once --dry-run)

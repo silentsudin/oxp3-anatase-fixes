@@ -1,0 +1,108 @@
+oxp3-verify 1.0.0  mode=default  kernel=7.2.7-an28.fc45.x86_64  root=no
+
+[SKIP ] volume     vol.unit               not installed
+        LoadState=not-found
+        hint: sudo tools/oxp3-voltap/install.sh install --hwdb (standalone path; do not combine with the hhd volume patch)
+[SKIP ] volume     vol.grab               daemon not running
+        hint: start oxp3-voltap: it grabs the hhd uinput volume keyboard
+[SKIP ] volume     vol.hwdb               not installed
+        no 84-oxp3-volume-keys*.hwdb in /etc/udev/hwdb.d
+        hint: sudo tools/oxp3-voltap/install.sh install --hwdb
+[SKIP ] leds       hid.rule               not installed
+        no /etc/udev/rules.d/90-oxp3-hid.rules
+        hint: sudo install -m 0644 tools/oxp3-hid.rules /etc/udev/rules.d/90-oxp3-hid.rules && sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw --action=change
+[PASS ] leds       led.status             protocol readable on /dev/hidraw4
+[PASS ] leds       led.zones              5 zones, 11 presets
+[SKIP ] leds       hid.access             udev rule not installed
+        /dev/hidraw4 is root-only (permissions 0o600 uid=0 gid=0)
+        hint: sudo install -m 0644 tools/oxp3-hid.rules /etc/udev/rules.d/90-oxp3-hid.rules && sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw --action=change
+[SKIP ] leds       homebtn.unit           user unit not installed
+        LoadState=not-found
+        hint: install ~/.config/systemd/user/oxp3-homebtn.service (tools/oxp3-homebtn.service) and systemctl --user enable --now oxp3-homebtn
+[SKIP ] leds       homebtn.mapping        unit not installed
+        hint: unit ExecStart must use --key homepage
+[SKIP ] leds       homebtn.press          unit not installed
+        hint: systemctl --user enable --now oxp3-homebtn
+[SKIP ] leds       rgbd.unit              no user config
+        /var/home/holzr/.config/oxp3-rgb.toml missing
+        hint: install -m 0644 tools/oxp3-rgbd.toml.example ~/.config/oxp3-rgb.toml && systemctl --user enable --now oxp3-rgbd
+[SKIP ] leds       rgbd.check             no user config
+        /var/home/holzr/.config/oxp3-rgb.toml missing
+        hint: same: install the example config, then tools/oxp3-rgbd.py --check
+[PASS ] imu        imu.selftest           RESULT: PASS (0 warning(s)) - IMU usable, gyro exposed to Steam
+[PASS ] sleep      sleep.mem              mem_sleep: [s2idle] deep
+[SKIP ] sleep      sleep.stats            no suspend attempt since boot
+        success=0 fail=0
+        hint: tools/oxp3-verify.sh --full runs a real suspend; or: sudo tools/sleep-power-measure.sh suspend -w 60
+[SKIP ] sleep      sleep.units            not installed
+        LoadState=not-found
+        hint: sudo tools/oxp3-hw-install.sh --sleep
+[SKIP ] sleep      sleep.wakeup           sleep policy not installed
+        no unit and no /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules
+        hint: sudo tools/oxp3-hw-install.sh --sleep
+[PASS ] sleep      sleep.audit            capability and suspend record readable
+[PASS ] bluetooth  bt.files               2/2 pinned files present
+[SKIP ] bluetooth  bt.dracut              no dracut drop-in
+        the standalone script writes it; a layered oxp3-firmware rpm can cover the same files
+        hint: sudo tools/oxp3-bt-firmware.sh (persist=items) ; or layering oxp3-firmware
+[FAIL ] bluetooth  bt.journal             kernel logged a firmware load failure
+        Nov 08 16:15:18 anatase kernel: Bluetooth: hci0: Failed to load Intel firmware file intel/ibt-00a0-0291-iml.sfi (-2)
+        hint: sudo modprobe -r btintel_pcie btintel && sudo modprobe btintel_pcie ; if it recurs, run sudo tools/oxp3-bt-firmware.sh (initramfs) and reboot
+[FAIL ] bluetooth  bt.controller          hci0 exists but btmgmt lists 0 controllers (no firmware)
+        hint: reload btintel_pcie now, or install the initramfs fix and reboot: sudo tools/oxp3-bt-firmware.sh
+[FAIL ] bluetooth  bt.diag                action needed (action)
+        files ok=2/2, journal failure=1
+        hint: read the verdict above; sudo tools/oxp3-bt-firmware.sh ; docs/hw/bluetooth.md
+[PASS ] power      pwr.zones              both zones readable
+[PASS ] power      pwr.pl1                PL1 35 W on both zones (tdp-sync invariant holds)
+[SKIP ] power      pwr.profile            no saved profile
+        /etc/oxp3/power.json absent
+        hint: sudo /usr/local/libexec/oxp3-powerctl profile balanced --save
+[PASS ] power      pwr.fan                auto mode, pwm 51/255 (enable=2), 1399 rpm
+[SKIP ] power      pwr.adaptive           not installed (opt-in not used)
+        LoadState=not-found
+        hint: sudo tools/oxp3-power-install.sh install --adaptive-tdp (installs it inactive)
+[PASS ] power      pwr.rapl               active
+[PASS ] battery    bat.threshold          charge_control_end_threshold=80
+[PASS ] battery    bat.behaviour          charge_behaviour: [auto] inhibit-charge inhibit-charge-awake
+[PASS ] audio      aud.scripts            eq-on.sh and eq-off.sh executable
+[PASS ] audio      aud.server             audio server reachable
+[SKIP ] audio      aud.eq                 EQ not installed
+        /var/home/holzr/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf missing
+        hint: tools/audio/eq-on.sh (no root; makes the filter sink the default)
+[UNKNOWN] audio      aud.dummy              only auto_null (Dummy Output) visible
+        no hardware sink in this context: no audio seat here, or the SOF card is wedged
+        hint: pactl list sinks ; journalctl --user -u pipewire ; docs/hw/README.md trap
+[PASS ] audio      aud.model              8-band model reproduces (pre-gain -8 dB)
+[PASS ] display    dsp.hdr                HDR=disabled, WCG=disabled
+[PASS ] display    dsp.icc                no ICC profile applied (panel profile: none)
+[PASS ] display    dsp.panel              EDID reports 10-bit PQ/HDR10 wide gamut
+[PASS ] display    dsp.vibrance           shader present, gamescope: installed in /var/home/holzr/.local/share/gamescope/reshade/Shaders
+[PASS ] graphics   gfx.mesa               ec418f04e589965a (match)
+[PASS ] graphics   gfx.xmx.driver         4b1d55ea9483417f (match)
+[PASS ] graphics   gfx.xmx.helper         xmx-cm-compile-nodgrf.sh
+[PASS ] graphics   gfx.xmx.igc            ocloc-25.18.1
+[PASS ] graphics   gfx.xmx.kernels        30 kernel(s)
+[PASS ] graphics   gfx.xmx.icd            icd-xmx.json -> xmx driver
+[SKIP ] graphics   gfx.xmx.trace          trace not present (expected unless tracing is enabled)
+        not found in the prefix
+        hint: enable the shim tracing for a traced launch if you need it; docs/xess-xmx.md
+[PASS ] graphics   gfx.xe                 layered (xe.ko.xz)
+[PASS ] graphics   gfx.working            state matches the recorded working build
+[SKIP ] graphics   sched.state            gaming scheduler not installed (opt-in)
+        not installed
+        hint: sudo systemctl enable --now oxp3-gaming-sched ; docs/cpu-sched.md
+[SKIP ] graphics   sched.scx              gaming scheduler not installed (opt-in)
+        hint: same
+[SKIP ] graphics   sched.unit             not installed (opt-in)
+        not installed
+        hint: install oxp3-gaming-sched.service and enable it
+[SKIP ] decky      decky.dir              not installed
+        looked in ~/homebrew/plugins/oxp3-status and 'OXP3 Status'
+        hint: cp -r tools/decky-oxp3-status ~/homebrew/plugins/oxp3-status (plugin.json, main.py and dist/ are enough), then restart plugin_loader
+[SKIP ] decky      decky.backend          not installed
+        hint: install the plugin, then: python3 -c 'import main' in the plugin dir
+[PASS ] decky      decky.status           overall=warn (ok=23 warn=5 fail=0 unknown=0)
+
+== summary: 55 checks: 28 pass, 3 fail, 23 skip, 1 unknown -> exit 1
+   failing: bt.journal bt.controller bt.diag

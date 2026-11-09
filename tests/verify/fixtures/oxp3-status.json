@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "version": "1.0.0",
+  "overall": "warn",
+  "counts": {"ok": 23, "warn": 5, "fail": 0, "unknown": 0, "na": 0},
+  "groups": [
+    {
+      "id": "mesa",
+      "title": "Mesa driver",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "mesa.host",
+          "label": "host libvulkan_intel.so",
+          "state": "ok",
+          "value": "ec418f04e589965a (match)",
+          "detail": "path: /usr/lib64/libvulkan_intel.so"
+        }
+      ]
+    },
+    {
+      "id": "sched",
+      "title": "CPU scheduler",
+      "state": "warn",
+      "indicators": [
+        {
+          "id": "sched.unit",
+          "label": "oxp3-gaming-sched.service",
+          "state": "warn",
+          "value": "not installed",
+          "detail": "LoadState=not-found ActiveState=inactive UnitFileState=-"
+        }
+      ]
+    }
+  ]
+}

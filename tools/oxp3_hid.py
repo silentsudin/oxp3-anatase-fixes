@@ -316,7 +316,15 @@ def parse_sides(values, default="all") -> list:
             elif low in SIDE_ALIASES_COMPAT:
                 out.append(SIDE_ALIASES_COMPAT[low])
             else:
-                n = int(part, 0)
+                try:
+                    if low.startswith("0x"):
+                        n = int(part, 16)
+                    elif part.isdigit():
+                        n = int(part, 10)   # accept zero-padded ids such as 01/02
+                    else:
+                        raise ValueError
+                except ValueError:
+                    raise SystemExit(f"bad side {part}")
                 if not 0 <= n <= 0xFF:
                     raise SystemExit(f"bad side {part}")
                 out.append(n)

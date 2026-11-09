@@ -1,0 +1,14 @@
+== controller ==
+00:14.7 Bluetooth [0d11]: Intel Corporation Core Ultra Processors (Series 3) CNVi Bluetooth [8086:e476] (rev 01)
+driver:        /sys/bus/pci/drivers/btintel_pcie
+hci devices:   hci0
+
+== firmware files ==
+[warn] ibt-00a0-0291-iml.sfi            ABSENT (want sha256 0f0f0f0f0f0f0f0f...)
+[warn] ibt-00a0-0291-pci.sfi            ABSENT (want sha256 1e1e1e1e1e1e1e1e...)
+
+== boot-time driver state (this boot) ==
+[warn] Nov 08 16:15:18 anatase kernel: Bluetooth: hci0: Failed to load Intel firmware file intel/ibt-00a0-0291-iml.sfi (-2)
+
+== verdict ==
+[warn] action needed (see above)

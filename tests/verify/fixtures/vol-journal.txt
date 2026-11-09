@@ -1,0 +1,2 @@
+grabbed /dev/input/event12 for probing (input goes only to us meanwhile)
+14:02:11 grabbed /dev/input/event12 ('Handheld Daemon Volume Keyboard' phys='hhd/input0') read-only fallback off

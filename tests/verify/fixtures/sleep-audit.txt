@@ -1,0 +1,18 @@
+== suspend capability
+mem_sleep       : [s2idle] deep
+state           : freeze mem 
+hibernate (disk): [disabled]
+lockdown        : none [integrity] confidentiality
+
+== kernel suspend record (this boot)
+  success            2
+  fail               0
+  last_hw_sleep      12345678
+  total_hw_sleep     24691356
+  (root shows the S0ix residency and the pmc_core blocker lists)
+
+== ACPI wake sources enabled (/proc/acpi/wakeup)
+  LID0   S3   platform:PNP0C0D:00
+
+== device wakeup / runtime PM enabled right now
+  pci  0000:00:06.0   wakeup=enabled runtime=active

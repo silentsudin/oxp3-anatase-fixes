@@ -1,0 +1,9 @@
+vendor interface : /dev/hidraw4
+permissions      : 0o600 uid=0 gid=0
+report descriptor: 0600ff0901a101090215002600ff750895408106090215002600ff75 ...
+ids              : USB 1a86:fe00, usage page ff00, usage 0001, 64-byte reports, no report id
+zones (side ids) : left_stick=0x01, right_stick=0x02, gkey=0x05, top=0x06, connector=0x07
+other-model ids  : 0x03=v_zone, 0x04=keyboard  (probe to test)
+brightness       : low=1, mid=2, medium=3, high=4
+presets          : monster_woke=1, flowing=2, sunset=3, neon=4, dreamy=5, cyberpunk=6, colorful=7, aok_classic=8, oxp_classic=9, aurora=10, warm_sun=11
+hhd rgb mode     : solid

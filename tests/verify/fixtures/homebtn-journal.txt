@@ -1,0 +1,4 @@
+listening on /dev/hidraw4
+button 0x24 pressed
+button 0x24 released
+button 0x24 pressed

@@ -1,0 +1,15 @@
+== controller ==
+00:14.7 Bluetooth [0d11]: Intel Corporation Core Ultra Processors (Series 3) CNVi Bluetooth [8086:e476] (rev 01)
+driver:        /sys/bus/pci/drivers/btintel_pcie
+hci devices:   hci0
+firmware blob: BT_Scorpius_S_REL102163_24.80.26362.102163
+
+== firmware files ==
+[ok] ibt-00a0-0291-iml.sfi            verified (/usr/lib/firmware/updates/intel/ibt-00a0-0291-iml.sfi)
+[ok] ibt-00a0-0291-pci.sfi            verified (/usr/lib/firmware/updates/intel/ibt-00a0-0291-pci.sfi)
+
+== boot-time driver state (this boot) ==
+[ok] no firmware-load failure in this boot
+
+== verdict ==
+[ok] radio looks healthy
