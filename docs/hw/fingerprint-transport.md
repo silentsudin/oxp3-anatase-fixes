@@ -448,6 +448,14 @@ python3 tools/fingerprint/oxp3-fp-probe.py --dry-run --spidev /dev/spidev0.0 fw 
 python3 tools/fingerprint/oxp3-fp-probe.py --dry-run --crs /tmp/fprt-crs.bin \
     --spidev /dev/spidev0.0 fw info uid count
 python3 tools/fingerprint/oxp3-fp-probe.py acpi_info --crs /tmp/fprt-crs.bin
+# the matrix (dry run first, then the real one; --allow-reset is mandatory)
+python3 tools/fingerprint/oxp3-fp-probe.py --try-matrix --dry-run \
+    --spidev /dev/spidev0.0 --gpio 18 --gpio-chip gpiochip1 \
+    --reset-gpio 16 --allow-reset --allow-writes
+sudo python3 tools/fingerprint/oxp3-fp-probe.py --try-matrix \
+    --spidev /dev/spidev0.0 --gpio 18 --gpio-chip gpiochip1 \
+    --reset-gpio 16 --allow-reset --allow-writes \
+    --matrix-json /tmp/oxp3-fp-matrix.json
 ```
 
 A real transfer requires **both** an explicit device path and `--allow-writes`
@@ -665,6 +673,50 @@ Two consequences matter for the probe:
    concatenate the two named buffers, the CLI overrides are the reliable way
    to pass the GPIOs; this is a known limitation, not a hardware fact.
 
+### 8.7 The try-matrix interpretation guide
+
+`--try-matrix` (also reachable as the runbook's `--try-matrix`) exists because
+the single-setting run can only test one hypothesis per boot: after the
+2026-11-09 run there were three at once (reset polarity, settling time,
+interrupt edge). One invocation walks all of them:
+
+* **reset polarity** - active-low, active-high and `hold` (never pulse the
+  line; the control),
+* **settle after release** - 10 ms and 150 ms,
+* **interrupt edge** - rising, falling and both,
+
+18 cells in a fixed order (active-low/10 ms/rising first). Every cell sends
+only the allowlisted read-only `0xA0`; `0xA1` and `0xC1` follow only when
+`0xA0` is non-zero. The per-attempt timeout is 1.5 s. The matrix stops at the
+first cell whose answer **parses** - a complete `0xAA | L:u32 | ... | CRC-32`
+frame (CRC verified) or the bare fixed-size answer, checked against the
+recovered `0xA0` (7 B: state/project/version), `0xA1` (table) and `0xC1` (9 B:
+geometry/flags) layouts. Non-zero but unparseable is *not* success; it stops
+the matrix and is reported as malformed, because the bus clearly worked in
+that setting.
+
+The console table and `matrix.json` have one row/record per cell with the
+polarity, settle, edge, the `0xA0` bytes and the verdict; `summary.json`
+embeds the same object under `matrix`. Read the outcomes like this:
+
+| what the table says | interpretation | next move |
+|---|---|---|
+| every cell `error` with no bytes (backend/open failure) | the command itself failed: no GPIO backend, bad `--gpio-chip` path, or spidev open/ioctl failure | fix the device/line selection first; nothing about the sensor was tested |
+| every cell `timeout` and `(none)` bytes | no transfer completed, or the device is not running: wrong interrupt pin/edge, module held in reset, or ACPI power state | check `_PS0`/power, the `GpioInt` line 18 mapping and `bytes_tx`; try the IRQ-first ordering |
+| `zeros` (or `00` bytes on every cell) | the SPI bus clocked but the sensor never drove MISO: wrong chip select/controller, SPI mode/clock, or the module needs the IRQ before it answers | fix CS/mode/clock from `_CRS`; then test the IRQ-first read order (a code change §8.5 lists as the main risk) |
+| all `ff` | nothing on the bus at all: wrong chip select/controller or the module is held in reset | verify the spidev node really belongs to this device; check reset wiring/polarity |
+| `timeout` with **non-zero** bytes | the answer came back but no edge was seen: the interrupt pin/edge/polarity is wrong (data is still useful) | read the bytes; if they parse, the matrix already reports `valid` and the remaining problem is only the IRQ |
+| `short` / `malformed` non-zero | the transport works but the framing/layout does not match: wrong answer length, a `0xAA` frame the parser rejects, or these are not the right SPI opcodes | capture the full bytes from `matrix.json`; check the frame `L`/CRC and the command table |
+| one cell `valid`, everything before it failed | the correct combination was found: polarity/settle/edge are in the winning row, and the query that parsed is named in `verdict` | repeat that exact single setting in a normal `--reads` run, then keep it for the driver |
+
+The matrix is still strictly read-only: only `0xA0`, `0xA1` and `0xC1` can be
+sent, `SpiTransport` re-checks the allowlist and the destructive
+opcode/selector gate, no write opcode is reachable, and the reset pulse itself
+requires `--allow-reset`. The probe's JSON records the context (spidev, chip,
+IRQ/reset pins, timeout) and every query's bytes/verdict, so an all-failed
+verdict names exactly which combinations were tried and the next session does
+not repeat them.
+
 ## 9. Next steps
 
 **If the goal is this unit (SPI-only, the realistic path).** This is the exact
@@ -760,8 +812,10 @@ explanation and as the fallback if the script cannot run.
   static `SBFG` `GpioInt` is edge/active-high/wake-capable, but the real
   numbers (IRQ 18, reset 16) come from `_INI`/`GNUM` and must be passed with
   `--irq-pin`/`--reset-pin`;
-* the reset polarity - ACPI `GpioIo` has no polarity field, so the probe
+* the reset polarity - ACPI `GpioIo` has no polarity field, so a normal read
   assumes the conventional active-low and requires `--allow-reset` explicitly;
+  `--try-matrix` (8.7) tests active-low, active-high and a no-pulse control in
+  one run;
 * the controller-side values (speed/mode/bits) and whether the PXA2xx PIO path
   with no DMA channels at 1 MHz behaves; and
 * everything about the device's response to the first selector byte, including

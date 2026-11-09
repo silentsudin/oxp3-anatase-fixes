@@ -387,6 +387,79 @@ else
     fail "every destructive name is refused by --reads"
 fi
 
+# ---------------------------------------------------------------- 13. --try-matrix
+# The probe runs for real against the fixture's fake spidev node and a
+# nonexistent GPIO chip path, so every cell fails closed; what is asserted is
+# that the flag reaches the probe and that the matrix table becomes part of
+# the transcript, without any real device or GPIO being opened.
+fixture "$TMP/matrix" clean
+mkdir -p "$TMP/session-matrix"
+printf 'y\ny\nprobe\n' | "$S" --root "$TMP/matrix" --out "$TMP/session-matrix" \
+    --try-matrix --irq-pin 18 --reset-pin 16 \
+    --gpio-chip "$TMP/matrix/dev/gpiochip1" --allow-reset \
+    >"$TMP/matrix.out" 2>&1
+matrix_rc=$?
+show_log "$TMP/matrix.out"
+if [ "$matrix_rc" -eq 1 ]; then
+    pass "--try-matrix runs to a matrix verdict (exit 1 = no valid answer)"
+else
+    fail "--try-matrix runs to a matrix verdict (exit $matrix_rc)"
+fi
+unbound "$TMP/matrix" && pass "--try-matrix restored the previous binding" \
+    || fail "--try-matrix restored the previous binding"
+contains "$TMP/session-matrix/commands.txt" '--try-matrix' \
+    && pass "the session passes --try-matrix to the probe" \
+    || fail "the session passes --try-matrix to the probe"
+contains "$TMP/session-matrix/commands.txt" '--matrix-json' \
+    && pass "the session passes an explicit --matrix-json path" \
+    || fail "the session passes an explicit --matrix-json path"
+if [ -s "$TMP/session-matrix/matrix.json" ]; then
+    pass "the matrix table lands in the transcript (matrix.json)"
+else
+    fail "the matrix table lands in the transcript (matrix.json)"
+fi
+if python3 -m json.tool "$TMP/session-matrix/matrix.json" >/dev/null 2>&1; then
+    pass "matrix.json is valid JSON"
+else
+    fail "matrix.json is valid JSON"
+fi
+if python3 - "$TMP/session-matrix/matrix.json" <<'PYMATRIX'
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["planned"] == 18, data["planned"]
+assert len(data["attempts"]) == 18, len(data["attempts"])
+assert data["outcome"] == "no-valid-answer", data["outcome"]
+assert data["attempts"][0]["polarity"] == "active-low"
+assert data["attempts"][0]["settle_ms"] == 10
+assert data["attempts"][0]["edge"] == "rising"
+assert "no valid answer" in data["verdict"]
+assert "tried polarity" in data["verdict"]
+PYMATRIX
+then
+    pass "matrix.json has 18 attempts and the documented shape"
+else
+    fail "matrix.json has 18 attempts and the documented shape"
+fi
+contains "$TMP/session-matrix/probe-readonly.txt" 'polarity' \
+    && pass "the compact matrix table is in the probe transcript" \
+    || fail "the compact matrix table is in the probe transcript"
+contains "$TMP/session-matrix/probe-readonly.txt" 'attempts failed' \
+    && pass "the no-valid-answer verdict names the combinations tried" \
+    || fail "the no-valid-answer verdict names the combinations tried"
+contains "$TMP/session-matrix/summary.json" '"matrix"' \
+    && pass "summary.json records the matrix table" \
+    || fail "summary.json records the matrix table"
+contains "$TMP/session-matrix/summary.json" '"outcome": "no-valid-answer"' \
+    && pass "summary.json records the matrix outcome" \
+    || fail "summary.json records the matrix outcome"
+if python3 -m json.tool "$TMP/session-matrix/summary.json" >/dev/null 2>&1; then
+    pass "summary.json stays valid JSON with the matrix embedded"
+else
+    fail "summary.json stays valid JSON with the matrix embedded"
+fi
+
 printf -- '------------------------------------------------------------------------\n'
 if [ "$FAILED" -eq 0 ]; then
     printf 'fingerprint-session: %d checks passed\n' "$COUNT"

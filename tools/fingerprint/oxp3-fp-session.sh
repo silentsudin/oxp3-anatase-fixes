@@ -61,6 +61,7 @@
 #   <out>/acpi-info.txt      the probe's acpi_info interpretation
 #   <out>/probe-dryrun.txt   the probe's --dry-run byte plan
 #   <out>/probe-readonly.txt the read-only answers (only when the probe ran)
+#   <out>/matrix.json        the --try-matrix table (only with --try-matrix)
 #   <out>/sys-before.txt     driver/override/module state before any change
 #   <out>/sys-after.txt      the same after the restore
 #   <out>/commands.txt       the exact commands, for copy/paste
@@ -87,6 +88,11 @@
 #                                  only; the probe refuses it for the reset line)
 #   --allow-reset                  let the probe pulse a GpioIo reset line (only if
 #                                  _CRS has one; the plan says so first)
+#   --try-matrix                   one bounded read-only experiment: reset polarity
+#                                  (active-low/active-high/hold) x settle (10/150 ms)
+#                                  x IRQ edge (rising/falling/both), 0xA0 then
+#                                  0xA1/0xC1 on a non-zero answer; needs --allow-reset,
+#                                  an IRQ pin and a reset pin; table -> matrix.json
 #   --allow-existing-bind          use a spidev bind this session did not create
 #                                  (never unbound by us)
 #   --allow-takeover               take the device from another driver; it is
@@ -101,7 +107,7 @@
 set -u
 
 PROG=oxp3-fp-session
-VERSION=1.1.0
+VERSION=1.2.0
 SCHEMA=1
 UNIQUE_NAME=${UNIQUE_NAME:-runbook}
 
@@ -134,6 +140,7 @@ RESUME_ARG=""
 ALLOW_TAKEOVER=0
 ALLOW_EXISTING=0
 ALLOW_RESET=0
+TRY_MATRIX=0
 NO_IRQ=0
 IRQ_PIN_OVERRIDE=""
 RESET_PIN_OVERRIDE=""
@@ -185,6 +192,7 @@ while [ "$#" -gt 0 ]; do
         --allow-takeover) ALLOW_TAKEOVER=1; shift ;;
         --allow-existing-bind) ALLOW_EXISTING=1; shift ;;
         --allow-reset) ALLOW_RESET=1; shift ;;
+        --try-matrix) TRY_MATRIX=1; shift ;;
         --irq-pin) [ "$#" -ge 2 ] || exit 2; IRQ_PIN_OVERRIDE=$2; shift 2 ;;
         --irq-pin=*) IRQ_PIN_OVERRIDE=${1#*=}; shift ;;
         --reset-pin) [ "$#" -ge 2 ] || exit 2; RESET_PIN_OVERRIDE=$2; shift 2 ;;
@@ -217,6 +225,10 @@ case $GPIO_BACKEND in
     ''|auto|gpiod|chardev|sysfs|poll) ;;
     *) printf '%s: --gpio-backend must be auto, gpiod, chardev, sysfs or poll\n' "$PROG" >&2; exit 2 ;;
 esac
+if [ "$TRY_MATRIX" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
+    printf '%s: --try-matrix pulses the reset line in some combinations; pass --allow-reset\n' "$PROG" >&2
+    exit 2
+fi
 
 # ------------------------------------------------------------------ constants
 DEV_ACPI_DIR=/sys/bus/acpi/devices/BF63112:00
@@ -265,6 +277,7 @@ IRQ_USED=0
 PROBE_DRYRUN_RC=""
 PROBE_RC=""
 PROBE_RAN=0
+MATRIX_OUTCOME=""
 RESTORED=0
 RESTORE_RC=""
 RESTORE_NOTES=()
@@ -798,6 +811,18 @@ parse_crs() { # run the probe's acpi_info and interpret the keys
     else
         note "GpioIo reset line: none in _CRS"
     fi
+    if [ "$TRY_MATRIX" = 1 ]; then
+        if [ -z "$CONN_IRQ" ] || [ "$NO_IRQ" = 1 ]; then
+            fail "--try-matrix needs the GpioInt line (--irq-pin N); the edge is part of the matrix"
+            return 1
+        fi
+        if [ -z "$CONN_RESET" ]; then
+            fail "--try-matrix needs the GpioIo reset line (--reset-pin N)"
+            return 1
+        fi
+        note "matrix mode       : reset polarity active-low/active-high/hold x settle 10/150 ms x edge rising/falling/both"
+        note "matrix queries    : 0xA0, then 0xA1/0xC1 only on a non-zero answer (allowlist enforced)"
+    fi
     return 0
 }
 
@@ -815,6 +840,14 @@ probe_args() { # mode(dry|real) -> words
         [ -n "$CONN_EDGE" ] && out+=" --irq-edge $CONN_EDGE"
         [ "$CONN_ACTIVE_LOW" = 1 ] && out+=" --irq-active-low"
     fi
+    # The matrix owns its query list (0xA0/0xA1/0xC1), its edge and its
+    # polarity; it is still gated by the probe's own allowlist and reset gate.
+    [ "$TRY_MATRIX" = 1 ] && out+=" --try-matrix"
+    if [ "$mode" = dry ] && [ "$TRY_MATRIX" = 1 ] && [ -n "$CONN_RESET" ]; then
+        # The dry run shows the reset line too; it never pulses it.
+        out+=" --reset-gpio $CONN_RESET"
+        [ "$IRQ_USED" != 1 ] && [ -n "$GPIO_CHIP" ] && out+=" --gpio-chip $GPIO_CHIP"
+    fi
     if [ "$mode" = real ]; then
         out+=" --allow-writes"
         # Pulsing a GpioIo reset line is not a read. It only happens when the
@@ -822,14 +855,29 @@ probe_args() { # mode(dry|real) -> words
         # explicit gate (which needs the reset pin, i.e. --crs).
         if [ "$ALLOW_RESET" = 1 ] && [ -n "$CONN_RESET" ]; then
             out+=" --reset-gpio $CONN_RESET --allow-reset"
-            [ -n "$GPIO_CHIP" ] && out+=" --gpio-chip $GPIO_CHIP"
+            [ "$IRQ_USED" != 1 ] && [ -n "$GPIO_CHIP" ] && out+=" --gpio-chip $GPIO_CHIP"
+        fi
+        if [ "$TRY_MATRIX" = 1 ]; then
+            out+=" --matrix-json $(sq "$T/matrix.json")"
         fi
     fi
     printf '%s' "$out"
 }
 
+probe_reads() { # the positional command list (empty in matrix mode)
+    [ "$TRY_MATRIX" = 1 ] || printf '%s' "$READS"
+}
+
+probe_reads_label() { # what the summary records as the read set
+    if [ "$TRY_MATRIX" = 1 ]; then
+        printf 'matrix:0xA0/0xA1/0xC1'
+    else
+        printf '%s' "$READS"
+    fi
+}
+
 probe_command() { # mode -> printable command
-    printf 'python3 -I -B %s %s %s' "$PROBE_REL" "$(probe_args "$1")" "$READS"
+    printf 'python3 -I -B %s %s %s' "$PROBE_REL" "$(probe_args "$1")" "$(probe_reads)"
 }
 
 print_plan() {
@@ -856,6 +904,10 @@ print_plan() {
         note "takeover: bind spidev over ${ORIGINAL_DRIVER:-another driver}; it is re-bound on exit"
     fi
     printf ' 3. read-only probe (typed confirmation required)\n'
+    if [ "$TRY_MATRIX" = 1 ]; then
+        note "--try-matrix: reset polarity active-low/active-high/hold x settle 10/150 ms x edge rising/falling/both"
+        note "18 cells; 0xA0 then 0xA1/0xC1 only on a non-zero answer; table -> matrix.json"
+    fi
     note "$(probe_command real)"
     printf ' 4. restore\n'
     if [ "$EXTERNAL_BIND" = 1 ]; then
@@ -1452,7 +1504,11 @@ phase_dryrun() {
     fi
     printf '$ %s\n' "$(probe_command dry)"
     # shellcheck disable=SC2086
-    python3 -I -B "$PROBE" $(probe_args dry) --dry-run $READS >"$out" 2>&1 || rc=$?
+    if [ "$TRY_MATRIX" = 1 ]; then
+        python3 -I -B "$PROBE" $(probe_args dry) --dry-run >"$out" 2>&1 || rc=$?
+    else
+        python3 -I -B "$PROBE" $(probe_args dry) --dry-run $READS >"$out" 2>&1 || rc=$?
+    fi
     cat "$out"
     PROBE_DRYRUN_RC=$rc
     journal dryrun ok "rc=$rc -> probe-dryrun.txt"
@@ -1466,7 +1522,12 @@ phase_dryrun() {
 phase_probe() {
     hr
     printf 'Read-only probe (the sensor is touched here)\n'
-    note "allowlisted reads: $READS"
+    if [ "$TRY_MATRIX" = 1 ]; then
+        note "matrix queries: 0xA0, then 0xA1/0xC1 only on a non-zero answer"
+        note "matrix cells: reset polarity active-low/active-high/hold x settle 10/150 ms x edge rising/falling/both"
+    else
+        note "allowlisted reads: $READS"
+    fi
     note "never sent: enrol (0xB0), identify (0xB1), remove (0xB2), JTAG (0xC2),"
     note "            restore (0xC3), firmware update (0xD0/0xD1/0xFF)"
     if [ "$IRQ_USED" = 1 ] && [ -n "$CONN_IRQ" ]; then
@@ -1496,13 +1557,27 @@ phase_probe() {
     printf '$ %s\n' "$(probe_command real)"
     printf '%s\n' "$(probe_command real)" >>"$T/commands.txt"
     # shellcheck disable=SC2086
-    python3 -I -B "$PROBE" $(probe_args real) $READS >"$out" 2>&1 || rc=$?
+    if [ "$TRY_MATRIX" = 1 ]; then
+        python3 -I -B "$PROBE" $(probe_args real) >"$out" 2>&1 || rc=$?
+    else
+        python3 -I -B "$PROBE" $(probe_args real) $READS >"$out" 2>&1 || rc=$?
+    fi
     cat "$out"
     PROBE_RC=$rc
     PROBE_RAN=1
     sync_state
     journal probe end "rc=$rc"
     collect_answers "$out"
+    if [ "$TRY_MATRIX" = 1 ]; then
+        if [ -s "$T/matrix.json" ]; then
+            MATRIX_OUTCOME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("outcome","unknown"))' "$T/matrix.json" 2>/dev/null || printf unknown)
+            journal answer matrix "outcome=${MATRIX_OUTCOME:-unknown}"
+            note "matrix outcome: ${MATRIX_OUTCOME:-unknown} (full table: matrix.json)"
+        else
+            MATRIX_OUTCOME="missing"
+            fail "the probe did not write $T/matrix.json"
+        fi
+    fi
     if [ "$rc" -ne 0 ]; then
         fail "the probe exited $rc (that is data, not a crash: the session still restores)"
         return 1
@@ -1574,6 +1649,19 @@ compute_unknowns() {
         if ! answer_for fw >/dev/null 2>&1; then
             add_unknown "no firmware answer was parsed: check SPI mode/clock, the IRQ-first hypothesis, and bytes_tx"
         fi
+        if [ "$TRY_MATRIX" = 1 ]; then
+            case $MATRIX_OUTCOME in
+                valid-answer)
+                    add_unknown "the matrix found a valid answer; repeat that single polarity/settle/edge setting in a normal read before trusting it"
+                    ;;
+                no-valid-answer)
+                    add_unknown "the matrix tried every polarity/settle/edge combination and none parsed; see matrix.json and fingerprint-transport.md §8.7"
+                    ;;
+                *)
+                    add_unknown "the matrix did not produce a readable outcome; see matrix.json in this transcript"
+                    ;;
+            esac
+        fi
     elif [ "$MODE" = plan ]; then
         add_unknown "no read was attempted (plan mode): everything about the device's response is still unknown"
     else
@@ -1631,7 +1719,7 @@ write_summary() {
         printf '  "probe": {"dry_run_exit": %s, "exit": %s, "ran": %s, "reads": %s, "answers": [' \
             "$(json_str "$PROBE_DRYRUN_RC")" "$(json_str "$PROBE_RC")" \
             "$([ "$PROBE_RAN" = 1 ] && printf true || printf false)" \
-            "$(json_str "$READS")"
+            "$(json_str "$(probe_reads_label)")"
         first=1
         for a in "${ANSWERS[@]}"; do
             [ "$first" = 1 ] || printf ', '
@@ -1643,6 +1731,13 @@ write_summary() {
                 "$(json_str "$(printf '%s' "${a#*$'\t'}" | cut -f3)")"
         done
         printf ']},\n'
+        if [ -s "$T/matrix.json" ] && python3 -m json.tool "$T/matrix.json" >/dev/null 2>&1; then
+            printf '  "matrix": '
+            cat "$T/matrix.json"
+            printf ',\n'
+        else
+            printf '  "matrix": null,\n'
+        fi
         printf '  "restore": {"attempted": %s, "verified": %s, "exit": %s, "driver": %s, "override": %s, "notes": [' \
             "$([ "$RESTORED" = 1 ] && printf true || printf false)" \
             "$([ "$RESTORE_RC" = 0 ] && printf true || printf false)" \
@@ -1663,7 +1758,7 @@ write_summary() {
             printf '%s' "$(json_str "$u")"
         done
         printf '],\n'
-        printf '  "files": {"journal": "journal.tsv", "console": "session.log", "acpi_info": "acpi-info.txt", "crs": "fprt-crs.bin", "dry_run": "probe-dryrun.txt", "readonly": "probe-readonly.txt", "commands": "commands.txt"}\n'
+        printf '  "files": {"journal": "journal.tsv", "console": "session.log", "acpi_info": "acpi-info.txt", "crs": "fprt-crs.bin", "dry_run": "probe-dryrun.txt", "readonly": "probe-readonly.txt", "matrix": "matrix.json", "commands": "commands.txt"}\n'
         printf '}\n'
     } >"$f"
 
@@ -1685,7 +1780,8 @@ write_summary() {
         printf '# previous binding: driver=%s override_hex=%s\n' \
             "${ORIGINAL_DRIVER:-none}" "${PREV_OVERRIDE_HEX:-none}"
         printf '# restore: %s\n' "$([ "$RESTORE_RC" = 0 ] && printf verified || printf NOT-verified)"
-        printf '# reads: %s (ran=%s exit=%s)\n' "$READS" "$PROBE_RAN" "${PROBE_RC:-n/a}"
+        printf '# reads: %s (ran=%s exit=%s)\n' "$(probe_reads_label)" "$PROBE_RAN" "${PROBE_RC:-n/a}"
+        [ "$TRY_MATRIX" = 1 ] && printf '# matrix: %s (matrix.json)\n' "${MATRIX_OUTCOME:-unknown}"
         printf '# hand this directory back for analysis: summary.json + journal.tsv\n'
     } >"$T/README.txt" 2>/dev/null || true
     return 0

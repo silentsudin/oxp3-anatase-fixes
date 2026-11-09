@@ -41,7 +41,11 @@ the allowlisted reads; default `fw scheme info`), `--no-irq` (never request the
 off by default, never implied, and inert unless `_CRS` actually has a `GpioIo`;
 it is then the only action in the runbook that is not a read, and the plan and
 the command say so), `--allow-existing-bind`,
-`--allow-takeover`, `--crs FILE` (use an already-extracted resource template),
+`--try-matrix` (one bounded read-only experiment: reset polarity
+active-low/active-high/hold x settle 10/150 ms x IRQ edge rising/falling/both;
+needs `--allow-reset`, an IRQ pin and a reset pin; the table is written to
+`matrix.json`), `--allow-takeover`, `--crs FILE` (use an already-extracted
+resource template),
 `--gpio N` / `--irq-edge E` / `--gpio-chip NAME` (override the `_CRS` value
 for an experiment; the plan prints what it will use), `--irq-pin N` /
 `--reset-pin N` (the runtime `_INI`/`GNUM` lines; the template has 0), and
@@ -68,7 +72,7 @@ restored).
 | 4 | **plan** | print every following command, then ask `Proceed?` | no |
 | 5 | **bind** | print the commands, ask once (the takeover question names the driver being displaced), then `modprobe spidev` (only if not loaded), write `spidev` to `driver_override`, write the device name to `spidev/bind`; read every write back; discover the new `/dev/spidevN.M` from sysfs | **yes** |
 | 6 | **dry run** | run the probe with `--dry-run`: the exact selector byte and two-entry transfer for each read, no device opened | no |
-| 7 | **read** | print the exact gated command, then require the literal word `probe` (`skip` stops before touching the sensor; anything else refuses). Runs only `fw scheme info` (`0xA0`, `0xA1`, `0xC1`) unless `--reads` narrows it - never enrol/identify/remove/JTAG/restore/update | talks to the sensor (read-only) |
+| 7 | **read** | print the exact gated command, then require the literal word `probe` (`skip` stops before touching the sensor; anything else refuses). Runs only `fw scheme info` (`0xA0`, `0xA1`, `0xC1`) unless `--reads` narrows it - never enrol/identify/remove/JTAG/restore/update. With `--try-matrix` the probe instead runs the 18-cell polarity/settle/edge matrix, which sends the same three queries and writes `matrix.json` | talks to the sensor (read-only; the matrix also pulses the reset line, already gated by `--allow-reset`) |
 | 8 | **restore** | see §3; then verify | **yes** |
 | 9 | **summary** | `summary.json`, `README.txt`, the journal and the transcript are written | transcript only |
 
@@ -129,6 +133,7 @@ so treat it as host-specific data and do not commit it.
 | `acpi-info.txt` | the probe's `acpi_info` output: descriptors and the derived connection |
 | `probe-dryrun.txt` | the probe's `--dry-run` byte plan |
 | `probe-readonly.txt` | the device's answers (only when the word `probe` was typed) |
+| `matrix.json` | the `--try-matrix` table: every cell (polarity, settle, edge), the bytes read, the verdict, the winning cell (or the all-attempts verdict); same content embedded in `summary.json` |
 | `answers.tsv` | the parsed answers: command, byte count, hex, interpretation |
 | `sys-before.txt`, `sys-after.txt` | driver / override / module / node / `bytes_tx`, before and after |
 | `commands.txt` | the exact probe commands, for copy/paste |
@@ -146,6 +151,10 @@ acpi binding mutations probe restore unknowns files`.
   `external_bind`, `module_loaded_before/_by_session`, `irq_used`.
 * `probe`: `ran`, `exit`, `dry_run_exit`, `reads`, `answers[]` with
   `command`, `bytes`, `hex`, `interpretation`.
+* `matrix`: `null` unless `--try-matrix` ran, otherwise the complete
+  `matrix.json` object (`outcome`, `verdict`, `planned`, `attempted`,
+  `attempts[]` with `polarity`, `settle_ms`, `edge`, `bytes_hex`, `queries[]`,
+  and `winning`).
 * `restore`: `attempted`, `verified`, `exit`, `driver`, `override`, `notes[]`.
 * `unknowns[]`: the remaining open questions, computed from what actually
   happened (e.g. "no GpioInt in `_CRS`", "no firmware answer was parsed",
@@ -275,6 +284,52 @@ timeout with no bytes means the node exists but the transfer never completed -
 check `bytes_tx` in `sys-after.txt`. Whatever happens, the runbook restores the
 spidev binding and says whether the restore was verified.
 
+### 5.2 The one-run matrix after the no-edge failure
+
+The last real run (2026-11-09) had the chardev GPIO requests succeed, pulsed
+reset 16, sent `0xA0` and then failed with **"no interrupt on GPIO 18 within
+979 ms"** - no edge at all. Earlier, without reset handling, the same reads
+returned 7/64/9 zero bytes. The remaining hypotheses (reset polarity, settle
+time, interrupt edge) are exactly what `--try-matrix` covers in one run:
+
+```sh
+sudo tools/fingerprint/oxp3-fp-session.sh \
+    --try-matrix \
+    --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 --allow-reset
+```
+
+`--try-matrix` is forwarded to the probe in the read step (the exact command
+is written to `commands.txt`); `--allow-reset` is mandatory because two of the
+three polarities pulse line 16. The matrix is 3 x 2 x 3 = 18 cells:
+
+* reset polarity: **active-low**, **active-high**, **hold** (no pulse - the
+  control),
+* settle after release (or before the first query for `hold`): **10 ms** and
+  **150 ms**,
+* interrupt edge requested from the GPIO backend: **rising**, **falling**,
+  **both**.
+
+Every cell sends only `0xA0` (firmware); `0xA1`/`0xC1` follow only if `0xA0`
+is non-zero. Each attempt has a 1.5 s timeout, the matrix stops at the first
+cell whose answer **parses** (a complete `0xAA`/`L`/CRC-32 frame or the bare
+fixed-size answer, checked against the recovered per-command layout - not
+merely non-zero), and the probe exits `0` on success, `1` when no cell
+produced a valid answer. The console table has one row per cell:
+
+```
+#  polarity     settle  edge    0xA0 bytes received               verdict
+ 1 active-low     10ms rising  00 00 00 00 00 00 00 ...          zeros
+```
+
+The same table lands in `matrix.json` (and in `summary.json` under `matrix`),
+so it travels with the transcript. What each outcome means is the guide in
+[fingerprint-transport.md §8.7](fingerprint-transport.md#87-the-try-matrix-interpretation-guide):
+nothing at all -> power/`_PS0` or the pins; zeros -> chip select/clock/mode;
+timeouts only -> interrupt pin/edge or the device is not running; a non-zero
+answer that does not parse -> the transport works but the framing/layout is
+wrong. If a cell wins, write down its polarity/settle/edge and repeat exactly
+that single setting in a normal `--reads` run before trusting it.
+
 ## 6. Handing the transcript back
 
 Give the whole `docs/state/fp-session-*` directory (or just `summary.json` +
@@ -354,7 +409,7 @@ GPIOs.
 ## 9. Offline testing (what is covered without root or a sensor)
 
 `tools/fingerprint/oxp3-fp-session.sh --selftest` (74 checks) and
-`tests/fingerprint-session/run.sh` (62 checks) build fake `/sys` trees with
+`tests/fingerprint-session/run.sh` (77 checks) build fake `/sys` trees with
 `--fixture-init DIR --variant ...` and drive the **real script** against them:
 
 * the AML scan and `acpi_info` on a synthetic DSDT whose `_CRS` is an SPI
@@ -375,7 +430,11 @@ GPIOs.
 * SIGINT while bound: exit 130, binding restored, summary says verified;
 * SIGKILL while bound (no trap possible), then `--resume`: the resumed run
   recognises the bind it owns, reuses the `_CRS`, finishes and restores;
-* an external spidev bind is left alone, a takeover re-binds `elanspi`.
+* an external spidev bind is left alone, a takeover re-binds `elanspi`;
+* `--try-matrix` reaches the probe against a fake spidev node and a
+  nonexistent GPIO chip path, every cell fails closed, and the 18-attempt
+  `matrix.json` (plus its embedded copy and outcome in `summary.json`) is
+  asserted in the transcript.
 
 The fixture root emulates the kernel side effects inside the tree (the driver
 symlink and `/dev` node a real `bind` produces) - it is test support, never used
@@ -401,10 +460,11 @@ or without the sensor, and never binds anything).
   releases it on close. A sysfs export is a transient sysfs write inside that
   request, which is why the request is listed in the phase output; the chardev
   backend writes nothing outside its own request fd.
-* The reset line's **polarity is assumed active-low** (ACPI `GpioIo` has no
-  polarity field) and the probe has no flag to invert it. If the pulse on line
-  16 produces no change, this is the first thing to revisit in the code, not a
-  reason to repeat the run.
+* A **normal** read still assumes the reset line is **active-low** (ACPI
+  `GpioIo` has no polarity field). `--try-matrix` now tests active-low,
+  active-high and a no-pulse control in one run, so polarity is no longer a
+  reason to repeat a single-setting run - but the matrix has not run on the
+  sensor yet either.
 * Whether the sensor needs the interrupt at all is still unproven: the probe
   clocks the selector/answer first and waits for the IRQ afterwards. If the
   first answer stays all-zero with the lines configured, the next experiment is

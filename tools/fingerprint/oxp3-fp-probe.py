@@ -39,6 +39,9 @@ Then:
     sudo ./oxp3-fp-probe.py --spidev /dev/spidev0.0 --allow-writes fw info
     sudo ./oxp3-fp-probe.py --spidev /dev/spidev0.0 --gpio 42 \
          --allow-writes fw                      # wait for the IRQ line too
+    sudo ./oxp3-fp-probe.py --spidev /dev/spidev0.0 --gpio 18 \
+         --gpio-chip gpiochip1 --reset-gpio 16 --allow-reset \
+         --allow-writes --try-matrix --matrix-json /tmp/fp-matrix.json
     sudo ./oxp3-fp-probe.py acpi_info --crs /tmp/fprt-crs.bin
 
 Undo:  echo spi-BF63112:00 | sudo tee /sys/bus/spi/drivers/spidev/unbind
@@ -236,6 +239,15 @@ def _load_acpi():
     return acpi
 
 
+def _load_matrix():
+    """Import the polarity/settle/edge matrix planner and runner."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from fpbf63112 import matrix
+    return matrix
+
+
 class SpiTransport:
     """The ``protocol.Session`` transport contract over an ``SpiDev``.
 
@@ -428,10 +440,40 @@ def main(argv=None):
                     help="readback bytes for --session (a 0xA2 answer needs ~153)")
     ap.add_argument("--session-timeout", type=int, default=2000,
                     help="--session answer timeout in ms")
+    ap.add_argument("--try-matrix", action="store_true",
+                    help="try reset polarity (active-low/active-high/hold), "
+                         "post-reset settle (10/150 ms) and IRQ edge "
+                         "(rising/falling/both) in one bounded run; sends only "
+                         "0xA0 (then 0xA1/0xC1 on a non-zero answer)")
+    ap.add_argument("--matrix-json", default=None,
+                    help="write the matrix table to this JSON file (default: "
+                         "matrix.json in the current directory)")
+    ap.add_argument("--matrix-timeout-ms", type=int, default=1500,
+                    help="per-attempt matrix timeout in ms (default 1500)")
     args = ap.parse_args(argv)
 
     if args.crypto_selftest:
         return crypto_selftest()
+
+    if args.try_matrix:
+        if args.transport != "spi":
+            print("refusing: --try-matrix is the SPI bring-up matrix; the "
+                  "frame transport has no selector/reset semantics",
+                  file=sys.stderr)
+            return 2
+        if args.commands:
+            print("refusing: --try-matrix sends its own allowlisted queries "
+                  "(0xA0/0xA1/0xC1); do not name commands",
+                  file=sys.stderr)
+            return 2
+        if args.op is not None:
+            print("refusing: --try-matrix does not take --op", file=sys.stderr)
+            return 2
+        if not 100 <= args.matrix_timeout_ms <= 10000:
+            print("refusing: --matrix-timeout-ms must be 100..10000",
+                  file=sys.stderr)
+            return 2
+        return run_spi_matrix(args)
 
     cmds = args.commands or (["raw"] if args.op is not None else ["info"])
     if args.transport == "spi":
@@ -532,6 +574,125 @@ def _spi_parameters(args, spi, acpi):
     return dict(speed=speed, mode=mode, bits=bits, gpio=gpio,
                 reset_gpio=reset_gpio, edge=edge or "rising",
                 active_low=active_low, chip_select=chip_select)
+
+
+def run_spi_matrix(args):
+    """``--try-matrix``: polarity x settle x edge, read-only.
+
+    The matrix is gated exactly like a normal read (explicit device path,
+    ``--allow-writes``, and ``--allow-reset`` for the cells that pulse the
+    reset) and it can only send 0xA0/0xA1/0xC1.  ``--dry-run`` prints the
+    matrix without opening a device or a GPIO.
+    """
+    spi = _load_spi()
+    acpi = _load_acpi()
+    matrix = _load_matrix()
+    try:
+        params = _spi_parameters(args, spi, acpi)
+        cells = matrix.plan_matrix()
+    except (spi.SpiError, ValueError) as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        print(f"dry-run: matrix spidev={args.spidev or '(unset)'} "
+              f"allow_writes={args.allow_writes} "
+              f"gpio_backend={args.gpio_backend or 'auto'}")
+        print(f"         speed={params['speed']} mode={params['mode']} "
+              f"bits={params['bits']} chip={args.gpio_chip or '(unset)'} "
+              f"irq={params['gpio']} reset={params['reset_gpio']} "
+              f"timeout={args.matrix_timeout_ms}ms")
+        print(f"matrix: {len(cells)} cells "
+              f"(polarity x settle x edge); queries 0xA0, then 0xA1/0xC1 "
+              f"only on a non-zero answer")
+        for cell in cells:
+            reset = "pulse" if cell.pulse else "hold"
+            print(f" {cell.index:>2} {cell.polarity:<12} {reset:<5} "
+                  f"settle={cell.settle_ms:>3}ms edge={cell.edge:<7} "
+                  f"-> 0xA0 {matrix.MATRIX_QUERIES[0].read_len}B")
+        print("matrix: success = a parsed answer (0xAA/L/CRC-32 frame or the "
+              "recovered bare layout), not merely non-zero")
+        print("dry-run: no device or GPIO is opened; no JSON is written")
+        return 0
+
+    if not args.spidev:
+        print("refusing: --spidev /dev/spidevN.M is required for a real "
+              "matrix (there is no default device)", file=sys.stderr)
+        return 2
+    if not args.allow_writes:
+        print("refusing: --allow-writes is required before any SPI transfer "
+              "(even a read)", file=sys.stderr)
+        return 2
+    if params["gpio"] is None:
+        print("refusing: --try-matrix needs the GpioInt line (--gpio N or a "
+              "_CRS that carries it); the edge is part of the matrix",
+              file=sys.stderr)
+        return 2
+    if params["reset_gpio"] is None:
+        print("refusing: --try-matrix needs the GpioIo reset line "
+              "(--reset-gpio N or a _CRS that carries it)", file=sys.stderr)
+        return 2
+    if not args.allow_reset:
+        print("refusing: --try-matrix pulses the reset line in the two "
+              "polarity combos; pass --allow-reset", file=sys.stderr)
+        return 2
+    if args.gpio_backend == "poll":
+        print("refusing: --gpio-backend poll cannot drive the reset line; "
+              "use auto, chardev, gpiod or sysfs", file=sys.stderr)
+        return 2
+
+    out_path = os.path.abspath(args.matrix_json or "matrix.json")
+    parent = os.path.dirname(out_path) or "."
+    if not os.path.isdir(parent):
+        print(f"refusing: the --matrix-json directory does not exist: "
+              f"{parent}", file=sys.stderr)
+        return 2
+
+    print(f"matrix: {len(cells)} cells, per-attempt timeout "
+          f"{args.matrix_timeout_ms}ms, read-only queries 0xA0/0xA1/0xC1")
+    print(f"matrix: spidev={args.spidev} chip={args.gpio_chip or '(unset)'} "
+          f"irq={params['gpio']} reset={params['reset_gpio']} "
+          f"irq_active_low={bool(params['active_low'])}")
+
+    def connect(cell):
+        return matrix.SpiMatrixSession(
+            cell, spidev_path=args.spidev,
+            speed_hz=params["speed"], mode=params["mode"],
+            bits_per_word=params["bits"], gpio_chip=args.gpio_chip,
+            reset_pin=params["reset_gpio"], irq_pin=params["gpio"],
+            irq_active_low=bool(params["active_low"]),
+            timeout_ms=args.matrix_timeout_ms,
+            gpio_backend=args.gpio_backend)
+
+    context = {
+        "spidev": args.spidev,
+        "gpio_chip": args.gpio_chip,
+        "irq_pin": params["gpio"],
+        "reset_pin": params["reset_gpio"],
+        "irq_active_low": bool(params["active_low"]),
+        "speed_hz": params["speed"],
+        "mode": params["mode"],
+        "bits_per_word": params["bits"],
+        "gpio_backend": args.gpio_backend or "auto",
+    }
+    try:
+        report = matrix.run_matrix(
+            cells, connect=connect, timeout_ms=args.matrix_timeout_ms,
+            context=context)
+    except matrix.MatrixRefused as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+
+    for line in report.render_table():
+        print(line)
+    print(f"matrix: {report.verdict}")
+    try:
+        matrix.write_report(report, out_path)
+    except OSError as exc:
+        print(f"matrix: could not write {out_path}: {exc}", file=sys.stderr)
+        return 1
+    print(f"matrix: table written to {out_path}")
+    return 0 if report.winning is not None else 1
 
 
 def run_spi(args, cmds):
