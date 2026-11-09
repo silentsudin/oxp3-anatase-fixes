@@ -54,6 +54,7 @@ repo=$(CDPATH= cd -- "$here/.." && pwd)
 
 PREFIX=""
 DRY_RUN=0
+RGB_DAEMON=0
 ACTION=install
 PURGE_CONFIG=0
 FORCE=0
@@ -85,7 +86,7 @@ usage() {
 
 Options:
   --all                     every component (volume sleep bluetooth power imu leds rgb audio decky)
-  --volume --leds --sleep --bluetooth --power --rgb --imu --audio --decky
+  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --decky
                             select components (repeatable; --all selects every one)
   --volume-daemon           with --volume: install the LEGACY oxp3-voltap daemon
                             (grabs an input device; with hhd running it only
@@ -725,8 +726,20 @@ comp_imu_install() {
 }
 
 comp_rgb_install() {
-    say "body RGB keeper (shared udev rule + user config/unit)"
+    say "body RGB (HHD owns the zones by default)"
     install_hid_rules
+    if (( ! RGB_DAEMON )); then
+        # HHD addresses all five zones itself; our per-zone daemon re-applies its
+        # own frames after HHD and therefore pins any zone listed in the config.
+        # Keep HHD as the single owner unless the user explicitly opts in.
+        printf '  HHD configures the RGB zones; no per-zone daemon installed\n'
+        printf '  per-zone custom frames: re-run with --rgb-daemon (or tools/oxp3-rgbd.py)\n'
+        if [[ -e $HOME/.config/systemd/user/oxp3-rgbd.service || -e ${PREFIX:-}/etc/systemd/user/oxp3-rgbd.service ]]; then
+            printf '  note: oxp3-rgbd is installed from an earlier run; hand the zones back with\n'
+            printf '        tools/oxp3-rgb-handback.sh\n'
+        fi
+        return 0
+    fi
     local home dst
     home=$(user_home "$TARGET_USER")
     dst="$PREFIX$home/.config/oxp3-rgb.toml"
@@ -1229,7 +1242,7 @@ add_component() {
 
 while (( $# )); do
     case $1 in
-        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--imu|--audio|--decky)
+        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--decky)
             add_component "${1#--}"
             [[ $1 == --volume ]] && VOLUME_MODE=plugin ;;
         --volume-daemon)

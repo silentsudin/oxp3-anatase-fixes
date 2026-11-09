@@ -1,5 +1,12 @@
 # OneXPlayer 3 body RGB - persistent user config for tools/oxp3-rgbd.py
 #
+# OPT-IN: HHD is the default owner of all five RGB zones (left stick 0x01,
+# right stick 0x02, G-key 0x05, top 0x06, connector 0x07) and applies one
+# global mode/colour.  This file only exists when you install the per-zone
+# daemon on purpose (oxp3-hw-install.sh --rgb-daemon); any zone listed below
+# stops following HHD because the daemon re-applies it.  Hand the zones back
+# with tools/oxp3-rgb-handback.sh.
+#
 # Install:
 #   install -m 0644 tools/oxp3-rgbd.toml.example ~/.config/oxp3-rgb.toml
 #   $EDITOR ~/.config/oxp3-rgb.toml

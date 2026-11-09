@@ -1587,7 +1587,7 @@ print(oxp3_hid.find_vendor_hidraw() or "")' "$REPO/tools" 2>/dev/null) || hsel="
         if [ "$u_load" = "?" ] || [ -z "$u_load" ]; then
             record rgbd.unit leds "RGB keeper unit" UNKNOWN "no user systemd instance" "systemctl --user is unavailable in this context" "run inside the logged-in desktop session"
         elif [ "$u_load" = not-found ]; then
-            record rgbd.unit leds "RGB keeper unit" FAIL "config present but unit not installed" "LoadState=not-found" "install ~/.config/systemd/user/oxp3-rgbd.service and systemctl --user enable --now oxp3-rgbd"
+            record rgbd.unit leds "RGB keeper unit" SKIP "HHD owns the RGB zones (per-zone daemon not installed)" "config present at $cfg but the unit is not installed; HHD drives left/right stick, G-key, top and connector" "per-zone custom colours: re-run the installer with --rgb-daemon, or tools/oxp3-rgb-handback.sh --undo"
         elif [ "$u_active" = active ]; then
             record rgbd.unit leds "RGB keeper unit" PASS "active (running)" "unit oxp3-rgbd.service (user)" ""
         else
@@ -2656,6 +2656,41 @@ check_audio() {
         record aud.scripts audio "EQ on/off scripts" FAIL "EQ scripts missing or not executable" "$on $off" "restore tools/audio/ from git and chmod +x"
     fi
 
+    # aud.mic: is there a capture source with a real signal path?  The ALC245
+    # internal microphone is a fixed codec pin (0x12), not a PCH DMIC, so the
+    # question is exposure, not NHLT.  mic_diag.py only reads proc/sysfs/UCM.
+    local micdiag=$REPO/tools/audio/mic_diag.py
+    if [ -x "$micdiag" ] && have python3; then
+        run_tool mic-diag 30 "$micdiag" --json
+        if json_ok "$RUN_OUT"; then
+            local mv ms mh mo
+            mv=$(json_get "$RUN_OUT" verdict)
+            ms=$(json_get "$RUN_OUT" summary)
+            mh=$(json_get "$RUN_OUT" hint)
+            mo=$(json_get "$RUN_OUT" ucm.override_installed)
+            case ${mv:-} in
+                exposed)
+                    record aud.mic audio "internal microphone exposed" PASS "${ms:-capture source exposed}" "" "" ;;
+                gated)
+                    if [ "${mo:-false}" = true ]; then
+                        record aud.mic audio "internal microphone exposed" FAIL "UCM override installed but the internal mic is still not exposed" "${ms:-?}" "${mh:-sudo tools/audio/internal-mic.sh undo ; docs/hw/audio-microphone.md}"
+                    else
+                        record aud.mic audio "internal microphone exposed" SKIP "internal mic pin present; no always-available capture source (opt-in fix not installed)" "${ms:-?}" "${mh:-sudo tools/audio/internal-mic.sh install ; docs/hw/audio-microphone.md}"
+                    fi ;;
+                pch-dmic)
+                    record aud.mic audio "internal microphone exposed" SKIP "this machine uses a PCH DMIC capture PCM, not the codec pin" "${ms:-?}" "docs/hw/audio-microphone.md" ;;
+                absent)
+                    record aud.mic audio "internal microphone exposed" SKIP "no fixed internal mic pin in the codec pin configuration" "${ms:-?}" "docs/hw/audio-microphone.md" ;;
+                *)
+                    record aud.mic audio "internal microphone exposed" SKIP "no SOF HDA card / not applicable in this context" "${ms:-?}" "docs/hw/audio-microphone.md" ;;
+            esac
+        else
+            record aud.mic audio "internal microphone exposed" UNKNOWN "mic_diag.py produced no JSON (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "tools/audio/mic_diag.py ; docs/hw/audio-microphone.md"
+        fi
+    else
+        record aud.mic audio "internal microphone exposed" SKIP "mic_diag.py or python3 missing" "$micdiag" ""
+    fi
+
     if ! have pactl; then
         record aud.server audio "PipeWire session" SKIP "pactl missing" "" "install pipewire-utils; docs/hw/audio-harman-apo.md"
         record aud.eq audio "speaker EQ loaded" SKIP "pactl missing" "" "tools/audio/eq-on.sh"
@@ -3441,7 +3476,7 @@ run_selftest() {
     if [ "$count" -ge 65 ]; then ST_PASS=$((ST_PASS + 1)); else ST_FAIL=$((ST_FAIL + 1)); printf 'FAIL inventory: only %s distinct declared checks\n' "$count"; fi
     local expected
     expected=$(printf '%s\n' \
-        aud.activate aud.dummy aud.eq aud.model aud.scripts aud.server \
+        aud.activate aud.dummy aud.eq aud.mic aud.model aud.scripts aud.server \
         bat.behaviour bat.limit bat.threshold \
         bt.controller bt.diag bt.dracut bt.files bt.journal \
         decky.backend decky.dir decky.loaded decky.status \

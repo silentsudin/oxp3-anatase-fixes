@@ -17,6 +17,14 @@ protocol facts are recorded here.
 
 ## 1. TL;DR
 
+* **HHD is the default RGB owner**: its `oxp3` quirk writes
+  `rgb_sides = (0x01, 0x02, 0x07)` (left stick, right stick, connector) and
+  `secondary_sides = (0x05, 0x06)` (G-key, top), i.e. **all five zones**, with
+  one global mode/colour. `oxp3-rgbd` is **opt-in**
+  (`oxp3-hw-install.sh --rgb-daemon`) for per-zone colours, and any zone in its
+  config stops following HHD. `tools/oxp3-rgb-handback.sh` disables it and
+  hands every zone back.
+
 * The OXP3 has **five** addressable RGB zones, not eight: left stick (1),
   right stick (2), G-key zone (5), top strip (6), controller connector (7).
   There is **no per-key addressing**.
