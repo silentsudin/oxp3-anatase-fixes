@@ -607,10 +607,10 @@ install_hid_rules() {
         target_user=${SUDO_USER:-${USER:-}}
         if [[ -n $target_user && $target_user != root ]]; then
             if id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx input; then
-                ok "$target_user is already in the input group"
+                printf '  %s is already in the input group\n' "$target_user"
             else
                 run usermod -aG input "$target_user"
-                note "log out and back in (or reboot) so $target_user can open the vendor HID node"
+                warn "log out and back in (or reboot) so $target_user can open the vendor HID node"
             fi
         fi
     fi
