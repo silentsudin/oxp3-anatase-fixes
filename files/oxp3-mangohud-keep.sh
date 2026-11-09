@@ -13,7 +13,7 @@ case $(rpm -q --qf '%{RELEASE}' mangohud 2>/dev/null | head -1) in
 esac
 rpms=()
 shopt -s nullglob
-for d in /var/home/*/.cache/oxp3-fixes/out "$HOME/.cache/oxp3-fixes/out"; do
+for d in /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
     rpms+=("$d"/mangohud-*oxp3*.x86_64.rpm "$d"/mangohud-*oxp3*.i686.rpm)
 done
 shopt -u nullglob

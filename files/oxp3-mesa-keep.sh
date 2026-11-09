@@ -11,7 +11,7 @@ set -uo pipefail
 log() { printf 'oxp3-mesa-keep: %s\n' "$*"; }
 find_known() {
     local f
-    for f in /var/home/*/.cache/oxp3-fixes/known-good "$HOME/.cache/oxp3-fixes/known-good"; do
+    for f in /var/home/*/.cache/oxp3-fixes/known-good "${HOME:-/root}/.cache/oxp3-fixes/known-good"; do
         [ -e "$f" ] && { printf '%s' "$f"; return 0; }
     done
     return 1

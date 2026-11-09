@@ -824,10 +824,14 @@ comp_xmx_install() {
             [ -d "$d" ] && appids+=("$(basename "$d")")
         done
     done
+    # The host environment is written even before a game exists: the "session env
+    # not set" state is what the wrapper sources, independent of a per-game shim.
+    as_user_run "$repo/tools/xmx-write-env.sh" || warn "could not write ~/.config/xess-xmx/oxp3-env.sh"
     if (( ${#appids[@]} == 0 )); then
         as_user_run "$tool" status | sed 's/^/  /'
         printf '  no Flatpak Steam Proton prefix exists yet, so there is no game shim to place.\n'
-        printf '  the per-session env/ICD files are written by %s install --appid <id> after the first launch.\n' "$(basename "$tool")"
+        printf '  the per-game shim is added by %s install --appid <id> after the first launch.\n' "$(basename "$tool")"
+        printf '  launch the game through tools/xmx-run.sh (or its printed launch option) to use the XMX path.\n'
         return 0
     fi
     for d in "${appids[@]}"; do
