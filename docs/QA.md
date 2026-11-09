@@ -122,6 +122,10 @@ The single FAIL is the licence-header/top-level-licence gap. No functional test 
   shared build/install path has to be made twice; the two `install_extras()`/`do_uninstall()` bodies
   already differ (the slow script adds the sleep units). Extract the common half into `tools/lib/` or
   make the fast script a mode of the slow one before the next driver-stack change.
+  *Done in the later dedupe round:* the 37 identical helpers now live in
+  `tools/lib/install-common.sh` (the 32/26 count here omits eleven one-line functions; see the
+  complete classification, the contract and the validation in
+  [MAINTAINABILITY.md](MAINTAINABILITY.md)).
 * **Docs duplicated three ways.** `README.md` (hardware table), `docs/hw/README.md` (state matrix +
   manual order) and `docs/INSTALL-HW.md` (install/verify/rollback) repeat the same component facts.
   Drift already exists in miniature (the BT `--check` row, the missing `BEYOND-PARITY` reference, the

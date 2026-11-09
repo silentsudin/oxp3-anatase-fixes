@@ -62,98 +62,26 @@ for a in "$@"; do
     esac
 done
 
-say() { printf '\n== %s\n' "$*"; }
-die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-
-# The Anatase kernel in the current deployment (not necessarily the booted one).
-anatase_kver() { rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -1; }
-
 # ---------------------------------------------------------------------------------------------
-# build container
+# shared build/install helpers
 # ---------------------------------------------------------------------------------------------
-ctr() { podman exec -w "$CACHE" "$CTR" "$@"; }
-ctr_root() { podman exec -u 0 -w "$CACHE" "$CTR" "$@"; }
-
-ensure_container() {
-    mkdir -p "$CACHE" "$OUT"
-    # rebuild the image when the Containerfile changes
-    local sum; sum=$(sha256sum "$here/container/Containerfile" | cut -c1-12)
-    if [[ $(podman image inspect "$IMAGE" --format '{{index .Labels "oxp3.containerfile"}}' 2>/dev/null) != "$sum" ]]; then
-        podman rm -f "$CTR" >/dev/null 2>&1 || true
-        podman rmi -f "$IMAGE" >/dev/null 2>&1 || true
-    fi
-    if ! podman image exists "$IMAGE"; then
-        say "creating build image $IMAGE (once, a few minutes)"
-        podman build --build-arg FEDORA="$FEDORA" --label oxp3.containerfile="$sum" -t "$IMAGE" \
-            -f "$here/container/Containerfile" "$here/container"
-    fi
-    # recreate the container if it was made with another MOK directory
-    if podman container exists "$CTR" &&
-       ! podman inspect "$CTR" --format '{{range .Mounts}}{{.Destination}} {{end}}' | grep -qF "$MOK_DIR"; then
-        podman rm -f "$CTR" >/dev/null
-    fi
-    if ! podman container exists "$CTR"; then
-        podman run -d --name "$CTR" --userns=keep-id --security-opt label=disable \
-            -v "$CACHE:$CACHE" -v "$here:$here:ro" -v "$MOK_DIR:$MOK_DIR:ro" \
-            "$IMAGE" sleep infinity >/dev/null 2>&1 || {
-            # MOK dir may not exist when only userspace parts are built
-            podman run -d --name "$CTR" --userns=keep-id --security-opt label=disable \
-                -v "$CACHE:$CACHE" -v "$here:$here:ro" "$IMAGE" sleep infinity >/dev/null; }
-    fi
-    podman start "$CTR" >/dev/null
-}
-
-# ---------------------------------------------------------------------------------------------
-# gamescope / MangoHud: Anatase's packaging + our patches, rebuilt as RPMs
-# ---------------------------------------------------------------------------------------------
-fetch_anatase() {
-    if [[ -d $CACHE/anatase/.git ]]; then
-        git -C "$CACHE/anatase" fetch -q --depth 1 origin HEAD
-        git -C "$CACHE/anatase" reset -q --hard FETCH_HEAD
-    else
-        git clone -q --depth 1 "$ANATASE_REPO" "$CACHE/anatase"
-    fi
-    echo "anatase packaging: $(git -C "$CACHE/anatase" log -1 --format='%h %cd %s' --date=short)"
-}
-
-# build_card <name> <patch-line-regex> <patch files...>
-build_card() {
-    local name=$1 anchor=$2; shift 2
-    local top="$CACHE/rpmbuild/$name" spec
-    rm -rf "$top"; mkdir -p "$top/SOURCES"
-    cp -r "$CACHE/anatase/cards/gaming/$name/." "$top/SOURCES/"
-    spec="$top/SOURCES/$name.spec"
-    # add our patches right after Anatase's overrides.patch, in order
-    local n=2000 lines="" p
-    for p in "$@"; do
-        cp "$p" "$top/SOURCES/"
-        lines+="Patch$n: $(basename "$p")\n"; n=$((n + 1))
-    done
-    grep -qE "$anchor" "$spec" || die "$name.spec: no '$anchor' line - Anatase packaging changed"
-    sed -i -E "0,/$anchor/s//&\n${lines%\\n}/" "$spec"
-    local ver; ver=$(sed -n 's/^Version:[[:space:]]*//p' "$spec")
-    local inst; inst=$(rpm -q "$name" --qf '%{VERSION}\n' 2>/dev/null | head -1 || true)
-    [[ -z $inst || $inst == "$ver" ]] || echo "note: installed $name $inst, Anatase packaging has $ver"
-
-    say "$name $ver: sources"
-    ctr spectool -g -C "$top/SOURCES" "$spec" >/dev/null
-    ctr_root dnf -y -q builddep "$spec" >/dev/null 2>&1 || ctr_root dnf -y builddep --skip-unavailable "$spec" | tail -3
-    say "$name $ver: x86_64"
-    ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3.$STAMP" -bb "$spec" > "$top/build.log" 2>&1 ||
-        { tail -30 "$top/build.log"; die "$name x86_64 build failed (full log: $top/build.log)"; }
-    say "$name $ver: i686"
-    ctr bash -c "export PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/usr/share/pkgconfig; setarch i686 rpmbuild --target i686 --nodeps --define '_topdir $top' --define 'dist .fc$FEDORA.oxp3.$STAMP' -bb '$spec'" \
-        > "$top/build-i686.log" 2>&1 ||
-        { tail -30 "$top/build-i686.log"; die "$name i686 build failed (full log: $top/build-i686.log)"; }
-    rm -f "$OUT/$name"-*.rpm
-    find "$top/RPMS" -name "$name-$ver-*.rpm" ! -name '*debug*' -exec cp {} "$OUT/" \;
-    ls "$OUT/$name"-*.rpm
-}
+# Everything that was byte-identical in this installer and oxp3-fixes-fast.sh lives in
+# tools/lib/install-common.sh (contract and function list: docs/MAINTAINABILITY.md). This file
+# keeps its own configuration, its own Mesa pipeline and its own install/uninstall flow; those
+# are the parts that genuinely differ between the RPM and the podman/Mesa variant.
+OXP3_INSTALL_COMMON_API=1
+install_common_lib="$here/tools/lib/install-common.sh"
+[[ -r $install_common_lib ]] ||
+    { printf 'error: %s is missing (incomplete checkout?)\n' "$install_common_lib" >&2; exit 1; }
+# shellcheck source=tools/lib/install-common.sh
+source "$install_common_lib"
 
 # ---------------------------------------------------------------------------------------------
 # Mesa 26.3 (Jay shader compiler on Xe2/Xe3, compression/tiling work) from Anatase's packaging:
 # the 26.3 branch at MESA_COMMIT plus patches/mesa, x86_64 + i686, all installed subpackages
 # ---------------------------------------------------------------------------------------------
+# Kept local: build_mesa()/mesa_rpms() are the RPM pipeline that makes this script different
+# from oxp3-fixes-fast.sh (podman/meson), so they are not part of tools/lib/install-common.sh.
 MESA_COMMIT=ea40598a68bab5690e0d08f845e2776ef9be2db9     # Mesa main, 2026-11-05 (the tree every measured win used)
 MESA_VERSION="27.0.0~devel.20261105git${MESA_COMMIT:0:8}"  # no "^": Cargo.toml needs semver
 MESA_URL=https://gitlab.freedesktop.org/mesa/mesa/-/archive/$MESA_COMMIT/mesa-$MESA_COMMIT.tar.gz
@@ -287,7 +215,8 @@ mesa_rpms() {
 
 # ---------------------------------------------------------------------------------------------
 # XeSS on XMX (xess-xmx-linux, our fork with Anatase support): the Mesa patches are in
-# patches/mesa (0101-0105); here the shim, ControlLib, scripts and compiler for the games
+# patches/mesa (0101-0105). The XESS_* pins below feed build_xess/install_xess/status_xess,
+# which live in tools/lib/install-common.sh.
 # ---------------------------------------------------------------------------------------------
 XESS_COMMIT=9532c79cebd55b8e3bac6f6498a49575a63d249b      # silentsudin/xess-xmx-linux, branch anatase
 XESS_SRC_URL=https://codeload.github.com/silentsudin/xess-xmx-linux/tar.gz/$XESS_COMMIT
@@ -298,78 +227,10 @@ XESS_DLLS="igdext64.dll|580ddcce0929fb8942062cd2a7413d9c6ec44ebfb2eacd40ff2f2a3a
 # under home: the Steam Flatpak and the game's container both see it
 XESS_PKG=${OXP3_XESS_DIR:-$HOME/.local/share/xess-xmx}
 
-build_xess() {
-    local dl="$CACHE/xess" stage="$OUT/xess-xmx" zip src entry name sha
-    mkdir -p "$dl"
-    say "XeSS XMX: fork ${XESS_COMMIT:0:8} + release DLLs"
-    zip="$dl/${XESS_ZIP_URL##*/}"
-    if [[ $(sha256sum "$zip" 2>/dev/null | cut -d' ' -f1) != "$XESS_ZIP_SHA" ]]; then
-        curl -sfL --retry 3 -o "$zip.part" "$XESS_ZIP_URL" || die "download failed: $XESS_ZIP_URL"
-        [[ $(sha256sum "$zip.part" | cut -d' ' -f1) == "$XESS_ZIP_SHA" ]] || die "checksum mismatch: $XESS_ZIP_URL"
-        mv "$zip.part" "$zip"
-    fi
-    src="$dl/xess-xmx-linux-$XESS_COMMIT.tar.gz"
-    [[ -s $src ]] || curl -sfL --retry 3 -o "$src" "$XESS_SRC_URL" || die "download failed: $XESS_SRC_URL"
-    rm -rf "$stage"; mkdir -p "$stage"
-    tar -xzf "$src" --strip-components=1 -C "$stage"
-    for entry in $XESS_DLLS; do
-        name=${entry%%|*}; sha=${entry#*|}
-        unzip -p "$zip" "*/$name" > "$stage/$name"
-        [[ $(sha256sum "$stage/$name" | cut -d' ' -f1) == "$sha" ]] || die "$name in the release zip has an unexpected checksum"
-    done
-    echo "  $stage"
-}
-
-# Intel's compiler as get-igc.sh would fetch it (IGC 2.10.10, ocloc 25.18.1), from an earlier package
-# download, instead of 230 MB again
-seed_xess_compiler() {
-    [[ -x $(ls "$XESS_PKG"/igc/neo/bin/ocloc* 2>/dev/null | head -1) ]] && return 0
-    local d
-    for d in "$HOME"/Downloads/xess-xmx-linux-*/igc; do
-        [[ -x $d/neo/bin/ocloc-25.18.1 ]] && ls "$d"/igc/local/lib/libigc.so.2.10.10* >/dev/null 2>&1 || continue
-        mkdir -p "$XESS_PKG/igc"; cp -a "$d"/. "$XESS_PKG/igc/"
-        echo "  compiler bundle copied from $d"
-        return 0
-    done
-}
-
-install_xess() {
-    [[ -d $OUT/xess-xmx ]] || die "missing $OUT/xess-xmx - run '$0 build' first"
-    if ! grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so; then
-        echo "  the installed Mesa has no CM kernel injection (built before patches/mesa 0101?) - XeSS XMX skipped"
-        return 0
-    fi
-    mkdir -p "$XESS_PKG"
-    # the package's own state (compiler, XeSS SDK, kernels, ICD file) stays
-    rsync -a --delete --exclude /igc/ --exclude /xess/ --exclude /kernels/ --exclude /run/ --exclude /lib/ \
-        "$OUT/xess-xmx/" "$XESS_PKG/"
-    seed_xess_compiler
-    bash "$XESS_PKG/install.sh" | sed 's/^/  /' || echo "  WARNING: xess-xmx-linux's install.sh failed"
-    echo "  Restart Steam (leave and re-enter Gamemode) so games get the new environment."
-}
-
-uninstall_xess() {
-    [[ -x $XESS_PKG/uninstall.sh ]] || return 0
-    bash "$XESS_PKG/uninstall.sh" | sed 's/^/  /' || true
-    echo "  $XESS_PKG (compiler, kernel cache) left in place; delete it to free about 300 MB"
-}
-
-status_xess() {
-    local f; f=$(xmx_override_file)
-    echo "  XeSS XMX: $(head -c 200 "${XDG_CACHE_HOME:-$HOME/.cache}/xess-xmx/driver-status" 2>/dev/null || echo 'no driver check yet')"
-    grep -q '^ANV_CM_HELPER=' "$f" 2>/dev/null && echo "    Steam Flatpak override: $(grep -E '^(ANV_CM_HELPER|VKD3D_DISABLE_EXTENSIONS|force_vk_vendor)=' "$f" | tr '\n' ' ')"
-    local p n=0 no=""
-    for p in "$HOME/.local/share/Steam/steamapps/common/Proton"* "$HOME/.local/share/Steam/compatibilitytools.d/"*; do
-        [[ -f $p/proton ]] || continue
-        if grep -aq IGDEXT_ "$p/files/lib/wine/igdext/x86_64-windows/igdext64.dll" 2>/dev/null; then n=$((n + 1)); else no+=" ${p##*/};"; fi
-    done
-    echo "    Protons with the shim: $n${no:+; without:${no%;}}"
-}
-xmx_override_file() { echo "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak/overrides/org.anatase.Steam"; }
-
 # ---------------------------------------------------------------------------------------------
 # kernel: xe, iwlwifi and btintel modules with our patches, for the installed Anatase kernel
 # ---------------------------------------------------------------------------------------------
+# Configuration for build_kmods(); the build itself is in tools/lib/install-common.sh.
 # <directory in the kernel tree>|<modules built there that we ship>. iwlwifi ships with all its
 # op modes, since the patches touch its shared core; btintel's patches only change function
 # bodies, so the stock btusb/hci_uart keep working with ours.
@@ -379,152 +240,11 @@ KMODS=(
     "drivers/bluetooth|btintel btintel_pcie"
 )
 
-# Apply patches/kernel/*.patch in order. A patch Anatase already carries is skipped, one that
-# neither applies nor is already there stops the build. Prints the number applied.
-apply_kernel_patches() {
-    local src=$1 p n=0 skipped=()
-    for p in "$here"/patches/kernel/*.patch; do
-        if git -C "$src" -c user.name=oxp3-fixes -c user.email=oxp3-fixes@localhost am -q -3 "$p" >/dev/null 2>&1; then
-            # git am succeeds without a commit when the change is already there
-            if [[ $(git -C "$src" log -1 --format=%s) == "$(sed -n 's/^Subject: \(\[PATCH[^]]*\] \)\{0,1\}//p' "$p" | head -1)"* ]]; then
-                n=$((n + 1))
-            else
-                skipped+=( "$(basename "$p")" )
-            fi
-        else
-            git -C "$src" am --abort >/dev/null 2>&1 || true
-            if git -C "$src" apply --check -R "$p" >/dev/null 2>&1; then
-                skipped+=( "$(basename "$p")" )
-            else
-                die "kernel patch $(basename "$p") doesn't apply to this kernel - it needs updating"
-            fi
-        fi
-    done
-    (( ${#skipped[@]} )) && printf '  already in Anatase, skipped: %s\n' "${skipped[@]}" >&2
-    echo "$n"
-}
-
-build_kmods() {
-    local kver tag src kb cfg hash
-    kver=$(anatase_kver)
-    tag=${kver%%.fc*}                              # 7.2.7-an19.fc45.x86_64 -> 7.2.7-an19
-    cfg=/usr/lib/modules/$kver/config
-    [[ -r $cfg ]] || die "no kernel config at $cfg"
-    [[ -r $MOK_DIR/MOK.key && -r $MOK_DIR/MOK.der ]] ||
-        die "MOK key not found in $MOK_DIR (see README: Secure Boot key), or use --skip-kernel"
-    src="$CACHE/kernel/src-$tag"; kb="$CACHE/kernel/build-$tag"
-
-    say "kernel $kver: source (anatase-org/patchwork tag $tag)"
-    if [[ ! -d $src/.git ]]; then
-        git ls-remote --exit-code --tags "$PATCHWORK_REPO" "refs/tags/$tag" >/dev/null ||
-            die "no tag $tag in anatase-org/patchwork (or GitHub unreachable)"
-        local try
-        for try in 1 2 3; do
-            git clone -q --depth 1 --branch "$tag" "$PATCHWORK_REPO" "$src" && break
-            rm -rf "$src"
-            (( try < 3 )) || die "cloning anatase-org/patchwork $tag failed 3 times (network?)"
-            echo "clone failed, retrying ($try/3)"; sleep 10
-        done
-    fi
-    git -C "$src" reset -q --hard "$tag" 2>/dev/null || git -C "$src" reset -q --hard HEAD
-    git -C "$src" clean -qfdx
-    local applied; applied=$(apply_kernel_patches "$src")
-    if (( applied == 0 )); then
-        echo "kernel $tag already contains every patch - no modules needed"
-        rm -f "$OUT/$KMOD_NAME"-*.rpm; touch "$OUT/.kernel-not-needed"; return 0
-    fi
-    echo "  $applied kernel patches applied"
-    rm -f "$OUT/.kernel-not-needed"
-    # out-of-tree drivers Anatase adds as submodules: stub their Kconfig, our modules don't use them
-    local k
-    for k in $(sed -n 's/^source "\(drivers\/custom\/[^"]*\)"/\1/p' "$src/drivers/custom/Kconfig" 2>/dev/null); do
-        [[ -e $src/$k ]] || { mkdir -p "$(dirname "$src/$k")"; : > "$src/$k"; }
-    done
-
-    say "kernel $kver: building modules (15-30 min)"
-    rm -rf "$kb"; mkdir -p "$kb"; cp "$cfg" "$kb/.config"
-    local entry dir mods m make_m=""
-    for entry in "${KMODS[@]}"; do
-        make_m+=" && make -s O='$kb' KERNELRELEASE='$kver' KBUILD_MODPOST_WARN=1 -j\$(nproc) M=${entry%%|*} modules"
-    done
-    # Anatase's symvers lets modpost resolve the kernel's exports, so a symbol our modules need
-    # but the running kernel lacks shows up here instead of as a module that won't load.
-    [[ -r /usr/lib/modules/$kver/symvers.xz ]] || die "no /usr/lib/modules/$kver/symvers.xz"
-    xz -dc "/usr/lib/modules/$kver/symvers.xz" > "$kb/Module.symvers"
-    ctr bash -c "cd '$src' && make -s O='$kb' KERNELRELEASE='$kver' olddefconfig &&
-        make -s O='$kb' KERNELRELEASE='$kver' -j\$(nproc) modules_prepare $make_m" \
-        > "$kb/build.log" 2>&1 || { tail -30 "$kb/build.log"; die "module build failed (full log: $kb/build.log)"; }
-    local undef; undef=$(grep -E 'modpost: ".*" \[.*\] undefined!' "$kb/build.log" || true)
-    [[ -z $undef ]] || { echo "$undef" | head -20; die "modules need kernel symbols $kver doesn't export"; }
-
-    say "kernel $kver: signing with $MOK_DIR/MOK.der"
-    hash=$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$cfg"); hash=${hash:-sha512}
-    local stage="$CACHE/kernel/stage-$tag" ko rel_path files=()
-    rm -rf "$stage"; mkdir -p "$stage"
-    for entry in "${KMODS[@]}"; do
-        dir=${entry%%|*}; mods=${entry#*|}
-        for m in $mods; do
-            ko="$src/$dir/$m.ko"
-            [[ -f $ko ]] || die "$dir/$m.ko not produced"
-            [[ $(ctr modinfo -F vermagic "$ko") == "$kver "* ]] || die "$m.ko vermagic doesn't match $kver"
-            rel_path="$dir/$m.ko"
-            mkdir -p "$stage/$(dirname "$rel_path")"
-            ctr strip --strip-debug -o "$stage/$rel_path" "$ko"
-            ctr "$kb/scripts/sign-file" "$hash" "$MOK_DIR/MOK.key" "$MOK_DIR/MOK.der" "$stage/$rel_path"
-            ctr xz -f --check=crc32 --lzma2=dict=1MiB "$stage/$rel_path"
-            files+=( "$rel_path.xz" )
-        done
-    done
-    echo "  signed by: $(ctr modinfo -F signer "$stage/drivers/gpu/drm/xe/xe.ko.xz")"
-
-    say "kernel $kver: packaging $KMOD_NAME"
-    local top="$CACHE/rpmbuild/$KMOD_NAME" rel f; rel=$(date +%Y%m%d%H%M)
-    rm -rf "$top"; mkdir -p "$top/SOURCES" "$top/SPECS"
-    tar -C "$stage" -cf "$top/SOURCES/modules.tar" "${files[@]}"
-    {
-        cat <<EOF
-Name:           $KMOD_NAME
-Version:        ${kver//-/_}
-Release:        $rel
-Summary:        xe, iwlwifi and btintel with the OneXPlayer 3 fixes
-License:        GPL-2.0-only
-Source0:        modules.tar
-Requires:       kernel-core = ${kver%.*}
-Obsoletes:      kmod-oxp3-xe < 999
-%global debug_package %{nil}
-%global __os_install_post %{nil}
-%description
-xe (VBT VS/PE-O backport, VRR/DSB timing, resume ENOMEM fix, 7.2.13 stable fixes, eDP HDR
-switches), iwlwifi/iwlmld and btintel/btintel_pcie (7.2.13 stable and 7.3/7.4 fixes) for
-kernel $kver. Signed with a local MOK. Installed in updates/, so they take priority over the
-stock modules.
-%prep
-%setup -c -T
-tar -xf %{SOURCE0}
-%install
-mkdir -p %{buildroot}/usr/lib/modules/$kver/updates
-cp -a drivers %{buildroot}/usr/lib/modules/$kver/updates/
-%files
-EOF
-        for f in "${files[@]}"; do echo "/usr/lib/modules/$kver/updates/$f"; done
-        cat <<EOF
-%post
-/usr/sbin/depmod -a $kver || :
-%postun
-/usr/sbin/depmod -a $kver || :
-EOF
-    } > "$top/SPECS/$KMOD_NAME.spec"
-    ctr rpmbuild --define "_topdir $top" -bb "$top/SPECS/$KMOD_NAME.spec" > "$top/build.log" 2>&1 ||
-        { tail -20 "$top/build.log"; die "kmod packaging failed"; }
-    rm -f "$OUT"/kmod-oxp3-*.rpm
-    find "$top/RPMS" -name "$KMOD_NAME-*.rpm" -exec cp {} "$OUT/" \;
-    ls "$OUT/$KMOD_NAME"-*.rpm
-}
-
 # ---------------------------------------------------------------------------------------------
 # firmware: pinned files from upstream, packaged under /usr/lib/firmware/updates (searched first
 # by the kernel and by dracut, so the initramfs gets them too)
 # ---------------------------------------------------------------------------------------------
+# Configuration for build_firmware(); the build itself is in tools/lib/install-common.sh.
 LF=https://gitlab.com/kernel-firmware/linux-firmware/-/raw
 # <installed path under /usr/lib/firmware/updates>|<url>|<sha256>|<what>
 FIRMWARE=(
@@ -539,174 +259,6 @@ FIRMWARE=(
 )
 FW_NAME=oxp3-firmware
 
-# revision of the first microcode header in a file
-ucode_rev() { od -An -t x4 -j 4 -N 4 "$1" 2>/dev/null | tr -d ' '; }
-
-# installed (Anatase) copy of a firmware file, compressed or not
-sys_fw() { local f; for f in /usr/lib/firmware/$1{,.xz,.zst}; do [[ -e $f ]] && { echo "$f"; return; }; done; }
-sys_fw_sha() {
-    local f; f=$(sys_fw "$1"); [[ -n $f ]] || return 0
-    case $f in *.xz) xz -dc "$f" ;; *.zst) zstd -dcq "$f" ;; *) cat "$f" ;; esac | sha256sum | cut -d' ' -f1
-}
-
-build_firmware() {
-    local stage="$CACHE/firmware/stage" entry path url sha kind f files=()
-    rm -rf "$stage"; mkdir -p "$stage" "$CACHE/firmware/dl"
-    say "firmware: pinned files"
-    for entry in "${FIRMWARE[@]}"; do
-        IFS='|' read -r path url sha kind <<<"$entry"
-        (( SKIP_DMC )) && [[ $kind == dmc ]] && { echo "  $path: --stock-dmc, keeping Anatase's"; continue; }
-        f="$CACHE/firmware/dl/$sha"
-        if [[ $(sha256sum "$f" 2>/dev/null | cut -d' ' -f1) != "$sha" ]]; then
-            curl -sfL --retry 3 -o "$f.part" "$url" || die "download failed: $url"
-            [[ $(sha256sum "$f.part" | cut -d' ' -f1) == "$sha" ]] || die "checksum mismatch: $url"
-            mv "$f.part" "$f"
-        fi
-        # skip what Anatase already ships in the same or a newer version
-        if [[ $(sys_fw_sha "$path") == "$sha" ]]; then
-            echo "  $path: Anatase ships the same file"; continue
-        fi
-        if [[ $kind == ucode ]]; then
-            local have want
-            have=$(ucode_rev "$(sys_fw "$path")"); want=$(ucode_rev "$f")
-            if [[ -n $have ]] && (( 16#$have >= 16#$want )); then
-                echo "  $path: Anatase ships revision 0x$have (>= 0x$want)"; continue
-            fi
-        fi
-        install -D -m 0644 "$f" "$stage/$path"
-        files+=( "$path" ); echo "  $path"
-    done
-    rm -f "$OUT/$FW_NAME"-*.rpm
-    if (( ${#files[@]} == 0 )); then echo "  nothing newer than Anatase's firmware"; return 0; fi
-
-    local top="$CACHE/rpmbuild/$FW_NAME" rel; rel=$(date +%Y%m%d%H%M)
-    rm -rf "$top"; mkdir -p "$top/SOURCES" "$top/SPECS"
-    tar -C "$stage" -cf "$top/SOURCES/firmware.tar" "${files[@]}"
-    {
-        cat <<EOF
-Name:           $FW_NAME
-Version:        1
-Release:        $rel
-Summary:        Pinned firmware for the OneXPlayer 3 (display DMC, Bluetooth, CPU microcode)
-License:        Redistributable, no modification permitted
-BuildArch:      noarch
-Source0:        firmware.tar
-%global debug_package %{nil}
-%description
-Firmware files that take priority over linux-firmware / microcode_ctl through
-/usr/lib/firmware/updates: display DMC v2.20 (VRR cap with v2.36), Bluetooth 24.80,
-CPU microcode 06-cc-02 0x11c.
-%prep
-%setup -c -T
-tar -xf %{SOURCE0}
-%install
-mkdir -p %{buildroot}/usr/lib/firmware/updates
-cp -a * %{buildroot}/usr/lib/firmware/updates/
-%files
-EOF
-        for f in "${files[@]}"; do echo "/usr/lib/firmware/updates/$f"; done
-    } > "$top/SPECS/$FW_NAME.spec"
-    ctr rpmbuild --define "_topdir $top" -bb "$top/SPECS/$FW_NAME.spec" > "$top/build.log" 2>&1 ||
-        { tail -20 "$top/build.log"; die "firmware packaging failed"; }
-    find "$top/RPMS" -name "$FW_NAME-*.rpm" -exec cp {} "$OUT/" \;
-    ls "$OUT/$FW_NAME"-*.rpm
-}
-
-do_build() {
-    command -v podman >/dev/null || die "podman is required"
-    ensure_container
-    if (( !SKIP_GAMESCOPE || !SKIP_MANGOHUD || !SKIP_MESA )); then fetch_anatase; fi
-    (( SKIP_GAMESCOPE )) || build_card gamescope '^Patch:[[:space:]]+overrides\.patch' "$here"/patches/gamescope/*.patch
-    (( SKIP_MANGOHUD )) || build_card mangohud '^Patch1000:[[:space:]]+overrides\.patch' "$here"/patches/mangohud/*.patch
-    (( SKIP_MESA )) || build_mesa
-    (( SKIP_XESS )) || build_xess
-    (( SKIP_KERNEL )) || build_kmods
-    (( SKIP_FIRMWARE )) || build_firmware
-    say "build done: $OUT"
-    ls "$OUT"
-}
-
-# ---------------------------------------------------------------------------------------------
-# install / uninstall (root)
-# ---------------------------------------------------------------------------------------------
-mok_cn() {
-    openssl x509 -in "$MOK_DIR/MOK.der" -inform der -noout -subject -nameopt multiline |
-        sed -n 's/^ *commonName *= *//p'
-}
-
-# Anatase's kernel only loads MOK keys into the machine keyring (the one that verifies
-# modules) if they are CA certs with keyCertSign and without digitalSignature
-# (CONFIG_INTEGRITY_CA_MACHINE_KEYRING_MAX); anything else lands in the platform keyring,
-# which can verify kernel images but not modules.
-mok_usage_ok() {
-    local ext
-    ext=$(openssl x509 -in "$MOK_DIR/MOK.der" -inform der -noout -ext basicConstraints,keyUsage 2>/dev/null)
-    grep -q 'CA:TRUE' <<<"$ext" && grep -q 'Certificate Sign' <<<"$ext" && ! grep -q 'Digital Signature' <<<"$ext"
-}
-
-# Is the MOK in the kernel's .machine keyring right now? keyctl can't find that keyring by
-# name from a normal process, so look its id up in /proc/keys and list it by id.
-mok_trusted() {
-    local cn kr; cn=$(mok_cn)
-    kr=$(sudo awk '$8 == "keyring" && $9 == ".machine:" { print $1; exit }' /proc/keys)
-    [[ -n $cn && -n $kr ]] && sudo keyctl list "0x$kr" 2>/dev/null | grep -qF "$cn"
-}
-
-# Create a module signing key the machine keyring accepts and queue it for enrolment.
-do_mok_setup() {
-    if [[ -e $MOK_DIR/MOK.key ]] && mok_usage_ok; then
-        echo "$MOK_DIR already has a suitable key."
-    else
-        if [[ -e $MOK_DIR/MOK.key ]]; then
-            local old; old="$MOK_DIR.old-$(date +%Y%m%d%H%M%S)"
-            echo "The key in $MOK_DIR isn't accepted for modules (needs CA + keyCertSign only); keeping it as $old"
-            mv "$MOK_DIR" "$old"
-        fi
-        install -d -m 700 "$MOK_DIR"
-        local cfg; cfg=$(mktemp)
-        printf '%s\n' '[req]' 'distinguished_name = dn' 'x509_extensions = mok' 'prompt = no' \
-            '[dn]' "CN = OXP3 module signing CA ($(id -un))" \
-            '[mok]' 'basicConstraints = critical, CA:TRUE' 'keyUsage = critical, keyCertSign' \
-            'subjectKeyIdentifier = hash' > "$cfg"
-        (umask 077; openssl req -new -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 -config "$cfg" \
-            -keyout "$MOK_DIR/MOK.key" -out "$MOK_DIR/MOK.crt" 2>/dev/null)
-        rm -f "$cfg"
-        openssl x509 -in "$MOK_DIR/MOK.crt" -outform DER -out "$MOK_DIR/MOK.der"
-        echo "Created $MOK_DIR/MOK.key (keep it private) and MOK.der."
-    fi
-    if mokutil --test-key "$MOK_DIR/MOK.der" 2>&1 | grep -q 'already enrolled'; then
-        echo "MOK already enrolled."
-    else
-        echo "Enrolling: choose a one-time password, then reboot and in MokManager pick"
-        echo "Enroll MOK -> Continue -> Yes -> enter the password."
-        sudo mokutil --import "$MOK_DIR/MOK.der"
-    fi
-}
-
-# MangoHud's CPU/GPU power: a root service publishes 1 s / 0.1 W averages in /run/rapl-power;
-# the raw RAPL counters stay root-only (CVE-2020-8694).
-install_rapl_power() {
-    sudo install -D -m 0755 "$here/files/rapl-power" /usr/local/libexec/rapl-power
-    sudo install -m 0644 "$here/files/rapl-power.service" /etc/systemd/system/rapl-power.service
-    sudo systemctl daemon-reload
-    sudo systemctl enable rapl-power.service >/dev/null
-    sudo systemctl restart rapl-power.service
-    remove_rapl_udev_rules
-}
-
-# Earlier versions opened the counters to all users with a udev rule: remove it and make
-# the counters root-only again right away (they are re-created root-only at boot anyway).
-remove_rapl_udev_rules() {
-    local r changed=0
-    for r in /etc/udev/rules.d/70-oxp3-rapl.rules /etc/udev/rules.d/70-anatase-rapl.rules; do
-        [[ -e $r ]] && { sudo rm -f "$r"; changed=1; }
-    done
-    if (( changed )); then
-        sudo udevadm control --reload
-        sudo chmod 0400 /sys/class/powercap/intel-rapl*/energy_uj 2>/dev/null || true
-    fi
-}
-
 # ---------------------------------------------------------------------------------------------
 # OneXPlayer 3 extras: services and settings in /etc and /usr/local (they survive updates)
 # ---------------------------------------------------------------------------------------------
@@ -714,6 +266,8 @@ EXTRA_UNITS=(oxp3-tdp-sync.service oxp3-xpad-sleep.service oxp3-rapl-pp1.service
              oxp3-sleep-pre.service oxp3-sleep-log.service)
 EXTRA_STATE=/etc/oxp3-fixes
 
+# Kept local: this variant also installs the suspend units; oxp3-fixes-fast.sh leaves them to
+# tools/oxp3-hw-install.sh, so the two bodies genuinely differ.
 install_extras() {
     local s u me; me=$(id -un)
     for s in oxp3-tdp-sync oxp3-xpad-sleep oxp3-audio-route oxp3-sleep-wakeup oxp3-sleep-log; do
@@ -776,44 +330,8 @@ uninstall_extras() {
 # update drops both and the rocker keeps working (just unfixed) until the next install.
 HHD_PATCHES=("$here"/patches/hhd/*.patch)
 VOLUME_HWDB=/usr/lib/udev/hwdb.d/84-oxp3-volume-keys.hwdb
-hhd_site() { python3 -c 'import hhd, os; print(os.path.dirname(os.path.dirname(hhd.__file__)))' 2>/dev/null; }
-
-install_volume_fix() {
-    local site p changed=0; site=$(hhd_site)
-    [[ -n $site ]] || { echo "  hhd not found, volume rocker fix skipped"; return 0; }
-    # each patch: already there, or applied now; one that does neither leaves the rocker stock
-    for p in "${HHD_PATCHES[@]}"; do
-        if git -C "$site" apply --check -R -p1 "$p" >/dev/null 2>&1; then
-            continue
-        elif git -C "$site" apply --check -p1 "$p" >/dev/null 2>&1; then
-            sudo git -C "$site" apply -p1 "$p"; changed=1
-        else
-            echo "  WARNING: ${p##*/} doesn't apply to this hhd - volume rocker left stock"
-            hhd_volume_unpatch "$site"
-            [[ -e $VOLUME_HWDB ]] && { sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update; }
-            sudo systemctl restart hhd.service
-            return 0
-        fi
-    done
-    sudo find "$site/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} +
-    echo "  hhd: volume rocker presses become taps$( ((changed)) || echo ' (already patched)')"
-    if ! cmp -s "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"; then
-        sudo install -m 0644 "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"
-        sudo systemd-hwdb update
-        sudo udevadm trigger --subsystem-match=input --action=change
-    fi
-    sudo systemctl restart hhd.service
-}
-
-# take our hhd patches out again, newest first (only those that are fully applied)
-hhd_volume_unpatch() { # <site>
-    local i p
-    for (( i=${#HHD_PATCHES[@]} - 1; i >= 0; i-- )); do
-        p=${HHD_PATCHES[$i]}
-        git -C "$1" apply --check -R -p1 "$p" >/dev/null 2>&1 && sudo git -C "$1" apply -R -p1 "$p"
-    done
-    sudo find "$1/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
-}
+# The patch list above is consumed by hhd_site/install_volume_fix/hhd_volume_unpatch in
+# tools/lib/install-common.sh.
 
 # Mesa for the Steam Flatpak. Anatase builds the org.anatase.Platform runtime from the composefs /usr
 # (anatase-flatpak-extensions skips the /usr overlay on purpose) plus its overrides directory, so
@@ -826,33 +344,8 @@ FLATPAK_MESA_LIST=$FLATPAK_RT/oxp3-mesa.list
 FLATPAK_RT_FILES=/run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files
 FLATPAK_MESA_SKIP='libvulkan_(radeon|panfrost|nouveau|freedreno|asahi|powervr_mesa|broadcom|dzn|virtio|intel_hasvk|lvp)\.so|/icd\.d/(radeon|panfrost|nouveau|freedreno|asahi|powervr_mesa|broadcom|dzn|virtio|intel_hasvk|lvp)_icd|RusticlOpenCL|/OpenCL/|^/usr/share/(doc|licenses|man)/'
 
-# Mesa version of the host (from its libgallium-<version>.so) and whether the Steam Flatpak runtime
-# runs the same Intel Vulkan driver
-host_mesa() { local g; g=$(ls /usr/lib64/libgallium-*.so 2>/dev/null | head -1); g=${g##*/libgallium-}; echo "${g%.so}"; }
-flatpak_mesa() {
-    if cmp -s /usr/lib64/libvulkan_intel.so "$FLATPAK_RT_FILES/lib64/libvulkan_intel.so"; then
-        echo "same as the host"
-    else
-        echo "Anatase's (not ours)"
-    fi
-}
-
-refresh_flatpak_runtime() {
-    if [[ -n $(flatpak ps --columns=application 2>/dev/null) ]]; then
-        echo "  Flatpak apps are running (Steam?): the Steam runtime picks this up after a reboot,"
-        echo "  or close them and run: sudo systemctl restart anatase-flatpak-extensions.service"
-        return 0
-    fi
-    sudo systemctl restart anatase-flatpak-extensions.service
-    echo "  Steam Flatpak runtime Mesa: $(flatpak_mesa)"
-}
-
-remove_flatpak_mesa() {
-    [[ -r $FLATPAK_MESA_LIST ]] || return 0
-    (cd "$FLATPAK_RT/overrides" && grep -v '/$' "$FLATPAK_MESA_LIST" | sudo xargs -r -d '\n' rm -f --)
-    sudo rm -f "$FLATPAK_MESA_LIST"
-}
-
+# Kept local: here the file list comes from the distro Mesa RPMs; the fast variant installs its
+# own built driver and expat. Only remove_flatpak_mesa/refresh_flatpak_runtime are shared.
 install_flatpak_mesa() {
     [[ -d $FLATPAK_RT/overrides ]] || { echo "  no Anatase Flatpak runtime overrides - Steam keeps Anatase's Mesa"; return 0; }
     local pkgs list
@@ -868,17 +361,13 @@ install_flatpak_mesa() {
     refresh_flatpak_runtime
 }
 
-# State of the deployments: is one staged, and which layered local packages does the booted
-# one have?
-deploy_info() {
-    rpm-ostree status --json | python3 -c 'import json,sys
-ds=json.load(sys.stdin)["deployments"]
-b=[x for x in ds if x.get("booted")][0]
-print("staged" if any(x.get("staged") for x in ds) else "none")
-print(" ".join(b.get("requested-local-packages",[])))'
-}
-
-hotfix_active() { rpm-ostree status --booted | grep -q 'Unlocked: hotfix'; }
+# ---------------------------------------------------------------------------------------------
+# install / uninstall (root)
+# ---------------------------------------------------------------------------------------------
+# Kept local: the variants stage different things (Mesa RPMs here; podman-built Mesa, sched_ext
+# and the Flatpak runtime in oxp3-fixes-fast.sh), so the flow stays with each caller. Every step
+# it calls (MOK, RAPL, extras, XeSS, deployment state) is in tools/lib/install-common.sh.
+# ---------------------------------------------------------------------------------------------
 
 do_install() {
     local rpms=() kmod=() kver info staged locals p un=()
@@ -986,6 +475,7 @@ do_install() {
     fi
 }
 
+# Kept local: mirrors this variant's do_install() and restores only what this variant installs.
 do_uninstall() {
     say "back to stock Anatase (sudo)"
     local p un=()
@@ -1015,40 +505,9 @@ do_uninstall() {
     echo "update) starts from the stock packages again."
 }
 
-do_status() {
-    echo "kernel (deployment): $(anatase_kver)   booted: $(uname -r)"
-    rpm -q gamescope mangohud mesa-vulkan-drivers kmod-oxp3-xe "$KMOD_NAME" "$FW_NAME" 2>&1 | grep -v 'is not installed' | sed 's/^/  /' || true
-    rpm-ostree status --booted | grep -E 'Version|LocalPackages|Initramfs|Unlocked' | sed 's/^/  /' || true
-    echo "  rapl-power service: $(systemctl is-active rapl-power.service 2>/dev/null)"
-    local f; for f in /run/rapl-power/*; do [[ -e $f ]] && echo "    $(basename "$f"): $(cat "$f") W"; done
-    ls /etc/udev/rules.d/70-*rapl.rules >/dev/null 2>&1 && echo "  WARNING: old RAPL udev rule still present (run install)"
-    stat -c '  RAPL counters: %A %n' /sys/class/powercap/intel-rapl:0/energy_uj 2>/dev/null
-    echo "  Mesa: host $(host_mesa)$(grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so && echo ' with the XeSS XMX patches'), Steam Flatpak: $(flatpak_mesa)"
-    local m; for m in xe iwlwifi iwlmld btintel btintel_pcie; do
-        printf '  %-13s %s\n' "$m:" "$(modinfo -F filename "$m" 2>/dev/null)"
-    done
-    journalctl -k -b 0 --no-pager 2>/dev/null | sed -n \
-        -e 's/.*\(Finished loading DMC firmware .*\)/  \1/p' \
-        -e 's/.*microcode: \(Current revision: .*\)/  microcode \1/p' \
-        -e 's/.*Bluetooth: hci0: \(Firmware timestamp .*\)/  Bluetooth \1/p' | sort -u
-    local u st; for u in "${EXTRA_UNITS[@]}" "oxp3-audio-resume@$(id -un).service" user:oxp3-audio-route.service; do
-        if [[ $u == user:* ]]; then st=$(systemctl --user is-enabled "${u#user:}" 2>/dev/null || true)
-        else st=$(systemctl is-enabled "$u" 2>/dev/null || true); fi
-        printf '  %-34s %s\n' "${u#user:}:" "${st:-missing}"
-    done
-    echo "  package PL1: MSR $(( $(cat /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 )) W," \
-         "MMIO $(( $(cat /sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 )) W"
-    local site; site=$(hhd_site)
-    local hp n=0; for hp in "${HHD_PATCHES[@]}"; do
-        [[ -n $site ]] && git -C "$site" apply --check -R -p1 "$hp" >/dev/null 2>&1 && n=$((n + 1))
-    done
-    echo "  volume rocker: $n/${#HHD_PATCHES[@]} hhd patches applied$( [[ -e $VOLUME_HWDB ]] && echo ', force-release on')"
-    if [[ -x $here/tools/oxp3-hw-install.sh ]]; then
-        "$here/tools/oxp3-hw-install.sh" --status 2>/dev/null | tail -n +2 | sed 's/^/  /' || true
-    fi
-    status_xess
-    [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
-}
+# Refuse to run if this caller does not satisfy the install-common contract (API version,
+# required configuration variables and the build_mesa hook): see tools/lib/install-common.sh.
+install_common_guard
 
 case $cmd in
     build) do_build ;;
