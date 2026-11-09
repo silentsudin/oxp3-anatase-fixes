@@ -2173,7 +2173,7 @@ check_sleep() {
             "stop or reconfigure the service holding it; docs/hw/sleep-power.md 2.5"
         ;;
     fail-incomplete)
-        if [ "${EUID:-$(id -u)}" -ne 0 ] && [ ! -r "$(dirname "$pol")" ] && [ -z "${pk:-}" ]; then
+        if [ "${EUID:-$(id -u)}" -ne 0 ] && [ ! -r "$(dirname "$pol")" ]; then
             record sleep.trigger sleep "suspend request has a path" UNKNOWN \
                 "logind drop-in present; the polkit rule is not readable without root and pkcheck has no session agent here" \
                 "drop-in=$drop rule=$pol pkcheck=${pk:-none}" \
@@ -2880,6 +2880,14 @@ check_display() {
         record dsp.gamemodehdr display "Gamemode HDR launcher" FAIL "Gamemode launcher has no HDR/PQ flags (session output is SDR)" "patched copy: $([ -r "$gm" ] && echo yes || echo no); override: $([ -r "$dropin" ] && echo yes || echo no)" "sudo tools/display/gamemode-hdr.sh install ; docs/hw/hdr-vibrance.md section 5.2"
     fi
     local tool=$REPO/tools/display/display-mode.sh kv out hdr wcg icc depth vrr
+    case ${DESKTOP_SESSION:-}:${XDG_CURRENT_DESKTOP:-} in
+        *gamescope*|*gamemode*)
+            record dsp.hdr display "HDR / WCG state" SKIP \
+                "inside Gamemode: desktop HDR is a Plasma/kscreen feature, gamescope HDR is covered by dsp.gamemodehdr" \
+                "session=${DESKTOP_SESSION:-?}/${XDG_CURRENT_DESKTOP:-?}" \
+                "check HDR in the desktop session, or dsp.gamemodehdr for Gamemode"
+            ;;
+        *)
     if [ ! -x "$tool" ]; then
         record dsp.hdr display "HDR / WCG state" SKIP "display-mode.sh missing" "$tool" ""
         record dsp.icc display "ICC profile" SKIP "display-mode.sh missing" "$tool" ""
@@ -2941,6 +2949,8 @@ check_display() {
     else
         record dsp.vibrance display "vibrance tooling" FAIL "vibrance.sh status failed (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "tools/display/vibrance.sh status"
     fi
+
+    esac
 }
 
 # ------------------------------------------------------------------ 9. graphics
@@ -2953,24 +2963,25 @@ check_graphics() {
         return 0
     fi
 
-    local xess_game=0 game_exe="" game_dir=""
+    local xess_game=0 game_exe=""
+    # Per-game XMX only matters when a process has actually loaded XeSS. Scanning
+    # the live maps is deterministic and needs no game-directory heuristic.
+    if grep -lsi 'libxess' /proc/[0-9]*/maps 2>/dev/null | head -1 | grep -q .; then
+        xess_game=1
+    fi
     if [ -n "${STATUS_JSON:-}" ] && have python3; then
         game_exe=$(printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
 try: d=json.load(sys.stdin)
 except Exception: raise SystemExit
 print(((d.get("game") or {}).get("exe") or ""))' 2>/dev/null)
     fi
-    if [ -n "$game_exe" ] && [ -d "$(dirname "$game_exe")" ]; then
-        game_dir=$(dirname "$game_exe")
-        find "$game_dir" -maxdepth 4 -iname 'libxess*.dll' -print -quit 2>/dev/null | grep -q . && xess_game=1
-    fi
 
     simple_ind gfx.mesa mesa.host graphics "host Mesa driver" "ec418f04e589965a" "restore the recorded build: sudo tools/oxp3-mesa-restore.sh restore ; or rebuild: ./oxp3-fixes-fast.sh build install ; docs/WORKING-BUILD-2026-11-08.md"
     simple_ind gfx.xmx.driver xmx.driver graphics "XMX driver" "4b1d55ea" "rebuild the XMX driver: tools/build-xmx-driver.sh ; docs/xess-xmx.md"
-    if [ -n "$game_exe" ] && [ "$xess_game" -eq 0 ]; then
-        record gfx.xmx.helper graphics "nodgrf helper" SKIP "the running game does not ship XeSS, so per-game XMX is not applicable" "game: $game_exe" "XMX only applies when a game loads libxess; docs/xess-xmx.md"
-        record gfx.xmx.igc graphics "IGC ocloc present" SKIP "the running game does not ship XeSS, so per-game XMX is not applicable" "game: $game_exe" "docs/xess-xmx.md"
-        record gfx.xmx.icd graphics "per-game XMX env" SKIP "the running game does not ship XeSS, so per-game XMX is not applicable" "game: $game_exe" "docs/xess-xmx.md"
+    if [ "$xess_game" -eq 0 ]; then
+        record gfx.xmx.helper graphics "nodgrf helper" SKIP "no process has libxess loaded, so per-game XMX is not in scope" "game: ${game_exe:-not detected}" "XMX only applies when a game loads libxess; docs/xess-xmx.md"
+        record gfx.xmx.igc graphics "IGC ocloc present" SKIP "no process has libxess loaded, so per-game XMX is not in scope" "game: ${game_exe:-not detected}" "docs/xess-xmx.md"
+        record gfx.xmx.icd graphics "per-game XMX env" SKIP "no process has libxess loaded, so per-game XMX is not in scope" "game: ${game_exe:-not detected}" "docs/xess-xmx.md"
     else
         simple_ind gfx.xmx.helper xmx.helper graphics "nodgrf helper" "" "launch the game through tools/xmx-run.sh (or the Heroic XMX env) so ANV_CM_HELPER points at tools/xmx-cm-compile-nodgrf.sh ; docs/xess-xmx.md"
         simple_ind gfx.xmx.igc xmx.igc graphics "IGC ocloc present" "" "launch with the XMX stack: tools/xmx-run.sh sets XMX_IGC_DIR ; docs/xess-xmx.md"
