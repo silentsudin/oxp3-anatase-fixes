@@ -15,6 +15,7 @@ here, so `build` + `install` reapplies it to whatever Anatase ships next.
 | firmware | display DMC v2.20 (v2.36 caps VRR at about 74 fps), Bluetooth 24.80, CPU microcode 0x11c | `oxp3-firmware`, layered with the modules, in `/usr/lib/firmware/updates` (searched first, also by dracut) |
 | `rapl-power` | CPU/GPU power for the overlay without opening the RAPL counters to users | `/usr/local/libexec` + `/etc/systemd/system` |
 | extras | TDP above 25 W actually applied, speakers after boot/resume, volume rocker no longer sticks, no 5 s wait on suspend, GPU power reading on every boot; only the lid, power button, sleep button and RTC alarm can wake it, and every resume logs what woke it ([docs/hw/sleep-power.md](docs/hw/sleep-power.md)) | services and configs in `/etc`; the hhd volume patch in the `/usr` overlay |
+| fingerprint | **not supported and not fixable by config**: the reader is a Betterlife `ACPI\BF63112` module on Intel LPSS SPI, with no kernel driver, no libfprint driver and no udev binding. Hardware ID, the Windows match-in-sensor command set and the byte-exact SPI frame (0xAA/0x4C/CRC-32) are recorded, plus a read-only userspace probe and a driver skeleton ([docs/hw/fingerprint.md](docs/hw/fingerprint.md)) | nothing is installed; `tools/fingerprint/` holds the probe and the skeleton, the privileged bring-up steps are in the doc |
 
 You keep booting the stock Anatase kernel; only the modules above are replaced. Kernel
 patches Anatase already carries are skipped one by one; firmware that Anatase ships in the
