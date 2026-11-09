@@ -9,6 +9,12 @@
 #
 # Usage: sudo tools/oxp3-nvme-suspend.sh status|apply|remove
 set -uo pipefail
+usage() {
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    printf '\nusage: sudo %s status|apply|remove [--force]\n' "$0"
+    exit 0
+}
+case ${1:-} in -h|--help) usage ;; esac
 [[ $EUID -eq 0 ]] || { echo "run with sudo: sudo $0 status|apply|remove" >&2; exit 2; }
 KARG=nvme.noacpi=1
 have_karg() { grep -qw -- "$KARG" /proc/cmdline; }

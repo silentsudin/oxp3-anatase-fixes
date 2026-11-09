@@ -3460,7 +3460,7 @@ run_selftest() {
         pwr.ac pwr.adaptive pwr.fan pwr.order pwr.pl1 pwr.profile pwr.rapl pwr.zones \
         rgbd.check rgbd.timing rgbd.unit \
         sched.scx sched.state sched.unit \
-        sleep.aspm sleep.audit sleep.measure sleep.mem sleep.mmcwake sleep.nvme sleep.sdcard sleep.stats sleep.suspend sleep.trigger sleep.units sleep.wakeup \
+        sleep.aspm sleep.audit sleep.measure sleep.mem sleep.mmcwake sleep.nvme sleep.nvmeacpi sleep.sdcard sleep.stats sleep.suspend sleep.trigger sleep.units sleep.wakeup \
         vol.grab vol.hold vol.hwdb vol.holder vol.topology vol.unit \
         | sort | uniq)
     t_eq "inventory/declared" "$expected" "$ids"
