@@ -190,9 +190,12 @@ HO=docs/HANDOVER.md
 def_phase preflight "Preflight" \
     "A hands-on answer is only meaningful against a known install and verifier state: which components are installed, which rows already fail, and whether this shell can see the user session." \
     "" "docs/INSTALL-HW.md §5; $V §1" "" \
-    "read-only: tools/oxp3-hw-install.sh --status and tools/oxp3-verify.sh --json (default mode, never --full)"
+    "read-only: tools/oxp3-preflight.sh, tools/oxp3-hw-install.sh --status and tools/oxp3-verify.sh --json (default mode, never --full)"
 d preflight.install info read -- "" "Install state" "" "" "tools/oxp3-hw-install.sh --status" "docs/INSTALL-HW.md §5" 0
 d preflight.verify info read -- "" "Verifier summary" "" "" "tools/oxp3-verify.sh --json" "$V §1" 0
+d preflight.preflight info read -- "" "Preflight verdict" \
+    "Would an install complete on this host, and which components would be skipped? Read-only; the installer refuses on FAIL unless --force." \
+    "" "tools/oxp3-preflight.sh" "docs/PREFLIGHT.md" 0
 d preflight.session choice none "" "" "Validation session" \
     "Where are you running this from? The home-button unit, the RGB keeper and the EQ need the user session (a root/SSH shell cannot see them)." \
     "desktop=Desktop session on the device|ssh=SSH or root shell|console=Plain console" "" "docs/WIZARD.md §2" 0
@@ -1485,7 +1488,7 @@ d')" '"a\"b\\c\nd"'
 
     # inventory
     st_eq "phase count" "${#PHASES[@]}" "10"
-    st_eq "item count" "${#ITEM_ORDER[@]}" "39"
+    st_eq "item count" "${#ITEM_ORDER[@]}" "40"
     local id bad=0
     local chk
     for id in "${ITEM_ORDER[@]}"; do

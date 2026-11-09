@@ -1,0 +1,29 @@
+{
+  "name": "old-systemd",
+  "base": "base",
+  "description": "systemd 245 is too old for ProtectProc=invisible (the units use it).",
+  "commands": {
+    "systemctl --version": {
+      "rc": 0,
+      "out": "systemd 245 (245-1.fc38)\n"
+    }
+  },
+  "expect": {
+    "verdict": "unsafe",
+    "safe": false,
+    "exit": 1,
+    "statuses": {
+      "systemd.version": "FAIL"
+    },
+    "skipped": [
+      "volume",
+      "leds",
+      "rgb",
+      "sleep",
+      "bluetooth",
+      "power",
+      "imu",
+      "audio"
+    ]
+  }
+}

@@ -310,6 +310,15 @@ suite_verify_fixtures() {
     tests/verify/run.sh
 }
 
+suite_rollback() {
+    [ -x "$REPO/tools/oxp3-rollback.sh" ] || skip "tools/oxp3-rollback.sh is missing"
+    [ -x "$REPO/tests/rollback/run.sh" ] || skip "tests/rollback/run.sh is missing"
+    cd "$REPO" || exit 1
+    # Installs into a --root prefix, edits the user-owned files, uninstalls and asserts a
+    # byte-identical restore. No root, no systemd, no udev, nothing outside $TMPDIR.
+    tests/rollback/run.sh
+}
+
 suite_installer_status() {
     [ -x "$REPO/tools/oxp3-hw-install.sh" ] || skip "tools/oxp3-hw-install.sh is missing"
     cd "$REPO" || exit 1
@@ -326,7 +335,13 @@ suite_installer_dry_run() {
         skip "root context with no SUDO_USER/--user; installer --dry-run needs an unprivileged target user"
     fi
     cd "$REPO" || exit 1
-    tools/oxp3-hw-install.sh --dry-run --all
+    local out
+    out=$(tools/oxp3-hw-install.sh --dry-run --all)
+    printf '%s\n' "$out" | tail -n 5
+    printf '%s\n' "$out" | grep -q 'preflight: skipped in --dry-run' \
+        || { printf 'FAIL the dry run did not skip preflight\n'; return 1; }
+    tools/oxp3-hw-install.sh --help | grep -q -- '--force' \
+        || { printf 'FAIL --help does not document --force\n'; return 1; }
 }
 
 suite_unit_verify() {
@@ -558,6 +573,31 @@ print("selftest ok; 8 fixtures valid; healthy silent; preinstall not-installed")
 PYEOF
 }
 
+suite_preflight() {
+    [ -x "$REPO/tools/oxp3-preflight.sh" ] || skip "tools/oxp3-preflight.sh is missing"
+    [ -d "$REPO/tests/fixtures/preflight" ] || skip "tests/fixtures/preflight is missing"
+    if [ -x "$REPO/tests/preflight/run.sh" ]; then
+        "$REPO/tests/preflight/run.sh"
+    else
+        "$REPO/tools/oxp3-preflight.sh" --selftest
+        "$REPO/tools/oxp3-preflight.sh" --fixtures "$REPO/tests/fixtures/preflight"
+    fi
+    # A live report is data, not an assertion: the verdict depends on the host.
+    local out=$LOGDIR/preflight.json
+    "$REPO/tools/oxp3-preflight.sh" --json >"$out" || true
+    [ -s "$out" ] || { printf 'FAIL preflight wrote no JSON\n'; return 1; }
+    python3 - "$out" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+assert data.get("schema") == 1, data.get("schema")
+assert data.get("tool") == "oxp3-preflight"
+assert isinstance(data.get("checks"), list) and data["checks"]
+assert data["counts"]["total"] == len(data["checks"])
+assert data["safe"] is (data["counts"]["fail"] == 0)
+PY
+}
+
 suite_gen_docs() {
     [ -f "$REPO/tools/gen-docs.py" ] || skip "tools/gen-docs.py is missing"
     [ -f "$REPO/docs/hw/components.yaml" ] || skip "docs/hw/components.yaml is missing"
@@ -624,6 +664,9 @@ def_suite verify-selftest fast fast 120 0 \
 def_suite verify-fixtures fast fast 120 0 \
     "the tests/verify/run.sh fixture runner (same selftest entrypoint)" \
     "tests/verify/run.sh"
+def_suite rollback fast fast 120 0 \
+    "undo round-trip under a --root prefix: install, edit, uninstall, byte-identical restore" \
+    "tests/rollback/run.sh"
 def_suite installer-status fast fast 120 0 \
     "hardware installer read-only status report" \
     "tools/oxp3-hw-install.sh --status"
@@ -669,6 +712,9 @@ def_suite wizard fast fast 300 0 \
 def_suite triage fast fast 120 0 \
     "evidence-bundle triage: rule selftest, 8 fixture bundles, JSON contract" \
     "tools/oxp3-triage.py --selftest && ... 8 fixtures --json"
+def_suite preflight fast fast 120 0 \
+    "preflight prerequisite validator: parser/fixture selftest + live JSON schema" \
+    "tools/oxp3-preflight.sh --selftest && --fixtures tests/fixtures/preflight && --json"
 def_suite gen-docs fast fast 60 0 \
     "generated component tables match docs/hw/components.yaml" \
     "python3 tools/gen-docs.py --check"

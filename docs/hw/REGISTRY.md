@@ -66,7 +66,9 @@ One component:
   intended drift alarm.
 
 `unmapped_checks` exists for the honest exception (for example a future whole-machine check that is
-not a component fact). It needs a reason; an empty `{}` is the current state.
+not a component fact, or the cross-cutting `inst.backups` undo alarm in
+[ROLLBACK.md](../ROLLBACK.md)). It needs a reason. Because check ids contain dots, the YAML
+subset accepts `.` in keys; only `unmapped_checks` uses such keys today.
 
 ## 3. State vocabulary (fixed)
 

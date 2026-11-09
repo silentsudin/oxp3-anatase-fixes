@@ -13,11 +13,12 @@ executed for this document.
 | 1 | this file | what exists, what is installed, what is proven, what is blocked, what is yours to decide |
 | 2 | [`hw/components.yaml`](hw/components.yaml) + the generated matrix in [`hw/README.md`](hw/README.md) | the only state truth (25 components); see [`hw/REGISTRY.md`](hw/REGISTRY.md) for the vocabulary |
 | 3 | [`INSTALL-HW.md`](INSTALL-HW.md) | install / opt-out / uninstall / rollback, one command per component |
-| 4 | [`VALIDATION.md`](VALIDATION.md) | the harness: 76 declared check ids (70 run by default, 76 with `--full --with-changes`), what each proves, exit codes, what a `SKIP` means |
+| 4 | [`VALIDATION.md`](VALIDATION.md) | the harness: 78 declared check ids (72 run by default, 78 with `--full --with-changes`), what each proves, exit codes, what a `SKIP` means |
 | 5 | [`QA.md`](QA.md), [`PROVENANCE.md`](PROVENANCE.md), [`upstream/README.md`](upstream/README.md) | offline evidence snapshot, the no-vendor-code rule, the decisions that are the owner's |
 | 6 | the per-topic doc of whatever you touch next | each holds the recovered evidence, the implementation and its validation steps |
 
-Then: `tools/repo-test.sh --fast` (offline, ~15 s) and `tools/oxp3-verify.sh` (read-only, ~4 s).
+Then: `tools/repo-test.sh --fast` (offline, ~15 s), `tools/oxp3-preflight.sh` (read-only,
+before any install) and `tools/oxp3-verify.sh` (read-only, ~4 s).
 The suite is green apart from six explained `SKIP`s; the harness has one known failing group (§2).
 No RE was needed for this round; Ghidra is only for the vendor-binary work already recorded in the
 topic docs.
@@ -51,7 +52,7 @@ Live evidence of the split (read-only, today): `rpm-ostree status --booted` list
 ## 2. State (generated from `components.yaml`; do not re-type facts here)
 
 25 components: **10 working, 8 awaiting-install, 4 partial, 2 not-a-gap, 1 blocked**
-(`tools/gen-docs.py --check` prints "25 components, 76 checks"). The full matrix with summaries,
+(`tools/gen-docs.py --check` prints "25 components, 78 checks"). The full matrix with summaries,
 implementation paths, install entrypoints, verify ids and caveats is generated into
 [`hw/README.md`](hw/README.md) and [`INSTALL-HW.md` §5](INSTALL-HW.md); read those, not a
 copy.
@@ -86,7 +87,7 @@ offline-validated, not "unknown" ([`hw/REGISTRY.md` §3](hw/REGISTRY.md)).
 |---|---|---|
 | offline suites | `tools/repo-test.sh --fast` | **26 suites: 20 pass, 0 fail, 6 skip**, exit 0 (5 full-only suites + `shellcheck`) |
 | unit tests | `make unit` | `Ran 470 tests ... OK (skipped=1)` |
-| harness | `tools/oxp3-verify.sh` | **70 checks: 40 pass, 3 fail, 27 skip**, exit 1; failing `bt.journal bt.controller bt.diag` |
+| harness | `tools/oxp3-verify.sh` | **72 checks: 41 pass, 4 fail, 27 skip**, exit 1; failing `bt.journal bt.controller bt.diag inst.backups` (the last one is the rollback round's unbacked in-place edits, not a preflight finding) |
 | status | `tools/oxp3-status.sh --json` | `overall=warn`, `ok=23 warn=5` (warns: `xmx.trace`, `sched.state`, `sched.scx_cosmos`, `sched.unit`, `flatpak.steam_env`) |
 | snapshots | `docs/state/` | dated evidence (55-check verify run, host snapshot, status JSON, selftest) — earlier inventory, not the current counts |
 
@@ -248,7 +249,8 @@ git diff --stat && tools/repo-test.sh --fast
 | tool | use |
 |---|---|
 | `tools/repo-test.sh [--fast\|--full\|--only GLOB\|--list\|--json]` / `make test` | every offline check; skips are explained, never silent; logs in `/tmp/oxp3-repo-test/<run>` |
-| `tools/oxp3-verify.sh [--json] [--full] [--with-changes]` | hardware acceptance: 76 ids, `PASS/FAIL/SKIP/UNKNOWN`; default is read-only; `--with-changes` (needs `--full`) makes exactly two persistent changes; only `sleep.suspend` needs `OXP3_ALLOW_SUSPEND=1` |
+| `tools/oxp3-verify.sh [--json] [--full] [--with-changes]` | hardware acceptance: 78 ids, `PASS/FAIL/SKIP/UNKNOWN`; default is read-only; `--with-changes` (needs `--full`) makes exactly two persistent changes; only `sleep.suspend` needs `OXP3_ALLOW_SUSPEND=1` |
+| `tools/oxp3-preflight.sh [--json] [--strict] [--component NAME]` | read-only prerequisite verdict before an install; the installer refuses on FAIL unless `--force` ([PREFLIGHT.md](PREFLIGHT.md)) |
 | `tools/oxp3-status.sh [--json\|--strict\|--selftest]` | same backend as the Decky panel |
 | `tools/oxp3-hw-install.sh --status\|--dry-run\|--root DIR\|--uninstall` | the hardware entry point; `--root` writes into an offline prefix |
 | `tools/ghidra-pod.sh <agent-name> <binary> [regex]` | isolated headless Ghidra in podman; dump at `~/.cache/ghidra-agents/<agent-name>/out/decomp.txt`; one **unique** name per agent/task so project dirs never collide, and never commit the dump |

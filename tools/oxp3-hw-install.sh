@@ -33,7 +33,12 @@
 # idempotent (re-running changes nothing it already applied), and --root=DIR installs everything
 # into a scratch prefix for offline validation.
 #
-# Docs: docs/INSTALL-HW.md (single install guide), docs/hw/README.md (state matrix).
+# Before a real install it runs tools/oxp3-preflight.sh for the selected components: a FAIL
+# aborts (the host would get a half-install), a WARN is printed and the install continues.
+# --force overrides the abort; re-read docs/PREFLIGHT.md before using it.
+#
+# Docs: docs/INSTALL-HW.md (single install guide), docs/PREFLIGHT.md (prerequisites),
+# docs/hw/README.md (state matrix).
 set -euo pipefail
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -43,6 +48,7 @@ PREFIX=""
 DRY_RUN=0
 ACTION=install
 PURGE_CONFIG=0
+FORCE=0
 AUDIO_ACTIVATE=0
 IMU_RELOAD=0
 POWER_PROFILE=""
@@ -63,7 +69,7 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
+    awk 'NR == 1 { next } /^set -euo pipefail/ { exit } /^#/ { sub(/^# ?/, ""); print }' "$0"
     cat <<'EOF'
 
 Options:
@@ -74,6 +80,8 @@ Options:
   --purge-config            with --uninstall: also remove ~/.config/oxp3-rgb.toml and oxp3-voltap.conf
   --status                  read-only state report, no root needed
   --dry-run, -n             print every command, execute nothing (no root needed)
+  --force                   continue even when tools/oxp3-preflight.sh finds a blocker
+                            (WARNs never block; see docs/PREFLIGHT.md)
   --root DIR                install into DIR instead of / (offline simulation; component
                             installers that write to / are skipped, systemd/udev are not run)
   --user NAME               user whose user-scope files are installed/removed (default: SUDO_USER)
@@ -131,6 +139,30 @@ render_unit() { # src
 
 user_home() { # user
     getent passwd "$1" | cut -d: -f6
+}
+
+rollback_tool() { printf '%s' "$repo/tools/oxp3-rollback.sh"; }
+
+# An earlier session wired ~/heroic-launch.sh by hand (docs/LAUNCH.md). Adopt that edit into the
+# undo state so `tools/oxp3-rollback.sh restore` can put the previous launcher back; this only
+# writes the state directory, it never changes the launcher itself. Idempotent.
+adopt_host_edits() {
+    local tool home wiring u
+    tool=$(rollback_tool)
+    [[ -x $tool ]] || return 0
+    u=${TARGET_USER:-${SUDO_USER:-}}
+    [[ -n $u && $u != root ]] || return 0
+    home=$(user_home "$u" 2>/dev/null) || return 0
+    [[ -n $home ]] || return 0
+    wiring="$PREFIX$home/heroic-launch.sh"
+    [[ -f $wiring ]] || return 0
+    grep -qE 'cp2077-direct\.sh|oxp3-gamewrap\.sh|heroic://' "$wiring" || return 0
+    printf '  adopting the existing Heroic launcher wiring into the undo state\n'
+    if [[ -n $PREFIX ]]; then
+        "$tool" adopt --root "$PREFIX" --user "$u" >/dev/null || warn "adoption failed (see $tool adopt)"
+    else
+        "$tool" adopt --user "$u" >/dev/null || warn "adoption failed (see $tool adopt)"
+    fi
 }
 
 resolve_user() {
@@ -525,7 +557,14 @@ comp_bluetooth_uninstall() {
         skip_prefixed "removal of the dracut conf and the firmware files (writes to /)"
         return
     fi
-    run rm -f "$(p /etc/dracut.conf.d/60-oxp3-bt-firmware.conf)"
+    local conf tool
+    conf=$(p /etc/dracut.conf.d/60-oxp3-bt-firmware.conf)
+    tool=$(rollback_tool)
+    if [[ -x $tool ]] && "$tool" has-record "$conf" 2>/dev/null; then
+        run "$tool" restore-file "$conf" || warn "could not restore $conf; remove it by hand"
+    else
+        run rm -f "$conf"
+    fi
     if rpm -q --quiet oxp3-firmware 2>/dev/null; then
         warn "the oxp3-firmware RPM owns the firmware files in this deployment; not deleting them by hand"
         printf '  remove the layered package instead: ./oxp3-fixes-fast.sh uninstall   (or oxp3-fixes.sh uninstall)\n'
@@ -542,14 +581,30 @@ comp_bluetooth_uninstall() {
 comp_power_uninstall() {
     say "power envelope + fan units"
     [[ -n $PREFIX ]] && { skip_prefixed "tools/oxp3-power-install.sh uninstall (writes to /)"; return; }
+    local ctl=/usr/local/libexec/oxp3-powerctl
+    # Undo the runtime state *before* removing the tool that can undo it: the charge limit and
+    # charge-inhibit live in the EC and outlive a reboot, the RAPL limits are re-initialised by
+    # the firmware at boot. All three are tolerant of an already-clean system.
+    if [[ -x $ctl ]]; then
+        run "$ctl" battery bypass off || warn "could not clear the charge-inhibit (check: $ctl battery status)"
+        run "$ctl" battery limit off || warn "could not clear the charge limit (check: $ctl battery status)"
+        run "$ctl" restore-baseline || warn "could not restore the RAPL baseline (a reboot also does)"
+    fi
     run "$repo/tools/oxp3-power-install.sh" uninstall
-    printf '  /etc/oxp3/ (power.json, baseline, fan curve) is deliberately kept; the live RAPL limits\n'
-    printf '  return to the firmware values on reboot, or run: sudo /usr/local/libexec/oxp3-powerctl restore-baseline\n'
+    printf '  /etc/oxp3/ (power.json, baseline, fan curve) is deliberately kept; the live PL1/PL2/PL4\n'
+    printf '  were re-applied from the saved baseline. If that failed, the firmware reinitialises them\n'
+    printf '  at the next reboot.\n'
 }
 
 comp_imu_uninstall() {
+    local conf
     say "IMU modprobe blacklist"
-    run rm -f "$(p /etc/modprobe.d/oxp3-bmi160.conf)"
+    conf=$(p /etc/modprobe.d/oxp3-bmi160.conf)
+    if [[ -f $conf ]] && ! cmp -s "$repo/files/oxp3-bmi160.conf" "$conf"; then
+        warn "$conf differs from ours; keeping it (remove it by hand if it is stale)"
+    else
+        run rm -f "$conf"
+    fi
     printf '  affects the next boot only; the running bmi260 driver is left alone.\n'
 }
 
@@ -583,6 +638,44 @@ comp_audio_uninstall() {
         run rm -f "$cfg"
         printf '  restart with: systemctl --user restart pipewire wireplumber\n'
     fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# preflight
+# ---------------------------------------------------------------------------------------------
+# Read-only prerequisite validator (docs/PREFLIGHT.md). It runs for real installs only:
+# a dry run must stay a plan, --root is an offline prefix, and uninstall removes what is
+# there. A FAIL would produce a half-install, so it aborts unless --force; WARNs are the
+# degraded paths the component installers already handle and are printed, not fatal.
+run_preflight() {
+    local pf=$repo/tools/oxp3-preflight.sh rc=0
+    local args=(--quiet)
+    [[ -x $pf ]] || { warn "tools/oxp3-preflight.sh is missing; skipping the prerequisite check"; return 0; }
+
+    for c in "${SELECTED[@]}"; do args+=(--component "$c"); done
+    if [[ -n ${TARGET_USER:-} ]]; then args+=(--user "$TARGET_USER"); fi
+
+    printf '\n== preflight (%s)\n' "${SELECTED[*]}"
+    set +e
+    "$pf" "${args[@]}"
+    rc=$?
+    set -e
+    case $rc in
+        0) ;;
+        1)
+            if (( FORCE )); then
+                warn "preflight found a blocker; continuing because --force was given"
+            else
+                warn "refusing to install: the preflight found a true blocker."
+                warn "fix the FAIL rows above, or re-run with --force to override"
+                warn "(docs/PREFLIGHT.md lists every check and its remediation)."
+                return 1
+            fi
+            ;;
+        2) warn "preflight usage error; continuing without its verdict" ;;
+        *) warn "preflight could not complete (exit $rc); continuing without its verdict" ;;
+    esac
+    return 0
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -641,6 +734,14 @@ do_install_or_uninstall() {
         fi
     fi
 
+    if (( DRY_RUN )); then
+        printf 'preflight: skipped in --dry-run (nothing is written)\n'
+    elif [[ -n $PREFIX ]]; then
+        printf 'preflight: skipped in --root mode (offline prefix)\n'
+    elif [[ $action == install ]]; then
+        run_preflight || return $?
+    fi
+
     if (( EUID == 0 )) && [[ -z $PREFIX ]] && (( !DRY_RUN )); then
         setup_sudo_shim
     fi
@@ -653,6 +754,7 @@ do_install_or_uninstall() {
 
     if (( !DRY_RUN )); then
         if [[ $action == install ]]; then
+            adopt_host_edits
             print_verify_hints
             if [[ -z $PREFIX ]] && { component_selected bluetooth || component_selected imu; }; then
                 printf '\nReboot needed for: the Bluetooth initramfs (regenerated at the next deployment) '
@@ -661,6 +763,10 @@ do_install_or_uninstall() {
         else
             say "uninstall complete"
             printf '  user config kept unless --purge-config was given; /etc/oxp3 kept by the power uninstaller.\n'
+            if [[ -x $(rollback_tool) ]]; then
+                printf '  in-place host edits (launcher, Heroic GamesConfig, dracut drop-in, hhd):\n'
+                printf '    %s restore\n' "$(rollback_tool)"
+            fi
         fi
     fi
 }
@@ -743,6 +849,7 @@ while (( $# )); do
         --uninstall|--remove) ACTION=uninstall ;;
         --status) ACTION=status ;;
         --dry-run|-n) DRY_RUN=1 ;;
+        --force) FORCE=1 ;;
         --purge-config) PURGE_CONFIG=1 ;;
         --root) [[ $# -ge 2 ]] || die "--root needs a directory"; PREFIX=${2%/}; shift
                 [[ -n $PREFIX ]] || die "--root=/ is not a simulation"; ;;

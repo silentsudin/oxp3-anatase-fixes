@@ -1,0 +1,22 @@
+{
+  "name": "missing-dir",
+  "base": "base",
+  "description": "systemd's unit directory is absent: no component can install a unit.",
+  "remove": [
+    "/etc/systemd/system"
+  ],
+  "expect": {
+    "verdict": "unsafe",
+    "safe": false,
+    "exit": 1,
+    "statuses": {
+      "dir.system-units": "FAIL"
+    },
+    "skipped": [
+      "volume",
+      "leds",
+      "sleep",
+      "power"
+    ]
+  }
+}

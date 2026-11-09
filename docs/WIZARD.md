@@ -79,7 +79,7 @@ build on that, and the final free-text box closes the record. Each phase explain
 
 | # | phase | why it needs a human | gate before anything is written |
 |---|---|---|---|
-| 1 | `preflight` | install state and the current verifier verdict are context for every later answer | read-only |
+| 1 | `preflight` | install state, the preflight prerequisite verdict and the current verifier verdict are context for every later answer | read-only |
 | 2 | `volume` | a hold must step once, not ramp; only the on-screen level shows it | read-only |
 | 3 | `leds` | the 5-zone vendor HID map, brightness and one effect must be seen | phase word **LEDS** |
 | 4 | `homebtn` | the journal proves a press, only the owner knows whether the action happened | read-only |
@@ -104,6 +104,7 @@ context or a preference, not an assertion). The ids are the stable `state` keys 
 |---|---|---|---|
 | `preflight.install` | Install state | — | docs/INSTALL-HW.md §5 |
 | `preflight.verify` | Verifier summary | — | docs/VALIDATION.md §1 |
+| `preflight.preflight` | Preflight verdict | — | docs/PREFLIGHT.md |
 | `preflight.session` | Validation session | — | docs/WIZARD.md §2 |
 | `vol.hold_ramp` | Hold Volume-Up: ramp or step? | `vol.hwdb`, `vol.hold` | docs/VALIDATION.md §3 volume |
 | `vol.taps` | Three taps | — | docs/VALIDATION.md §3 volume |
@@ -191,8 +192,8 @@ The JSON is derived from the journal and looks like this (abridged):
   "run_id": "20261109T042014Z", "resumed": false,
   "host": {"kernel": "7.2.7-an28.fc45.x86_64", "root": false, "repo": "~/git/.../oxp3-anatase-fixes"},
   "phases": ["preflight", "volume", "..."],
-  "verifier": {"exit_code": "1", "counts": "total=70 pass=40 fail=3 skip=27 unknown=0",
-               "failing": "bt.journal,bt.controller,bt.diag",
+  "verifier": {"exit_code": "1", "counts": "total=72 pass=41 fail=4 skip=27 unknown=0",
+               "failing": "bt.journal,bt.controller,bt.diag,inst.backups",
                "checks": {"vol.hold": "skip", "sleep.stats": "skip"}},
   "items": [
     {"phase": "volume", "id": "vol.hold_ramp", "title": "Hold Volume-Up: ramp or step?",
@@ -200,7 +201,7 @@ The JSON is derived from the journal and looks like this (abridged):
      "checks": ["vol.hwdb", "vol.hold"],
      "evidence": ["cmd:...", "verify:vol.hold=skip"], "timestamp": "2026-11-09T04:20:31Z"}
   ],
-  "counts": {"total": 39, "pass": 30, "fail": 1, "skip": 8, "blocked": 0},
+  "counts": {"total": 40, "pass": 31, "fail": 1, "skip": 8, "blocked": 0},
   "phases_summary": {"volume": {"total": 4, "pass": 4, "fail": 0, "skip": 0, "blocked": 0}},
   "restore": [{"resource": "led", "status": "restored", "command": "tools/oxp3-led.py off"}],
   "last_validated_suggestions": [{"component": "volume", "date": "2026-11-09",
@@ -267,7 +268,7 @@ then run `tools/gen-docs.py --check` before `--write`. Do not hand-edit the gene
 
 ```sh
 tools/oxp3-wizard.sh --selftest     # 59 assertions: state machine, journal, JSON, restore queue,
-                                    # inventory (10 phases / 39 items), check-id existence
+                                    # inventory (10 phases / 40 items), check-id existence
 tests/wizard/run.sh                 # 39 end-to-end checks, scripted stdin, --simulate
 tools/repo-test.sh --only wizard    # the suite as the repo runs it
 ```
@@ -282,10 +283,10 @@ Offline validation recorded on 2026-11-09 (this host, no root, no host change):
 * `bash -n tools/oxp3-wizard.sh` and `bash -n tests/wizard/run.sh`: clean.
 * `--selftest`: **59 checks passed, 0 failed**.
 * `tests/wizard/run.sh`: **39 checks, 0 failed**.
-* `--non-interactive` and `--dry-run`: exit 0, list 10 phases / 39 items, create no file and run no
+* `--non-interactive` and `--dry-run`: exit 0, list 10 phases / 40 items, create no file and run no
   command (the dry run prints the exact LED/suspend commands).
 * `tools/repo-test.sh --only wizard`: PASS (~2 s).
-* A simulate run of `--phase preflight,volume` produces schema-1 JSON: 7/7 pass, verifier check
+* A simulate run of `--phase preflight,volume` produces schema-1 JSON: 8/8 pass, verifier check
   ids copied per item, journal/MD written next to it; `--resume` keeps all 7 items.
 * A simulate run of `--phase leds` with the wrong phase word executes no LED command and skips the
   phase; with `LEDS` it records 8/8 pass and one `led` restore (`simulated`).

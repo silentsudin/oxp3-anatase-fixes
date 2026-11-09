@@ -155,10 +155,27 @@ The **hardware fixes** (volume rocker, home button + LEDs, body RGB, suspend/wak
 firmware, power envelope/fan/battery, IMU, speaker EQ) have their own entry point and single guide:
 
 ```sh
+tools/oxp3-preflight.sh                 # read-only: would an install complete? what is missing?
 sudo tools/oxp3-hw-install.sh --all      # flags and opt-outs: --help; guide: docs/INSTALL-HW.md
 ```
 
+The installer re-runs the preflight for the selected components and refuses on a true blocker
+(`--force` overrides); every check and its remediation is in [docs/PREFLIGHT.md](docs/PREFLIGHT.md).
+
 `install` above also calls it for the home-button/LED and power units; `--skip-hw` skips that.
+
+Files the installers modify **in place** (the Heroic launcher, a Heroic GamesConfig JSON, the
+Bluetooth dracut drop-in, the IMU blacklist, the hhd Python files) are backed up before every edit;
+one command puts them back, byte-identical:
+
+```sh
+tools/oxp3-rollback.sh adopt             # once: record edits made by hand (writes only the state dir)
+tools/oxp3-rollback.sh restore           # after an uninstall; --dry-run lists what it would do
+```
+
+What is touched, how the hash check refuses to overwrite a later user edit, and what cannot be
+undone (ostree history, an enrolled MOK, kernel args, an initramfs that already carries the
+firmware): [docs/ROLLBACK.md](docs/ROLLBACK.md).
 
 After the post-install reboot, one command prints the ordered install checklist with the live
 state of every step and writes a redacted evidence bundle for hand-back:

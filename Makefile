@@ -9,13 +9,14 @@
 
 REPO_TEST = tools/repo-test.sh
 
-.PHONY: help test test-full verify decky install-dry-run units unit clean
+.PHONY: help test test-full verify preflight decky install-dry-run units unit clean
 
 help:
 	@printf '%s\n' \
 		'make test            - every offline fast check (no network, no builds; default run)' \
 		'make test-full       - test + fingerprint C/Decky builds + libfprint syntax check' \
 		'make verify          - post-reboot hardware acceptance harness (read-only, no root)' \
+		'make preflight       - read-only install-prerequisite verdict (docs/PREFLIGHT.md)' \
 		'make decky           - build, smoke-test and package the Decky plugin (offline)' \
 		'make install-dry-run - print every hardware-installer command, change nothing' \
 		'make units           - verify systemd units, udev rules and hwdb files' \
@@ -30,6 +31,9 @@ test-full:
 
 verify:
 	tools/oxp3-verify.sh
+
+preflight:
+	tools/oxp3-preflight.sh
 
 decky:
 	cd tools/decky-oxp3-status && ./build.sh --offline

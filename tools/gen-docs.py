@@ -232,7 +232,7 @@ def _maybe_key(text, line):
         key, rest = _split_key(text, line)
     except YamlError:
         return None, None, None
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", key):
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_.-]*$", key):
         return None, None, None
     return key, ":", rest
 
@@ -244,7 +244,7 @@ def _parse_map(lines, idx, indent):
         if content.startswith("-"):
             raise YamlError(lineno, "unexpected sequence item in a mapping")
         key, rest = _split_key(content, lineno)
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", key):
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_.-]*$", key):
             raise YamlError(lineno, "invalid key %r" % key)
         if key in out:
             raise YamlError(lineno, "duplicate key %r" % key)

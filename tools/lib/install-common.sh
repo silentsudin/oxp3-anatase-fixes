@@ -31,6 +31,9 @@
 #                              images/containers named by the caller. No root, no host change.
 #   install_*, do_mok_setup    root writes through sudo: /etc, /usr, /usr/local, /run and
 #                              rpm-ostree layering; /usr overlay via rpm-ostree usroverlay.
+#   oxp3_* (undo section)      user-owned state only: <state>/backups/<stamp>/<key> and
+#                              <state>/manifest.tsv, plus the restore target the caller names.
+#                              Never /etc, never the checkout. docs/ROLLBACK.md is the contract.
 #   status_*, do_status        read-only: rpm, rpm-ostree --booted, systemctl is-*, /sys, /run.
 #   remove_*, uninstall_*      undo the corresponding install_*; idempotent, tolerate absence.
 #
@@ -50,9 +53,10 @@
 # and warnings to stderr. Nothing is written to a log file or to syslog from here.
 #
 # COMPATIBILITY: bash, because the two installers already require bash features ([[ ]], arrays,
-# process substitution, local). It is not POSIX sh and is not sourced by anything else in the
-# repo; tools/oxp3-hw-install.sh intentionally does not use it (it orchestrates the component
-# installers instead of reusing their helpers).
+# process substitution, local). It is not POSIX sh. tools/oxp3-hw-install.sh intentionally does
+# not use it (it orchestrates the component installers instead of reusing their helpers); the one
+# other sourcer is tools/oxp3-rollback.sh, which uses only the oxp3_* undo section above, takes no
+# caller configuration and therefore does not call the guard.
 
 # Fail fast if the caller does not satisfy the contract above. Called by the caller once,
 # immediately before its command dispatch; never from this file at source time.
@@ -86,6 +90,320 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 # The Anatase kernel in the current deployment (not necessarily the booted one).
 anatase_kver() { rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -1; }
+
+# ---------------------------------------------------------------------------------------------
+# undo state: a timestamped backup and manifest row for every file we change in place
+# ---------------------------------------------------------------------------------------------
+# This is the reverse half of an installer. A file we *create* needs no copy (its undo is a
+# removal); a file we *modify* has content the user may want back, so it is copied first. The
+# scheme is plain files under one state directory, so an undo survives a reboot and a new
+# checkout:
+#
+#   <state>/backups/<UTC stamp>[-N]/<key>  the content the file had before we touched it
+#                                          (cp -a: bytes, mode and mtime are preserved)
+#   <state>/manifest.tsv                   append-only log, one row per edit:
+#     ts  tool  event  key  logical  real  post_sha  note
+#
+# event is one of
+#   backup   the file existed; its previous content is at backups/<ts>/<key>
+#   created  the file did not exist; undo removes it
+#   adopted  a pre-existing edit of ours (made by hand before this mechanism existed); the
+#            previous content comes from a sibling .bak* when one exists, otherwise the row
+#            only records that the file is ours (restore is then a no-op, reported as such)
+#   restored a restore we performed (post_sha is what we wrote back)
+#   removed  a removal we performed for a file we had created
+#
+# key is "home/<rel>" for a file under the target user's home and "abs/<path>" otherwise. An
+# absolute $OXP3_ROOT prefix is stripped before the mapping and $OXP3_HOME overrides the home
+# that the key is relative to, so a `--root DIR` simulation produces the same keys as the host
+# and a restore rebuilds the destination from today's prefix/HOME instead of a stale path.
+#
+# State directory: $OXP3_STATE_DIR, else <SUDO_USER home>/.local/state/oxp3-fixes when running
+# as root from a sudo session, else /var/lib/oxp3-fixes when root, else
+# ${XDG_STATE_HOME:-$HOME/.local/state}/oxp3-fixes. Never /etc, never the checkout.
+#
+# Restore rules (never lose user data):
+#   current == the pre-image       -> nothing to do (already original)
+#   current == what we wrote       -> put the backup back, byte-identical
+#   current is anything else       -> the user edited after us: leave it, report it; --force
+#                                     first saves the user's version as a new backup, then
+#                                     restores the original
+# A file we created is removed only while it still matches what we wrote.
+#
+# The functions below take every path as an argument, print status lines and return codes
+# (0 changed, 10 nothing to do, 12 skipped because the user edited, 13 no record, 14 failed).
+# They create files only under the state directory (plus the restore target), so sourcing this
+# file is still free of side effects and a dry run is possible through oxp3_restore_file's
+# --dry-run.
+
+oxp3_sha() {
+    [[ -f $1 ]] || return 0
+    sha256sum -- "$1" 2>/dev/null | cut -d' ' -f1
+}
+
+oxp3_state_dir() {
+    local h=""
+    if [[ -n ${OXP3_STATE_DIR:-} ]]; then printf '%s' "$OXP3_STATE_DIR"; return 0; fi
+    if (( EUID == 0 )); then
+        if [[ -n ${SUDO_USER:-} && ${SUDO_USER:-} != root ]]; then
+            h=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6) || h=""
+        fi
+        if [[ -n $h ]]; then printf '%s' "$h/.local/state/oxp3-fixes"; else printf '%s' /var/lib/oxp3-fixes; fi
+    else
+        printf '%s' "${XDG_STATE_HOME:-$HOME/.local/state}/oxp3-fixes"
+    fi
+}
+
+# Create the state tree and print its path. As root from a sudo session the new entries are
+# given back to $SUDO_USER, so the next unprivileged run can keep appending to the manifest.
+oxp3_state_init() {
+    local st=${1:-$(oxp3_state_dir)} owner=""
+    mkdir -p -- "$st/backups" 2>/dev/null || return 1
+    [[ -e $st/manifest.tsv ]] || : >"$st/manifest.tsv" 2>/dev/null || return 1
+    (( EUID == 0 )) && [[ -n ${SUDO_USER:-} && ${SUDO_USER:-} != root ]] && owner=$SUDO_USER
+    if [[ -n $owner ]]; then
+        chown -R -- "$owner": "$st" 2>/dev/null || true
+    fi
+    printf '%s' "$st"
+}
+
+oxp3_manifest_path() { printf '%s/manifest.tsv' "$(oxp3_state_dir)"; }
+
+oxp3_stamp() { date -u +%Y%m%dT%H%M%SZ; }
+
+# Map an absolute path to its store key (the simulation prefix is stripped first).
+oxp3_key() {
+    local p=${1%/} root=${OXP3_ROOT:-} home=${OXP3_HOME:-$HOME}
+    [[ -n $root ]] && p=${p#"$root"}
+    case $p in
+        "$home"/*) printf 'home/%s' "${p#"$home"/}" ;;
+        *) printf 'abs/%s' "${p#/}" ;;
+    esac
+}
+
+# Copy the pre-image of PATH into a fresh backup directory.
+# Prints "<stamp>\t<key>\t<pre_sha>"; pre_sha is empty when PATH did not exist.
+oxp3_backup_image() { # PATH [TOOL]
+    local path=$1 st base ts key dir n=2 pre=""
+    st=$(oxp3_state_init) || return 1
+    base=$(oxp3_stamp); ts=$base
+    dir="$st/backups/$ts"
+    while [[ -e $dir ]]; do ts="$base-$n"; dir="$st/backups/$ts"; n=$((n + 1)); done
+    key=$(oxp3_key "$path")
+    mkdir -p -- "$dir/$(dirname -- "$key")" || return 1
+    if [[ -f $path ]]; then
+        cp -a -- "$path" "$dir/$key" || return 1
+        pre=$(oxp3_sha "$dir/$key")
+    fi
+    printf '%s\t%s\t%s\n' "$ts" "$key" "$pre"
+}
+
+# Copy an explicit earlier version (a sibling .bak file) as the pre-image of PATH: used to
+# adopt an edit that was made before the manifest existed.
+oxp3_adopt_image() { # PATH PREIMAGE
+    local path=$1 pre=$2 st base ts key dir n=2 sha=""
+    st=$(oxp3_state_init) || return 1
+    base=$(oxp3_stamp); ts=$base
+    dir="$st/backups/$ts"
+    while [[ -e $dir ]]; do ts="$base-$n"; dir="$st/backups/$ts"; n=$((n + 1)); done
+    key=$(oxp3_key "$path")
+    mkdir -p -- "$dir/$(dirname -- "$key")" || return 1
+    if [[ -f $pre ]]; then
+        cp -a -- "$pre" "$dir/$key" || return 1
+        sha=$(oxp3_sha "$dir/$key")
+    fi
+    printf '%s\t%s\t%s\n' "$ts" "$key" "$sha"
+}
+
+# Append one row to the manifest. event=backup when a pre-image exists for the stamp, else the
+# caller chooses (created/adopted). post_sha is the content PATH has now ("-" when absent).
+oxp3_manifest_record() { # PATH TOOL STAMP EVENT [NOTE]
+    local path=$1 tool=${2:-${0##*/}} ts=$3 event=$4 note=${5:-} st key dir post logical
+    [[ -n $ts ]] || return 1
+    st=$(oxp3_state_dir)
+    [[ -f $st/manifest.tsv ]] || return 1
+    key=$(oxp3_key "$path")
+    dir="$st/backups/$ts"
+    if [[ $event == auto ]]; then
+        if [[ -f $dir/$key ]]; then event=backup; else event=created; fi
+    fi
+    post=$(oxp3_sha "$path"); [[ -n $post ]] || post=-
+    logical=$path
+    [[ -n ${OXP3_ROOT:-} ]] && logical=${path#"${OXP3_ROOT}"}
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$ts" "$tool" "$event" "$key" "$logical" "$path" "$post" "$note" >>"$st/manifest.tsv"
+}
+
+# Manifest rows for one key (oldest first); empty when there is no record.
+oxp3_rows_for_key() { # KEY
+    local st; st=$(oxp3_state_dir)
+    [[ -f $st/manifest.tsv ]] || return 0
+    awk -F'\t' -v k="$1" '$4 == k' "$st/manifest.tsv"
+}
+
+# Every key that has a record, in install order (oldest first).
+oxp3_manifest_keys() {
+    local st; st=$(oxp3_state_dir)
+    [[ -f $st/manifest.tsv ]] || return 0
+    awk -F'\t' 'NF >= 4 && $4 != "" && !seen[$4]++ { print $4 }' "$st/manifest.tsv"
+}
+
+oxp3_record_restored() { # PATH STAMP CONTENT_SHA
+    local path=$1 ts=$2 st; st=$(oxp3_state_dir)
+    [[ -f $st/manifest.tsv ]] || return 1
+    printf '%s\t%s\trestored\t%s\t%s\t%s\t%s\t%s\n' \
+        "$ts" "oxp3-rollback" "$(oxp3_key "$path")" "$path" "$path" "${3:--}" \
+        >>"$st/manifest.tsv"
+}
+
+# Put back the newest recorded pre-image of PATH. Prints one status line and returns
+# 0 changed, 10 nothing to do, 12 user edited after us (skipped), 13 no record, 14 failed.
+oxp3_restore_file() { # PATH [--force] [--dry-run]
+    local path=$1 force=0 dry=0 a st key rows wrow last row ts event post pre cur store dir rc=0
+    shift || true
+    for a in "$@"; do
+        case $a in
+            --force) force=1 ;;
+            --dry-run) dry=1 ;;
+        esac
+    done
+    st=$(oxp3_state_dir); key=$(oxp3_key "$path")
+    rows=$(oxp3_rows_for_key "$key")
+    if [[ -z $rows ]]; then
+        printf 'no-record\t%s\tno manifest entry for %s\n' "$path" "$key"
+        return 13
+    fi
+    wrow=$(printf '%s\n' "$rows" | awk -F'\t' '$3 == "backup" || $3 == "created" || $3 == "adopted"' | tail -n 1)
+    if [[ -z $wrow ]]; then
+        printf 'noop\t%s\talready restored (no edit record left)\n' "$path"
+        return 10
+    fi
+    ts=$(printf '%s' "$wrow" | cut -f1)
+    event=$(printf '%s' "$wrow" | cut -f3)
+    post=$(printf '%s' "$wrow" | cut -f7)
+    dir="$st/backups/$ts"; store="$dir/$key"
+    # A later restore/removal row means the last thing we did is already the final state.
+    last=$(printf '%s\n' "$rows" | tail -n 1)
+    if [[ $(printf '%s' "$last" | cut -f3) == restored && $(printf '%s' "$last" | cut -f1) != $ts ]]; then
+        local lastsha cur2
+        lastsha=$(printf '%s' "$last" | cut -f7); cur2=$(oxp3_sha "$path"); [[ -n $cur2 ]] || cur2=-
+        if [[ $lastsha == "$cur2" ]]; then
+            printf 'noop\t%s\talready restored (content matches the recorded restore)\n' "$path"
+            return 10
+        fi
+    fi
+    cur=$(oxp3_sha "$path")
+    if [[ $event == created ]]; then
+        if [[ -z $cur ]]; then
+            printf 'noop\t%s\talready absent\n' "$path"
+            return 10
+        fi
+        if [[ $post != - && $cur != "$post" ]]; then
+            if (( !force )); then
+                printf 'skipped\t%s\tcreated by us but edited since (current %.12s, recorded %.12s); nothing removed\n' \
+                    "$path" "$cur" "$post"
+                return 12
+            fi
+            local rok; rok=$(oxp3_backup_image "$path" oxp3-rollback) || true
+            oxp3_manifest_record "$path" oxp3-rollback "${rok%%$'\t'*}" backup \
+                "user version saved before a forced restore" 2>/dev/null || true
+        fi
+        if (( dry )); then
+            printf 'would-remove\t%s\twe created it\n' "$path"
+            return 0
+        fi
+        if ! rm -f -- "$path"; then
+            printf 'failed\t%s\tcould not remove (permissions? run with sudo)\n' "$path"
+            return 14
+        fi
+        oxp3_manifest_record "$path" oxp3-rollback "$(oxp3_stamp)" removed "removed a file we created"
+        printf 'removed\t%s\twe had created it\n' "$path"
+        return 0
+    fi
+    if [[ ! -f $store ]]; then
+        printf 'noop\t%s\tadopted edit with no earlier image; nothing to restore\n' "$path"
+        return 10
+    fi
+    pre=$(oxp3_sha "$store")
+    if [[ -n $cur && $cur == "$pre" ]]; then
+        printf 'noop\t%s\talready the backed-up content\n' "$path"
+        return 10
+    fi
+    if [[ -n $cur && $post != - && $cur != "$post" ]]; then
+        if (( !force )); then
+            printf 'skipped\t%s\tuser edited after us (current %.12s, ours %.12s); not overwritten\n' \
+                "$path" "$cur" "$post"
+            return 12
+        fi
+        local rok; rok=$(oxp3_backup_image "$path" oxp3-rollback) || true
+        oxp3_manifest_record "$path" oxp3-rollback "${rok%%$'\t'*}" backup \
+            "user version saved before a forced restore" 2>/dev/null || true
+    fi
+    if (( dry )); then
+        printf 'would-restore\t%s\tfrom backups/%s\n' "$path" "$ts"
+        return 0
+    fi
+    mkdir -p -- "$(dirname -- "$path")" 2>/dev/null || true
+    if ! cp -a -- "$store" "$path"; then
+        printf 'failed\t%s\tcould not restore (permissions? run with sudo)\n' "$path"
+        return 14
+    fi
+    oxp3_record_restored "$path" "$(oxp3_stamp)" "$(oxp3_sha "$path")"
+    printf 'restored\t%s\tfrom backups/%s (%s)\n' "$path" "$ts" "$event"
+    return 0
+}
+
+# Restore every recorded path, newest install first, and print a summary.
+# Returns 0 when everything is restored or already original, 3 when at least one path was
+# skipped because the user edited it after us, 1 on a hard failure.
+oxp3_restore_all() { # [--force] [--dry-run] [--only SUBSTRING]
+    local force=0 dry=0 only="" keys=() i changed=0 noop=0 skipped=0 failed=0 line code kind
+    local -a opts=()
+    while (( $# )); do
+        case $1 in
+            --force) force=1; shift ;;
+            --dry-run) dry=1; shift ;;
+            --only) only=${2:-}; shift 2 || shift ;;
+            --only=*) only=${1#--only=}; shift ;;
+            *) shift ;;
+        esac
+    done
+    (( force )) && opts+=(--force)
+    (( dry )) && opts+=(--dry-run)
+    mapfile -t keys < <(oxp3_manifest_keys)
+    for (( i=${#keys[@]} - 1; i >= 0; i-- )); do
+        if [[ -n $only && ${keys[i]} != *"$only"* ]]; then continue; fi
+        if line=$(oxp3_restore_file "$(oxp3_logical_to_real "${keys[i]}")" ${opts[@]+"${opts[@]}"}); then
+            code=0
+        else
+            code=$?
+        fi
+        printf '%s\n' "$line"
+        kind=${line%%$'\t'*}
+        case $kind in
+            restored|would-restore|removed|would-remove) changed=$((changed + 1)) ;;
+            noop|no-record) noop=$((noop + 1)) ;;
+            skipped) skipped=$((skipped + 1)) ;;
+            *) failed=$((failed + 1)) ;;
+        esac
+        (( code == 14 )) && failed=$((failed + 1))
+    done
+    printf 'undo: %d changed, %d already done, %d skipped (user edits), %d failed\n' \
+        "$changed" "$noop" "$skipped" "$failed"
+    (( failed )) && return 1
+    (( skipped )) && return 3
+    return 0
+}
+
+# Rebuild the real path of a key from today's prefix/HOME.
+oxp3_logical_to_real() { # KEY
+    local key=$1 root=${OXP3_ROOT:-} home=${OXP3_HOME:-$HOME}
+    case $key in
+        home/*) printf '%s%s/%s' "$root" "$home" "${key#home/}" ;;
+        abs/*) printf '%s/%s' "$root" "${key#abs/}" ;;
+        *) printf '%s' "$key" ;;
+    esac
+}
 
 # ---------------------------------------------------------------------------------------------
 # build container: every build step runs inside podman, so the host needs no build toolchain
@@ -575,15 +893,34 @@ remove_rapl_udev_rules() {
 
 hhd_site() { python3 -c 'import hhd, os; print(os.path.dirname(os.path.dirname(hhd.__file__)))' 2>/dev/null; }
 
+# Record a copy of every file a patch is about to change. An hhd update or a failed reverse
+# patch then still has the exact previous bytes in the undo state (docs/ROLLBACK.md), which the
+# reverse patch alone cannot guarantee.
+hhd_backup_patch_files() { # SITE PATCH -> prints "<stamp>	<key>	<pre_sha>" lines, one per file
+    local site=$1 patch=$2 f
+    git -C "$site" apply --numstat -p1 "$patch" 2>/dev/null | awk '{ $1=""; $2=""; sub(/^  /, ""); print }' |
+        while IFS= read -r f; do
+            [[ -n $f && -f $site/$f ]] || continue
+            oxp3_backup_image "$site/$f" "install-common/hhd"
+        done
+}
+
 install_volume_fix() {
-    local site p changed=0; site=$(hhd_site)
+    local site p changed=0 rows row rk; site=$(hhd_site)
     [[ -n $site ]] || { echo "  hhd not found, volume rocker fix skipped"; return 0; }
     # each patch: already there, or applied now; one that does neither leaves the rocker stock
     for p in "${HHD_PATCHES[@]}"; do
         if git -C "$site" apply --check -R -p1 "$p" >/dev/null 2>&1; then
             continue
         elif git -C "$site" apply --check -p1 "$p" >/dev/null 2>&1; then
+            rows=$(hhd_backup_patch_files "$site" "$p")
             sudo git -C "$site" apply -p1 "$p"; changed=1
+            while IFS= read -r row; do
+                [[ -n $row ]] || continue
+                rk=$(printf '%s' "$row" | cut -f2)
+                oxp3_manifest_record "/${rk#abs/}" "install-common/hhd" \
+                    "${row%%$'\t'*}" backup "${p##*/}" 2>/dev/null || true
+            done <<<"$rows"
         else
             echo "  WARNING: ${p##*/} doesn't apply to this hhd - volume rocker left stock"
             hhd_volume_unpatch "$site"
@@ -604,12 +941,21 @@ install_volume_fix() {
 
 # take our hhd patches out again, newest first (only those that are fully applied)
 hhd_volume_unpatch() { # <site>
-    local i p
+    local i p k real pending=0
     for (( i=${#HHD_PATCHES[@]} - 1; i >= 0; i-- )); do
         p=${HHD_PATCHES[$i]}
         git -C "$1" apply --check -R -p1 "$p" >/dev/null 2>&1 && sudo git -C "$1" apply -R -p1 "$p"
     done
     sudo find "$1/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+    # The reverse patch is the normal undo. If it did not apply (a newer hhd, a rejected hunk),
+    # the pre-patch bytes recorded by install_volume_fix are the fallback; restoring needs root
+    # for /usr, so this only tries and otherwise points at the rollback tool.
+    for k in $(oxp3_manifest_keys 2>/dev/null); do
+        case $k in abs/*) real=/${k#abs/} ;; *) continue ;; esac
+        [[ $real == "$1"/* ]] || continue
+        oxp3_restore_file "$real" >/dev/null 2>&1 || pending=$((pending + 1))
+    done
+    (( pending )) && echo "  hhd patch files still differ from their backups: sudo $here/tools/oxp3-rollback.sh restore"
 }
 
 # ---------------------------------------------------------------------------------------------

@@ -39,6 +39,7 @@ set -euo pipefail
 export LC_ALL=C
 
 PROG=${0##*/}
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 # --- pinned firmware set -----------------------------------------------------
 # path-relative-to-firmware-root  size-bytes  sha256
@@ -77,6 +78,25 @@ warn() { printf '[warn] %s\n' "$*" >&2; }
 err()  { printf '[err] %s\n' "$*" >&2; }
 die()  { err "$*"; exit 2; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Write $DRACUT_CONF, keeping the previous content in the undo state first (docs/ROLLBACK.md).
+# A file that did not exist is recorded as created, so the uninstall removes it; a pre-existing
+# drop-in is restored byte-for-byte instead of being deleted.
+conf_write() { # CONTENT
+  local ts=""
+  # Idempotent: unchanged content means no write and no new backup row.
+  if [[ -f $DRACUT_CONF ]] && printf '%s\n' "$1" | cmp -s - "$DRACUT_CONF"; then
+    return 0
+  fi
+  if [[ -x $HERE/oxp3-rollback.sh ]]; then
+    ts=$("$HERE/oxp3-rollback.sh" backup "$DRACUT_CONF" 2>/dev/null || true)
+  fi
+  printf '%s\n' "$1" | sudo tee "$DRACUT_CONF" >/dev/null
+  if [[ -n $ts ]]; then
+    "$HERE/oxp3-rollback.sh" record --ts "$ts" "$DRACUT_CONF" --tool "$PROG" \
+      --note "dracut initramfs drop-in (--persist=$PERSIST)" >/dev/null 2>&1 || true
+  fi
+}
 
 usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -290,15 +310,14 @@ plan_and_run() {
       for rel in "${WANT[@]}"; do read -r path _ _ <<<"$rel"; items+=" /usr/lib/firmware/updates/$path"; done
       info "sudo tee $DRACUT_CONF   (install_items${items})"
       if [[ $dry == 0 ]]; then
-        printf '# oxp3-bt-firmware.sh: dracut cannot infer these names from modinfo\ninstall_items+="%s "\n' "$items" |
-          sudo tee "$DRACUT_CONF" >/dev/null
+        conf_write "$(printf '# oxp3-bt-firmware.sh: dracut cannot infer these names from modinfo\ninstall_items+="%s "\n' "$items")"
       fi
       ;;
     omit)
       info "sudo tee $DRACUT_CONF   (omit_drivers btintel_pcie)"
       if [[ $dry == 0 ]]; then
-        printf '# oxp3-bt-firmware.sh: let udev probe after switch_root, where the blobs exist\nomit_drivers+=" btintel_pcie "\n' |
-          sudo tee "$DRACUT_CONF" >/dev/null
+        conf_write "# oxp3-bt-firmware.sh: let udev probe after switch_root, where the blobs exist
+omit_drivers+=" btintel_pcie ""
       fi
       ;;
     none) info "skipping initramfs config (--persist=none)" ;;

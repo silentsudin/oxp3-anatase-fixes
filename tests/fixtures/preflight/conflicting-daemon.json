@@ -1,0 +1,26 @@
+{
+  "name": "conflicting-daemon",
+  "base": "base",
+  "description": "The hhd volume-rocker patch is already applied and oxp3-voltap is also installed; both normalise the same key.",
+  "files": {
+    "/usr/local/libexec/oxp3-voltap": "",
+    "/etc/systemd/system/oxp3-voltap.service": "[Service]\nExecStart=/bin/true\n"
+  },
+  "commands": {
+    "git -C /usr/lib/python3.15/site-packages/hhd apply": {
+      "rc": 0,
+      "out": ""
+    }
+  },
+  "expect": {
+    "verdict": "unsafe",
+    "safe": false,
+    "exit": 1,
+    "statuses": {
+      "conflict.volume-path": "FAIL"
+    },
+    "skipped": [
+      "volume"
+    ]
+  }
+}

@@ -38,16 +38,16 @@ failing command and its log path.
 Recorded on this host (2026-11-09, no root):
 
 ```
-== 27 suite(s): 21 pass, 0 fail, 6 skip -> exit 0      # --fast
-== 27 suite(s): 25 pass, 0 fail, 2 skip -> exit 0      # --full (expected; see §9)
+== 31 suite(s): 25 pass, 0 fail, 6 skip -> exit 0      # --fast
+== 31 suite(s): 29 pass, 0 fail, 2 skip -> exit 0      # --full (expected; see §9)
 ```
 
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 22 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 27 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 26 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 31 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
 `--full` still never installs host packages. The one network-dependent suite
 (`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
@@ -99,10 +99,17 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `eq-model` | fast | fast | 60 s | `python3` | – |
 | `firstrun` | fast | fast | 120 s | `python3`, `bash` | – (self-test in `$TMPDIR`; the dry run writes nothing) |
 | `wizard` | fast | fast | 300 s | `python3`, `bash` | – (scripted stdin, `--simulate`, private state dir) |
+| `preflight` | fast | fast | 120 s | `python3`, `bash` | – (fixtures in memory; the live `--json` is read-only) |
 | `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check) |
+| `rollback` | fast | fast | 120 s | `bash`, `python3` | – (`--root` prefix + private state dir in `$TMPDIR`) |
 
 Areas and what is actually proven:
 
+* **preflight** — the read-only prerequisite validator (`tools/oxp3-preflight.sh`,
+  `tools/oxp3_preflight.py`, `docs/PREFLIGHT.md`): parser assertions plus seven fixture
+  verdicts (sane host, missing directory, old systemd, missing evdev, conflicting
+  volume daemon, unprivileged) and a live schema-1 `--json` check. It runs before
+  every real install and aborts on a true blocker.
 * **wizard** — the interactive hardware-validation workflow
   (`tools/oxp3-wizard.sh`, [WIZARD.md](WIZARD.md)): its offline `--selftest`,
   a plan run that must write nothing, and `tests/wizard/run.sh`, which feeds
@@ -125,9 +132,14 @@ Areas and what is actually proven:
   the CLI's `--json` output must parse as JSON. The Decky CLI's live exit code
   (0/1/2) is reported but not asserted: it is a status verdict about the host,
   not a repository test. `make decky` runs the full offline build directly.
-* **`oxp3-verify`** — the parser self-test (52 assertions over synthetic
+* **`oxp3-verify`** — the parser self-test (150 assertions over synthetic
   fixtures) through both documented entrypoints (`--selftest` and
   `tests/verify/run.sh`).
+* **rollback** — `tests/rollback/run.sh`: installs into a `--root` prefix, adopts the
+  hand-made launcher wiring, edits the launcher and a Heroic GamesConfig JSON, uninstalls and
+  asserts a byte-identical restore (content and mode), idempotency of a second run and that the
+  undo state stays inside the prefix. No root, no systemd, no udev. The unit library itself is
+  covered by `tests/unit/test_backup.py` (15 tests in the `unit` suite).
 * **installer** — `--status` and `--dry-run --all`, both read-only. A dry run
   still needs the unprivileged target user the installer wires user units for;
   a root container without `SUDO_USER` is reported as `SKIP` with that reason.
@@ -326,9 +338,9 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 | run | result |
 |---|---|
-| `tools/repo-test.sh --fast` | 27 rows: **21 pass, 0 fail, 6 skip**, exit 0, ≈ 26 s (the `firstrun` suite runs the verifier twice, hence the jump) |
-| `tools/repo-test.sh --full` | 27 rows expected: **25 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
-| `tools/repo-test.sh --list` | 27 suites; 22 run in `--fast`, 27 in `--full` |
+| `tools/repo-test.sh --fast` | 31 rows: **25 pass, 0 fail, 6 skip**, exit 0, ≈ 40 s (the `firstrun` suite runs the verifier twice, hence the jump) |
+| `tools/repo-test.sh --full` | 31 rows expected: **29 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
+| `tools/repo-test.sh --list` | 31 suites; 26 run in `--fast`, 31 in `--full` |
 | `python3 -m unittest discover -s tests/unit -q` | `Ran 535 tests ... OK (skipped=1)`, ≈ 1.3 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
 | deliberately broken copy in `/tmp`, `--only fp-python` | 1 fail, exit 1, failing command + log path printed |
@@ -340,8 +352,8 @@ are enumerated in the table on every run, not implied.
 
 *Added after this snapshot:* the `gamewrap`, `gen-docs`, `firstrun` and `wizard`
 suites (later rounds add more; the table above is authoritative). A
-fresh `--fast` on 2026-11-09 reported **27 suites: 21 pass, 0 fail, 6 skip**, and
-`--list` reports 22 suites run in `--fast`, 27 in `--full` (the `unit` row has
+fresh `--fast` on 2026-11-09 reported **31 suites: 25 pass, 0 fail, 6 skip**, and
+`--list` reports 26 suites run in `--fast`, 31 in `--full` (the `unit` row has
 since grown to 535 cases, see [UNIT-TESTS.md](UNIT-TESTS.md)). The `firstrun`
 suite is the one to watch when timing: it exercises the collector's self-test,
 the live `--check-only --json` and a `--dry-run`, which runs `oxp3-verify` twice.

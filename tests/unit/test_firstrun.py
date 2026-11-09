@@ -416,7 +416,7 @@ class FixtureChecklistTest(unittest.TestCase):
         ids = [s.step_id for s in steps]
         self.assertEqual(ids[0], "driver-stack")
         self.assertEqual(ids[-1], "collector")
-        for required in ("hw-install", "udev-rules", "sleep-policy", "logind-restart",
+        for required in ("hw-install", "preflight", "udev-rules", "sleep-policy", "logind-restart",
                          "bluetooth", "power-profile", "battery-care", "audio-eq",
                          "xmx", "decky-plugin", "suspend-evidence"):
             self.assertIn(required, ids)

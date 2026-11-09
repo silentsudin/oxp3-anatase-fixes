@@ -29,8 +29,16 @@ global_checks:
   - label: Harness self-test
     command: "tests/verify/run.sh"
     expect: "every parser asserted against tests/verify/fixtures; exit 0"
+  - label: Preflight validator
+    command: "tools/oxp3-preflight.sh"
+    expect: "OK/WARN/FAIL per prerequisite, a safe/unsafe verdict and the components that would be skipped; exit 0 safe, 1 unsafe"
 
-unmapped_checks: {}
+unmapped_checks:
+  # Cross-cutting: the undo manifest covers every in-place host edit (launcher, Heroic
+  # GamesConfig, dracut drop-in, hhd patches), not one component. See docs/ROLLBACK.md.
+  inst.backups: "undo backups for every file we modify in place"
+  # Cross-cutting: gates every component before a single file is written.
+  preflight.verdict: "prerequisite verdict for every component: is an install safe, and which components would be skipped (docs/PREFLIGHT.md)"
 
 components:
   # -------------------------------------------------------------------------

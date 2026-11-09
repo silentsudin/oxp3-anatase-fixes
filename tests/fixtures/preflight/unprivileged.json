@@ -1,0 +1,14 @@
+{
+  "name": "unprivileged",
+  "base": "base",
+  "description": "A user run before sudo: the only warning is the privilege escalation; the install would be safe as root.",
+  "euid": 1000,
+  "expect": {
+    "verdict": "safe",
+    "safe": true,
+    "exit": 0,
+    "statuses": {
+      "core.root": "WARN"
+    }
+  }
+}

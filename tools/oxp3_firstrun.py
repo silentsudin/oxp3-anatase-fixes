@@ -818,6 +818,27 @@ def _unit_enabled(facts: Facts, name: str, user: bool = False) -> bool:
     return props.get("UnitFileState") in ("enabled", "enabled-runtime", "static", "generated")
 
 
+def _preflight_facts(ctx: Context) -> Optional[Dict[str, Any]]:
+    """Run tools/oxp3-preflight.sh read-only and return its JSON (or None).
+
+    Fixture mode (``ctx.prefix``) never runs the host tool: the checklist tests
+    are hermetic and a synthetic tree must not probe the real machine.
+    """
+    if ctx.prefix:
+        return None
+    tool = ctx.repo / "tools" / "oxp3-preflight.sh"
+    if not tool.is_file():
+        return None
+    res = ctx.run([str(tool), "--json"], 120, cwd=ctx.repo)
+    if res.rc not in (0, 1):
+        return None
+    try:
+        data = json.loads(res.out)
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def evaluate_checklist(ctx: Context, facts: Facts) -> List[Step]:
     steps: List[Step] = []
 
@@ -854,6 +875,37 @@ def evaluate_checklist(ctx: Context, facts: Facts) -> List[Step]:
             state,
             "%d/%d helpers installed" % (present, total),
             "sudo tools/oxp3-hw-install.sh --all",
+        )
+    )
+
+    # 2b. preflight: would an install complete, and what would be skipped? ----
+    pre = _preflight_facts(ctx)
+    if pre is None:
+        pre_state, pre_detail = UNKNOWN, "preflight not run (fixture or tool missing)"
+    else:
+        counts = pre.get("counts") or {}
+        skipped = pre.get("skipped_components") or []
+        if pre.get("safe"):
+            if counts.get("warn"):
+                pre_state = PARTIAL
+                pre_detail = "safe; %s warning(s); would skip: %s" % (
+                    counts.get("warn"),
+                    ", ".join(skipped) if skipped else "none")
+            else:
+                pre_state = OK
+                pre_detail = "safe; 0 warnings, 0 blockers"
+        else:
+            pre_state = TODO
+            pre_detail = "unsafe: %s blocker(s); would skip: %s" % (
+                counts.get("fail", "?"),
+                ", ".join(skipped) if skipped else "none")
+    steps.append(
+        Step(
+            "preflight",
+            "preflight (install prerequisites)",
+            pre_state,
+            pre_detail,
+            "tools/oxp3-preflight.sh   # fix the FAIL rows, then docs/PREFLIGHT.md",
         )
     )
 

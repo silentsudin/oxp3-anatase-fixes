@@ -210,3 +210,22 @@ except for where the bodies are defined.
   policy and the evidence, and `tools/apply-license.py` applies the choice to the whole tree in one
   reviewable commit (respecting the fingerprint subtree's existing `LGPL-2.1-or-later`). Patches
   keep their upstream licences and are out of scope. Run `--check` before and after the change.
+
+## 8. Addendum: undo state (2026-11-09, rollback round)
+
+A later round added the undo section to the library (between `anatase_kver` and the build
+container section). It is append-only code: no moved function changed, the contract
+(`OXP3_INSTALL_COMMON_API`, the guard, `build_mesa`) is untouched, and sourcing still runs no
+command. The new functions are `oxp3_sha`, `oxp3_state_dir`, `oxp3_state_init`,
+`oxp3_manifest_path`, `oxp3_stamp`, `oxp3_key`, `oxp3_backup_image`, `oxp3_adopt_image`,
+`oxp3_manifest_record`, `oxp3_rows_for_key`, `oxp3_manifest_keys`, `oxp3_record_restored`,
+`oxp3_restore_file`, `oxp3_restore_all`, `oxp3_logical_to_real` (15), plus
+`hhd_backup_patch_files` (16), which `install_volume_fix` uses for the pre-patch copies.
+
+They are used by `install_volume_fix` (pre-patch copies of the hhd files), `install_extras` in both
+installers (the BMI260 blacklist), `tools/oxp3-bt-firmware.sh` (the dracut drop-in) and
+`tools/oxp3-rollback.sh` (the user-facing undo). `tools/oxp3-rollback.sh` is the only other
+sourcer of the library; it uses the undo section only and needs no caller configuration, so it
+does not call `install_common_guard`. The classification rule in §4 is unchanged: the undo code
+belongs in the library because three callers share it. Contract, state layout and restore rules:
+[docs/ROLLBACK.md](ROLLBACK.md).

@@ -1,0 +1,12 @@
+{
+  "name": "sane-host",
+  "description": "The base fixture, named as a case: root, every directory/tool/device present, no half-install and no conflicting daemon. Expected verdict: safe with no warnings.",
+  "base": "base",
+  "expect": {
+    "verdict": "safe",
+    "safe": true,
+    "exit": 0,
+    "skipped": [],
+    "statuses": {"core.root": "OK", "systemd.version": "OK", "tool.evdev": "OK", "conflict.hhd": "OK"}
+  }
+}

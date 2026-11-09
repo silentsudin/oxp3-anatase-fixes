@@ -40,7 +40,8 @@
 #
 # The deferred risks listed in docs/UNIT-TESTS.md section 5 are covered by
 # read-only probes in the default mode (hid.node, led.sides, rgbd.timing,
-# imu.iio, pwr.ac, pwr.order, fan.curvedup, bat.limit, inst.paths); fan.savemode
+# imu.iio, pwr.ac, pwr.order, fan.curvedup, bat.limit, inst.paths, inst.backups);
+# fan.savemode
 # is the only one that needs --full --with-changes.
 #
 # States and exit code:
@@ -423,6 +424,29 @@ parse_audio_sinks() { # stdin: pactl list short sinks
         else real = 1
     }
     END { printf "SINKS=%d\nREAL=%d\nDUMMY=%d\n", n + 0, real + 0, dummy + 0 }'
+}
+
+parse_preflight_summary() { # stdin: tools/oxp3-preflight.sh --json
+    local code
+    code=$(cat <<'PY'
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(3)
+counts = data.get("counts") or {}
+skipped = data.get("skipped_components") or []
+safe = data.get("safe")
+print("SAFE=%s" % ("true" if safe is True else "false"))
+print("VERDICT=%s" % (data.get("verdict") or "?"))
+print("FAIL=%s" % (counts.get("fail", "?")))
+print("WARN=%s" % (counts.get("warn", "?")))
+print("OK=%s" % (counts.get("ok", "?")))
+print("TOTAL=%s" % (counts.get("total", "?")))
+print("SKIPPED=%s" % (", ".join(str(x) for x in skipped) if skipped else "-"))
+PY
+)
+    python3 -c "$code"
 }
 
 parse_vol_journal() { # stdin: journalctl -u oxp3-voltap
@@ -969,6 +993,51 @@ powerctl_cmd() {
 POWER_STATE=/etc/oxp3/power.json
 
 watts() { awk -v u="${1:-0}" 'BEGIN{printf "%.2f", u / 1000000}'; }
+
+# ------------------------------------------------------------------ 0. preflight
+check_preflight() {
+    local tool out safe verdict fails warns skipped detail
+    tool=$(tool_path tools/oxp3-preflight.sh)
+    if [ -z "$tool" ]; then
+        record preflight.verdict preflight "preflight verdict" SKIP \
+            "tools/oxp3-preflight.sh not found" "" \
+            "restore the checkout (tools/oxp3-preflight.sh + tools/oxp3_preflight.py)"
+        return 0
+    fi
+    run_tool preflight 90 "$tool" --json
+    case $RUN_RC in
+        0|1) ;;
+        2) record preflight.verdict preflight "preflight verdict" UNKNOWN \
+               "preflight usage error" "$(tail_flat "$RUN_OUT" 2)" \
+               "tools/oxp3-preflight.sh --help"
+           return 0 ;;
+        *) record preflight.verdict preflight "preflight verdict" UNKNOWN \
+               "preflight could not start (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" \
+               "python3 tools/oxp3_preflight.py --selftest"
+           return 0 ;;
+    esac
+    if ! json_ok "$RUN_OUT"; then
+        record preflight.verdict preflight "preflight verdict" UNKNOWN \
+            "preflight did not return JSON (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" \
+            "python3 tools/oxp3_preflight.py --selftest"
+        return 0
+    fi
+    out=$(parse_preflight_summary <"$RUN_OUT")
+    safe=$(kv "$out" SAFE)
+    verdict=$(kv "$out" VERDICT)
+    fails=$(kv "$out" FAIL)
+    warns=$(kv "$out" WARN)
+    skipped=$(kv "$out" SKIPPED)
+    detail="warnings: ${warns:-?}; would skip: ${skipped:-none}"
+    if [ "$safe" = true ]; then
+        record preflight.verdict preflight "preflight verdict" PASS \
+            "$verdict: ${fails:-0} blocker(s), ${warns:-0} warning(s)" "$detail" ""
+    else
+        record preflight.verdict preflight "preflight verdict" FAIL \
+            "$verdict: ${fails:-?} blocker(s)" "$detail" \
+            "tools/oxp3-preflight.sh ; fix the FAIL rows (docs/PREFLIGHT.md)"
+    fi
+}
 
 # ------------------------------------------------------------------ 1. volume
 check_volume() {
@@ -2402,6 +2471,25 @@ check_install() {
     else
         record inst.paths install "install-common host helpers" PASS "sys_fw/host_mesa/flatpak_mesa resolve against the live host" "fw=${fw:-none} host_mesa=$hmesa flatpak=$fmesa" ""
     fi
+
+    # Undo state (docs/ROLLBACK.md, read-only): every file we modify in place must have a
+    # timestamped backup image from before the edit. A known edit with no record means an
+    # uninstall cannot put the previous content back; adopt records it retroactively.
+    local rbt=$REPO/tools/oxp3-rollback.sh bad hint
+    hint="$rbt adopt   # then: $rbt status   (docs/ROLLBACK.md)"
+    if [ ! -x "$rbt" ]; then
+        record inst.backups install "undo backups for in-place edits" SKIP "tools/oxp3-rollback.sh missing" "$rbt" ""
+    else
+        run_tool rollback-verify 30 "$rbt" verify
+        bad=$(grep -E '^(UNBACKED|MISSING-IMAGE)' "$RUN_OUT" 2>/dev/null | head -4 | tr '\n' ' ' || true)
+        if [ "$RUN_RC" -eq 0 ]; then
+            record inst.backups install "undo backups for in-place edits" PASS \
+                "every known edit has a backup image" "$(tail_flat "$RUN_OUT" 2)" ""
+        else
+            record inst.backups install "undo backups for in-place edits" FAIL \
+                "in-place edit(s) without a backup" "${bad:-$rbt verify exited $RUN_RC}" "$hint"
+        fi
+    fi
 }
 
 # ------------------------------------------------------------------ 11. decky
@@ -2731,6 +2819,17 @@ run_selftest() {
     t_eq "rgbd/timing-nojournal" fallback "$(kv "$out" JOURNAL)"
     t_eq "rgbd/timing-nojournal-device" /dev/hidraw4 "$(kv "$out" DEVICE)"
 
+    # preflight verdict parser
+    out=$(parse_preflight_summary <"$fx/preflight-ok.json")
+    t_eq "preflight/safe" true "$(kv "$out" SAFE)"
+    t_eq "preflight/verdict" safe "$(kv "$out" VERDICT)"
+    t_eq "preflight/fail" 0 "$(kv "$out" FAIL)"
+    t_eq "preflight/skipped" - "$(kv "$out" SKIPPED)"
+    out=$(parse_preflight_summary <"$fx/preflight-unsafe.json")
+    t_eq "preflight/unsafe" false "$(kv "$out" SAFE)"
+    t_eq "preflight/blockers" 2 "$(kv "$out" FAIL)"
+    t_eq "preflight/would-skip" "volume, sleep" "$(kv "$out" SKIPPED)"
+
     # exit-code mapping
     t_eq "exit/fail" 1 "$(exit_code 10 1 2 0)"
     t_eq "exit/skips-only" 2 "$(exit_code 0 0 3 1)"
@@ -2755,9 +2854,10 @@ run_selftest() {
         hid.access hid.node hid.rule \
         homebtn.mapping homebtn.press homebtn.unit \
         imu.iio imu.selftest \
-        inst.paths \
+        inst.backups inst.paths \
         led.sides led.status led.write led.zones \
         life.fd life.reconnect life.sim \
+        preflight.verdict \
         pwr.ac pwr.adaptive pwr.fan pwr.order pwr.pl1 pwr.profile pwr.rapl pwr.zones \
         rgbd.check rgbd.timing rgbd.unit \
         sched.scx sched.state sched.unit \
@@ -2867,6 +2967,7 @@ if [ "$FULL" -eq 1 ]; then
     if [ "$WITH_CHANGES" -eq 1 ]; then MODE_NAME="full+changes"; else MODE_NAME=full; fi
 fi
 
+check_preflight
 check_volume
 check_leds
 check_lifecycle

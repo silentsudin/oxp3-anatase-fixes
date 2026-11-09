@@ -106,8 +106,8 @@ fi
 [ -z "$(ls -A "$TMP/plan")" ] && pass "plan mode writes nothing" || fail "plan mode writes nothing"
 contains "$TMP/plan.out" "[phase 10/10] final" && pass "plan lists all 10 phases" \
     || fail "plan lists all 10 phases"
-[ "$(grep -c '^  - ' "$TMP/plan.out")" -eq 39 ] && pass "plan lists all 39 items" \
-    || fail "plan lists all 39 items"
+[ "$(grep -c '^  - ' "$TMP/plan.out")" -eq 40 ] && pass "plan lists all 40 items" \
+    || fail "plan lists all 40 items"
 not_contains "$TMP/plan.out" "[sim]" && pass "plan mode runs nothing" \
     || fail "plan mode runs nothing"
 
@@ -136,11 +136,11 @@ J1=$(ls "$TMP/run1"/validation-*.json 2>/dev/null | head -n 1)
 [ -f "${J1%.json}.md" ] && pass "Markdown summary written" || fail "Markdown summary written"
 [ -f "${J1%.json}.journal" ] && pass "journal written" || fail "journal written"
 if [ -n "$J1" ]; then
-    json_check "$J1" 'assert d["counts"] == {"total": 7, "pass": 7, "fail": 0, "skip": 0, "blocked": 0}; assert d["resumed"] is False' \
+    json_check "$J1" 'assert d["counts"] == {"total": 8, "pass": 8, "fail": 0, "skip": 0, "blocked": 0}; assert d["resumed"] is False' \
         && pass "JSON schema, item fields and counts" || fail "JSON schema, item fields and counts"
-    json_check "$J1" 'assert [i["status"] for i in d["items"]] == ["pass"] * 7' \
+    json_check "$J1" 'assert [i["status"] for i in d["items"]] == ["pass"] * 8' \
         && pass "every scripted answer is recorded as pass" || fail "every scripted answer is recorded as pass"
-    json_check "$J1" 'assert d["items"][2]["answer"].startswith("Desktop session"); assert "vol.hold" in d["items"][3]["checks"]' \
+    json_check "$J1" 'x=[i for i in d["items"] if i["id"]=="preflight.session"][0]; assert x["answer"].startswith("Desktop session"); assert "vol.hold" in [c for i in d["items"] for c in i["checks"]]' \
         && pass "answers and verifier check mapping recorded" || fail "answers and verifier check mapping recorded"
     contains "$TMP/run1.out" "components.yaml: volume.last_validated.evidence" \
         && pass "suggests the exact components.yaml edit" || fail "suggests the exact components.yaml edit"
@@ -154,7 +154,7 @@ RC=$?
 [ "$RC" -eq 0 ] && pass "resume exits 0 on a complete run" || fail "resume exits 0 on a complete run (got $RC)"
 contains "$TMP/resume.out" "complete (resumed)" && pass "resume skips answered phases" \
     || fail "resume skips answered phases"
-json_check "$J1" 'assert d["resumed"] is True; assert d["counts"]["total"] == 7' \
+json_check "$J1" 'assert d["resumed"] is True; assert d["counts"]["total"] == 8' \
     && pass "resume keeps every recorded item" || fail "resume keeps every recorded item"
 
 # 6. suspend refusal ------------------------------------------------------

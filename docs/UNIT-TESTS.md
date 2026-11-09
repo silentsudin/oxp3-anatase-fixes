@@ -13,9 +13,9 @@ package installation**, and it writes only to a private temporary directory
 Recorded on this host (Python 3.15, no root):
 
 ```
-python3 -m unittest discover -s tests/unit -q     -> Ran 535 tests ... OK (skipped=1), ~1.3 s
-tools/repo-test.sh --fast  -> 27 suites: 21 pass, 0 fail, 6 skip, exit 0
-tools/repo-test.sh --full  -> 27 suites: 25 pass, 0 fail, 2 skip, exit 0 (expected)
+python3 -m unittest discover -s tests/unit -q     -> Ran 613 tests ... OK (skipped=1), ~3.0 s
+tools/repo-test.sh --fast  -> 31 suites: 25 pass, 0 fail, 6 skip, exit 0
+tools/repo-test.sh --full  -> 31 suites: 29 pass, 0 fail, 2 skip, exit 0 (expected)
 ```
 
 ## 1. How to run it
@@ -60,7 +60,9 @@ install-common tests run the shell tools in a stub `PATH` and a private
 | `test_icc.py` | `tools/display/oxp3-icc.py` | 22 | `xy_to_xyz`, matrix multiply/inverse, Bradford adaptation D65↔D50, white-normalised sRGB RGB→XYZ matrix, s15Fixed16/u8Fixed8 tag round trips, ICC v2 build→read round trip (header, 9 tags, D50 wtpt, gamma), corrupt-profile rejection, CLI `--check`/`--out`/`--from-edid` errors |
 | `test_sagv.py` | `tools/oxp3-sagv.sh` | 14 | usage exit 4, `set off/on/point` output and refusals (exit 3), `measure` minimum window, RAPL sample averaging against a fixture dir (stub `sleep`), `status`/`report` read-only exit 0 |
 | `test_install_common.py` | `tools/lib/install-common.sh` | 18 | sourcing has no side effects, the `install_common_guard` contract (API version, every required variable, non-empty arrays, caller `build_mesa`), `ucode_rev`, `xmx_override_file`, `anatase_kver`, `hotfix_active`, `deploy_info`, `mok_cn`/`mok_usage_ok` against generated CA/non-CA certs |
+| `test_backup.py` | `tools/lib/install-common.sh` (undo section) + `tools/oxp3-rollback.sh` | 15 | backup image bytes/mode, `home/` vs `abs/` key mapping with `OXP3_ROOT` stripping, manifest rows (`backup`/`created`), byte-identical idempotent restore, created-file removal, user-edit detection (exit 12) and `--force` preservation, `restore_all` skip summary (exit 3), dry runs write nothing, state-dir precedence, and the tool's `--root` round trip (`verify` → `apply` → `restore`), adoption from a sibling `.bak*`, and refusal to overwrite a later user edit. See [ROLLBACK.md](ROLLBACK.md) |
 | `test_sleep_trigger.py` | `files/logind-oxp3.conf`, `files/49-oxp3-suspend.rules`, `tools/oxp3-hw-install.sh`, `tools/oxp3-verify.sh` | 23 | the drop-in parses as one `[Login]` section with the documented `Handle*` values (power/suspend key = suspend, lid = suspend AC+battery, docked = ignore, long-press = poweroff), no key wired to hibernate, no duplicate keys; the polkit rule is one `addRule`, balanced, limited to the four suspend/hibernate actions, guarded on `subject.local && subject.active && isInGroup("wheel")`, and never grants `suspend-ignore-inhibit` (comments stripped first); installer wiring (TRIGGER_FILES table used by both install and uninstall, status lines, no logind restart behind the user's session); verify wiring (`record sleep.trigger`, the three-way `--full`/`--with-changes`/`OXP3_ALLOW_SUSPEND` gate, one and only one suspend call site, every `trigger_verdict` outcome present) |
+| `test_preflight.py` | `tools/oxp3_preflight.py` | 17 | parser units (systemd version, passwd, kernel options, unit `Restart=` sections, logind defaults/overrides, hhd version, stale checkout references), the vendor-HID selection rule, component artefact counts, the safe/degraded/unsafe verdict matrix, seven fixture verdicts through `FixtureHost` (sane host, missing directory, old systemd, missing evdev, conflicting volume daemon, Bluetooth half-install, unprivileged), the `--component` filter, JSON schema 1 and the text verdict/remediation rendering |
 | `test_firstrun.py` | `tools/oxp3_firstrun.py` | 68 | redaction rules and their idempotency (identity, MAC → vendor OUI, serial/UUID incl. bare UUIDs, e-mail, PulseAudio cookie, token families, secret assignments), sha256 left intact, per-file line cap, total byte cap (truncate vs. skip, JSON never corrupted), manifest accounting and redaction of the manifest/README themselves, bundle idempotency and `--force` semantics, checklist state transitions against a synthetic system prefix (partial/pending/ok/unknown), degraded collection statuses, the `session/power.txt` artifact (logind show-session fallback, PowerDevil keys, powerdevilrc excerpt, polkit-agent probe, tool-missing degradation, redaction), and the CLI contract |
 
 Shared fixtures live in `tests/unit/support.py`: module-by-path loader,

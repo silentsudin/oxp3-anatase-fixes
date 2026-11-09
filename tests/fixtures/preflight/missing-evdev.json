@@ -1,0 +1,23 @@
+{
+  "name": "missing-evdev",
+  "base": "base",
+  "description": "python3-evdev is not installed; oxp3-voltap cannot run, so volume must be skipped.",
+  "commands": {
+    "python3 -c import evdev": {
+      "rc": 1,
+      "out": "",
+      "err": "ModuleNotFoundError: evdev"
+    }
+  },
+  "expect": {
+    "verdict": "unsafe",
+    "safe": false,
+    "exit": 1,
+    "statuses": {
+      "tool.evdev": "FAIL"
+    },
+    "skipped": [
+      "volume"
+    ]
+  }
+}

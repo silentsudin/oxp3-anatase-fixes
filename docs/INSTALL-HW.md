@@ -59,6 +59,11 @@ Why a separate entry point:
   and verifies pinned SHA-256 sums; nothing vendor-proprietary is stored in this repo).
 * `runuser` (util-linux, always present) for the user-scope half.
 * No BIOS/kernel-cmdline change is required. `mem_sleep` already selects `[s2idle]`.
+* The installer runs [`tools/oxp3-preflight.sh`](../tools/oxp3-preflight.sh) for the selected
+  components first: it proves every prerequisite (root, systemd, directories, tools, device
+  nodes, kernel options, half-installs and conflicting daemons), refuses on a true blocker and
+  prints the exact `fix:` command. Everything it checks, and why, is in
+  [PREFLIGHT.md](PREFLIGHT.md).
 
 ## 2. The ordered command set
 
@@ -66,6 +71,9 @@ Why a separate entry point:
 
 ```bash
 cd /var/home/holzr/git/linux_scratch/oxp3-anatase-fixes
+
+# 0. read-only: would an install complete, and what is missing? (no root needed)
+tools/oxp3-preflight.sh
 
 # 1. driver stack (kernel modules, firmware package, Mesa, gamescope, MangoHud, XeSS).
 #    build as your user; install asks for sudo; after a kernel change run install twice
@@ -212,6 +220,7 @@ Start with the whole-system checks; then the per-component rows.
 | Verification harness | `tools/oxp3-verify.sh --json` | JSON report; exit 0 with at least one PASS, 1 on any FAIL, 2 when nothing passed, 3 on usage error |
 | Repo status matrix | `tools/oxp3-status.sh --json` | schema 1 report with per-indicator ok/warn/fail/unknown and an overall state |
 | Harness self-test | `tests/verify/run.sh` | every parser asserted against tests/verify/fixtures; exit 0 |
+| Preflight validator | `tools/oxp3-preflight.sh` | OK/WARN/FAIL per prerequisite, a safe/unsafe verdict and the components that would be skipped; exit 0 safe, 1 unsafe |
 
 | Component | Install |
 |---|---|
@@ -323,6 +332,20 @@ configuration (`~/.config/oxp3-rgb.toml`, `/etc/oxp3-voltap.conf`, `/etc/oxp3/`)
 (`oxp3-firmware`, `kmod-oxp3`) are removed by `oxp3-fixes-fast.sh uninstall` / `rpm-ostree uninstall`;
 the orchestrator warns if it sees them.
 
+The files the installers **modify in place** (`~/heroic-launch.sh`, a Heroic GamesConfig JSON,
+`/etc/dracut.conf.d/60-oxp3-bt-firmware.conf`, `/etc/modprobe.d/oxp3-bmi160.conf`, the hhd Python
+files) are backed up before every edit and put back by one command:
+
+```sh
+tools/oxp3-rollback.sh adopt      # once: record edits made by hand (idempotent)
+tools/oxp3-rollback.sh restore    # after the uninstall: byte-identical restore
+```
+
+`--uninstall --all` prints that command. What is backed up, how the hash check refuses to
+clobber a later user edit, and what can *not* be undone (rpm-ostree history, an enrolled MOK,
+an initramfs that already carries the firmware, manual EC limits) is in
+[ROLLBACK.md](ROLLBACK.md).
+
 ## 7. Rollback per component (manual, if you do not want the orchestrator)
 
 | component | rollback |
@@ -345,6 +368,9 @@ the orchestrator warns if it sees them.
 * `oxp3-fixes.sh install` does the same and additionally installs the sleep units and the hhd
   volume patch — so for that script the orchestrator line only needs `--rgb --audio` (LEDs and the
   power units are already called by its extras).
+* The orchestrator's preflight is per invocation: `--force` overrides a `FAIL`, `--dry-run`,
+  `--root` and `--uninstall` skip it. A `WARN` never blocks (see [PREFLIGHT.md](PREFLIGHT.md)
+  for the WARN/FAIL split).
 * Re-running the orchestrator is safe: files are replaced only with identical content, units are
   re-enabled, the Bluetooth script skips files whose pinned hash already matches, and
   `oxp3-power-install.sh` re-installs the same units.

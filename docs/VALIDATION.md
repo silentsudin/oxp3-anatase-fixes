@@ -74,9 +74,17 @@ scheduler or adaptive TDP, and a plain game launch leaves no igdext trace.
 
 ## 3. Check inventory — what each check proves
 
-Default mode runs **70 checks**; `--full` adds 4 (**74**); `--with-changes` adds
-`aud.activate` and `fan.savemode` (**76**). The ids are stable (they are the `state`
-keys in `--json`).
+Default mode runs **72 checks** (measured 2026-11-09, including `preflight.verdict`).
+`--full` adds four (**76**); `--with-changes` adds two more (**78**). The opt-in rows
+(`vol.hold`, `led.write`, `life.sim`, `aud.activate` and `fan.savemode`) run only with
+`--full` / `--with-changes`; the harness declares **78** ids in total, which `--selftest`
+asserts. The ids are stable (they are the `state` keys in `--json`).
+
+### preflight (1)
+
+| id | proves | how |
+|---|---|---|
+| `preflight.verdict` | the host can take an install: every prerequisite in [PREFLIGHT.md](PREFLIGHT.md) is OK or a handled WARN; `safe: false` names the components that would be skipped | `tools/oxp3-preflight.sh --json`; `PASS` for `safe: true`, `FAIL` for `safe: false`, `SKIP` when the tool is absent |
 
 ### volume (6; `vol.hold` only in `--full`)
 
@@ -227,10 +235,22 @@ re-apply itself is event-driven and is only visible as `HHD settle +Ns` / re-app
 lines in `journalctl --user -u oxp3-rgbd` after a resume. The `voltap` release-all tail
 remains a manual step (see §9).
 
+### undo state (1)
+
+| id | proves | how |
+|---|---|---|
+| `inst.backups` | every in-place host edit of ours has a timestamped backup image, so an uninstall can put the previous content back | `tools/oxp3-rollback.sh verify` (read-only); `FAIL` lists the unbacked paths and points at `adopt` | default; see [ROLLBACK.md](ROLLBACK.md) |
+
+`inst.backups` is read-only and cross-cutting: it sources nothing and runs
+`tools/oxp3-rollback.sh verify`, which compares the files we edit in place against the
+manifest and backup images. A `FAIL` is actionable (`adopt`), not a hardware defect;
+[ROLLBACK.md](ROLLBACK.md) explains the state and the restore semantics.
+
 ## 4. Fix → check map
 
 | fix (INSTALL-HW.md §) | checks |
 |---|---|
+| (preflight, every component) | `preflight.verdict` |
 | 1 volume rocker | `vol.unit`, `vol.grab`, `vol.topology`, `vol.holder`, `vol.hwdb`, (`vol.hold`) |
 | 2 LEDs / home button | `hid.rule`, `led.status`, `led.zones`, `hid.access`, `homebtn.unit`, `homebtn.mapping`, `homebtn.press`, (`led.write`) |
 | 2 RGB keeper | `rgbd.unit`, `rgbd.check` |
@@ -272,11 +292,11 @@ machine. The pass/skip split above is otherwise unchanged.)
   the daemons are installed; `life.sim` additionally needs `--full`). `vol.topology`
   is the one volume row that `PASS`es without root on this host.
 * Without the Decky plugin, `decky.dir`/`decky.backend` also `SKIP`: 45 pass / 10 skip.
-* `--full` on the same machine: `74 checks` (adds `vol.hold`, `led.write`,
+* `--full` on the same machine: `76 checks` (adds `vol.hold`, `led.write`,
   `sleep.measure`, `sleep.suspend`; `life.sim` then runs its offline suite instead of
   being gated; `sleep.suspend` stays `SKIP` until `OXP3_ALLOW_SUSPEND=1` is also set).
   Run it on battery; `sleep.measure` is `SKIP` on AC by design.
-* `--full --with-changes`: `76 checks` — the two extra rows over `--full` are
+* `--full --with-changes`: **78 checks** — adds two rows over `--full`, namely
   `aud.activate` and `fan.savemode`, the only checks that may change persistent state.
   Adding `OXP3_ALLOW_SUSPEND=1` changes no count: it turns `sleep.suspend` from `SKIP`
   into a real 60 s suspend.
@@ -360,12 +380,12 @@ This is the honest state of this machine, not a harness problem:
   zones/PL1/fan/RAPL/ordering, adaptive AC detection, battery limit/behaviour/default,
   audio server/model/scripts, display HDR/ICC/EDID/vibrance, Mesa/XMX/xe/working-build,
   HID node/empty-sides, rgbd timing, install-common helpers, status overview.
-* `--full` here (non-root, 1 s measurement) = 74 checks: adds `vol.hold` SKIP
+* `--full` here (non-root, 1 s measurement) = 76 checks: adds `vol.hold` SKIP
   (`needs root`), `led.write` SKIP (hidraw 0600), `sleep.measure` SKIP (on AC),
   `sleep.suspend` SKIP (gated: `OXP3_ALLOW_SUSPEND` unset); `life.sim` runs the
   offline suite and PASSes.
   Still exit 1 for the same three Bluetooth rows.
-  `--full --with-changes` = 76 checks and additionally SKIPs `fan.savemode` (`needs
+  `--full --with-changes` = 78 checks and additionally SKIPs `fan.savemode` (`needs
   root`); `aud.activate` was attempted as the documented opt-in.
   The root-only paths (`vol.hold`, `sleep.suspend`) were **not** executed here: this
   repository's rules forbid `sudo`, so they are device-side acceptance steps.
@@ -374,23 +394,24 @@ Verbatim evidence (never overwritten, regenerate when the machine changes):
 
 * [`docs/state/verify-default-2026-11-09.txt`](state/verify-default-2026-11-09.txt) — 108 lines, the run above.
 * [`docs/state/verify-default-2026-11-09.json`](state/verify-default-2026-11-09.json) — `--json`, 55 checks (pre-deferred-risk inventory), schema 1, exit 1.
-* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 150).
+* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 157).
 
 The snapshots above predate the three `life.*` rows: a host without the daemons now
-reports 70 (default), 74 (`--full`) and 76 (`--full --with-changes`) checks, with the
-three lifecycle rows as `SKIP` (`life.sim` is gated until `--full`).
+reports 72 checks in the default mode and adds the opt-in rows with `--full`/
+`--with-changes`; the three lifecycle rows are `SKIP` without the daemons (`life.sim` is gated
+until `--full`).
 
 ## 8. Offline validation performed (no root, no host change)
 
 * `bash -n tools/oxp3-verify.sh` and `sh -n tests/verify/run.sh`: clean.
-* `tools/oxp3-verify.sh --selftest`: **150 assertions / 0 failures** over the parsers
+* `tools/oxp3-verify.sh --selftest`: **157 assertions / 0 failures** over the parsers
   (`display-mode` ANSI output, `powerctl` domains/fan/profile, `status` indicators,
   `suspend_stats`, `bt --check`, `led status`, `rgbd --check`, `pactl` sinks,
   the two journals, `sleep-audit`), the ten deferred-risk probes -- HID candidate map
   and verdicts, dry-run frame counts, adaptive decision/AC verdict, per-domain limit
   ordering, curve summary, battery-limit dry run, install-common helper output, IIO
   primary/fallback map, rgbd timing -- the exit-code mapping, and a fixed inventory
-  check that the 76 declared check ids are exactly the documented set (no typos, no
+  check that the 78 declared check ids are exactly the documented set (no typos, no
   drops). New fixtures live under `tests/verify/fixtures/` (`hidraw/`, `iio/`,
   `adaptive-*.json`, `hid-verdict-*.txt`, `led-dry-*.txt`, `battery-limit-dry.json`,
   `powerctl-profile-*.json`, `curve-dup.json`, `rgbd-check-nojournal.txt`,

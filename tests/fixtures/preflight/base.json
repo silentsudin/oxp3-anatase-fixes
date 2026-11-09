@@ -1,0 +1,167 @@
+{
+  "name": "sane-host",
+  "description": "A fully equipped host: root, all directories, every tool, the vendor HID node, RAPL, uinput, a readable kernel config, no half-install and no conflicting daemon. Expected verdict: safe, no warnings.",
+  "euid": 0,
+  "user": "tester",
+  "home": "/home/tester",
+  "repo": "/repo",
+  "kernel": "7.2.7-test.x86_64",
+  "dirs": [
+    "/etc/systemd/system",
+    "/etc/udev/rules.d",
+    "/etc/udev/hwdb.d",
+    "/etc/polkit-1/rules.d",
+    "/etc/systemd/logind.conf.d",
+    "/usr/local/libexec",
+    "/etc/dracut.conf.d",
+    "/etc/modprobe.d",
+    "/etc/systemd",
+    "/dev",
+    "/run/user/1000",
+    "/sys",
+    "/sys/class",
+    "/sys/class/hidraw",
+    "/sys/class/hidraw/hidraw4",
+    "/sys/class/hidraw/hidraw4/device",
+    "/sys/class/input",
+    "/sys/class/powercap",
+    "/sys/class/powercap/intel-rapl:0",
+    "/sys/class/power_supply",
+    "/sys/class/power_supply/BAT0",
+    "/sys/devices",
+    "/sys/devices/platform",
+    "/sys/devices/platform/oxp-platform",
+    "/sys/devices/platform/oxp-platform/hwmon",
+    "/sys/devices/platform/oxp-platform/hwmon/hwmon6",
+    "/sys/kernel",
+    "/sys/kernel/sched_ext",
+    "/usr/lib",
+    "/usr/lib/modules",
+    "/usr/lib/modules/7.2.7-test.x86_64",
+    "/usr/lib/firmware",
+    "/usr/lib/firmware/updates",
+    "/usr/lib/firmware/updates/intel",
+    "/usr/lib/python3.15",
+    "/usr/lib/python3.15/site-packages",
+    "/usr/lib/python3.15/site-packages/hhd",
+    "/home/tester",
+    "/home/tester/.config",
+    "/home/tester/.config/systemd",
+    "/home/tester/.config/systemd/user",
+    "/home/tester/.config/pipewire",
+    "/home/tester/.config/pipewire/pipewire.conf.d",
+    "/home/tester/.cache",
+    "/home/tester/.cache/oxp3-bt-firmware",
+    "/repo",
+    "/repo/files",
+    "/repo/tools",
+    "/repo/tools/oxp3-voltap",
+    "/repo/tools/audio",
+    "/repo/patches",
+    "/repo/patches/hhd"
+  ],
+  "files": {
+    "/etc/passwd": "root:x:0:0::/root:/bin/bash\ntester:x:1000:1000::/home/tester:/bin/bash\n",
+    "/proc/sys/kernel/osrelease": "7.2.7-test.x86_64\n",
+    "/proc/cmdline": "root=UUID=test ro quiet\n",
+    "/sys/class/hidraw/hidraw0/device/uevent": "HID_ID=0003:00001997:00002433\nHID_NAME=mini keyboard\n",
+    "/sys/class/hidraw/hidraw4/device/uevent": "HID_ID=0003:00001A86:0000FE00\nHID_NAME=HID 1a86:fe00\n",
+    "/sys/class/hidraw/hidraw4/device/report_descriptor": "\u0006\u0000\u00ff",
+    "/sys/class/powercap/intel-rapl:0/name": "package-0\n",
+    "/sys/devices/platform/oxp-platform/hwmon/hwmon6/name": "oxp_ec\n",
+    "/sys/class/power_supply/BAT0/charge_control_end_threshold": "80\n",
+    "/sys/class/power_supply/BAT0/charge_behaviour": "[auto]\n",
+    "/sys/kernel/sched_ext/state": "disabled\n",
+    "/usr/lib/modules/7.2.7-test.x86_64/config": "CONFIG_HIDRAW=y\nCONFIG_INPUT_UINPUT=m\nCONFIG_INTEL_RAPL=m\nCONFIG_INTEL_RAPL_CORE=m\nCONFIG_BMI260=m\nCONFIG_SCHED_CLASS_EXT=y\nCONFIG_BT_INTEL_PCIE=m\n",
+    "/usr/lib/firmware/updates/intel/ibt-00a0-0291-iml.sfi": "iml",
+    "/usr/lib/firmware/updates/intel/ibt-00a0-0291-pci.sfi": "pci",
+    "/etc/dracut.conf.d/60-oxp3-bt-firmware.conf": "install_items+=\" /usr/lib/firmware/updates/intel/ibt-00a0-0291-pci.sfi \"\n",
+    "/etc/systemd/logind.conf": "[Login]\n#HandlePowerKey=poweroff\n#HandleSuspendKey=suspend\n",
+    "/etc/systemd/logind.conf.d/.keep": "",
+    "/dev/uinput": "",
+    "/dev/hidraw0": "",
+    "/dev/hidraw4": "",
+    "/dev/input/event4": "",
+    "/dev/spidev0.0": "",
+    "/run/user/1000/bus": "",
+    "/home/tester/.cache/oxp3-bt-firmware/ibt-00a0-0291-iml.sfi": "iml",
+    "/home/tester/.cache/oxp3-bt-firmware/ibt-00a0-0291-pci.sfi": "pci",
+    "/repo/tools/oxp3-voltap/oxp3-voltap.service": "[Unit]\nDescription=test\n[Service]\nExecStart=/bin/true\nRestart=always\nRestartSec=2\n[Install]\nWantedBy=multi-user.target\n",
+    "/repo/tools/oxp3-homebtn.service": "[Unit]\nDescription=test\n[Service]\nExecStart=/bin/true\nRestart=always\nRestartSec=2\n[Install]\nWantedBy=default.target\n",
+    "/repo/tools/oxp3-rgbd.service": "[Unit]\nDescription=test\n[Service]\nExecStart=/bin/true\nRestart=always\nRestartSec=3\n[Install]\nWantedBy=default.target\n",
+    "/repo/patches/hhd/0001-oxp-volume-rocker-taps.patch": "From 0 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] test\n",
+    "/repo/files/49-oxp3-suspend.rules": "polkit.addRule(function (a, s) { return polkit.Result.NOT_HANDLED; });\n"
+  },
+  "tools": [
+    "install",
+    "systemctl",
+    "systemd-analyze",
+    "udevadm",
+    "systemd-hwdb",
+    "python3",
+    "runuser",
+    "dracut",
+    "curl",
+    "pipewire",
+    "wireplumber",
+    "pactl",
+    "kreadconfig6",
+    "btmgmt",
+    "flatpak",
+    "modprobe",
+    "git",
+    "rpm",
+    "journalctl",
+    "rpm-ostree",
+    "pgrep"
+  ],
+  "commands": {
+    "systemctl --version": {
+      "rc": 0,
+      "out": "systemd 262 (262-3.fc45)\n"
+    },
+    "rpm -q --qf %{VERSION} hhd": {
+      "rc": 0,
+      "out": "4.1.12+git.154.geca609b0f54a\n"
+    },
+    "systemctl show -p ActiveState -p UnitFileState -p MainPID hhd": {
+      "rc": 0,
+      "out": "ActiveState=active\nUnitFileState=enabled\nMainPID=100\n"
+    },
+    "journalctl -u hhd -b --no-pager -n 5000": {
+      "rc": 0,
+      "out": "Opening virtual device 'Handheld Daemon Volume Keyboard'.\nLEDS  INFO  Setting RGB to mode 'solid'.\n"
+    },
+    "journalctl -k -b --no-pager": {
+      "rc": 0,
+      "out": ""
+    },
+    "rpm-ostree status --json": {
+      "rc": 0,
+      "out": "{\"deployments\":[{\"booted\":true,\"staged\":false}]}\n"
+    },
+    "python3 -c import evdev": {
+      "rc": 0,
+      "out": ""
+    },
+    "python3 -c import tomllib": {
+      "rc": 0,
+      "out": ""
+    },
+    "pgrep -af polkit": {
+      "rc": 0,
+      "out": "123 /usr/libexec/polkit-kde-authentication-agent-1\n"
+    },
+    "git -C /usr/lib/python3.15/site-packages/hhd apply": {
+      "rc": 1,
+      "out": "",
+      "err": "patch does not apply"
+    }
+  },
+  "expect": {
+    "verdict": "safe",
+    "safe": true,
+    "exit": 0,
+    "skipped": []
+  }
+}

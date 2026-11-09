@@ -72,12 +72,20 @@ Every row is a read-only probe; the state vocabulary is:
 | `unknown` | readable but not assertable here (no user bus, unreadable timestamp, …) |
 | `n/a` | this machine has no such interface |
 
-Rows, in install order: driver stack · hardware install (libexec helpers) · udev rules +
+Rows, in install order: driver stack · hardware install (libexec helpers) · preflight
+verdict (`tools/oxp3-preflight.sh`, read-only: safe / partial on warnings / todo on
+blockers) · udev rules +
 volume hwdb · sleep trigger policy (logind + polkit) · logind restarted after the drop-in
 · suspend units enabled · Bluetooth firmware + initramfs + `hci0` · saved power profile ·
 battery care · IMU blacklist · speaker EQ · RGB config · home-button unit · display
 (HDR/ICC/vibrance) · XMX driver + ICD + session env · Decky plugin · a real suspend
 recorded since boot · the bundle itself.
+
+The `preflight` row is the install-prerequisite verdict from
+[PREFLIGHT.md](PREFLIGHT.md): `ok` when every prerequisite is satisfied or only
+diagnostics warnings remain, `partial` when a warning leaves a degraded path, `todo`
+when an install would be blocked. It is read-only and is reported as `unknown` in the
+collector's fixture mode.
 
 `logind-restart` is the interesting one for this round: the drop-in's mtime is compared
 with `systemd-logind`'s `ActiveEnterTimestamp`, so "installed but not in effect" is a

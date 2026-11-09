@@ -289,6 +289,11 @@ tools/oxp3-hw-install.sh --root /tmp/oxp3-sim --sleep --leds --rgb --imu --audio
 tools/oxp3-hw-install.sh --root /tmp/oxp3-sim --sleep --leds --rgb --imu --audio   # idempotent
 tools/oxp3-hw-install.sh --root /tmp/oxp3-sim --uninstall --sleep --leds --rgb --imu --audio
 
+# 7b. undo round-trip (install, edit, uninstall, byte-identical restore) + undo unit tests
+tests/rollback/run.sh
+python3 -m unittest discover -s tests/unit -p 'test_backup.py' -q
+tools/oxp3-rollback.sh verify          # read-only: edits of ours that have no backup
+
 # 8. hygiene
 git ls-files -z | xargs -0 file --mime | grep -v 'text/'          # expect only text/mbox patches
 git ls-files | grep -Ei 'node_modules|/dist/|/build/|__pycache__|\.(pyc|zip|o|so|dll|exe|sys|bin|sfi|ddc)$'

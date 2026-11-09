@@ -1,0 +1,17 @@
+{
+  "name": "half-install-bluetooth",
+  "base": "base",
+  "description": "The Bluetooth firmware is installed but the dracut drop-in is missing: a half-install the installer completes; degraded but safe.",
+  "remove": [
+    "/etc/dracut.conf.d/60-oxp3-bt-firmware.conf"
+  ],
+  "expect": {
+    "verdict": "safe",
+    "safe": true,
+    "exit": 0,
+    "statuses": {
+      "state.bluetooth": "WARN",
+      "state.bt-initramfs": "WARN"
+    }
+  }
+}

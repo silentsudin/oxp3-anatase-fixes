@@ -284,8 +284,18 @@ install_extras() {
     sudo install -D -m 0644 "$here/files/oxp3-audio-route.service" /etc/systemd/user/oxp3-audio-route.service
     sudo install -D -m 0644 "$here/files/52-oxp3-speakers.conf" \
         /etc/wireplumber/wireplumber.conf.d/52-oxp3-speakers.conf
-    # the BMI260 IMU also matches bmi160's ACPI id; bmi160 loads but never binds
-    echo 'blacklist bmi160_i2c' | sudo tee /etc/modprobe.d/oxp3-bmi160.conf >/dev/null
+    # the BMI260 IMU also matches bmi160's ACPI id; bmi160 loads but never binds. The file is
+    # ours by name, but whatever was there before is kept in the undo state first so the
+    # uninstall can put it back instead of deleting it (docs/ROLLBACK.md).
+    local bmit
+    if printf 'blacklist bmi160_i2c\n' | cmp -s - /etc/modprobe.d/oxp3-bmi160.conf; then
+        :
+    else
+        bmit=$(oxp3_backup_image /etc/modprobe.d/oxp3-bmi160.conf oxp3-fixes)
+        echo 'blacklist bmi160_i2c' | sudo tee /etc/modprobe.d/oxp3-bmi160.conf >/dev/null
+        oxp3_manifest_record /etc/modprobe.d/oxp3-bmi160.conf oxp3-fixes "${bmit%%$'\t'*}" auto \
+            "IMU blacklist (bmi160_i2c)"
+    fi
     sudo systemctl daemon-reload
     sudo systemctl enable oxp3-xpad-sleep.service oxp3-rapl-pp1.service "oxp3-audio-resume@$me.service" \
         oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service >/dev/null 2>&1
@@ -310,8 +320,14 @@ uninstall_extras() {
     sudo systemctl disable --now "${EXTRA_UNITS[@]}" "oxp3-audio-resume@$me.service" >/dev/null 2>&1 || true
     sudo systemctl --global disable oxp3-audio-route.service >/dev/null 2>&1 || true
     for u in "${EXTRA_UNITS[@]}" oxp3-audio-resume@.service; do sudo rm -f "/etc/systemd/system/$u"; done
+    local bmiconf=/etc/modprobe.d/oxp3-bmi160.conf rbt="$here/tools/oxp3-rollback.sh"
+    if [[ -x $rbt ]] && "$rbt" has-record "$bmiconf" 2>/dev/null; then
+        sudo "$rbt" restore-file "$bmiconf" || sudo rm -f "$bmiconf"
+    else
+        sudo rm -f "$bmiconf"
+    fi
     sudo rm -f /etc/systemd/user/oxp3-audio-route.service \
-        /etc/wireplumber/wireplumber.conf.d/52-oxp3-speakers.conf /etc/modprobe.d/oxp3-bmi160.conf \
+        /etc/wireplumber/wireplumber.conf.d/52-oxp3-speakers.conf \
         /usr/local/libexec/oxp3-tdp-sync /usr/local/libexec/oxp3-xpad-sleep /usr/local/libexec/oxp3-audio-route \
         /usr/local/libexec/oxp3-sleep-wakeup /usr/local/libexec/oxp3-sleep-log \
         /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules

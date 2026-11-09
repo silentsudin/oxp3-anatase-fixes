@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "tool": "oxp3-preflight",
+  "version": "1.0.0",
+  "safe": false,
+  "verdict": "unsafe",
+  "counts": {"total": 71, "ok": 62, "warn": 7, "fail": 2},
+  "skipped_components": ["volume", "sleep"],
+  "warning_ids": ["core.root"],
+  "components": {"volume": {"state": "blocked", "blockers": ["tool.evdev"], "warnings": []}},
+  "checks": []
+}
