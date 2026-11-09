@@ -2963,25 +2963,37 @@ check_graphics() {
         return 0
     fi
 
-    local xess_game=0 game_exe=""
-    # Per-game XMX only matters when a process has actually loaded XeSS. Scanning
-    # the live maps is deterministic and needs no game-directory heuristic.
-    if grep -lsi 'libxess' /proc/[0-9]*/maps 2>/dev/null | head -1 | grep -q .; then
-        xess_game=1
-    fi
+    local xess_game=0 game_exe="" game_dir=""
+    # XeSS capability is a property of the install, not of the live process: games
+    # keep libxess in plugin/ThirdParty directories and only load it when the
+    # upscaler is enabled in-game. Check the running game's directory recursively,
+    # fall back to the live maps, and treat igdext in the prefix as capability too.
     if [ -n "${STATUS_JSON:-}" ] && have python3; then
         game_exe=$(printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
 try: d=json.load(sys.stdin)
 except Exception: raise SystemExit
 print(((d.get("game") or {}).get("exe") or ""))' 2>/dev/null)
     fi
+    if [ -n "$game_exe" ] && [ -d "$(dirname "$game_exe")" ]; then
+        game_dir=$(dirname "$game_exe")
+        find "$game_dir" -maxdepth 12 -iname 'libxess*.dll' -print -quit 2>/dev/null | grep -q . && xess_game=1
+    fi
+    [ "$xess_game" -eq 0 ] && grep -lsi 'libxess' /proc/[0-9]*/maps 2>/dev/null | head -1 | grep -q . && xess_game=1
+    if [ "$xess_game" -eq 0 ] && [ -n "${STATUS_JSON:-}" ] && have python3; then
+        prefix=$(printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: raise SystemExit
+print(((d.get("game") or {}).get("prefix") or ""))' 2>/dev/null)
+        [ -n "$prefix" ] && [ -d "$prefix/drive_c" ] && \
+            find "$prefix/drive_c" -maxdepth 6 -iname 'igdext*.dll' -print -quit 2>/dev/null | grep -q . && xess_game=1
+    fi
 
     simple_ind gfx.mesa mesa.host graphics "host Mesa driver" "ec418f04e589965a" "restore the recorded build: sudo tools/oxp3-mesa-restore.sh restore ; or rebuild: ./oxp3-fixes-fast.sh build install ; docs/WORKING-BUILD-2026-11-08.md"
     simple_ind gfx.xmx.driver xmx.driver graphics "XMX driver" "4b1d55ea" "rebuild the XMX driver: tools/build-xmx-driver.sh ; docs/xess-xmx.md"
     if [ "$xess_game" -eq 0 ]; then
-        record gfx.xmx.helper graphics "nodgrf helper" SKIP "no process has libxess loaded, so per-game XMX is not in scope" "game: ${game_exe:-not detected}" "XMX only applies when a game loads libxess; docs/xess-xmx.md"
-        record gfx.xmx.igc graphics "IGC ocloc present" SKIP "no process has libxess loaded, so per-game XMX is not in scope" "game: ${game_exe:-not detected}" "docs/xess-xmx.md"
-        record gfx.xmx.icd graphics "per-game XMX env" SKIP "no process has libxess loaded, so per-game XMX is not in scope" "game: ${game_exe:-not detected}" "docs/xess-xmx.md"
+        record gfx.xmx.helper graphics "nodgrf helper" SKIP "the running game has no XeSS files (no libxess in its directory, maps or prefix)" "game: ${game_exe:-not detected}" "XMX only applies when a game loads libxess; docs/xess-xmx.md"
+        record gfx.xmx.igc graphics "IGC ocloc present" SKIP "the running game has no XeSS files (no libxess in its directory, maps or prefix)" "game: ${game_exe:-not detected}" "docs/xess-xmx.md"
+        record gfx.xmx.icd graphics "per-game XMX env" SKIP "the running game has no XeSS files (no libxess in its directory, maps or prefix)" "game: ${game_exe:-not detected}" "docs/xess-xmx.md"
     else
         simple_ind gfx.xmx.helper xmx.helper graphics "nodgrf helper" "" "launch the game through tools/xmx-run.sh (or the Heroic XMX env) so ANV_CM_HELPER points at tools/xmx-cm-compile-nodgrf.sh ; docs/xess-xmx.md"
         simple_ind gfx.xmx.igc xmx.igc graphics "IGC ocloc present" "" "launch with the XMX stack: tools/xmx-run.sh sets XMX_IGC_DIR ; docs/xess-xmx.md"
