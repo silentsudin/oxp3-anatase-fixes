@@ -648,7 +648,7 @@ def_suite python-compile fast fast 120 0 \
     "py_compile every tracked .py plus the extensionless oxp3-voltap" \
     "PYTHONPYCACHEPREFIX=<logs>/pycache python3 -m py_compile <files>"
 def_suite fp-python fast fast 120 0 \
-    "fingerprint protocol + session crypto Python unittest suite (172 tests)" \
+    "fingerprint protocol + SPI/ACPI + session crypto Python unittest suite (264 tests)" \
     "python3 -m unittest discover -s tools/fingerprint/tests -q"
 def_suite fp-crypto fast fast 120 0 \
     "session crypto (SM2/SM3/SM4/KDF) against published vectors + benchmark" \

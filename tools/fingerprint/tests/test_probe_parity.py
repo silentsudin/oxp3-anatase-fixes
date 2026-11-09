@@ -71,14 +71,19 @@ class TestProbeParity(unittest.TestCase):
             self.assertEqual(library_ops[self.probe.OPS[short][1]], opcode)
 
     def test_destructive_set_matches(self):
-        self.assertEqual(set(self.probe.DESTRUCTIVE),
-                         {int(c) for c in P.DESTRUCTIVE_COMMANDS})
+        # The probe additionally refuses identify (0xB1) and the undocumented
+        # 0xD1 mode switch, which the protocol table classifies as
+        # read-only/unknown rather than template-destroying.
+        self.assertTrue({int(c) for c in P.DESTRUCTIVE_COMMANDS}
+                        <= set(self.probe.DESTRUCTIVE))
         self.assertEqual(self.probe.DESTRUCTIVE, {
             0xB0: "ENROLL",
+            0xB1: "IDENTIFY",
             0xB2: "REMOVE",
             0xC2: "JTAG",
             0xC3: "RESTORE_MCU",
             0xD0: "UPDATE_FIRMWARE",
+            0xD1: "FW_WORK_MODE_SWITCH",
             0xFF: "FW_WORK_MODE_SWITCH",
         })
 

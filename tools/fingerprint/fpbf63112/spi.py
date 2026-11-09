@@ -1,7 +1,8 @@
 """BF63112 SPI (ACPI/SPB) transport - the wire format the sensor really uses.
 
 Recovered from ``BetterlifeFingerprintDevice.dll`` 9.39.15.26 (the ACPI/SPB
-branch, not the USB branch):
+branch, not the USB branch); the full evidence is in
+``docs/hw/fingerprint-transport.md`` §4:
 
 * every transaction starts with a one-byte **selector**:
 
@@ -12,38 +13,49 @@ branch, not the USB branch):
   bits, bit 0 is always zero.  This is ``FUN_180017020`` (read, selector
   ``(x & 0x3f) * 2``) and ``FUN_180017404`` (write, ``(x | 0xc0) * 2``);
   the two forms differ by the 0x80 bit.
-* a **read** is a two-entry SPB sequence: write the 1-byte selector, then read
-  ``len`` bytes into the caller's buffer (``FUN_18001197c`` builds the two
-  transfers, ``FUN_180017020`` issues and waits).  There is no length field
-  and no leading status byte on the wire: the caller passes the exact length
-  of the register/data it wants.
-* a **write** is one transfer: the selector followed by ``len`` payload bytes
-  (``FUN_180017404``).
+
+  **Consequence that the safety gate must handle:** the selector only carries
+  six opcode bits, so the wire cannot distinguish ``0xA0`` from ``0x20``, nor
+  ``0xC2`` (JTAG) from ``0x02``.  :class:`SpiTransport` therefore refuses by
+  *selector* as well as by opcode (see ``FORBIDDEN_SELECTORS`` below).
+
+* a **read** is the driver's two-entry SPB sequence: write the 1-byte
+  selector, then clock ``len`` bytes out of the device
+  (``FUN_18001197c`` builds the two transfers, ``FUN_180017020`` issues them
+  and waits).  There is no length field and no leading status byte on the
+  wire: the caller passes the exact length of the register/data it wants.
+* a **write** is the same two-entry sequence with the payload as the second
+  transfer (``FUN_180017404``).
 * completion is the WDF request completion event
-  (``FUN_1800113a0`` -> ``SetEvent``), waited with 200 ms (bulk/data) or
-  300 ms (small register) timeouts in the driver.  A separate GPIO interrupt
-  (``GpioInt`` in ``_CRS``) signals "device has status"; the driver's DPC
+  (``FUN_1800113a0`` -> ``SetEvent``); a separate GPIO interrupt (``GpioInt``
+  in ``_CRS``) signals "device has status".  The driver's DPC
   (``FUN_180016450``) then *reads a one-byte status register over SPI* and
   compares it with an armed mask before signalling the higher layer.  The
   line's edge/level and polarity are not in the binary - they come from ACPI.
 * the first command lazily opens a reset target and sleeps 50 ms
   (``FUN_180016260`` -> ``FUN_180011550``); recovery pulses the reset line
   with 5 ms/10 ms sleeps (``FUN_180016110``/``FUN_180016a10``).
+* per-command timeouts are the descriptor values: 1000 ms per attempt /
+  2030 ms total for ordinary queries, 5000/10010 ms for GET_IMG,
+  2000/4016 ms for the vendor restore, and a 150 ms cancel settle
+  (``FUN_180013b60``).  A single spidev ``ioctl`` is synchronous and cannot
+  be interrupted by this module, so a kernel-level hang still blocks; the
+  deadline checks are applied at every boundary we control.
 
 Safety design
 -------------
 ``SpiTransport`` does nothing at construction time.  It refuses to open the
 device and send anything unless the caller passed ``allow_writes=True`` *and*
 the opcode is on an explicit allowlist.  Enrol/identify/remove/JTAG/restore/
-firmware-update opcodes are refused unconditionally.  ``--dry-run`` in the
-probe uses :func:`build_plan` only, which performs no I/O.
+firmware-update opcodes are refused unconditionally - both by opcode and by
+the selector they would put on the wire.  ``--dry-run`` in the probe uses
+:func:`build_plan`/:class:`SpiPlan` only, which performs no I/O.
 """
 
 from __future__ import annotations
 
 import ctypes
 import dataclasses
-import errno
 import fcntl
 import os
 import select
@@ -92,6 +104,11 @@ def selector(opcode: int, write: bool = False) -> int:
     return (value | SELECTOR_WRITE) if write else value
 
 
+def selector_low(opcode: int) -> int:
+    """Selector with the direction bit cleared (the part that gates safety)."""
+    return selector(opcode) & 0x7F
+
+
 #: Recovered SPI register that the driver reads/writes for capture mode and
 #: interrupt masking (``FUN_18000e588``: read 0x2d, set bit 0x10, write it
 #: back, later restore it).
@@ -103,6 +120,8 @@ OP_STATUS_REG = 0x2D
 OP_MODE = 0x2D
 
 #: Destructive / forbidden opcodes: never sent, even if a caller lists them.
+#: ``0xB1`` (identify) is included because the task's safety contract names
+#: identify alongside enrol.
 DESTRUCTIVE_OPS = {
     0xB0: "ENROLL_FINGERPRINT",
     0xB1: "IDENTIFY_FINGERPRINT",
@@ -114,10 +133,20 @@ DESTRUCTIVE_OPS = {
     0xFF: "FW_WORK_MODE_SWITCH",
 }
 
+#: Low seven selector bits that must never reach the wire.  Because the
+#: selector drops opcode bits 7..6, these also block aliases such as 0x02
+#: (which would otherwise compute JTAG's selector 0x04 / 0x84).
+FORBIDDEN_SELECTORS: dict[int, tuple[int, ...]] = {
+    selector_low(opcode): tuple(
+        other for other in DESTRUCTIVE_OPS
+        if selector_low(other) == selector_low(opcode))
+    for opcode in DESTRUCTIVE_OPS
+}
+
 #: Read-only commands that a probe may send.  These are the *USB* command
 #: table opcodes; the SPI branch has its own, data-driven opcode set, so on
 #: SPI they are deliberate read-only experiments (docs/hw/fingerprint-
-#: transport.md §8 step 2) plus the one recovered SPI register read (0x2d).
+#: transport.md §9 step 2) plus the one recovered SPI register read (0x2d).
 SAFE_READ_OPS: dict[int, str] = {
     0xA0: "QUERY_FIRMWARE_VER",
     0xA1: "QUERY_MODULE_SCHEME_INFORMATION",
@@ -131,41 +160,46 @@ SAFE_READ_OPS: dict[int, str] = {
 #: write must extend both ``write_allowlist`` and ``allow_writes=True``.
 SAFE_WRITE_OPS: dict[int, str] = {}
 
+# ---------------------------------------------------------------------------
+# Recovered timings (milliseconds)
+# ---------------------------------------------------------------------------
 
-@dataclasses.dataclass(frozen=True)
-class SpiCommand:
-    """One named, read-only command and the number of bytes it answers."""
+#: One SPI transfer / one command attempt in the Windows driver.
+XFER_TIMEOUT_MS = 200
+#: Ordinary query: per attempt, then total deadline (1000/2030).
+CMD_TIMEOUT_MS = 1000
+CMD_TOTAL_MS = 2030
+#: GET_IMG: per attempt, then total deadline (5000/10010).
+IMAGE_TIMEOUT_MS = 5000
+IMAGE_TOTAL_MS = 10010
+#: Vendor restore (0xC3): per attempt, then total deadline (2000/4016).
+RESTORE_TIMEOUT_MS = 2000
+RESTORE_TOTAL_MS = 4016
+#: Cancel settle after resetting the request events (150).
+CANCEL_SETTLE_MS = 150
+#: Sleep after the reset target is opened (50).
+RESET_OPEN_MS = 50
+#: Reset pulse widths (5 ms asserted, 10 ms released).
+RESET_ASSERT_MS = 5
+RESET_RELEASE_MS = 10
+#: Capture wait in FUN_18000e588: 3 x 100 ms, 50 ms between attempts.
+IRQ_WAIT_MS = 100
+IRQ_ATTEMPTS = 3
+IRQ_RETRY_SLEEP_MS = 50
 
-    name: str
-    opcode: int
-    read_len: int
-    timeout_ms: int = 300
-    description: str = ""
+#: Opcodes whose recovered descriptor uses a longer timeout.
+_IMAGE_OPCODE = 0xB4
+_RESTORE_OPCODE = 0xC3
 
 
-#: Read lengths from docs/hw/fingerprint.md (the answer layouts).  On the SPI
-#: link these lengths are the caller's fixed read size; there is no length
-#: field on the wire.
-COMMANDS: dict[str, SpiCommand] = {
-    "fw": SpiCommand("fw", 0xA0, 7, 300, "firmware version / project"),
-    "scheme": SpiCommand("scheme", 0xA1, 64, 300, "module scheme table"),
-    "count": SpiCommand("count", 0xB3, 4, 300, "template count (u32)"),
-    "uid": SpiCommand("uid", 0xC0, 16, 300, "module UID"),
-    "info": SpiCommand("info", 0xC1, 9, 300, "sensor geometry + flags"),
-    "status": SpiCommand("status", OP_STATUS_REG, 1, 300,
-                         "recovered SPI status register"),
-}
+def default_timeouts(opcode: int) -> tuple[int, int]:
+    """``(per_attempt_ms, total_ms)`` for ``opcode`` (recovered values)."""
+    if opcode == _IMAGE_OPCODE:
+        return IMAGE_TIMEOUT_MS, IMAGE_TOTAL_MS
+    if opcode == _RESTORE_OPCODE:
+        return RESTORE_TIMEOUT_MS, RESTORE_TOTAL_MS
+    return CMD_TIMEOUT_MS, CMD_TOTAL_MS
 
-#: Recovered driver timings (milliseconds).
-XFER_TIMEOUT_MS = 300          # FUN_180017020 / FUN_180017404 small transfers
-DATA_TIMEOUT_MS = 200          # FUN_180017020 bulk image read
-IRQ_WAIT_MS = 100              # FUN_18000e588 WaitForSingleObject(..., 100)
-IRQ_ATTEMPTS = 3               # retry loop in FUN_18000e588
-IRQ_RETRY_SLEEP_MS = 50        # Sleep(0x32) between attempts
-RESET_ASSERT_MS = 5            # FUN_180016110: Sleep(5)
-RESET_RELEASE_MS = 10          # FUN_180016110: Sleep(10)
-RESET_OPEN_MS = 50             # FUN_180016260: Sleep(0x32) after target open
-CANCEL_SETTLE_MS = 150         # FUN_180013b60: Sleep(0x96)/Wait(...,0x96)
 
 SPI_ACPI_EXPECTATIONS = """\
 The BF63112 SPI connection is described by _SB.PC00.SPI1.FPRT._CRS:
@@ -175,7 +209,8 @@ The BF63112 SPI connection is described by _SB.PC00.SPI1.FPRT._CRS:
   * GpioInt: the sensor interrupt line (PinIndex + triggering/polarity).
   * optional GpioIo: the reset line the Windows driver drives through the
     resource hub (if absent, the module must come up out of reset).
-The driver package itself contains no clock, mode, bit width or GPIO number."""
+The driver package itself contains no clock, mode, bit width or GPIO number.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -215,13 +250,35 @@ class IrqUnavailable(SpiError):
 # ---------------------------------------------------------------------------
 
 @dataclasses.dataclass(frozen=True)
+class SpiTransfer:
+    """One ``struct spi_ioc_transfer`` the plan will submit.
+
+    ``tx`` is written (empty means a receive-only transfer, which clocks
+    zeros) and ``rx_len`` bytes are captured.  One plan is submitted as a
+    single ``SPI_IOC_MESSAGE(n)`` ioctl so the chip select stays asserted.
+    """
+
+    tx: bytes = b""
+    rx_len: int = 0
+    speed_hz: int = 0
+    delay_us: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tx", bytes(self.tx))
+        if self.rx_len < 0:
+            raise ValueError("rx_len must be >= 0")
+        if not self.tx and not self.rx_len:
+            raise ValueError("transfer has neither tx nor rx bytes")
+
+
+@dataclasses.dataclass(frozen=True)
 class SpiPlan:
     """One transaction, fully determined before any I/O happens.
 
-    ``tx`` is the byte string handed to spidev; ``rx_len`` is the size of the
-    full-duplex receive buffer (always ``len(tx)`` for a single spidev
-    transfer; a read plan pads the selector with zeros so the device clocks
-    out its answer in the same transfer).
+    ``transfers`` is the exact two-entry SPB sequence: selector first, then
+    the payload (write) or the read clocking (read).  ``tx`` is the
+    concatenation of the outgoing bytes and ``rx_len`` the total receive
+    length; ``answer_len`` is the number of device bytes a read returns.
     """
 
     opcode: int
@@ -229,60 +286,152 @@ class SpiPlan:
     payload: bytes
     read_len: int
     selector: int
-    tx: bytes
-    rx_len: int
+    transfers: tuple[SpiTransfer, ...]
     timeout_ms: int
+    total_ms: int
 
     def __post_init__(self) -> None:
         if self.operation not in ("read", "write"):
             raise ValueError(f"bad operation {self.operation!r}")
-        if self.selector != selector(self.opcode, self.operation == "write"):
+        if self.selector != selector(self.opcode,
+                                     self.operation == "write"):
             raise ValueError("selector does not match opcode/direction")
-        if self.rx_len < len(self.tx):
-            raise ValueError("rx_len smaller than tx")
-        if self.operation == "read" and self.tx[0] != self.selector:
-            raise ValueError("read plan must start with the selector")
-        if self.operation == "write" and self.tx[0] != self.selector:
-            raise ValueError("write plan must start with the selector")
+        if not self.transfers:
+            raise ValueError("plan has no transfers")
+        if self.transfers[0].tx != bytes([self.selector]):
+            raise ValueError("first transfer must be the selector byte")
+        if self.operation == "read":
+            if len(self.transfers) != 2:
+                raise ValueError("read plan is selector + receive clock")
+            if self.transfers[0].rx_len:
+                raise ValueError("selector transfer must not read")
+            if self.transfers[1].tx:
+                raise ValueError("read plan's second transfer is receive-only")
+            if self.transfers[1].rx_len != self.read_len:
+                raise ValueError("read plan rx_len must equal read_len")
+        else:
+            if len(self.transfers) not in (1, 2):
+                raise ValueError("write plan is selector (+ payload)")
+            if any(t.rx_len for t in self.transfers):
+                raise ValueError("write plan must not read")
+            if self.read_len:
+                raise ValueError("write plan has a read_len")
+            if len(self.transfers) == 1 and self.payload:
+                raise ValueError("write plan dropped its payload")
+            if len(self.transfers) == 2 and self.transfers[1].tx != self.payload:
+                raise ValueError("write plan payload mismatch")
+        if self.segment_count > 0xFFFF:
+            raise ValueError("too many transfers")
+        if self.timeout_ms <= 0 or self.total_ms <= 0:
+            raise ValueError("timeouts must be > 0")
+        if self.total_ms < self.timeout_ms:
+            raise ValueError("total timeout smaller than one attempt")
+
+    @property
+    def tx(self) -> bytes:
+        return b"".join(t.tx for t in self.transfers)
+
+    @property
+    def rx_len(self) -> int:
+        return sum(t.rx_len for t in self.transfers)
+
+    @property
+    def segment_count(self) -> int:
+        return len(self.transfers)
+
+    @property
+    def answer_len(self) -> int:
+        return self.read_len if self.operation == "read" else 0
 
     def hexdump(self) -> str:
-        return self.tx.hex(" ")
+        """The exact wire bytes, with receive-only regions marked."""
+        parts = []
+        for transfer in self.transfers:
+            if transfer.tx:
+                parts.append(transfer.tx.hex(" "))
+            if transfer.rx_len:
+                parts.append(f"<- {transfer.rx_len} B")
+        return " | ".join(parts)
 
 
 def build_plan(opcode: int, *, operation: str = "read",
                payload: bytes = b"", read_len: int | None = None,
-               timeout_ms: int | None = None) -> SpiPlan:
-    """Build the exact bytes for one transaction, without touching hardware.
+               timeout_ms: int | None = None,
+               total_ms: int | None = None) -> SpiPlan:
+    """Build the exact transaction for ``opcode``, without touching hardware.
 
-    * read : ``selector`` then ``read_len`` zero bytes (full-duplex); the
-      answer is the corresponding receive bytes.
-    * write: ``selector | 0x80`` then ``payload``.
+    * read : selector transfer, then a receive-only transfer of ``read_len``
+      bytes (the device clocks its answer out during that second transfer).
+    * write: selector transfer, then the payload as a write transfer.
     """
     payload = bytes(payload)
     if operation == "read":
-        n = len(payload) if read_len is None else read_len
-        if n < 0:
-            raise ValueError("read_len must be >= 0")
+        if payload:
+            raise ValueError("a read plan takes no payload")
+        n = read_len if read_len is not None else 0
+        if n <= 0:
+            raise ValueError("read_len must be > 0")
+        if len(payload) > n:
+            raise ValueError("read payload longer than read_len")
+        default_timeout, default_total = default_timeouts(opcode)
         sel = selector(opcode, write=False)
-        tx = bytes([sel]) + bytes(n)
-        return SpiPlan(opcode, "read", payload, n, sel, tx,
-                       len(tx), timeout_ms if timeout_ms is not None
-                       else XFER_TIMEOUT_MS)
+        transfers = (
+            SpiTransfer(bytes([sel]), 0),
+            SpiTransfer(b"", n),
+        )
+        return SpiPlan(
+            opcode, "read", payload, n, sel, transfers,
+            timeout_ms if timeout_ms is not None else default_timeout,
+            total_ms if total_ms is not None else default_total)
     if operation == "write":
+        default_timeout, default_total = default_timeouts(opcode)
         sel = selector(opcode, write=True)
-        tx = bytes([sel]) + payload
-        return SpiPlan(opcode, "write", payload, len(payload), sel, tx,
-                       len(tx), timeout_ms if timeout_ms is not None
-                       else XFER_TIMEOUT_MS)
+        transfers = (SpiTransfer(bytes([sel]), 0),)
+        if payload:
+            transfers += (SpiTransfer(payload, 0),)
+        return SpiPlan(
+            opcode, "write", payload, 0, sel, transfers,
+            timeout_ms if timeout_ms is not None else default_timeout,
+            total_ms if total_ms is not None else default_total)
     raise ValueError(f"bad operation {operation!r}")
 
 
-def plan_command(command: SpiCommand, **kwargs) -> SpiPlan:
+def plan_command(command: "SpiCommand", **kwargs) -> SpiPlan:
     """Plan a named read-only command (``COMMANDS``)."""
+    timeout_ms = kwargs.pop("timeout_ms", command.timeout_ms)
+    total_ms = kwargs.pop("total_ms", command.total_ms)
     return build_plan(command.opcode, operation="read",
                       read_len=command.read_len,
-                      timeout_ms=kwargs.pop("timeout_ms", command.timeout_ms),
+                      timeout_ms=timeout_ms, total_ms=total_ms,
                       **kwargs)
+
+
+@dataclasses.dataclass(frozen=True)
+class SpiCommand:
+    """One named, read-only command and the number of bytes it answers."""
+
+    name: str
+    opcode: int
+    read_len: int
+    timeout_ms: int = CMD_TIMEOUT_MS
+    total_ms: int = CMD_TOTAL_MS
+    description: str = ""
+
+
+#: Read lengths from docs/hw/fingerprint.md (the answer layouts).  On the SPI
+#: link these lengths are the caller's fixed read size; there is no length
+#: field on the wire.  Timeouts are the recovered descriptor values.
+COMMANDS: dict[str, SpiCommand] = {
+    "fw": SpiCommand("fw", 0xA0, 7, description="firmware version / project"),
+    "scheme": SpiCommand("scheme", 0xA1, 64,
+                         description="module scheme table"),
+    "count": SpiCommand("count", 0xB3, 4, description="template count (u32)"),
+    "uid": SpiCommand("uid", 0xC0, 16, description="module UID"),
+    "info": SpiCommand("info", 0xC1, 9,
+                       description="sensor geometry + flags"),
+    "status": SpiCommand("status", OP_STATUS_REG, 1,
+                         description="recovered SPI status register"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +441,9 @@ def plan_command(command: SpiCommand, **kwargs) -> SpiPlan:
 class LinuxSpiIO:
     """``os.open``/``ioctl`` based spidev access, injectable for tests.
 
-    Only ``open``/``configure``/``transfer``/``close`` are part of the
-    interface :class:`SpiTransport` uses.
+    Only ``open``/``configure``/``message``/``close`` are part of the
+    interface :class:`SpiTransport` uses; ``transfer`` is a convenience
+    wrapper kept for small callers and probes.
     """
 
     def __init__(self, path: str):
@@ -302,6 +452,8 @@ class LinuxSpiIO:
         self.speed_hz = 0
         self.mode = 0
         self.bits_per_word = 8
+        self.last_transfers: tuple[SpiTransfer, ...] = ()
+        self.last_message: tuple[bytes, ...] = ()
 
     # -- lifecycle ---------------------------------------------------------
     def open(self) -> None:
@@ -327,26 +479,60 @@ class LinuxSpiIO:
                         struct.pack("<I", speed_hz & 0xFFFFFFFF))
             self.speed_hz = speed_hz & 0xFFFFFFFF
 
+    def message(self, transfers: tuple[SpiTransfer, ...]) -> tuple[bytes, ...]:
+        """Submit one ``SPI_IOC_MESSAGE(n)``; return each receive buffer."""
+        if self.fd is None:
+            raise SpiError("message() before open()")
+        transfers = tuple(transfers)
+        if not transfers:
+            raise SpiError("empty SPI message")
+        if len(transfers) > 0xFFFF:
+            raise SpiError("too many SPI transfers")
+        keep = []
+        descriptors = []
+        for transfer in transfers:
+            length = max(len(transfer.tx), transfer.rx_len)
+            if length <= 0:
+                raise SpiError("zero-length SPI transfer")
+            if transfer.tx:
+                tx_buf = ctypes.create_string_buffer(transfer.tx, length)
+                tx_addr = ctypes.addressof(tx_buf)
+            else:
+                tx_buf = None
+                tx_addr = 0
+            if transfer.rx_len:
+                rx_buf = ctypes.create_string_buffer(length)
+                rx_addr = ctypes.addressof(rx_buf)
+            else:
+                rx_buf = None
+                rx_addr = 0
+            keep.append((tx_buf, rx_buf))
+            descriptors.append(_SPI_IOC_TRANSFER.pack(
+                tx_addr, rx_addr, length,
+                transfer.speed_hz & 0xFFFFFFFF,
+                transfer.delay_us & 0xFFFF,
+                self.bits_per_word & 0xFF, 0, 0, 0, 0, 0))
+        msg = b"".join(descriptors)
+        fcntl.ioctl(self.fd, spi_ioc_message(len(transfers)), msg)
+        received = tuple(
+            bytes(rx_buf.raw[:transfer.rx_len]) if rx_buf is not None else b""
+            for transfer, (_tx_buf, rx_buf) in zip(transfers, keep))
+        self.last_transfers = transfers
+        self.last_message = received
+        return received
+
     def transfer(self, tx: bytes, rx_len: int | None = None,
                  speed_hz: int = 0, delay_us: int = 0) -> bytes:
         """One full-duplex transfer; returns ``rx_len`` received bytes."""
-        if self.fd is None:
-            raise SpiError("transfer() before open()")
-        tx = bytes(tx)
-        n = max(len(tx), rx_len or 0, 1)
-        tx_buf = bytearray(tx) + bytearray(n - len(tx))
-        rx_buf = bytearray(n)
-        tx_addr = ctypes.addressof((ctypes.c_char * n).from_buffer(tx_buf))
-        rx_addr = ctypes.addressof((ctypes.c_char * n).from_buffer(rx_buf))
-        msg = _SPI_IOC_TRANSFER.pack(tx_addr, rx_addr, n, speed_hz, delay_us,
-                                     self.bits_per_word, 0, 0, 0, 0, 0)
-        fcntl.ioctl(self.fd, SPI_IOC_MESSAGE_1, msg)
-        return bytes(rx_buf[:rx_len or n])
+        transfer = SpiTransfer(bytes(tx), rx_len or 0, speed_hz, delay_us)
+        return self.message((transfer,))[0]
 
     def close(self) -> None:
         if self.fd is not None:
             try:
                 os.close(self.fd)
+            except OSError:
+                pass
             finally:
                 self.fd = None
 
@@ -359,10 +545,20 @@ class LinuxSpiIO:
 class IrqEvent:
     """One observed interrupt wait result."""
 
-    source: str                 # "gpiod", "sysfs", "poll", "unavailable"
+    source: str                 # "gpiod", "sysfs", "poll"
     elapsed_ms: float
     edge: str | None = None     # "rising"/"falling" when known
     value: int | None = None    # line level when known
+    observed: bool = True       # False only for the time-based fallback
+
+    @property
+    def asserted(self) -> bool | None:
+        """``True`` when the edge/level represents line assertion."""
+        if self.edge == "rising" or self.value == 1:
+            return True
+        if self.edge == "falling" or self.value == 0:
+            return False
+        return None
 
 
 class GpioIrqWaiter:
@@ -370,14 +566,24 @@ class GpioIrqWaiter:
 
     Backend order: ``gpiod`` (libgpiod v1 or v2 Python bindings) -> sysfs
     edge -> polling.  The sysfs path writes ``export``/``direction``/``edge``
-    under ``/sys/class/gpio`` (root, and it may conflict with another owner);
-    the polling fallback cannot see an edge and only waits out the timeout,
-    so it warns loudly.
+    (and ``active_low`` when the controller exposes it) under
+    ``/sys/class/gpio`` (root, and it may conflict with another owner); the
+    polling fallback cannot see an edge and only waits out the timeout, so it
+    warns loudly and reports ``observed=False``.
+
+    ``edge`` is the *logical* assertion edge after ``active_low`` is applied:
+    for an active-low line, a rising logical edge is the physical falling
+    edge.  ACPI ``GpioInt`` polarity therefore maps to ``active_low``, not to
+    a different edge name.  Level-triggered lines cannot be represented by
+    libgpiod's edge API; the caller should pass ``both`` and document that
+    limitation.
     """
 
     def __init__(self, line: int, *, chip: str | None = None,
                  edge: str = "rising", active_low: bool = False,
                  backend: str = "auto",
+                 sysfs_base: str = "/sys/class/gpio",
+                 gpiod_module=None,
                  warn=warnings.warn,
                  clock=time.monotonic, sleep=time.sleep):
         if edge not in ("rising", "falling", "both"):
@@ -387,6 +593,8 @@ class GpioIrqWaiter:
         self.edge = edge
         self.active_low = active_low
         self.backend = backend
+        self.sysfs_base = sysfs_base
+        self._gpiod_module = gpiod_module
         self._warn = warn
         self._clock = clock
         self._sleep = sleep
@@ -403,10 +611,13 @@ class GpioIrqWaiter:
         for candidate in order:
             try:
                 if candidate == "gpiod":
-                    self._impl = _GpiodWaiter(self.line, self.chip, self.edge,
-                                              self.active_low)
+                    self._impl = _GpiodWaiter(
+                        self.line, self.chip, self.edge, self.active_low,
+                        self._gpiod_module)
                 elif candidate == "sysfs":
-                    self._impl = _SysfsWaiter(self.line, self.edge)
+                    self._impl = _SysfsWaiter(
+                        self.line, self.edge, self.active_low,
+                        self.sysfs_base)
                 elif candidate == "poll":
                     self._impl = _PollWaiter(self._clock, self._sleep)
                 else:
@@ -431,9 +642,13 @@ class GpioIrqWaiter:
                 "poll; the interrupt line cannot be observed, so a timeout "
                 "here does not prove the device is idle", RuntimeWarning,
                 stacklevel=2)
+            impl.wait(timeout_ms / 1000.0)
+            return IrqEvent(source="poll",
+                            elapsed_ms=(self._clock() - started) * 1000.0,
+                            observed=False)
         edge, value = impl.wait(timeout_ms / 1000.0)
         elapsed = (self._clock() - started) * 1000.0
-        if edge is None and value is None and impl.name != "poll":
+        if edge is None and value is None:
             raise SpiTimeout(f"no interrupt on GPIO {self.line} within "
                              f"{timeout_ms} ms")
         return IrqEvent(source=impl.name, elapsed_ms=elapsed,
@@ -449,21 +664,23 @@ class _GpiodWaiter:
     name = "gpiod"
 
     def __init__(self, line: int, chip: str | None, edge: str,
-                 active_low: bool):
-        import gpiod  # noqa: F401  (probe for the binding)
-        self._gpiod = gpiod
+                 active_low: bool, gpiod_module=None):
+        if gpiod_module is None:
+            import gpiod as gpiod_module
+        self._gpiod = gpiod_module
         self._line = line
         self._chip = chip
         self._edge = edge
         self._active_low = active_low
         self._request = None
         # libgpiod v1 and v2 have incompatible Python APIs; decide by symbol.
-        if hasattr(gpiod, "Chip") and hasattr(gpiod, "LINE_REQ_EV_EDGE"):
-            self._version = 1
-            self._open_v1()
-        elif hasattr(gpiod, "request_lines"):
+        if hasattr(gpiod_module, "request_lines"):
             self._version = 2
             self._open_v2()
+        elif (hasattr(gpiod_module, "Chip")
+              and hasattr(gpiod_module, "LINE_REQ_EV_EDGE")):
+            self._version = 1
+            self._open_v1()
         else:
             raise SpiError("unrecognised gpiod Python binding")
 
@@ -494,7 +711,8 @@ class _GpiodWaiter:
             _chip, line = self._request
             if line.event_wait(timeout=timeout_s):
                 ev = line.event_read()
-                return ("rising" if ev.type == self._gpiod.EdgeEventType.RISING_EDGE
+                return ("rising"
+                        if ev.type == self._gpiod.EdgeEventType.RISING_EDGE
                         else "falling"), None
             return None, None
         if self._request.wait_edge_events(timeout_s):
@@ -520,26 +738,55 @@ class _GpiodWaiter:
 
 
 class _SysfsWaiter:
-    """Edge wait through /sys/class/gpio (root; writes export/edge)."""
+    """Edge wait through /sys/class/gpio (root; writes export/edge).
+
+    The kernel's sysfs ABI does not report which edge woke the wait, so this
+    backend samples the level before and after the wakeup and derives the
+    transition.  That is enough to tell rising from falling for an
+    edge-triggered line, but a level-triggered line (or a missed edge between
+    the two samples) should be treated as best-effort.  ``active_low`` is
+    written to the controller's ``active_low`` attribute when present and
+    emulated in software otherwise.
+    """
 
     name = "sysfs"
 
-    def __init__(self, line: int, edge: str):
-        base = "/sys/class/gpio"
-        gpio = os.path.join(base, f"gpio{line}")
+    def __init__(self, line: int, edge: str, active_low: bool = False,
+                 base: str = "/sys/class/gpio"):
         if not os.path.isdir(base):
-            raise SpiError("/sys/class/gpio is not available")
+            raise SpiError(f"{base} is not available")
+        self._base = base
+        gpio = os.path.join(base, f"gpio{line}")
         self._exported_here = False
         if not os.path.isdir(gpio):
             self._write(os.path.join(base, "export"), str(line))
             self._exported_here = True
             if not _wait_path(gpio, 0.5):
                 raise SpiError(f"gpio{line} did not appear after export")
-        self._dir = os.path.join(gpio, "direction")
-        self._write(self._dir, "in")
-        self._write(os.path.join(gpio, "edge"), edge)
-        self._value = os.path.join(gpio, "value")
         self._gpio = gpio
+        self._value_path = os.path.join(gpio, "value")
+        self._write(os.path.join(gpio, "direction"), "in")
+        self._write(os.path.join(gpio, "edge"), edge)
+        self._active_low = active_low
+        self._hw_active_low = False
+        active_low_path = os.path.join(gpio, "active_low")
+        if os.path.exists(active_low_path):
+            try:
+                self._write(active_low_path, "1" if active_low else "0")
+                self._hw_active_low = True
+            except OSError:
+                self._hw_active_low = False
+        self._last = self._read_value()
+
+    def _read_value(self) -> int:
+        with open(self._value_path, "r", encoding="ascii") as fh:
+            raw = fh.read().strip()
+        if raw not in ("0", "1"):
+            raise SpiError(f"unexpected sysfs value {raw!r}")
+        value = int(raw)
+        if self._active_low and not self._hw_active_low:
+            value = 1 - value
+        return value
 
     @staticmethod
     def _write(path: str, text: str) -> None:
@@ -547,19 +794,23 @@ class _SysfsWaiter:
             fh.write(text + "\n")
 
     def wait(self, timeout_s: float):
-        with open(self._value, "r", encoding="ascii") as fh:
+        with open(self._value_path, "r", encoding="ascii") as fh:
             ready, _, _ = select.select([fh], [], [], timeout_s)
             if not ready:
                 return None, None
-            fh.seek(0)
-            value = fh.read().strip()
-        return ("edge" if value in ("0", "1") else None,
-                int(value) if value in ("0", "1") else None)
+        value = self._read_value()
+        previous = self._last
+        self._last = value
+        if value == previous:
+            # A level-triggered wake (or a missed edge): level is real, edge
+            # type is not.
+            return None, value
+        return ("rising" if value > previous else "falling"), value
 
     def close(self) -> None:
         if self._exported_here:
             try:
-                self._write(os.path.join("/sys/class/gpio", "unexport"),
+                self._write(os.path.join(self._base, "unexport"),
                             str(os.path.basename(self._gpio)[4:]))
             except OSError:
                 pass
@@ -592,15 +843,24 @@ def _wait_path(path: str, timeout_s: float) -> bool:
 
 
 class GpioResetLine:
-    """Output line used to pulse the sensor reset (only when configured)."""
+    """Output line used to pulse the sensor reset (only when configured).
+
+    ``active_low`` is the electrical polarity of the reset input.  The
+    backend receives the logical values 1 (asserted) and 0 (idle); polarity is
+    applied by the gpiod request flags or by the sysfs ``active_low``
+    attribute, and emulated in software when the kernel exposes neither.
+    """
 
     def __init__(self, line: int, *, chip: str | None = None,
                  active_low: bool = True, backend: str = "auto",
-                 sleep=time.sleep):
+                 sysfs_base: str = "/sys/class/gpio",
+                 gpiod_module=None, sleep=time.sleep):
         self.line = line
         self.chip = chip
         self.active_low = active_low
         self.backend = backend
+        self.sysfs_base = sysfs_base
+        self._gpiod_module = gpiod_module
         self._sleep = sleep
         self._impl = None
 
@@ -613,10 +873,14 @@ class GpioResetLine:
         for candidate in order:
             try:
                 if candidate == "gpiod":
-                    self._impl = _GpiodOutput(self.line, self.chip,
-                                              self.active_low)
+                    self._impl = _GpiodOutput(
+                        self.line, self.chip, self.active_low,
+                        self._gpiod_module)
+                elif candidate == "sysfs":
+                    self._impl = _SysfsOutput(
+                        self.line, self.active_low, self.sysfs_base)
                 else:
-                    self._impl = _SysfsOutput(self.line)
+                    raise ValueError(f"unknown reset backend {candidate!r}")
                 return self._impl
             except (ImportError, OSError, SpiError) as exc:
                 errors.append(f"{candidate}: {exc}")
@@ -625,12 +889,11 @@ class GpioResetLine:
 
     def pulse(self, assert_ms: int = RESET_ASSERT_MS,
               release_ms: int = RESET_RELEASE_MS) -> None:
+        """Assert (logical 1), sleep ``assert_ms``, release, sleep."""
         impl = self._open()
-        active = 0 if self.active_low else 1
-        idle = 1 - active
-        impl.set(active)
+        impl.set(1)
         self._sleep(assert_ms / 1000.0)
-        impl.set(idle)
+        impl.set(0)
         self._sleep(release_ms / 1000.0)
 
     def close(self) -> None:
@@ -639,12 +902,15 @@ class GpioResetLine:
 
 
 class _GpiodOutput:
-    def __init__(self, line: int, chip: str | None, active_low: bool):
-        import gpiod
-        self._gpiod = gpiod
+    def __init__(self, line: int, chip: str | None, active_low: bool,
+                 gpiod_module=None):
+        if gpiod_module is None:
+            import gpiod as gpiod_module
+        self._gpiod = gpiod_module
         self._line = line
-        self._version = 1 if hasattr(gpiod, "Chip") else 2
+        self._version = 2 if hasattr(gpiod_module, "request_lines") else 1
         if self._version == 1:
+            gpiod = gpiod_module
             c = gpiod.Chip(chip or "gpiochip0")
             ln = c.get_line(line)
             flags = (gpiod.LINE_REQ_FLAG_ACTIVE_LOW if active_low else 0)
@@ -652,19 +918,22 @@ class _GpiodOutput:
                        flags=flags)
             self._h = (c, ln)
         else:
-            settings = gpiod.LineSettings(direction=gpiod.Direction.OUTPUT,
-                                          output_value=gpiod.Value.INACTIVE,
-                                          active_low=active_low)
-            self._h = gpiod.request_lines(chip or "gpiochip0",
-                                          consumer="fpbf63112-reset",
-                                          config={line: settings})
+            settings = gpiod_module.LineSettings(
+                direction=gpiod_module.Direction.OUTPUT,
+                output_value=gpiod_module.Value.INACTIVE,
+                active_low=active_low)
+            self._h = gpiod_module.request_lines(
+                chip or "gpiochip0", consumer="fpbf63112-reset",
+                config={line: settings})
 
     def set(self, value: int) -> None:
         if self._version == 1:
-            self._h[1].set_value(value)
+            self._h[1].set_value(1 if value else 0)
         else:
-            self._h.set_value(self._line, self._gpiod.Value.ACTIVE if value
-                              else self._gpiod.Value.INACTIVE)
+            self._h.set_value(
+                self._line,
+                self._gpiod.Value.ACTIVE if value
+                else self._gpiod.Value.INACTIVE)
 
     def close(self) -> None:
         if self._version == 1:
@@ -676,26 +945,40 @@ class _GpiodOutput:
 
 
 class _SysfsOutput:
-    def __init__(self, line: int):
-        base = "/sys/class/gpio"
-        gpio = os.path.join(base, f"gpio{line}")
+    def __init__(self, line: int, active_low: bool = False,
+                 base: str = "/sys/class/gpio"):
         if not os.path.isdir(base):
-            raise SpiError("/sys/class/gpio is not available")
+            raise SpiError(f"{base} is not available")
+        self._base = base
+        gpio = os.path.join(base, f"gpio{line}")
         self._exported_here = False
         if not os.path.isdir(gpio):
             _SysfsWaiter._write(os.path.join(base, "export"), str(line))
             self._exported_here = True
-        _SysfsWaiter._write(os.path.join(gpio, "direction"), "out")
-        self._value = os.path.join(gpio, "value")
         self._gpio = gpio
+        _SysfsWaiter._write(os.path.join(gpio, "direction"), "out")
+        self._active_low = active_low
+        self._hw_active_low = False
+        active_low_path = os.path.join(gpio, "active_low")
+        if os.path.exists(active_low_path):
+            try:
+                _SysfsWaiter._write(active_low_path,
+                                    "1" if active_low else "0")
+                self._hw_active_low = True
+            except OSError:
+                self._hw_active_low = False
+        self._value = os.path.join(gpio, "value")
 
     def set(self, value: int) -> None:
-        _SysfsWaiter._write(self._value, "1" if value else "0")
+        physical = 1 if value else 0
+        if self._active_low and not self._hw_active_low:
+            physical = 1 - physical
+        _SysfsWaiter._write(self._value, "1" if physical else "0")
 
     def close(self) -> None:
         if self._exported_here:
             try:
-                _SysfsWaiter._write(os.path.join("/sys/class/gpio", "unexport"),
+                _SysfsWaiter._write(os.path.join(self._base, "unexport"),
                                     str(os.path.basename(self._gpio)[4:]))
             except OSError:
                 pass
@@ -746,6 +1029,7 @@ class SpiTransport:
         self._opened = False
         self._configured = False
         self._cancel_requested = False
+        self.last_irq: IrqEvent | None = None
 
     # -- introspection -----------------------------------------------------
     @property
@@ -768,6 +1052,14 @@ class SpiTransport:
             raise UnsafeCommand(
                 f"opcode 0x{plan.opcode:02x} is "
                 f"{DESTRUCTIVE_OPS[plan.opcode]}: refusing unconditionally")
+        low = plan.selector & 0x7F
+        if low in FORBIDDEN_SELECTORS:
+            aliases = FORBIDDEN_SELECTORS[low]
+            names = ", ".join(f"0x{op:02x} {DESTRUCTIVE_OPS[op]}"
+                              for op in aliases)
+            raise UnsafeCommand(
+                f"selector 0x{low:02x} (opcode 0x{plan.opcode:02x}) is "
+                f"reserved for {names}: refusing unconditionally")
         if not self.allow_writes:
             raise CommandNotAllowed(
                 "refusing to send any command without allow_writes=True "
@@ -788,9 +1080,17 @@ class SpiTransport:
             raise SpiError("no spidev path configured; refusing to guess one")
         if self._io is None:
             self._io = LinuxSpiIO(self.spidev_path)
-        self._io.open()
-        self._io.configure(speed_hz=self.speed_hz, mode=self.mode,
-                           bits_per_word=self.bits_per_word)
+        try:
+            self._io.open()
+            self._io.configure(speed_hz=self.speed_hz, mode=self.mode,
+                               bits_per_word=self.bits_per_word)
+        except OSError as exc:
+            try:
+                self._io.close()
+            except OSError:
+                pass
+            raise SpiError(f"cannot open/configure {self.spidev_path}: "
+                           f"{exc}") from exc
         self._opened = True
         if self.reset_line is not None and self.allow_reset:
             self.reset_line.pulse()
@@ -799,7 +1099,10 @@ class SpiTransport:
 
     def close(self) -> None:
         if self._io is not None:
-            self._io.close()
+            try:
+                self._io.close()
+            except OSError:
+                pass
         if self.irq is not None:
             self.irq.close()
         if self.reset_line is not None:
@@ -816,9 +1119,11 @@ class SpiTransport:
     # -- planning ----------------------------------------------------------
     def plan(self, opcode: int, *, operation: str = "read",
              payload: bytes = b"", read_len: int | None = None,
-             timeout_ms: int | None = None) -> SpiPlan:
+             timeout_ms: int | None = None,
+             total_ms: int | None = None) -> SpiPlan:
         return build_plan(opcode, operation=operation, payload=payload,
-                          read_len=read_len, timeout_ms=timeout_ms)
+                          read_len=read_len, timeout_ms=timeout_ms,
+                          total_ms=total_ms)
 
     def plan_command(self, name: str, **kwargs) -> SpiPlan:
         try:
@@ -848,52 +1153,83 @@ class SpiTransport:
             raise Cancelled("transaction cancelled by the caller")
 
     # -- execution ---------------------------------------------------------
-    def execute(self, plan: SpiPlan) -> bytes:
-        """Run one plan and return the received bytes.
+    def _elapsed_ms(self, started: float) -> float:
+        return (self._clock() - started) * 1000.0
 
-        For a read the answer starts after the selector byte; the full
-        received buffer is returned (the caller takes ``[1:]``).  The
-        per-command timeout covers the transfer plus the IRQ wait; spidev
-        itself performs a synchronous, kernel-bounded ioctl.
+    def _check_deadline(self, plan: SpiPlan, started: float, stage: str) -> None:
+        elapsed = self._elapsed_ms(started)
+        # The total deadline is the outer bound; if it fired, report it even
+        # when the (shorter) per-attempt bound would also have fired.
+        if elapsed > plan.total_ms:
+            raise SpiTimeout(
+                f"opcode 0x{plan.opcode:02x} took {elapsed:.0f} ms > "
+                f"{plan.total_ms} ms total timeout ({stage})")
+        if elapsed > plan.timeout_ms:
+            raise SpiTimeout(
+                f"opcode 0x{plan.opcode:02x} took {elapsed:.0f} ms > "
+                f"{plan.timeout_ms} ms per-attempt timeout ({stage})")
+
+    def execute(self, plan: SpiPlan) -> bytes:
+        """Run one plan and return the device's answer bytes.
+
+        A read returns exactly ``plan.read_len`` bytes (the second transfer's
+        receive buffer); a write returns ``b""``.  The per-attempt and total
+        deadlines cover opening, the transfer and the optional IRQ wait.
+        spidev itself performs a synchronous, kernel-bounded ioctl, so a
+        kernel hang cannot be interrupted here.
         """
         self._check(plan)
         self._check_cancel()
         self.open()
         started = self._clock()
-        rx = self._io.transfer(plan.tx, rx_len=plan.rx_len)
+        self._check_deadline(plan, started, "before transfer")
+        try:
+            received = self._io.message(plan.transfers)
+        except OSError as exc:
+            raise SpiError(
+                f"SPI transfer for opcode 0x{plan.opcode:02x} failed: "
+                f"{exc}") from exc
+        answer = b"".join(received)
         self._check_cancel()
+        self._check_deadline(plan, started, "after transfer")
         if self.irq is not None:
-            remaining = plan.timeout_ms - (self._clock() - started) * 1000.0
+            remaining = min(plan.timeout_ms, plan.total_ms) \
+                - self._elapsed_ms(started)
             if remaining <= 0:
                 raise SpiTimeout(
                     f"opcode 0x{plan.opcode:02x} timed out before the IRQ "
                     f"wait ({plan.timeout_ms} ms)")
-            self.irq.wait(int(remaining))
-        elapsed_ms = (self._clock() - started) * 1000.0
-        if elapsed_ms > plan.timeout_ms:
-            raise SpiTimeout(f"opcode 0x{plan.opcode:02x} took "
-                             f"{elapsed_ms:.0f} ms > {plan.timeout_ms} ms")
-        return rx
+            self.last_irq = self.irq.wait(int(remaining))
+            self._check_deadline(plan, started, "after IRQ")
+        if plan.operation == "read":
+            if len(answer) < plan.read_len:
+                raise SpiError(
+                    f"short SPI read for opcode 0x{plan.opcode:02x}: "
+                    f"{len(answer)} of {plan.read_len} bytes")
+            return answer[:plan.read_len]
+        return b""
 
     # -- command helpers ---------------------------------------------------
     def read(self, opcode: int, length: int, *,
-             timeout_ms: int | None = None) -> bytes:
-        """Read ``length`` bytes for ``opcode`` (answer only, no selector)."""
+             timeout_ms: int | None = None,
+             total_ms: int | None = None) -> bytes:
+        """Read ``length`` bytes for ``opcode`` (exactly the answer bytes)."""
         plan = self.plan(opcode, operation="read", read_len=length,
-                         timeout_ms=timeout_ms)
-        rx = self.execute(plan)
-        return rx[1:1 + length]
+                         timeout_ms=timeout_ms, total_ms=total_ms)
+        return self.execute(plan)
 
     def read_command(self, name: str) -> bytes:
         command = COMMANDS[name]
         return self.read(command.opcode, command.read_len,
-                         timeout_ms=command.timeout_ms)
+                         timeout_ms=command.timeout_ms,
+                         total_ms=command.total_ms)
 
     def write(self, opcode: int, payload: bytes, *,
-              timeout_ms: int | None = None) -> None:
+              timeout_ms: int | None = None,
+              total_ms: int | None = None) -> None:
         """Write ``payload`` for ``opcode`` (requires the write allowlist)."""
         plan = self.plan(opcode, operation="write", payload=payload,
-                         timeout_ms=timeout_ms)
+                         timeout_ms=timeout_ms, total_ms=total_ms)
         self.execute(plan)
 
     def wait_irq(self, timeout_ms: int | None = None) -> IrqEvent:
@@ -907,16 +1243,24 @@ class SpiTransport:
         """The driver's capture wait: up to 3 x 100 ms, 50 ms apart.
 
         Mirrors ``FUN_18000e588``'s ``ResetEvent`` + ``WaitForSingleObject
-        (..., 100)`` loop with ``Sleep(0x32)`` between attempts.
+        (..., 100)`` loop with ``Sleep(0x32)`` between attempts.  A
+        time-based poll result is not an observation, so it counts as a
+        timeout here.
         """
         last: SpiTimeout | None = None
         for attempt in range(attempts):
             try:
-                return self.wait_irq(timeout_ms)
+                event = self.wait_irq(timeout_ms)
             except SpiTimeout as exc:
                 last = exc
-                if attempt + 1 < attempts:
-                    self._sleep(IRQ_RETRY_SLEEP_MS / 1000.0)
+            else:
+                if event.observed:
+                    return event
+                last = SpiTimeout(
+                    f"no observable interrupt on {event.source} within "
+                    f"{timeout_ms} ms")
+            if attempt + 1 < attempts:
+                self._sleep(IRQ_RETRY_SLEEP_MS / 1000.0)
         raise last or SpiTimeout("no interrupt")
 
 

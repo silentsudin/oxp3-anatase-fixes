@@ -91,13 +91,22 @@ SPI_FLAG_DEVICE_POLARITY_HIGH = 1 << 1  # 0 = active low, 1 = active high
 GPIO_TYPE_INT = 0
 GPIO_TYPE_IO = 1
 
-#: GPIO interrupt-flags bit fields (``int_flags``).
+#: GPIO interrupt/io-flags bit fields (``int_flags``).
+#:
+#: ACPI 6.x "GPIO Connection Descriptor", InterruptAndIoFlags:
+#:   bit 0      GpioInt triggering (0 level, 1 edge); reserved for GpioIo
+#:   bits 1-2   GpioInt polarity; reserved for GpioIo
+#:   bit 3      shareable (both)
+#:   bit 4      wake capable (both)
+#:   bits 5-6   GpioIo IO restriction; reserved for GpioInt
+#:   bit 7      reserved
 GPIO_TRIGGERING_MASK = 0x1             # 0 = level, 1 = edge
 GPIO_POLARITY_SHIFT = 1
 GPIO_POLARITY_MASK = 0x3               # 0 = active high, 1 = active low, 2 = both
 GPIO_SHAREABLE = 1 << 3
 GPIO_WAKE_CAPABLE = 1 << 4
-GPIO_IO_RESTRICTION_MASK = 0x3         # for GpioIo only
+GPIO_IO_RESTRICTION_SHIFT = 5          # GpioIo only (bits 5-6, not 0-1)
+GPIO_IO_RESTRICTION_MASK = 0x3 << GPIO_IO_RESTRICTION_SHIFT
 
 
 class AcpiError(ValueError):
@@ -147,6 +156,8 @@ class Resource:
     clock_phase: int | None = None
     clock_polarity: int | None = None
     device_selection: int | None = None
+    wire_mode_three: bool | None = None
+    device_polarity_high: bool | None = None
     # GPIO -----------------------------------------------------------------
     connection_type: int | None = None
     pins: tuple[int, ...] = ()
@@ -235,10 +246,19 @@ class ResourceTemplate:
                     lines.append(f"  type flags      : 0x{r.type_specific_flags:04x}"
                                  if r.type_specific_flags is not None
                                  else "  type flags: ?")
+                    if r.wire_mode_three is not None:
+                        wire = "three-wire" if r.wire_mode_three else "four-wire"
+                        lines.append(f"  wire mode       : {wire}")
+                    if r.device_polarity_high is not None:
+                        pol = ("active-high" if r.device_polarity_high
+                               else "active-low")
+                        lines.append(f"  device polarity : {pol}")
             elif r.kind == "gpio":
-                what = "GpioInt" if r.connection_type == GPIO_TYPE_INT else "GpioIo"
+                what = ("GpioInt" if r.connection_type == GPIO_TYPE_INT
+                        else "GpioIo")
                 pins = ", ".join(str(p) for p in r.pins) or "?"
-                lines.append(f"{what} @{r.offset:#x} len {r.length} pins [{pins}]")
+                lines.append(f"{what} @{r.offset:#x} len {r.length} "
+                             f"pins [{pins}]")
                 if r.resource_source:
                     lines.append(f"  resource source : {r.resource_source}")
                 if r.connection_type == GPIO_TYPE_INT:
@@ -342,14 +362,21 @@ def _decode_serial_bus(off: int, data: memoryview, total: int) -> Resource:
         type_specific_flags=type_flags,
     )
 
-    source = ""
+    source: str | None = None
     if res_index:
         # data starts at absolute 3; string starts at absolute 12 + td.
         source_rel = 9 + type_data_length
-        if source_rel < len(data):
-            source = _cstring(data, source_rel)
+        if source_rel >= len(data):
+            raise TruncatedResource(
+                f"SerialBus at {off:#x}: resource-source string at "
+                f"{source_rel + 3:#x} is outside the descriptor")
+        source = _cstring(data, source_rel)
 
     if serial_type == SERIAL_TYPE_SPI:
+        if type_data_length < 9:
+            raise TruncatedResource(
+                f"SPI SerialBus at {off:#x}: type data length "
+                f"{type_data_length} < 9")
         if len(data) < 18:
             raise TruncatedResource(f"SPI SerialBus at {off:#x} too short")
         return dataclasses.replace(
@@ -359,9 +386,16 @@ def _decode_serial_bus(off: int, data: memoryview, total: int) -> Resource:
             clock_phase=data[14],
             clock_polarity=data[15],
             device_selection=_u16(data, 16),
+            wire_mode_three=bool(type_flags & SPI_FLAG_WIRE_MODE_3),
+            device_polarity_high=bool(
+                type_flags & SPI_FLAG_DEVICE_POLARITY_HIGH),
             resource_source=source,
         )
     if serial_type == SERIAL_TYPE_I2C:
+        if type_data_length < 6:
+            raise TruncatedResource(
+                f"I2C SerialBus at {off:#x}: type data length "
+                f"{type_data_length} < 6")
         if len(data) < 15:
             raise TruncatedResource(f"I2C SerialBus at {off:#x} too short")
         return dataclasses.replace(
@@ -420,9 +454,17 @@ def _decode_gpio(off: int, data: memoryview, total: int) -> Resource:
         end = absolute(end_abs)
         if start < 0 or end > len(data) or end < start:
             raise TruncatedResource(f"GPIO pin table at {off:#x} out of range")
-        pins = tuple(_u16(data, i) for i in range(start, end - 1, 2))
+        if (end - start) % 2:
+            raise TruncatedResource(
+                f"GPIO pin table at {off:#x} has an odd byte length")
+        pins = tuple(_u16(data, i) for i in range(start, end, 2))
 
-    source = _cstring(data, absolute(res_off)) if res_index else ""
+    source: str | None = None
+    if res_index:
+        if res_off < 3 or absolute(res_off) >= len(data):
+            raise TruncatedResource(
+                f"GPIO resource-source string at {off:#x} is out of range")
+        source = _cstring(data, absolute(res_off))
 
     fields = dict(
         connection_type=connection_type, pins=pins, pin_config=data[6],
@@ -449,7 +491,8 @@ def _decode_gpio(off: int, data: memoryview, total: int) -> Resource:
                 1: IoRestriction.INPUT,
                 2: IoRestriction.OUTPUT,
                 3: IoRestriction.NONE_PRESERVE,
-            }.get(int_flags & GPIO_IO_RESTRICTION_MASK, IoRestriction.NONE),
+            }.get((int_flags & GPIO_IO_RESTRICTION_MASK)
+                  >> GPIO_IO_RESTRICTION_SHIFT, IoRestriction.NONE),
         )
     return Resource(kind="gpio", offset=off, length=total, **fields)
 
@@ -490,6 +533,7 @@ def parse_resource_template(buf: bytes | bytearray | memoryview) -> ResourceTemp
     raw = bytes(buf)
     view = memoryview(raw)
     resources: list[Resource] = []
+    trailing = b""
     off = 0
     while off < len(view):
         tag = view[off]
@@ -497,10 +541,7 @@ def parse_resource_template(buf: bytes | bytearray | memoryview) -> ResourceTemp
             if off + 2 > len(view):
                 raise TruncatedResource(f"EndTag at {off:#x} truncated")
             off += 2
-            if off < len(view):
-                resources.append(Resource(kind="trailing-bytes", offset=off,
-                                          length=len(view) - off))
-                off = len(view)
+            trailing = raw[off:]
             break
         if tag & 0x80:  # large item
             name = tag & 0x7F
@@ -538,10 +579,9 @@ def parse_resource_template(buf: bytes | bytearray | memoryview) -> ResourceTemp
             resources.append(Resource(kind=_SMALL_NAMES.get(
                 name, f"small-0x{name:02x}"), offset=off, length=total))
         off += total
-    else:
-        # No EndTag: not fatal (some firmware omits it), but worth reporting.
-        pass
-    return ResourceTemplate(resources=tuple(resources))
+    # No EndTag is tolerated (some firmware omits it), but any bytes after the
+    # EndTag are preserved rather than silently dropped.
+    return ResourceTemplate(resources=tuple(resources), trailing=trailing)
 
 
 _LARGE_NAMES = {
@@ -592,6 +632,37 @@ class SpiConnection:
 
     def as_dict(self) -> dict[str, object]:
         return dataclasses.asdict(self)
+
+    @property
+    def irq_active_low(self) -> bool | None:
+        """Whether the interrupt is asserted low (``None`` when unknown)."""
+        if self.irq_polarity is None:
+            return None
+        if self.irq_polarity is Polarity.ACTIVE_LOW:
+            return True
+        if self.irq_polarity is Polarity.ACTIVE_HIGH:
+            return False
+        return None
+
+    @property
+    def irq_edge(self) -> str:
+        """Best gpiod/sysfs edge name for this ACPI ``GpioInt``.
+
+        The selection is the *logical* assertion edge: with ``active_low``
+        applied by the backend, ``rising`` means "line asserted".  A
+        level-triggered GpioInt cannot be expressed by the edge API, so it
+        requests both edges and leaves the level handling to ``value``.
+        """
+        if self.irq_triggering is Triggering.EDGE:
+            if self.irq_polarity is Polarity.ACTIVE_BOTH:
+                return "both"
+            return "rising"
+        return "both"
+
+    @property
+    def reset_active_low_default(self) -> bool:
+        """ACPI GpioIo carries no polarity; the conventional reset is low."""
+        return True
 
 
 def spi_connection(template: ResourceTemplate) -> SpiConnection:

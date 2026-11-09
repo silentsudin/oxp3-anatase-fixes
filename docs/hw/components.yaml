@@ -809,7 +809,7 @@ components:
     state: partial
     group: hardware
     headline: true
-    summary: "Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver."
+    summary: "Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library, an offline-tested SPI transport/_CRS parser and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver."
     implementation:
       - tools/fingerprint
     doc: docs/hw/fingerprint.md
@@ -818,7 +818,7 @@ components:
       summary: "nothing is installed; tools/fingerprint/ holds the probe and the compile-checked skeleton"
     verify:
       - command: "python3 -m unittest discover -s tools/fingerprint/tests"
-        expect: "Ran 172 tests ... OK"
+        expect: "Ran 264 tests ... OK"
       - command: "tools/fingerprint/tests/run-c-tests.sh"
         expect: "ok: 324 checks, 10 vectors (podman fallback when no host compiler)"
     dependencies: []
@@ -827,7 +827,7 @@ components:
       - "the probe needs spidev bound and root, and the driver needs libfprint's internal API"
     last_validated:
       date: 2026-11-09
-      evidence: "2026-11-09 audit rerun: 172 Python tests OK, 324 C checks/10 vectors, session crypto OK; syntax-real OK against libfprint v1.94.9 (docs/QA.md rows 4-8, docs/state/audit-2026-11-09.txt)"
+      evidence: "2026-11-09: 264 Python tests OK (incl. SPI transport and _CRS parser), 324 C checks/10 vectors, session crypto OK; syntax-real OK against libfprint v1.94.9"
 
   # -------------------------------------------------------------------------
   # Diagnostics

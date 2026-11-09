@@ -7,19 +7,23 @@ does not drive.  It has two transports:
 ``--transport spi`` (default) - the one this unit actually uses.  It speaks the
 SPB/SPI wire format recovered from ``BetterlifeFingerprintDevice.dll``
 (``FUN_180017020`` read / ``FUN_180017404`` write): a one-byte selector
-``(opcode & 0x3f) << 1`` (bit 7 set for host->device writes), then a fixed-size
-read (two-entry sequence) or the payload (single write).  See
-``fpbf63112/spi.py`` and docs/hw/fingerprint-transport.md.
+``(opcode & 0x3f) << 1`` (bit 7 set for host->device writes), then the driver's
+two-entry sequence (write the selector, then clock out the fixed-size answer or
+write the payload).  See ``fpbf63112/spi.py`` and
+docs/hw/fingerprint-transport.md.
 
 ``--transport frame`` - the older experiment that puts the USB branch's 0xAA /
 CRC-32 frame on the SPI wire.  Kept only to test the "is the USB frame behind
 the selector?" question; it is not the SPI protocol.
 
-Safety: every command needs ``--allow-writes`` and a read-only opcode on the
-allowlist.  Enrol/identify/remove/JTAG/restore/firmware-update are refused
-unconditionally.  ``--dry-run`` prints the exact bytes and never opens a device.
-``acpi_info`` parses an extracted ``_CRS`` resource template (the only root
-step), and prints the exact commands to obtain it.
+Safety: a real transfer needs an explicit ``--spidev`` path *and*
+``--allow-writes``; the transport is write-gated even for reads.  Enrol/
+identify/remove/JTAG/restore/firmware-update are refused unconditionally, both
+by opcode and by the selector those opcodes produce (the selector carries only
+six opcode bits, so 0x02 aliases JTAG's 0xC2).  ``--dry-run`` prints the exact
+bytes and never opens a device or GPIO.  ``acpi_info`` parses an extracted
+``_CRS`` resource template (the only root step) and prints the exact commands to
+obtain it.
 
 Requires: python3 (stdlib only, no python3-spidev) plus an spidev-bound node.
 The sensor has no in-tree driver, so bind spidev by hand:
@@ -107,8 +111,9 @@ OPS = {
     "uid":    (0xC0, "CMD_QUERY_MODULE_UID"),
     "info":   (0xC1, "CMD_QUERY_SENSOR_INFO"),
 }
-DESTRUCTIVE = {0xB0: "ENROLL", 0xB2: "REMOVE", 0xC2: "JTAG", 0xC3: "RESTORE_MCU",
-               0xD0: "UPDATE_FIRMWARE", 0xFF: "FW_WORK_MODE_SWITCH"}
+DESTRUCTIVE = {0xB0: "ENROLL", 0xB1: "IDENTIFY", 0xB2: "REMOVE",
+               0xC2: "JTAG", 0xC3: "RESTORE_MCU", 0xD0: "UPDATE_FIRMWARE",
+               0xD1: "FW_WORK_MODE_SWITCH", 0xFF: "FW_WORK_MODE_SWITCH"}
 
 
 def build_frame(opcode, phase=0, arg=0, data=b""):
@@ -211,6 +216,24 @@ def _load_protocol():
         sys.path.insert(0, here)
     from fpbf63112 import protocol
     return protocol
+
+
+def _load_spi():
+    """Import the SPI transport (no I/O happens at import)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from fpbf63112 import spi
+    return spi
+
+
+def _load_acpi():
+    """Import the ACPI resource parser (pure byte parsing, no I/O)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from fpbf63112 import acpi
+    return acpi
 
 
 class SpiTransport:
@@ -338,18 +361,50 @@ def _try_variant_search(crypto, protocol, session, raw):
     return None
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("commands", nargs="*", help=", ".join(OPS))
-    ap.add_argument("--dev", default="/dev/spidev0.0")
-    ap.add_argument("--speed", type=int, default=1_000_000,
-                    help="SPI clock in Hz (unknown: Windows value not recovered)")
-    ap.add_argument("--mode", type=int, default=0, choices=[0, 1, 2, 3])
+    ap.add_argument("commands", nargs="*",
+                    help=", ".join(sorted(set(OPS) | {"acpi_info"})))
+    ap.add_argument("--transport", choices=("spi", "frame"), default="spi",
+                    help="spi (the recovered SPB transport, default) or the "
+                         "old 0xAA/CRC experiment")
+    ap.add_argument("--spidev", "--dev", dest="spidev", default=None,
+                    help="explicit spidev node, e.g. /dev/spidev0.0; required "
+                         "for any real transfer (there is no default)")
+    ap.add_argument("--speed", type=int, default=None,
+                    help="SPI clock in Hz; omitted means leave the controller "
+                         "default (values come from _CRS)")
+    ap.add_argument("--mode", type=int, default=None, choices=[0, 1, 2, 3],
+                    help="SPI mode; omitted means leave the controller default")
+    ap.add_argument("--bits", type=int, default=None,
+                    help="bits per word; omitted means leave the default")
+    ap.add_argument("--gpio", type=int, default=None,
+                    help="GpioInt line number (the sensor interrupt)")
+    ap.add_argument("--gpio-chip", default=None, help="gpiochip name")
+    ap.add_argument("--irq-edge", choices=("rising", "falling", "both"),
+                    default=None, help="logical assertion edge")
+    ap.add_argument("--irq-active-low", action="store_true",
+                    help="the interrupt line is asserted low")
+    ap.add_argument("--reset-gpio", type=int, default=None,
+                    help="GpioIo reset line number (requires --allow-reset)")
+    ap.add_argument("--allow-reset", action="store_true",
+                    help="permit pulsing the reset line on open")
+    ap.add_argument("--allow-writes", action="store_true",
+                    help="explicit opt-in required before any SPI transfer "
+                         "(even a read): the transport is write-gated")
+    ap.add_argument("--allow-op", action="store_true",
+                    help="extend the read allowlist with the single --op "
+                         "opcode (never a destructive one)")
+    ap.add_argument("--crs", default=None,
+                    help="binary _CRS resource template; acpi_info parses it, "
+                         "and a hardware run uses its SPI/GPIO values")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the exact plans; never opens a device or GPIO")
     ap.add_argument("--wait-ms", type=int, default=40)
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--rx", type=int, default=64, help="bytes to read back")
     ap.add_argument("--op", type=lambda s: int(s, 0),
-                    help="send one raw opcode instead of a named command")
+                    help="send one raw read opcode instead of a named command")
     ap.add_argument("--arg", type=int, default=0)
     ap.add_argument("--data", default="", help="hex payload for --op")
     ap.add_argument("--raw-info", action="store_true", help="hexdump frames")
@@ -357,8 +412,8 @@ def main():
                     help="prove SM2/SM3/SM4/KDF against published vectors and "
                          "benchmark; needs no device and touches nothing")
     ap.add_argument("--session", action="store_true",
-                    help="attempt the 0xA2 SM2 session handshake (read-only key "
-                         "exchange) and report the derived-key fingerprint")
+                    help="attempt the 0xA2 SM2 session handshake (frame "
+                         "transport only; read-only key exchange)")
     ap.add_argument("--session-secure", action="store_true",
                     help="send the 0xA2 request in the vendor's secure-frame "
                          "form (SM4 with the initial zero key)")
@@ -366,18 +421,316 @@ def main():
                     help="readback bytes for --session (a 0xA2 answer needs ~153)")
     ap.add_argument("--session-timeout", type=int, default=2000,
                     help="--session answer timeout in ms")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if args.crypto_selftest:
         return crypto_selftest()
 
     cmds = args.commands or (["raw"] if args.op is not None else ["info"])
+    if args.transport == "spi":
+        if "acpi_info" in cmds:
+            return acpi_info(args, cmds)
+        if args.session:
+            print("refusing: --session runs the USB-branch 0xAA frame, which "
+                  "is not the SPI transport; use --transport frame",
+                  file=sys.stderr)
+            return 2
+        return run_spi(args, cmds)
+    return run_frame(args, cmds)
+
+
+# ---------------------------------------------------------------- SPI command
+def _refuse_destructive(spi, opcode):
+    """Raise ``UnsafeCommand`` for a destructive opcode *or its selector."""
+    low = spi.selector(opcode) & 0x7F
+    if opcode in spi.DESTRUCTIVE_OPS:
+        raise spi.UnsafeCommand(
+            f"opcode 0x{opcode:02x} is {spi.DESTRUCTIVE_OPS[opcode]}: "
+            f"refusing unconditionally")
+    aliases = spi.FORBIDDEN_SELECTORS.get(low)
+    if aliases:
+        names = ", ".join(f"0x{o:02x} {spi.DESTRUCTIVE_OPS[o]}" for o in aliases)
+        raise spi.UnsafeCommand(
+            f"selector 0x{low:02x} (opcode 0x{opcode:02x}) is reserved for "
+            f"{names}: refusing unconditionally")
+
+
+def _spi_plan(spi, args, cmd):
+    """Return ``(label, SpiPlan)`` for one command; never performs I/O."""
+    if cmd == "raw":
+        if args.op is None:
+            raise spi.SpiError("--op is required for the raw command")
+        if not 0 <= args.op <= 0xFF:
+            raise spi.SpiError(f"--op must be 0..0xff, not {args.op!r}")
+        if args.rx <= 0:
+            raise spi.SpiError("--rx must be > 0 for a raw read")
+        if args.data:
+            raise spi.SpiError("SPI writes are deliberately not implemented; "
+                               "--data belongs to the frame transport")
+        _refuse_destructive(spi, args.op)
+        return (f"op 0x{args.op:02x}",
+                spi.build_plan(args.op, operation="read",
+                               read_len=args.rx))
+    if cmd in spi.COMMANDS:
+        command = spi.COMMANDS[cmd]
+        _refuse_destructive(spi, command.opcode)
+        return (cmd, spi.plan_command(command))
+    raise spi.SpiError(f"unknown command {cmd!r}; choose from "
+                       f"{', '.join(spi.COMMANDS)}")
+
+
+def _crs_connection(args, spi, acpi):
+    """Parse ``--crs`` if given; return ``(template, connection)`` or Nones."""
+    if not args.crs:
+        return None, None
+    try:
+        with open(args.crs, "rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise spi.SpiError(f"cannot read --crs {args.crs}: {exc}") from exc
+    try:
+        template = acpi.parse_resource_template(raw)
+    except acpi.AcpiError as exc:
+        raise spi.SpiError(f"--crs {args.crs}: {exc}") from exc
+    return template, acpi.spi_connection(template)
+
+
+def _spi_parameters(args, spi, acpi):
+    """Resolve CLI values, falling back to the parsed _CRS (no guessing)."""
+    _template, connection = _crs_connection(args, spi, acpi)
+    speed = args.speed
+    mode = args.mode
+    bits = args.bits
+    gpio = args.gpio
+    reset_gpio = args.reset_gpio
+    edge = args.irq_edge
+    active_low = args.irq_active_low
+    chip_select = None
+    if connection is not None:
+        if speed is None:
+            speed = connection.speed_hz
+        if mode is None:
+            mode = connection.mode
+        if bits is None:
+            bits = connection.bits_per_word
+        if gpio is None:
+            gpio = connection.irq_pin
+        if reset_gpio is None:
+            reset_gpio = connection.reset_pin
+        if edge is None and connection.irq_triggering is not None:
+            edge = connection.irq_edge
+        if not active_low and connection.irq_active_low is not None:
+            active_low = connection.irq_active_low
+        chip_select = connection.chip_select
+    return dict(speed=speed, mode=mode, bits=bits, gpio=gpio,
+                reset_gpio=reset_gpio, edge=edge or "rising",
+                active_low=active_low, chip_select=chip_select)
+
+
+def run_spi(args, cmds):
+    """Hardware SPI path: every gate is checked before any open()."""
+    spi = _load_spi()
+    acpi = _load_acpi()
 
     try:
-        spi = SpiDev(args.dev, speed_hz=args.speed, mode=args.mode)
+        params = _spi_parameters(args, spi, acpi)
+        plans = [_spi_plan(spi, args, cmd) for cmd in cmds]
+    except spi.SpiError as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        print(f"dry-run: transport=spi spidev={args.spidev or '(unset)'} "
+              f"allow_writes={args.allow_writes}")
+        print(f"         speed={params['speed']} mode={params['mode']} "
+              f"bits={params['bits']} chip-select={params['chip_select']} "
+              f"gpio={params['gpio']} reset={params['reset_gpio']}")
+        for label, plan in plans:
+            print(f"{label}: opcode 0x{plan.opcode:02x} "
+                  f"selector 0x{plan.selector:02x} "
+                  f"{plan.operation} {plan.answer_len} B, "
+                  f"timeout {plan.timeout_ms}/{plan.total_ms} ms")
+            print(f"    {plan.hexdump()}")
+        return 0
+
+    if not args.spidev:
+        print("refusing: --spidev /dev/spidevN.M is required for a real "
+              "transfer (there is no default device)", file=sys.stderr)
+        return 2
+    if not args.allow_writes:
+        print("refusing: --allow-writes is required before any SPI transfer "
+              "(even a read); use --dry-run to inspect the bytes",
+              file=sys.stderr)
+        return 2
+    if params["reset_gpio"] is not None and not args.allow_reset:
+        print("refusing: --reset-gpio needs --allow-reset (the default is to "
+              "leave the module alone)", file=sys.stderr)
+        return 2
+    if params["chip_select"] not in (None, 0):
+        print(f"note: _CRS says chip select {params['chip_select']}; spidev "
+              "chooses the chip select by device node, not by this value",
+              file=sys.stderr)
+
+    read_allowlist = set(spi.SAFE_READ_OPS)
+    if args.allow_op and args.op is not None:
+        _refuse_destructive(spi, args.op)
+        read_allowlist.add(args.op)
+    irq = None
+    if params["gpio"] is not None:
+        irq = spi.GpioIrqWaiter(
+            params["gpio"], chip=args.gpio_chip, edge=params["edge"],
+            active_low=params["active_low"])
+    reset = None
+    if params["reset_gpio"] is not None:
+        reset = spi.GpioResetLine(
+            params["reset_gpio"], chip=args.gpio_chip, active_low=True)
+    transport = spi.SpiTransport(
+        args.spidev, speed_hz=params["speed"], mode=params["mode"],
+        bits_per_word=params["bits"], allow_writes=True,
+        read_allowlist=read_allowlist, irq=irq, reset=reset,
+        allow_reset=args.allow_reset)
+    print(f"spi: {transport.describe()}")
+    rc = 0
+    try:
+        for label, plan in plans:
+            try:
+                answer = transport.execute(plan)
+            except spi.SpiError as exc:
+                print(f"{label}: FAILED - {exc}", file=sys.stderr)
+                return 1
+            print(f"{label}: opcode 0x{plan.opcode:02x} "
+                  f"selector 0x{plan.selector:02x} answer {len(answer)} B")
+            if answer:
+                print(f"    {answer.hex(' ')}")
+            if label == "fw":
+                print("   ", show_fw(answer))
+            elif label == "info":
+                print("   ", show_info(answer))
+            if args.raw_info:
+                for transfer, data in zip(
+                        getattr(transport._io, "last_transfers", ()),
+                        getattr(transport._io, "last_message", ())):
+                    print(f"    tx {transfer.tx.hex(' ') or '(clock)'} "
+                          f"rx {data.hex(' ') or '(none)'}")
+    finally:
+        transport.close()
+    return rc
+
+
+def _extraction_help():
+    return """\
+Extract the FPRT _CRS on the host (root; no state change):
+  sudo cat /sys/firmware/acpi/tables/DSDT > /tmp/dsdt.aml
+  iasl -d /tmp/dsdt.aml
+  grep -n -A 40 'FPRT' /tmp/dsdt.dsl
+Then take the ResourceTemplate bytes of the matching _CRS and save them:
+  python3 - <<'PY'
+  # paste the hex from the DSL (the bytes inside ResourceTemplate () {...})
+  open('/tmp/fprt-crs.bin','wb').write(bytes.fromhex('...'))
+  PY
+  sudo tools/fingerprint/oxp3-fp-probe.py acpi_info --crs /tmp/fprt-crs.bin
+"""
+
+
+def acpi_info(args, cmds):
+    """``acpi_info``: parse an extracted _CRS template.  Offline, no device."""
+    if len(cmds) > 1:
+        print(f"refusing: acpi_info does not take other commands: "
+              f"{', '.join(cmds[1:])}", file=sys.stderr)
+        return 2
+    acpi = _load_acpi()
+    if not args.crs:
+        print("acpi_info: no --crs file supplied.")
+        print(_extraction_help())
+        return 0
+    try:
+        with open(args.crs, "rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        print(f"acpi_info: cannot read {args.crs}: {exc}", file=sys.stderr)
+        return 1
+    try:
+        template = acpi.parse_resource_template(raw)
+    except acpi.AcpiError as exc:
+        print(f"acpi_info: malformed resource template: {exc}", file=sys.stderr)
+        return 1
+    print(f"acpi_info: {len(raw)} B, {len(template.resources)} resource item(s)"
+          + (f", {len(template.trailing)} trailing B" if template.trailing
+             else ""))
+    for line in template.describe():
+        print(f"  {line}")
+    connection = acpi.spi_connection(template)
+    print("SpiConnection:")
+    for key, value in connection.as_dict().items():
+        print(f"  {key:<18}: {value}")
+    if connection.irq_pin is None:
+        print(f"  {'irq edge':<18}: n/a (no GpioInt)")
+        print(f"  {'irq active_low':<18}: n/a")
+    else:
+        print(f"  {'irq edge':<18}: {connection.irq_edge}")
+        print(f"  {'irq active_low':<18}: {connection.irq_active_low}")
+    print("Suggested probe (after binding spidev):")
+    print("  sudo tools/fingerprint/oxp3-fp-probe.py --crs "
+          f"{args.crs} --spidev /dev/spidev0.0 --allow-writes --dry-run fw")
+    return 0
+
+
+def run_frame(args, cmds):
+    """The old ``0xAA``/CRC-32 frame experiment over spidev."""
+    if args.dry_run:
+        print(f"dry-run: transport=frame spidev={args.spidev or '(unset)'}")
+        for cmd in cmds:
+            if cmd == "acpi_info":
+                print("acpi_info: use --transport spi (or no --transport)")
+                return 2
+            if cmd == "raw":
+                if args.op is None:
+                    print("refusing: --op is required for raw", file=sys.stderr)
+                    return 2
+                if not 0 <= args.op <= 0xFF:
+                    print(f"refusing: --op must be 0..0xff, not {args.op!r}",
+                          file=sys.stderr)
+                    return 2
+                if args.op in DESTRUCTIVE:
+                    print(f"op 0x{args.op:02x} is {DESTRUCTIVE[args.op]}: "
+                          "refusing", file=sys.stderr)
+                    return 2
+                try:
+                    data = bytes.fromhex(args.data.replace(" ", ""))
+                except ValueError as exc:
+                    print(f"refusing: bad --data hex: {exc}", file=sys.stderr)
+                    return 2
+                op, label = args.op, f"op 0x{args.op:02x}"
+            elif cmd in OPS:
+                op, label = OPS[cmd]
+                data = b""
+            else:
+                print(f"unknown command {cmd!r}; choose from {', '.join(OPS)}",
+                      file=sys.stderr)
+                return 2
+            frame = build_frame(op, 0, args.arg, data)
+            print(f"{label}: {len(frame)} B frame, opcode 0x{op:02x}, "
+                  f"phase 0, arg 0x{args.arg:04x}")
+            print(f"    {frame.hex(' ')}")
+        return 0
+    if not args.spidev:
+        print("refusing: --spidev /dev/spidevN.M is required (there is no "
+              "default device)", file=sys.stderr)
+        return 2
+    if args.data:
+        try:
+            bytes.fromhex(args.data.replace(" ", ""))
+        except ValueError as exc:
+            print(f"refusing: bad --data hex: {exc}", file=sys.stderr)
+            return 2
+    try:
+        spi = SpiDev(args.spidev, speed_hz=args.speed or 1_000_000,
+                     mode=args.mode or 0, bits=args.bits or 8)
     except OSError as e:
-        sys.exit(f"cannot open {args.dev}: {e}\n"
-                 "bind spidev first - see the header of this file")
+        print(f"cannot open {args.spidev}: {e}\n"
+              "bind spidev first - see the header of this file",
+              file=sys.stderr)
+        return 2
 
     rc = 0
     try:
@@ -386,15 +739,22 @@ def main():
         for cmd in cmds:
             if cmd == "raw":
                 op = args.op
+                if op is None:
+                    print("refusing: --op is required for raw", file=sys.stderr)
+                    return 2
                 if op in DESTRUCTIVE:
-                    sys.exit(f"op 0x{op:02x} is {DESTRUCTIVE[op]}: refusing")
+                    print(f"op 0x{op:02x} is {DESTRUCTIVE[op]}: refusing",
+                          file=sys.stderr)
+                    return 2
                 data = bytes.fromhex(args.data.replace(" ", ""))
                 label = f"op 0x{op:02x}"
             elif cmd in OPS:
                 op, label = OPS[cmd]
                 data = b""
             else:
-                sys.exit(f"unknown command {cmd!r}; choose from {', '.join(OPS)}")
+                print(f"unknown command {cmd!r}; choose from {', '.join(OPS)}",
+                      file=sys.stderr)
+                return 2
 
             (hdr, body), resp = query(spi, op, arg=args.arg, data=data,
                                       wait_ms=args.wait_ms, rx_len=args.rx,
@@ -417,6 +777,7 @@ def main():
     finally:
         spi.close()
     return rc
+
 
 
 if __name__ == "__main__":

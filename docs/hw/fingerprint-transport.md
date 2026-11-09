@@ -284,7 +284,7 @@ This is a separate implementation, not a port of the USB one:
   hub. On Linux the equivalent is a `GpioIo` in `_CRS` (or a `reset-gpios`
   property) toggled from the driver; if the platform exposes none, the module
   must come up already out of reset.
-* **Wire format**: *open* - see next section.
+* **Wire format**: the selector form is implemented in `fpbf63112/spi.py` (§8) but is still unproven on hardware; see §9.
 * **Timings**: 200 ms per transfer / 1000-2030 ms per ordinary command /
   5000-10010 ms for GET_IMG / 2000-4016 ms for restore / 150 ms cancel settle /
   50 ms after reset / 5 s device idle.
@@ -374,23 +374,197 @@ or strap beyond the hardware-ID prefix, and all four embedded MCU images carry
 USB descriptors. The USB variant is a wiring/product decision, not something a
 driver update can switch on for our board.
 
-## 8. Next steps
+## 8. Implemented transport and probe (2026-11-09)
 
-**If the goal is this unit (SPI-only, the realistic path):**
+Status: **code and offline tests only; this has still never run against the
+sensor.** The selector framing and the two-entry transfer shape are recovered
+from the driver; whether the module answers that shape is the experiment in
+§9. What exists now:
 
-1. Privileged read of `\_SB.PC00.SPI1.FPRT._CRS`: `acpidump -b` + `iasl -d`
-   (or `cat /sys/firmware/acpi/tables/DSDT` with root), extract
-   `SpiSerialBus` (device-selection, connection-speed, data-bit-length, phase,
-   polarity) and `GpioInt`/`GpioIo`. This is still the first blocker.
-2. Decide the wire format question (see §5) *before* writing a driver: the
-   cheapest experiment is a `spidev`-based probe that sends the documented
-   `0xAA` query frame **and** the `(opcode & 0x3f) << 1` + payload form recovered
-   here, on a read-only opcode (`0xA0` firmware version), and compares.
-3. Then the libfprint SPI driver (`tools/fingerprint/libfprint-bf63112.c`) with
-   an IRQ-driven wait instead of polling; keep the 1000/2030 ms timeouts.
-4. Optionally mirror the reset behaviour only if `_CRS` really exposes a GPIO -
-   Windows itself drives it through the resource hub, so the line exists on the
-   ACPI side of some units.
+### 8.1 `fpbf63112/spi.py`
+
+* **Selection.** `selector(opcode, write)` is `(opcode & 0x3f) << 1`, with bit
+  7 set for a host write. Because only six opcode bits reach the wire, the
+  implementation refuses destructive operations by *selector* as well as by
+  opcode: `0x02` aliases JTAG `0xC2` (selector `0x04`), `0x03` aliases restore
+  `0xC3` (selector `0x06`), and so on. `FORBIDDEN_SELECTORS` lists every such
+  alias.
+* **Transaction.** One plan is two `struct spi_ioc_transfer` entries submitted
+  as a single `SPI_IOC_MESSAGE(2)` ioctl (chip select stays asserted): write
+  the selector byte, then either a receive-only clock of `read_len` bytes
+  (read) or the payload (write). There is no length field and no status byte
+  on the wire. `LinuxSpiIO` implements the ABI with `os.open`/`fcntl.ioctl`
+  only, so no `python3-spidev` package is needed.
+* **Timeouts.** The descriptor values are used: 1000 ms per attempt /
+  2030 ms total for ordinary queries, 5000/10010 for GET_IMG (`0xB4`),
+  2000/4016 for the vendor restore (`0xC3`), 150 ms cancel settle and 50 ms
+  after a reset. A blocking spidev ioctl cannot be preempted from userspace;
+  the deadline is checked before, after and around the IRQ wait, and a kernel
+  hang is explicitly out of scope.
+* **IRQ.** `GpioIrqWaiter` tries libgpiod v1/v2, then sysfs, then a timed poll.
+  It takes the *logical* edge (`rising` = assertion after `active_low`), so
+  ACPI `GpioInt` polarity maps to `active_low`, not to a different edge name.
+  The sysfs backend writes `export`/`direction`/`edge` (and `active_low` when
+  available), tracks the level across the wakeup to derive rising/falling, and
+  unexports a line it exported. The poll fallback warns and reports
+  `observed=False`; `capture_wait` treats that as a timeout instead of a
+  successful interrupt. Level-triggered `GpioInt` cannot be expressed by the
+  edge API; the probe requests both edges and documents the limitation.
+* **Reset.** `GpioResetLine` drives logical 1 (assert) for 5 ms, logical 0 for
+  10 ms, then `SpiTransport.open` sleeps 50 ms. It is only pulsed with
+  `allow_reset=True`; the polarity is applied by gpiod flags, the sysfs
+  `active_low` attribute, or software when the kernel exposes neither.
+* **Safety gate.** Every transfer needs `allow_writes=True`; for this probe
+  that flag is the explicit opt-in. Read opcodes must also be on the explicit
+  allowlist (`SAFE_READ_OPS`: `0xA0`, `0xA1`, `0xB3`, `0xC0`, `0xC1` and the
+  recovered status register `0x2D`). No write opcode is allowlisted. Enrol
+  (`0xB0`), identify (`0xB1`), remove (`0xB2`), JTAG (`0xC2`), restore
+  (`0xC3`), firmware update (`0xD0`) and the mode switch are refused
+  unconditionally. Construction performs no I/O, and opening also refuses an
+  unset device path rather than guessing one.
+
+### 8.2 `fpbf63112/acpi.py`
+
+Parses a raw `_CRS` resource template and decodes only what the transport
+needs: `SpiSerialBus` (speed, data bit length, phase, polarity, device
+selection, resource source, SPI type flags), `GpioInt`
+(triggering/polarity/pins/shareable/wake), `GpioIo` (pins and IO restriction;
+the restriction is bits 5-6, not 0-1), I2C serial bus, small/extended IRQ, and
+opaque items so a template with extra resources still parses. It validates
+lengths and offsets and raises `TruncatedResource` for malformed or truncated
+buffers. `spi_connection(template)` reduces it to the exact values a driver
+needs and derives the Linux SPI mode (`(CPOL << 1) | CPHA`) and the logical IRQ
+edge. It does not parse `_DSD` properties.
+
+### 8.3 Exact CLI
+
+All of these are offline except the ones with `--spidev`:
+
+```sh
+python3 tools/fingerprint/oxp3-fp-probe.py --help
+python3 tools/fingerprint/oxp3-fp-probe.py --dry-run --spidev /dev/spidev0.0 fw info
+python3 tools/fingerprint/oxp3-fp-probe.py --dry-run --crs /tmp/fprt-crs.bin \
+    --spidev /dev/spidev0.0 fw info uid count
+python3 tools/fingerprint/oxp3-fp-probe.py acpi_info --crs /tmp/fprt-crs.bin
+```
+
+A real transfer requires **both** an explicit device path and `--allow-writes`
+(the transport is write-gated even for reads):
+
+```sh
+sudo python3 tools/fingerprint/oxp3-fp-probe.py --crs /tmp/fprt-crs.bin \
+    --spidev /dev/spidev0.0 --allow-writes --gpio 42 --irq-edge rising \
+    fw info uid count
+```
+
+`--gpio`/`--irq-edge`/`--irq-active-low` are optional; `--crs` fills in speed,
+mode, bits and the IRQ/reset pins when the CLI does not override them.
+`--allow-op` extends the read allowlist with one `--op` byte, and even then a
+destructive selector is refused. Reset additionally needs `--reset-gpio N
+--allow-reset`. `--dry-run` never opens `/dev/spidev*` or any GPIO; it prints
+the selector and transfer shape for each command. `--transport frame` is the
+old `0xAA`/CRC experiment and is not the SPI protocol.
+
+### 8.4 Safety model in one line
+
+Read-only commands are an explicit allowlist; destructive commands are refused
+by opcode *and* selector; no write opcode is allowlisted; a device path and
+`--allow-writes` are both mandatory for I/O; `--dry-run` and `acpi_info` do no
+I/O at all; nothing here installs a driver, writes firmware, enrols, deletes a
+template or touches the module's stored data.
+
+## 9. Next steps
+
+**If the goal is this unit (SPI-only, the realistic path).** This is the exact
+root-time order; steps 1-3 are read-only, step 4 changes only the `spidev` bind,
+and every step is reversible:
+
+1. **Extract the `_CRS` (root, read-only).**
+
+   ```sh
+   sudo cat /sys/firmware/acpi/tables/DSDT > /tmp/dsdt.aml
+   iasl -d /tmp/dsdt.aml
+   grep -n -A 60 'FPRT' /tmp/dsdt.dsl
+   ```
+
+   Find the `ResourceTemplate ()` of the matching `_CRS` and save exactly the
+   bytes between the braces as binary, e.g. from the hex dump:
+
+   ```sh
+   printf '%s' '8e 21 00 01 01 02 ...' | xxd -r -p > /tmp/fprt-crs.bin
+   python3 tools/fingerprint/oxp3-fp-probe.py acpi_info --crs /tmp/fprt-crs.bin
+   ```
+
+   `acpi_info` prints the `SpiSerialBus` (device selection, speed, bit length,
+   phase, polarity), the `GpioInt` pin/triggering/polarity, any `GpioIo` reset
+   pin, and the derived Linux SPI mode. No device is opened.
+
+2. **Inspect the plan offline** with the real `_CRS` values:
+
+   ```sh
+   python3 tools/fingerprint/oxp3-fp-probe.py --crs /tmp/fprt-crs.bin \
+       --spidev /dev/spidev0.0 --dry-run fw info uid count
+   ```
+
+   This prints the selector and the two-entry transfer for each read, plus the
+   recovered 1000/2030 ms deadlines, without opening anything.
+
+3. **Bind `spidev` (the only state change; reversible):**
+
+   ```sh
+   sudo modprobe spidev
+   echo spidev | sudo tee /sys/bus/spi/devices/spi-BF63112:00/driver_override
+   echo spi-BF63112:00 | sudo tee /sys/bus/spi/drivers/spidev/bind
+   ls -l /dev/spidev0.0
+   ```
+
+4. **Read-only attempt** on the recovered query opcodes (`0xA0`, `0xA1`,
+   `0xC1`; `0xB3`/`0xC0` are also allowlisted). Start without the IRQ/reset and
+   add them only if `_CRS` supplies the pins:
+
+   ```sh
+   sudo python3 tools/fingerprint/oxp3-fp-probe.py --crs /tmp/fprt-crs.bin \
+       --spidev /dev/spidev0.0 --allow-writes --gpio <GpioInt pin> \
+       --irq-edge rising --irq-active-low fw info
+   ```
+
+   A healthy answer is 7 bytes for `fw` and 9 for `info`; all-`0xFF` or no
+   answer usually means wrong SPI mode/clock or a device that expects a
+   different transaction order. `cat
+   /sys/bus/spi/devices/spi-BF63112:00/statistics/bytes_tx` shows whether the
+   transfers happened at all. Stop after the first answer or first failure;
+   do not retry destructive opcodes (the probe cannot send them anyway).
+
+5. **Roll back:** `echo spi-BF63112:00 | sudo tee
+   /sys/bus/spi/drivers/spidev/unbind`, remove `driver_override`, and
+   `sudo modprobe -r spidev`.
+
+6. **Only after a read answers**, the libfprint SPI driver
+   (`tools/fingerprint/libfprint-bf63112.c`) can be validated with an
+   IRQ-driven wait instead of polling; keep the 1000/2030 ms timeouts. Mirror
+   the reset behaviour only if `_CRS` really exposes a `GpioIo` - Windows itself
+   drives it through the resource hub, so the line exists on some units.
+
+**Still unknown until hardware answers:**
+
+* whether a read is really "selector, then clock the answer in the same SPB
+  message" or the module raises `GpioInt` first and expects a second
+  transaction (the code implements the former; the latter is the first thing
+  to test if the first read is all-`0xFF`);
+* the SPI opcode set on the wire - the SPI branch is data-driven, so the
+  `0xA0`/`0xA1`/`0xB3`/`0xC0`/`0xC1` bytes are deliberate read-only
+  experiments borrowed from the USB dispatch table, not proven SPI opcodes;
+* the real answer length for `0xA1` and whether `0xC1` is the same 9-byte
+  record as on USB;
+* the `GpioInt` edge/level and polarity, which the parser reads from `_CRS`
+  but which no sensor has exercised;
+* whether `_CRS` exposes a `GpioIo` reset line at all, and its polarity - ACPI
+  `GpioIo` has no polarity field, so the probe assumes the conventional
+  active-low and requires `--allow-reset` explicitly;
+* the controller-side values (speed/mode/bits) and whether the PXA2xx PIO path
+  with no DMA channels at 1 MHz behaves; and
+* everything about the device's response to the first selector byte, including
+  whether it needs the 50 ms power/reset settle before accepting one.
 
 **If a USB unit ever shows up (or for completeness):**
 
@@ -402,7 +576,7 @@ driver update can switch on for our board.
    (`idVendor=347d`, `TAG+="uaccess"`). Expect the same secure-frame question
    for enrol.
 
-## 9. Provenance
+## 10. Provenance
 
 | item | value |
 |---|---|
@@ -410,7 +584,7 @@ driver update can switch on for our board.
 | `BetterlifeFingerprintDevice.inf` | sha256 `323d04d84fe37b7d3acda6c32c18840085f8205643e43ae833a07bdf3e87d8c0` |
 | `betterlifefingerprintdevice.cat` | sha256 `9081e8c7f7bec9452627ab106205a76ad4f9e84dcbc82ae78e48ff192a38158d` (DER PKCS#7, catalogues both hardware-ID sets) |
 | decompiler dump | `tools/ghidra-pod.sh fpusb <dll>` -> `~/.cache/ghidra-agents/fpusb/out/decomp.txt` (805 functions) |
-| key functions | `FUN_180005a2c` EvtDeviceAdd / `FUN_180006a60` PrepareHardware / `FUN_180019d90` USB init / `FUN_180015acc` SPB init / `FUN_18001B6E4` USB frame write / `FUN_180004358` frame+CRC+retry / `FUN_18001AC60` answer reassembly / `FUN_180011550` resource-hub GPIO / `FUN_180017020`+`FUN_18001197C` SPB transfer / `FUN_180013b60` SPB cancel |
+| key functions | `FUN_180005a2c` EvtDeviceAdd / `FUN_180006a60` PrepareHardware / `FUN_180019d90` USB init / `FUN_180015acc` SPB init / `FUN_18001B6E4` USB frame write / `FUN_180004358` frame+CRC+retry / `FUN_18001AC60` answer reassembly / `FUN_180011550` resource-hub GPIO / `FUN_180017020`+`FUN_18001197C` SPB read / `FUN_180017404` SPB write / `FUN_180013b60` SPB cancel / `FUN_180016260` reset-target open + 50 ms / `FUN_180016110` 5/10 ms reset pulse |
 | firmware descriptors | DLL file offsets `0x521d0` (0304), `0x844d4` and `0xbf69c` (0302 FS), `0xf81fe` (0302 HS) |
 
 No vendor binary, decompiled listing or vendor string beyond short quoted

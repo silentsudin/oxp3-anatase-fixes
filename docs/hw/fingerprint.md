@@ -3,9 +3,13 @@
 Status: hardware identified, Windows protocol recovered far enough to build a
 frame-accurate probe, **no Linux support exists yet** - a new libfprint SPI
 driver is the only path. The protocol now also exists as a tested userspace
-library (`tools/fingerprint/fpbf63112/`) and a driver that compiles against
-libfprint 1.94's internal driver API, but **nothing has run against the sensor**
-(see `tools/fingerprint/README.md`). The remaining unknowns are listed in
+library (`tools/fingerprint/fpbf63112/`), the recovered SPI/SPB transport
+(`fpbf63112/spi.py`), a `_CRS` parser (`fpbf63112/acpi.py`) and a probe with
+`--transport spi --spidev --allow-writes --dry-run` and `acpi_info`, plus a
+driver that compiles against libfprint 1.94's internal driver API. The Python
+suite is now 264 tests and all SPI/ACPI behaviour is exercised offline, but
+**nothing has run against the sensor** (see
+`tools/fingerprint/README.md`). The remaining unknowns are listed in
 [Open points](#open-points); two of them need root on this unit.
 Owner: silentsudin. Host: Anatase 20261026.3, kernel 7.2.7-an28.fc45,
 libfprint 1.94.100, fprintd 1.94.5.
@@ -395,11 +399,13 @@ driver cannot start.
 
 | file | what it is |
 |---|---|
-| `tools/fingerprint/oxp3-fp-probe.py` | read-only userspace handshake: binds to `spidev`, builds the exact 41-byte query frame, sends the read-only opcodes (`fw`, `scheme`, `uid`, `info`, `count`), hexdumps the answer, refuses destructive opcodes. Stdlib only. |
+| `tools/fingerprint/oxp3-fp-probe.py` | bring-up probe. Default `--transport spi` sends the recovered selector + two-entry SPB transaction (`--spidev` and `--allow-writes` required for I/O); `--dry-run` prints exact plans with no I/O; `acpi_info --crs FILE` parses an extracted `_CRS` offline. `--transport frame` keeps the old `0xAA`/CRC experiment. Refuses destructive opcodes by opcode *and* selector. Stdlib only. |
+| `tools/fingerprint/fpbf63112/spi.py` | recovered SPI/SPB transport: selector computation, two `spi_ioc_transfer` entries per command, recovered 1000/2030 (5000/10010 image, 2000/4016 restore) timeouts, IRQ waiters (gpiod v1/v2, sysfs, poll), reset pulse, cancel settle, and the allowlist/destructive gates |
+| `tools/fingerprint/fpbf63112/acpi.py` | raw `_CRS` resource-template parser for `SpiSerialBus`, `GpioInt`, `GpioIo`, I2C and IRQ items; validates lengths/offsets and reduces them to `SpiConnection` (speed, mode, bits, CS, IRQ, reset) |
 | `tools/fingerprint/fpbf63112/` | protocol library (stdlib only): frame build/parse, CRC-32, offset arithmetic, command table, GET_IMG reassembly, retry state machine, `Session`/`open_session` |
 | `tools/fingerprint/fpbf63112/crypto.py` | session crypto (stdlib only): SM3, SM4 (ECB/CBC), SM2 over sm2p256v1, GM/T 0003 KDF, the 0xA2 handshake, the secure-frame transform, a bounded variant search, vector self-test and benchmark |
 | `tools/fingerprint/bf63112_session_openssl.c/.h` | the same handshake for the C driver via OpenSSL (EVP SM3/SM4 + `EC_POINT_mul` for the shared point), opt-in behind `BF63112_ENABLE_SESSION` |
-| `tools/fingerprint/tests/` | 172 unittest tests incl. fuzz/property round-trips, synthetic device transcripts, the SM2/SM3/SM4 vectors and a synthetic end-to-end handshake, and `test_driver_derived.py` (layouts recovered from the driver, synthetic vectors); shared frame vectors for the C implementation |
+| `tools/fingerprint/tests/` | 264 unittest tests incl. fuzz/property round-trips, synthetic device transcripts, the SM2/SM3/SM4 vectors and a synthetic end-to-end handshake, `test_driver_derived.py` (layouts recovered from the driver), `test_spi.py` (spidev ABI, selectors, timeouts, IRQ/reset, gates, probe dry-run/refusals) and `test_acpi.py` (constructed `_CRS` buffers and malformed cases); shared frame vectors for the C implementation |
 | `tools/fingerprint/bf63112_proto.h/.c` | dependency-free C11 protocol core shared with the driver |
 | `tools/fingerprint/libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; enrol/verify/identify refuse with `NOT_SUPPORTED` until the payloads are decoded. Syntax-checked (`-Wall -Wextra -Werror`) against libfprint v1.94.9 headers; see `tools/fingerprint/README.md` |
 | `tools/fingerprint/README.md` | proven vs inferred vs unknown, test commands, privileged probe steps, upstreaming path |
@@ -415,7 +421,8 @@ its first run as a bring-up experiment.
 ## Bringing it up by hand (privileged steps, exact commands)
 
 Nothing below is executed by this repo; they are the commands to run yourself.
-Steps 1-2 are read-only. Step 3 is the only state change and it is reversible.
+Steps 1, 2, 4 and 5 are read-only; step 3 is the only state change (the
+`spidev` bind) and it is reversible.
 
 1. **Read the ACPI resources** (the numbers a driver needs):
 
@@ -428,6 +435,9 @@ Steps 1-2 are read-only. Step 3 is the only state change and it is reversible.
 
    Look for `SpiSerialBus (... , SpiMode, SpiBitWidth, ConnectionSpeed ...)`
    and the `GpioInt`/`GpioIo` entries with their `PinIndex`/`GpioIo` numbers.
+   Save the bytes of the matching `ResourceTemplate ()` as binary (the hex
+   dump from `iasl`), e.g. `printf '%s' '8e 21 00 ...' | xxd -r -p >
+   /tmp/fprt-crs.bin`; the offline parser in step 4 consumes that file.
    `ACPI\BF63112:00` may also carry a `_DSD` with `spi-max-frequency`.
 
    Checked: the kernel exposes **nothing** of this without root - the ACPI node
@@ -451,28 +461,52 @@ Steps 1-2 are read-only. Step 3 is the only state change and it is reversible.
    ls -l /dev/spidev0.0
    ```
 
-4. **Run the probe** (read-only queries; add `--speed`/`--mode` once step 1
-   told you the real values, and `--raw-info` to see bytes):
+4. **Parse `_CRS` offline, then inspect the plan** (no device access):
 
    ```bash
-   sudo tools/fingerprint/oxp3-fp-probe.py info
-   sudo tools/fingerprint/oxp3-fp-probe.py fw scheme uid count
+   python3 tools/fingerprint/oxp3-fp-probe.py acpi_info --crs /tmp/fprt-crs.bin
+   python3 tools/fingerprint/oxp3-fp-probe.py --crs /tmp/fprt-crs.bin \
+       --spidev /dev/spidev0.0 --dry-run fw info uid count
    ```
 
-   A healthy answer starts with `0xAA` and shows sensor width x height. All
-   `0xFF`/no answer almost always means wrong SPI mode or too high a clock.
-   `cat /sys/bus/spi/devices/spi-BF63112:00/statistics/bytes_tx` tells you
-   whether the transfer happened at all, even when the answer is garbage.
+   `acpi_info` prints the `SpiSerialBus` speed/mode/bit length/CS and the
+   `GpioInt`/`GpioIo` pins. The dry run prints the exact selector and
+   two-entry transfer for each read; it never opens `/dev/spidev*` or a GPIO.
+
+5. **Run the read-only probe** (explicit device path and `--allow-writes` are
+   both mandatory; the SPI transport is write-gated even for reads):
+
+   ```bash
+   sudo python3 tools/fingerprint/oxp3-fp-probe.py --crs /tmp/fprt-crs.bin \
+       --spidev /dev/spidev0.0 --allow-writes --gpio <GpioInt pin> \
+       --irq-edge rising --irq-active-low fw info uid count
+   ```
+
+   Start with `fw` (`0xA0`) and `info` (`0xC1`); `0xA1` and the count/UID reads
+   follow. A healthy `fw` answer is 7 bytes and `info` 9 bytes. All-`0xFF`/no
+   answer almost always means wrong SPI mode or too high a clock, or that the
+   device expects the IRQ first. `cat
+   /sys/bus/spi/devices/spi-BF63112:00/statistics/bytes_tx` tells you whether
+   the transfers happened at all, even when the answer is garbage. The reset
+   line is only pulsed with `--reset-gpio N --allow-reset`.
 
 ## Safety
 
-* **No firmware writes, no JTAG, no `RESTORE_MCU`.** `0xD1`/`0xC3`/`0xD0` brick
-  the module if misused; the probe refuses them by name.
-* **No template deletion.** `0xB3`/`0xB1` are not wired up; fingers enrolled in
-  Windows stay untouched.
-* **SPI is low risk by nature**: the frame has a CRC, wrong parameters produce
-  garbage reads rather than damage, and the module is powered by the platform
-  (no relay/destructive side effects).
+* **No firmware writes, no JTAG, no `RESTORE_MCU`.** `0xB0`/`0xB1`/`0xB2`/
+  `0xC2`/`0xC3`/`0xD0`/`0xD1`/`0xFF` are refused unconditionally, both by
+  opcode and by the selector they produce (the SPI selector keeps only six
+  opcode bits, so `0x02` aliases JTAG `0xC2`). `--allow-op` can add one raw
+  *read* opcode but can never override this.
+* **No template deletion.** `0xB2`/`0xB1` are not allowlisted; fingers
+  enrolled in Windows stay untouched.
+* **Two independent opt-ins.** Even a read needs `--spidev /dev/spidevN.M`
+  (no default path) and `--allow-writes`; no write opcode is allowlisted by
+  default. `--dry-run` and `acpi_info` perform no device I/O and are safe
+  unprivileged.
+* **SPI is low risk by nature**: wrong mode/clock produces garbage reads rather
+  than damage, and the module is powered by the platform (no relay/destructive
+  side effects). The one non-read action, a reset pulse, needs
+  `--allow-reset` explicitly.
 * **Do not run the vendor's Windows firmware update** against this module from
   Linux under any wrapper.
 * Binding `spidev` takes the device from any future in-tree driver; do it on a
@@ -499,7 +533,9 @@ what is left needs the hardware.
 1. **SPI clock, mode, bit width and the reset/IRQ GPIOs** - not in the driver
    package (the INF only has `ConnectInterrupt=1`), so they are in
    `\_SB.PC00.SPI1.FPRT._CRS`/`_DSD`; root-only on this host, so not read here.
-   Without them the probe can only guess (defaults used: mode 0, 1 MHz).
+   `acpi_info --crs` now parses them when supplied; without `_CRS` the probe
+   passes no speed/mode/bits and leaves the controller defaults alone rather
+   than guessing.
 2. ~~Answer framing~~ - **closed.** Answer = same layout as a request: `0xAA`,
    `L`, 16-byte nonce, `4C`, opcode@22, phase@23, len@27, body@31; CRC-32 is
    verified by the driver on receive.
@@ -516,9 +552,11 @@ what is left needs the hardware.
 5. **`BF63112:01` on SPI2** - present in ACPI, no controller instanced. Either
    an unpopulated second source or a phantom node; harmless, but a driver
    should match `BF63112:00`-style enumeration rather than assume one device.
-6. **The probe has never run** - written and self-checked here (and now
-   parity-tested against the protocol library), first execution is the bring-up
-   itself; expect to tune `--speed`/`--mode`/`--wait-ms`.
+6. **The probe has never run** - the SPI transport, ACPI parser and CLI are
+   implemented and offline-tested (264 tests), and the first execution is the
+   bring-up itself; expect to tune `--speed`/`--mode`/`--irq-edge` and to
+   discover whether the device clocks the answer in the first transfer or
+   raises `GpioInt` first.
 7. **The driver has never talked to the sensor either** - it compiles against
    libfprint 1.94; its sensor-info and firmware offsets now match the vendor
    handler, but the retry timing and the real answers still need one hardware

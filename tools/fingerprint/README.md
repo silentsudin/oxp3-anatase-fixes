@@ -14,8 +14,10 @@ See [`docs/hw/fingerprint.md`](../../docs/hw/fingerprint.md) for the hardware ev
 | path | what it is |
 |---|---|
 | `fpbf63112/protocol.py` | Python protocol library (stdlib only): frame build/parse, CRC-32, length/offset arithmetic, chunk sums, command table, image reassembly, retry state machine |
+| `fpbf63112/spi.py` | recovered SPI/SPB transport (stdlib only): selector `(opcode & 0x3f) << 1`, two-entry `spi_ioc_transfer` sequence, 1000/2030 (5000/10010 image, 2000/4016 restore) deadlines, gpiod/sysfs/poll IRQ waiters, reset pulse, cancel settle, allowlist/destructive gates |
+| `fpbf63112/acpi.py` | raw `_CRS` resource-template parser for `SpiSerialBus`, `GpioInt`, `GpioIo`, I2C and IRQ items; validates lengths/offsets and reduces them to the driver parameters |
 | `fpbf63112/crypto.py` | session crypto (stdlib only): SM3, SM4 (ECB/CBC), SM2 over sm2p256v1, GM/T 0003 KDF, the 0xA2 handshake, the secure-frame transform, a bounded variant search, `selftest()`/`benchmark()` |
-| `tests/` | unittest suite (172 tests), synthetic fixtures, generated frame vectors, replay helpers, the SM vector + handshake tests |
+| `tests/` | unittest suite (264 tests), synthetic fixtures, generated frame vectors, replay helpers, the SM vector + handshake tests, and `test_spi.py` + `test_acpi.py` for the transport/parser |
 | `tests/fixtures/*.json` | small device transcripts: clean answers, noise, truncation, bad CRC, wrong opcode, retry exhaustion, GET_IMG good/partial/bad-sum/retried/oversized |
 | `tests/vectors.json`, `tests/vectors.h` | one set of frame vectors shared by the Python and C implementations |
 | `tests/generate_fixtures.py` | regenerates all fixtures/vectors (checked in; a test fails if they drift) |
@@ -26,7 +28,7 @@ See [`docs/hw/fingerprint.md`](../../docs/hw/fingerprint.md) for the hardware ev
 | `stub/` | **offline syntax-check shim only** - fake `fpi-*.h` + minimal GLib declarations, clearly marked "not libfprint"; never installed or linked |
 | `Makefile` | `py-test`, `proto-test`, `syntax`, `syntax-real` targets |
 | `tests/run-c-tests.sh`, `tests/check-libfprint.sh` | run the C targets here without a host compiler (ephemeral podman) |
-| `oxp3-fp-probe.py` | the standalone `sudo` bring-up probe (unchanged; parity-tested against the library) |
+| `oxp3-fp-probe.py` | the standalone `sudo` bring-up probe: `--transport spi` (default) or the old `--transport frame`; `--dry-run` and `acpi_info --crs` do no I/O; a real transfer needs `--spidev PATH` and `--allow-writes`; destructive opcodes are refused by opcode and selector |
 
 ## What is proven, inferred, and unknown
 
@@ -79,6 +81,28 @@ Windows UMDF driver, no vendor code in this repo):
 * Whether the second ACPI node (`BF63112:01` on SPI2) is real.
 * Anything about hardware behaviour: **no code here has talked to the sensor.**
 
+## SPI bring-up probe (implemented, not yet run on hardware)
+
+The probe now speaks the recovered SPI/SPB transport by default instead of
+putting the USB `0xAA` frame on the wire:
+
+```sh
+# offline: exact selector + transfer shape for each read, no device opened
+python3 tools/fingerprint/oxp3-fp-probe.py --dry-run --spidev /dev/spidev0.0 fw info
+# offline: parse an extracted _CRS resource template
+python3 tools/fingerprint/oxp3-fp-probe.py acpi_info --crs /tmp/fprt-crs.bin
+# hardware: explicit path + opt-in are both required; fw=0xA0, info=0xC1
+sudo python3 tools/fingerprint/oxp3-fp-probe.py --crs /tmp/fprt-crs.bin \
+    --spidev /dev/spidev0.0 --allow-writes --gpio 42 --irq-edge rising \
+    fw info
+```
+
+`--crs` fills in speed, mode, bits and the IRQ/reset pins when the CLI does not
+override them. `--allow-op` can add one raw *read* byte; no destructive opcode
+can be enabled. `--transport frame` remains only as the old experiment. See
+`docs/hw/fingerprint-transport.md` §8-§9 for the safety model and the exact
+root-time procedure.
+
 ## Run the tests
 
 The host has Python 3 but no C compiler and no `make`, so:
@@ -86,7 +110,7 @@ The host has Python 3 but no C compiler and no `make`, so:
 ```sh
 # Python protocol + transcript + fuzz tests (this is the full behavioural suite)
 python3 -m unittest discover -s tools/fingerprint/tests -v
-#   -> Ran 172 tests ... OK
+#   -> Ran 264 tests ... OK
 
 # C protocol tests (same vectors, independent implementation)
 tools/fingerprint/tests/run-c-tests.sh

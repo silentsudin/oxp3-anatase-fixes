@@ -28,7 +28,7 @@ install/verify matrix in [`../INSTALL-HW.md`](../INSTALL-HW.md) and the summary 
 | Display HDR / vibrance / colour | working | The internal OLED is 10-bit PQ/HDR10 wide gamut and Plasma toggles it; our ICC profile, vibrance shader and one per-game launch wrapper ship, while Gamemode needs the gamescope session flags. | `tools/display/`, `tools/oxp3-gamewrap.sh`, `tools/lib/oxp3_gamewrap.py`, `tools/oxp3-gamewrap.toml.example`, `patches/gamescope/` | [hdr-vibrance.md](hdr-vibrance.md) | partial |
 | IMU / gyro | not-a-gap | The BMI260 works out of the box at 100 Hz and HHD syncs the gyro into the emulated Steam Controller; our tool is diagnostics only. | `tools/oxp3-imu.py`, `files/oxp3-bmi160.conf` | [camera-imu.md](camera-imu.md) | no |
 | Camera / IPU7 | not-a-gap | There is no camera hardware on this unit: every OVTI/INT3472 device is _STA=0 and there is no IPU7 function, so this is not a Linux gap. | `tools/oxp3-imu.py` | [camera-imu.md](camera-imu.md) | n/a |
-| Fingerprint reader | partial | Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver. | `tools/fingerprint/` | [fingerprint.md](fingerprint.md) | partial |
+| Fingerprint reader | partial | Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library, an offline-tested SPI transport/_CRS parser and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver. | `tools/fingerprint/` | [fingerprint.md](fingerprint.md) | partial |
 
 Recorded caveats:
 
