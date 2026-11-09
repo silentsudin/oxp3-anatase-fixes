@@ -14,8 +14,8 @@ Recorded on this host (Python 3.15, no root):
 
 ```
 python3 -m unittest discover -s tests/unit -q     -> Ran 658 tests ... OK (skipped=1), ~4.5 s
-tools/repo-test.sh --fast  -> 33 suites: 27 pass, 0 fail, 6 skip, exit 0
-tools/repo-test.sh --full  -> 33 suites: 31 pass, 0 fail, 2 skip, exit 0 (expected)
+tools/repo-test.sh --fast  -> 34 suites: 28 pass, 0 fail, 6 skip, exit 0 (~58 s)
+tools/repo-test.sh --full  -> 34 suites expected (build + network rows; not re-run this round)
 ```
 
 ## 1. How to run it

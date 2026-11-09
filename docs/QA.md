@@ -67,33 +67,38 @@ paths are fixed and covered by behavioural tests.
 2. `tools/oxp3-hw-install.sh --unknown`: exited 1 although its header says 2 = usage. Fixed; test added.
 3. `tools/oxp3-verify.sh` status consumer: cache/exit-code bugs above, demonstrated with a forced
    `overall=fail` backend (before: SKIP/UNKNOWN; after: FAIL/PASS). Fixed; 5 behavioural tests added.
-4. Stale docs that contradicted behaviour: 31→32 suites, 85→172 fingerprint tests, 150→157 verify
-   assertions, 470→634 unit tests, the `--list` "95 checks" string, the `firstrun` timing tier, and
-   `components.yaml`'s fingerprint expect (regenerated `INSTALL-HW.md`). `gen-docs --check` is clean.
+4. Stale docs that contradicted behaviour: the `repo-test` suite count, the fingerprint test count,
+   the verify assertion/check counts and the unit-test count had all drifted, as had the `--list`
+   "95 checks" string and the `firstrun` timing tier; `components.yaml`'s fingerprint expect was
+   regenerated into `INSTALL-HW.md`. `gen-docs --check` is clean.
 
 ### Health of the repository as a whole
 
-* **First thing a user hits:** `README.md` sends them to `docs/HANDOVER.md`, whose counts are from an
-  older revision (85 fingerprint tests, 26 suites, revision `250dcfe`). The generated component tables
-  and `docs/TESTING.md` are current; HANDOVER is the remaining stale landing page.
-* **Slow:** `tools/repo-test.sh --fast` is 36 s and `--full` ~42 s (fine); the dominant fast-mode
-  suite is `firstrun` (15 s, runs verify twice). No individual tool is slow; `--full` still needs a
-  warm npm cache and the podman image.
+* **First thing a user hits:** `README.md` sent them to `docs/HANDOVER.md`, whose counts were from an
+  older revision (`250dcfe`). The generated component tables and `docs/TESTING.md` were current;
+  HANDOVER was the remaining stale landing page and now derives its volatile counts from their
+  sources in the `handover-state` block.
+* **Slow:** `tools/repo-test.sh --fast` is ≈ 58 s (the `cli-contracts` and `gen-docs` suites added
+  since this audit account for ~12 s of that); the dominant fast-mode suite is still `firstrun`
+  (≈ 13.5 s, runs verify twice). No individual tool is slow; `--full` still needs a warm npm cache
+  and the podman image.
 * **Noisy:** the default `oxp3-verify` prints 72 rows, preflight 71, and status 28 indicators. The
   signal (4 fails / 5 warns) is buried; triage is the only tool that ranks it.
 * **Should be one command but is three:** install readiness, live health and the remaining checklist
   are `preflight`, `verify` and `firstrun`/`triage`. `repo-test` covers only the offline layer.
 
-### Proposed simplifications (not implemented)
+### Proposed simplifications (all implemented since this audit)
 
-1. **One `health` subcommand** in `tools/oxp3-verify.sh` (or a wrapper) that runs preflight + verify +
-   the firstrun checklist and prints only the non-PASS rows plus a single verdict. Removes the
-   "three commands" problem without changing any probe.
-2. **Make HANDOVER generated or dated-checked.** Its state table duplicates `components.yaml`; add it
-   to `gen-docs.py` (or make `repo-test` fail when its counts are older than HEAD's latest audit).
-3. **A CLI-contract suite in `repo-test.sh`** that runs every `--help`/`--selftest` with a short
-   timeout (the audit did this by hand). It would have caught the `build.sh --help` bug and the
-   `--list` drift automatically.
+1. **One `health` command** (`tools/oxp3-health.sh`, `make health`) composes preflight + verify + the
+   firstrun checklist and prints only the non-PASS rows plus a single verdict; it is documented in
+   [HEALTH.md](HEALTH.md) and covered by the `health` suite.
+2. **HANDOVER counts are generated.** `tools/gen-docs.py` renders a fourth block, `handover-state`, in
+   [HANDOVER.md](HANDOVER.md) with the component state counts, the harness check count, the runner's
+   suite count and the unit-test count; the `gen-docs` suite fails when it drifts (convention:
+   [hw/REGISTRY.md §7.1](hw/REGISTRY.md)).
+3. **A CLI-contract suite exists.** `tools/cli-contracts.py` runs every discovered `--help` and each
+   advertised safe flag in a throw-away copy of the tree; `tools/repo-test.sh --only cli-contracts`
+   is the suite that would have caught the `build.sh --help` bug automatically.
 
 ## Checks
 
@@ -256,14 +261,12 @@ make test-full              # == tools/repo-test.sh --full
 Logs and `summary.txt` go to `${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/<utc-run>/`;
 the failing command and its log path are printed when something fails. Missing
 optional tools (a C compiler/container image, `shellcheck`, a warm npm cache,
-network) are reported as `SKIP` with a reason, never as a pass. On this host the
-fast run is **18 pass / 0 fail / 6 skip** (five full-only suites plus
-`shellcheck`); `--full` is **22 pass / 0 fail / 2 skip**. See
-[TESTING.md](TESTING.md) for the suite inventory, timing tiers and CI notes.
-*Added after this snapshot:* the `unit` suite (`tests/unit/`, 318 stdlib
-unittest cases) raises those rows to 25 suites — **19 pass / 0 fail / 6 skip**
-in `--fast` and **23 pass / 0 fail / 2 skip** in `--full`; see
-[UNIT-TESTS.md](UNIT-TESTS.md).
+network) are reported as `SKIP` with a reason, never as a pass. The inventory is
+not copied here: `tools/repo-test.sh --list` prints the current count and the
+`--fast` subset (34 suites, 29 in `--fast` at the time of writing, including the
+`unit`, `gen-docs` and `cli-contracts` suites added after the snapshot above).
+[TESTING.md](TESTING.md) §9 records the last run; the generated `handover-state`
+block in [HANDOVER.md](HANDOVER.md) is the current count.
 
 The pre-`repo-test.sh` per-suite commands are preserved verbatim in
 [Appendix A](#appendix-a--per-suite-commands-pre-repo-test) for debugging a

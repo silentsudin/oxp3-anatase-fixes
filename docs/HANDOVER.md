@@ -12,28 +12,28 @@ executed for this document.
 > `--json` for machines, `--quiet` for one line, `--verbose` for the raw reports; the section
 > contract is in [`HEALTH.md`](HEALTH.md).
 
-> **Audit update, 2026-11-09 06:00 UTC (HEAD `cfad8fb`).** The live numbers below have
-> moved again: `repo-test.sh --fast` is **32 suites: 26 pass, 0 fail, 6 skip** (~36 s) and
-> `--full` **32: 30 pass, 2 skip**; the unit suite is **634 tests**, the fingerprint suite
-> **172**, `oxp3-verify` reports **72 checks: 41 pass, 4 fail, 27 skip** (the fourth failure
-> is `inst.backups`, documented until `oxp3-rollback.sh adopt`), and `oxp3-status --selftest`
-> is 90 checks. The matrix is [`state/audit-2026-11-09.txt`](state/audit-2026-11-09.txt);
-> where this page and that file disagree, the audit file is newer.
+> **Audit update, 2026-11-09 06:00 UTC.** The volatile counts in this page (component states,
+> harness checks, `repo-test` suites, unit tests) are now generated from their sources by
+> `tools/gen-docs.py`; read the `handover-state` block in §2 instead of trusting a number
+> copied into prose. The dated audit matrix is
+> [`state/audit-2026-11-09.txt`](state/audit-2026-11-09.txt); where this page and that file
+> disagree, the audit file is newer.
 
 ## 0. Start here, in this order
 
 | # | read | why |
 |---|---|---|
 | 1 | this file | what exists, what is installed, what is proven, what is blocked, what is yours to decide |
-| 2 | [`hw/components.yaml`](hw/components.yaml) + the generated matrix in [`hw/README.md`](hw/README.md) | the only state truth (25 components); see [`hw/REGISTRY.md`](hw/REGISTRY.md) for the vocabulary |
+| 2 | [`hw/components.yaml`](hw/components.yaml) + the generated matrix in [`hw/README.md`](hw/README.md) | the only state truth (the roll-up is generated in §2); see [`hw/REGISTRY.md`](hw/REGISTRY.md) for the vocabulary |
 | 3 | [`INSTALL-HW.md`](INSTALL-HW.md) | install / opt-out / uninstall / rollback, one command per component |
-| 4 | [`VALIDATION.md`](VALIDATION.md) | the harness: 78 declared check ids (72 run by default, 78 with `--full --with-changes`), what each proves, exit codes, what a `SKIP` means |
+| 4 | [`VALIDATION.md`](VALIDATION.md) | the harness: its declared check ids (counted in the §2 block), what each proves, exit codes, what a `SKIP` means |
 | 5 | [`QA.md`](QA.md), [`PROVENANCE.md`](PROVENANCE.md), [`upstream/README.md`](upstream/README.md) | offline evidence snapshot, the no-vendor-code rule, the decisions that are the owner's |
 | 6 | the per-topic doc of whatever you touch next | each holds the recovered evidence, the implementation and its validation steps |
 
-Then: `tools/repo-test.sh --fast` (offline, ~15 s), `tools/oxp3-preflight.sh` (read-only,
-before any install) and `tools/oxp3-verify.sh` (read-only, ~4 s).
-The suite is green apart from six explained `SKIP`s; the harness has one known failing group (§2).
+Then: `tools/repo-test.sh --fast` (offline; `--list` prints its inventory), `tools/oxp3-preflight.sh`
+(read-only, before any install) and `tools/oxp3-verify.sh` (read-only).
+The suite is green apart from the explained `SKIP`s listed on every run; the harness has one known
+failing group (§2).
 No RE was needed for this round; Ghidra is only for the vendor-binary work already recorded in the
 topic docs.
 
@@ -65,19 +65,36 @@ Live evidence of the split (read-only, today): `rpm-ostree status --booted` list
 
 ## 2. State (generated from `components.yaml`; do not re-type facts here)
 
-25 components: **10 working, 8 awaiting-install, 4 partial, 2 not-a-gap, 1 blocked**
-(`tools/gen-docs.py --check` prints "25 components, 78 checks"). The full matrix with summaries,
-implementation paths, install entrypoints, verify ids and caveats is generated into
-[`hw/README.md`](hw/README.md) and [`INSTALL-HW.md` §5](INSTALL-HW.md); read those, not a
-copy.
+The state roll-up and the volatile counts that this page used to copy by hand are generated from
+their sources below - the component data, the harness inventory, the test-runner registry and the
+unit-test run. Change the source, then `tools/gen-docs.py --write`; never edit the block.
+
+<!-- BEGIN GENERATED: handover-state (source: docs/hw/components.yaml + tools/oxp3-verify.sh + tools/repo-test.sh + tests/unit; regenerate: tools/gen-docs.py --write) -->
+State roll-up and the volatile counts this page used to re-type. Every value below is
+computed by `tools/gen-docs.py` from the named source; **do not hand-edit this block**.
+
+**25 components**: **10** `working`, **4** `partial`, **1** `blocked`, **2** `not-a-gap`, **8** `awaiting-install`.
+Counted from the `state:` field of each component in `docs/hw/components.yaml`.
 
 | state | components (doc link) |
 |---|---|
-| `working` (10) | gamescope ([hdr-vibrance](hw/hdr-vibrance.md)), mesa ([BEST-CONFIG](BEST-CONFIG.md)), mangohud ([BEST-CONFIG](BEST-CONFIG.md)), kernel-modules ([WORKING-BUILD](WORKING-BUILD-2026-11-08.md)), firmware ([WORKING-BUILD](WORKING-BUILD-2026-11-08.md)), rapl-power ([sagv](hw/sagv.md)), audio ([audio-harman-apo](hw/audio-harman-apo.md)), power ([power-fan](hw/power-fan.md)), display ([hdr-vibrance](hw/hdr-vibrance.md)), decky ([decky-plugin](decky-plugin.md)) |
-| `awaiting-install` (8) | sched-ext ([cpu-sched](cpu-sched.md)), volume ([volume-buttons](hw/volume-buttons.md)), leds ([home-button-leds](hw/home-button-leds.md)), rgb ([rgb-coverage](hw/rgb-coverage.md)), daemons ([DAEMONS](DAEMONS.md)), sleep ([sleep-power](hw/sleep-power.md)), bluetooth ([bluetooth](hw/bluetooth.md)), adaptive-tdp ([battery-tdp](hw/battery-tdp.md)) |
+| `working` (10) | gamescope ([hdr-vibrance](hw/hdr-vibrance.md)), mesa ([BEST-CONFIG](BEST-CONFIG.md)), mangohud ([BEST-CONFIG](BEST-CONFIG.md)), kernel-modules ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), firmware ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), rapl-power ([sagv](hw/sagv.md)), audio ([audio-harman-apo](hw/audio-harman-apo.md)), power ([power-fan](hw/power-fan.md)), display ([hdr-vibrance](hw/hdr-vibrance.md)), decky ([decky-plugin](decky-plugin.md)) |
 | `partial` (4) | xess-xmx ([xess-xmx](xess-xmx.md)), fan ([power-fan](hw/power-fan.md)), battery ([battery-tdp](hw/battery-tdp.md)), fingerprint ([fingerprint](hw/fingerprint.md)) |
-| `not-a-gap` (2) | imu, camera ([camera-imu](hw/camera-imu.md)) |
 | `blocked` (1) | sagv ([sagv](hw/sagv.md)) |
+| `not-a-gap` (2) | imu ([camera-imu](hw/camera-imu.md)), camera ([camera-imu](hw/camera-imu.md)) |
+| `awaiting-install` (8) | sched-ext ([cpu-sched](cpu-sched.md)), volume ([volume-buttons](hw/volume-buttons.md)), leds ([home-button-leds](hw/home-button-leds.md)), rgb ([rgb-coverage](hw/rgb-coverage.md)), daemons ([DAEMONS](DAEMONS.md)), sleep ([sleep-power](hw/sleep-power.md)), bluetooth ([bluetooth](hw/bluetooth.md)), adaptive-tdp ([battery-tdp](hw/battery-tdp.md)) |
+| **total** (25) | every component in the data file; add a component there, not here |
+
+| volatile fact | value | how this number was obtained |
+|---|---|---|
+| checks declared by `tools/oxp3-verify.sh` | **78** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
+| suites in `tools/repo-test.sh` | **34** (**29** in `--fast`, **34** in `--full`) | parsed from the `def_suite` registrations and their mode column |
+| tests in `tests/unit` | **658** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
+<!-- END GENERATED: handover-state -->
+
+The full matrix with summaries, implementation paths, install entrypoints, verify ids and caveats is
+generated into [`hw/README.md`](hw/README.md) and [`INSTALL-HW.md` §5](INSTALL-HW.md); read those,
+not a copy.
 
 ### Installed vs awaiting install (live, read-only)
 
@@ -91,21 +108,21 @@ eq-dropin=yes`, `imu: modprobe-blacklist=yes`.
 So of the hardware-fix set this host has exactly two artefacts — the speaker EQ drop-in
 (`~/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf`) and the IMU modprobe snippet
 (`/etc/modprobe.d/oxp3-bmi160.conf`). The driver-stack half *is* installed (`LocalPackages`, overlay
-Mesa, `rapl-power.service` active, the XMX release tree and `~/.config/xess-xmx/oxp3-env.sh`). All
-eight `awaiting-install` components are still uninstalled; that state means code-complete and
+Mesa, `rapl-power.service` active, the XMX release tree and `~/.config/xess-xmx/oxp3-env.sh`). Every
+`awaiting-install` component is still uninstalled; that state means code-complete and
 offline-validated, not "unknown" ([`hw/REGISTRY.md` §3](hw/REGISTRY.md)).
 
 ### Validated vs unvalidated
 
 | layer | command | result on this host |
 |---|---|---|
-| offline suites | `tools/repo-test.sh --fast` | **26 suites: 20 pass, 0 fail, 6 skip**, exit 0 (5 full-only suites + `shellcheck`) |
-| unit tests | `make unit` | `Ran 470 tests ... OK (skipped=1)` |
-| harness | `tools/oxp3-verify.sh` | **72 checks: 41 pass, 4 fail, 27 skip**, exit 1; failing `bt.journal bt.controller bt.diag inst.backups` (the last one is the rollback round's unbacked in-place edits, not a preflight finding) |
+| offline suites | `tools/repo-test.sh --fast` | run it for this host's PASS/FAIL/SKIP verdict; the suite total and the `--fast` subset are in the block above |
+| unit tests | `make unit` | run it for this host's verdict; the test total is in the block above |
+| harness | `tools/oxp3-verify.sh` | run it for this host's PASS/FAIL/SKIP verdict; the declared id count is in the block above. This page's recorded run still failed `bt.journal bt.controller bt.diag inst.backups` (the last one is the rollback round's unbacked in-place edits, not a preflight finding) |
 | status | `tools/oxp3-status.sh --json` | `overall=warn`, `ok=23 warn=5` (warns: `xmx.trace`, `sched.state`, `sched.scx_cosmos`, `sched.unit`, `flatpak.steam_env`) |
 | snapshots | `docs/state/` | dated evidence (55-check verify run, host snapshot, status JSON, selftest) — earlier inventory, not the current counts |
 
-The three failures are one real defect and its documented fix: both Bluetooth firmware files are in
+The Bluetooth failures are one real defect and its documented fix: both Bluetooth firmware files are in
 `/usr/lib/firmware/updates/intel` with matching pinned hashes, but this boot's initramfs predates them,
 so the kernel logged `Failed to load Intel firmware file …(-2)`; `bt.diag` reports it correctly
 ([`hw/bluetooth.md`](hw/bluetooth.md), `docs/state/verify-default-2026-11-09.txt`).
@@ -132,7 +149,7 @@ behaves. Both are needed; neither substitutes for the other.
 | display HDR / ICC / vibrance | [`hw/hdr-vibrance.md`](hw/hdr-vibrance.md): EDID/PQ/BT.2020, gamescope flags | `dsp.*`; `tests/unit/test_edid.py`, `test_icc.py`; `gamewrap` suite |
 | SAGV | [`hw/sagv.md`](hw/sagv.md): MCHBAR pair `0x5DA0/0x5DA4=0x80000122`, busy bit, `enable_sagv` semantics | `tools/oxp3-sagv.sh status`/`probe` (probe exits 3 by design) |
 | camera / IMU | [`hw/camera-imu.md`](hw/camera-imu.md): PCI/USB/ACPI inventory (`_STA=0` everywhere for camera), IIO 100 Hz BMI260 | `imu.selftest`, `imu.iio`; camera = the `grep …/OVTI*/status` command row |
-| fingerprint | [`hw/fingerprint.md`](hw/fingerprint.md) + [`tools/fingerprint/README.md`](../tools/fingerprint/README.md): BF63112 SPI frame/CRC/image/retry | 172 Python tests (at the audit; 85 when this page was written), 324 C checks / 10 vectors, libfprint v1.94.9 syntax check; **no hardware transcript** |
+| fingerprint | [`hw/fingerprint.md`](hw/fingerprint.md) + [`tools/fingerprint/README.md`](../tools/fingerprint/README.md): BF63112 SPI frame/CRC/image/retry | its Python suite (`python3 -m unittest discover -s tools/fingerprint/tests -q` prints the count), 324 C checks / 10 vectors, libfprint v1.94.9 syntax check; **no hardware transcript** |
 | XeSS XMX | [`xess-xmx.md`](xess-xmx.md): CM patch series, IGC 2.10.10, binary comparison, `-doubleGRF` root cause | `gfx.xmx.*` (driver prefix `4b1d55ea` matches the live `~/.cache/oxp3-fixes/xmx-driver` build; `trace` SKIPs by design) |
 | Mesa / gamescope / kernel / firmware / MangoHud | [`WORKING-BUILD-2026-11-08.md`](WORKING-BUILD-2026-11-08.md), [`BEST-CONFIG.md`](BEST-CONFIG.md), [`xess-xmx.md`](xess-xmx.md), `patches/**` | `gfx.mesa`, `gfx.working` (`tools/check-working.sh` 7/7), `gfx.xe`, `inst.paths` |
 | sched_ext | [`cpu-sched.md`](cpu-sched.md) + [`cpu-sched-results.csv`](cpu-sched-results.csv) (round-3 numbers) | `sched.*` (unit not installed here, so `SKIP`/warn) |
@@ -182,15 +199,15 @@ Each `components.yaml` `last_validated.evidence` points at the file that carries
 7. **Corrections made *while writing this file*** (small, factual, no behaviour change): the
    `hw/sleep-power.md` baseline row still said "has not suspended once" (now cites the 9-entry count and
    the `-k`/`-b` trap); `hw/sagv.md` §5.4 referred to "a device that never suspended"; `docs/TESTING.md`
-   §3/§9 had pre-`gamewrap`/`gen-docs` suite counts (now 470 unit cases, 26 suites, with the dated table
-   kept as a record plus an "added after this snapshot" note).
+   §3/§9 had suite counts that had drifted. Those counts are now generated in §2 instead of copied
+   into prose, and the dated tables in `TESTING.md` are kept only as a record.
 
 ## 5. The owner's next three actions (exact commands)
 
 **A1 — install the installable `awaiting-install` components and clear the three failing checks.**
-This covers six of the eight (`volume`, `leds`, `rgb`, `sleep`, `bluetooth`, and the `daemons`
-lifecycle that ships inside them); `sched-ext` needs `oxp3-fixes-fast.sh install` **and** `scx_cosmos`
-present, and `adaptive-tdp` is opt-in by design. Review, then run; the only disruptive step is the
+This covers `volume`, `leds`, `rgb`, `sleep`, `bluetooth`, and the `daemons` lifecycle that ships
+inside them; `sched-ext` needs `oxp3-fixes-fast.sh install` **and** `scx_cosmos` present, and
+`adaptive-tdp` is opt-in by design. Review, then run; the only disruptive step is the
 reboot (initramfs + module reload), and `--uninstall` reverses the rest.
 
 ```sh
@@ -215,7 +232,7 @@ sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes   # sleep.s
 sudo tools/sleep-power-measure.sh suspend -w 600                       # bag-drain %/h; run on battery
 sudo tools/oxp3-voltap/oxp3-voltap selftest                            # a hold = one step, not a ramp
 # fingerprint probe: read-only queries, manual only, needs spidev bound + root; steps in docs/hw/fingerprint.md
-python3 -m unittest discover -s tools/fingerprint/tests                # offline, already green (172 tests at the audit)
+python3 -m unittest discover -s tools/fingerprint/tests                # offline, already green; prints its own count
 tools/fingerprint/tests/run-c-tests.sh                                 # 324 checks / 10 vectors (podman fallback)
 ```
 
@@ -234,7 +251,7 @@ git diff --stat && tools/repo-test.sh --fast
 
 | # | action | effort | risk | unblocks |
 |---|---|---|---|---|
-| 1 | Run A1, then re-record `docs/state/` snapshots | S | low (reboot) | 6 of 8 components leave `awaiting-install` (plus `sched-ext` if `scx_cosmos` is installed); the only 3 harness failures clear |
+| 1 | Run A1, then re-record `docs/state/` snapshots | S | low (reboot) | the installable components leave `awaiting-install` (plus `sched-ext` if `scx_cosmos` is installed); the recorded harness failures clear |
 | 2 | Run A2 transcripts and update `components.yaml` `last_validated` | S-M | low (physical) | turns "waiting for install" into "validated on device"; `sleep.suspend`, `vol.hold`, `led.write` |
 | 3 | Apply the licence choice (A3) and commit | S | none functional | removes the only DECISION PENDING in [`QA.md`](QA.md); makes reuse terms explicit |
 | 4 | Fix the two stale texts still visible: the Decky/status hint `"Flatpak Steam is not supported by the XMX project"` (`tools/decky-oxp3-status/main.py:1654`) contradicts [`hw/flatpak-xmx.md`](hw/flatpak-xmx.md); annotate `hw/gap-audit.md` §1 as superseded on the Bluetooth row | XS | none | stops new sessions re-learning the corrected facts |
@@ -248,9 +265,9 @@ git diff --stat && tools/repo-test.sh --fast
 
 ### Truth, generation, and the loop to run at the end of every round
 
-* Per-component facts live **only** in [`hw/components.yaml`](hw/components.yaml); the three tables in
-  `README.md`, `hw/README.md` and `INSTALL-HW.md` are generated. Never hand-edit a
-  `<!-- BEGIN GENERATED: … -->` block. Add or change a fact, then
+* Per-component facts live **only** in [`hw/components.yaml`](hw/components.yaml); the generated
+  tables in `README.md`, `hw/README.md` and `INSTALL-HW.md`, plus the §2 roll-up here, are generated. Never
+  hand-edit a `<!-- BEGIN GENERATED: … -->` block. Add or change a fact, then
   `tools/gen-docs.py --write`, then commit both.
 * Adding a `record <id>` to `tools/oxp3-verify.sh` requires owning it in some component (or listing it
   in `unmapped_checks` with a reason) or `tools/gen-docs.py --check` fails — that is the intended drift
@@ -263,7 +280,7 @@ git diff --stat && tools/repo-test.sh --fast
 | tool | use |
 |---|---|
 | `tools/repo-test.sh [--fast\|--full\|--only GLOB\|--list\|--json]` / `make test` | every offline check; skips are explained, never silent; logs in `/tmp/oxp3-repo-test/<run>` |
-| `tools/oxp3-verify.sh [--json] [--full] [--with-changes]` | hardware acceptance: 78 ids, `PASS/FAIL/SKIP/UNKNOWN`; default is read-only; `--with-changes` (needs `--full`) makes exactly two persistent changes; only `sleep.suspend` needs `OXP3_ALLOW_SUSPEND=1` |
+| `tools/oxp3-verify.sh [--json] [--full] [--with-changes]` | hardware acceptance: the declared id count is in the §2 block; `PASS/FAIL/SKIP/UNKNOWN`; default is read-only; `--with-changes` (needs `--full`) makes exactly two persistent changes; only `sleep.suspend` needs `OXP3_ALLOW_SUSPEND=1` |
 | `tools/oxp3-preflight.sh [--json] [--strict] [--component NAME]` | read-only prerequisite verdict before an install; the installer refuses on FAIL unless `--force` ([PREFLIGHT.md](PREFLIGHT.md)) |
 | `tools/oxp3-status.sh [--json\|--strict\|--selftest]` | same backend as the Decky panel |
 | `tools/oxp3-hw-install.sh --status\|--dry-run\|--root DIR\|--uninstall` | the hardware entry point; `--root` writes into an offline prefix |

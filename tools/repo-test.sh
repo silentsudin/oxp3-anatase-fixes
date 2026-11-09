@@ -624,6 +624,16 @@ suite_gen_docs() {
     python3 tools/gen-docs.py --check
 }
 
+suite_cli_contracts() {
+    [ -f "$REPO/tools/cli-contracts.py" ] || skip "tools/cli-contracts.py is missing"
+    need python3
+    cd "$REPO" || exit 1
+    # The default run, not --selftest: discover every CLI from git ls-files,
+    # probe --help and each advertised safe flag in a throw-away copy of the
+    # tree, and fail on a contract violation (exit 1) or a setup error (exit 2).
+    python3 tools/cli-contracts.py
+}
+
 suite_health() {
     [ -x "$REPO/tools/oxp3-health.sh" ] || skip "tools/oxp3-health.sh is missing"
     [ -f "$REPO/tools/oxp3_health.py" ] || skip "tools/oxp3_health.py is missing"
@@ -778,6 +788,9 @@ def_suite preflight fast fast 120 0 \
 def_suite gen-docs fast fast 60 0 \
     "generated component tables match docs/hw/components.yaml" \
     "python3 tools/gen-docs.py --check"
+def_suite cli-contracts fast medium 180 0 \
+    "every discovered tool's CLI contract: --help/--selftest exit codes, usage text, no traceback, no writes" \
+    "python3 tools/cli-contracts.py"
 def_suite health fast medium 180 0 \
     "one-command health front-end: offline verdict selftest + live JSON/quiet contract" \
     "tools/oxp3-health.sh --selftest && ... --json && ... --quiet"

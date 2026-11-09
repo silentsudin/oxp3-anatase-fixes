@@ -38,21 +38,20 @@ failing command and its log path.
 Recorded on this host (2026-11-09, no root):
 
 ```
-== 32 suite(s): 26 pass, 0 fail, 6 skip -> exit 0      # --fast
-== 32 suite(s): 30 pass, 0 fail, 2 skip -> exit 0      # --full (expected; see §9)
+== 34 suite(s): 28 pass, 0 fail, 6 skip -> exit 0      # --fast, ≈ 58 s
 ```
 
-*Later round:* the `health` suite (one-command front-end, [HEALTH.md](HEALTH.md)) was added
-after this snapshot. It makes that **33 suites**: **27 pass, 0 fail, 6 skip** in `--fast` (≈ 46 s,
-it adds a live `--json`/`--quiet` contract check) and **31 pass, 2 skip** in `--full`;
-`repo-test.sh --list` reports 28 suites run in `--fast`, 33 in `--full`.
+The inventory is the runner's, not a number copied here: `tools/repo-test.sh --list` prints the
+current **34 suites**, of which **29** run in `--fast` and all 34 in `--full`, with each suite's
+mode, tier and timeout. `--full` was not re-run in this round; it is expected to add the two
+build/network rows and keep the two explained skips (§9).
 
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 28 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 33 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 29 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 34 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
 `--full` still never installs host packages. The one network-dependent suite
 (`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
@@ -107,7 +106,8 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `wizard` | fast | fast | 300 s | `python3`, `bash` | – (scripted stdin, `--simulate`, private state dir) |
 | `triage` | fast | fast | 120 s | `python3` | – (rule selftest + 8 fixture bundles) |
 | `preflight` | fast | fast | 120 s | `python3`, `bash` | – (fixtures in memory; the live `--json` is read-only) |
-| `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check) |
+| `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check; it runs the `unit` discovery for the HANDOVER block) |
+| `cli-contracts` | fast | medium | 180 s | `python3`, `git` | – (probes run in a throw-away copy with `HOME`/XDG/`TMPDIR` redirected) |
 | `rollback` | fast | fast | 120 s | `bash`, `python3` | – (`--root` prefix + private state dir in `$TMPDIR`) |
 | `health` | fast | medium | 180 s | `python3`, `bash` | – (fixture selftest; the live runs are read-only and write only `<log>/health*.log`) |
 
@@ -162,7 +162,7 @@ Areas and what is actually proven:
   HDR gating on the panel state, vibrance backend choice, MangoHud env-only
   behaviour, gamescope wrapping/inside-session handling, argv/JSON safety and
   the parsed-not-sourced XMX env file. The `unit` suite runs the same file.
-* **unit** — the stdlib `unittest` suite in `tests/unit/` (634 tests, ~3.0 s):
+* **unit** — the stdlib `unittest` suite in `tests/unit/` (the count is what `unittest` itself prints, currently 658 tests in ~4.8 s):
   HID/LED frame encoders, rgbd TOML config and frame planning, powerctl
   parsers/write ordering/readback and exit codes, adaptivetdp policy and
   hysteresis, the voltap tap state machine, IMU helpers, EDID/ICC parsers and
@@ -170,11 +170,23 @@ Areas and what is actually proven:
   `install-common.sh` contract, and the launch wrapper's decisions. No root, no
   hardware, no network; synthetic sysfs trees and a synthetic HOME only. Inventory, coverage and the bugs found are in
   [UNIT-TESTS.md](UNIT-TESTS.md).
-* **generated docs** — `tools/gen-docs.py --check` re-renders the component tables from
-  `docs/hw/components.yaml` in memory and fails when a generated block in
-  `README.md`, `docs/hw/README.md` or `docs/INSTALL-HW.md` is stale. Read-only:
-  the suite never passes `--write`. The registry schema and the CI one-liner are
-  documented in [hw/REGISTRY.md](hw/REGISTRY.md).
+* **generated docs** — `tools/gen-docs.py --check` re-renders the three component tables from
+  `docs/hw/components.yaml`, plus the `handover-state` count block in `docs/HANDOVER.md`, in
+  memory and fails when any generated block in `README.md`, `docs/hw/README.md`,
+  `docs/INSTALL-HW.md` or `docs/HANDOVER.md` is stale. Read-only: the suite never passes
+  `--write`. The HANDOVER block derives the component counts, the harness check count, the
+  runner's suite count and the unit-test count from their sources; its derivation table is in
+  [hw/REGISTRY.md §7.1](hw/REGISTRY.md). The registry schema and the CI one-liner are in the
+  same document.
+* **CLI contracts** — `tools/cli-contracts.py` (the default run, not `--selftest`) discovers every
+  tool with a help path from `git ls-files`, then runs `--help` and each advertised safe flag
+  (`--selftest`, `--check`, `--dry-run`) in a throw-away copy of the tree with `HOME`, the XDG
+  directories and `TMPDIR` redirected. A violation (`exit 1`) is a repository failure: nonzero or
+  undocumented exit code, a traceback, missing usage text, or a write to the checkout. Documented
+  deviations and denied probes live in the tool's `HELP_EXCEPTIONS`/`PROBE_DENY` tables, so an
+  exception is visible instead of skipped. It prints its own discovered-tool and probe counts;
+  those are not copied into this document. It automates the hand-run matrix in
+  `docs/state/audit-2026-11-09.txt` (see also §11).
 * **lint** — `shellcheck -x` on every shell script when installed. It is not
   installed on this host, so the suite is a `SKIP` with the install hint; it is
   never a silent pass.
@@ -185,8 +197,8 @@ Measured per suite in the recorded `--fast` run (wall clock, this host):
 
 | tier | definition | suites here |
 |---|---|---|
-| fast | < 5 s | the per-suite largest are `python-compile` ≈ 2.9 s (26 Python processes), `unit` ≈ 4.9 s and `unit-verify` ≈ 1.3 s (17 units); the total `--fast` run is ≈ 46 s, including the two medium suites |
-| medium | 5–60 s | `firstrun` ≈ 15 s (it runs `oxp3-verify` twice; timeout stays 120 s), `health` ≈ 8 s (one live verify); a cold `npm ci` or a first container `dnf install` would also land here |
+| fast | a few seconds (< 5 s target; the timeout is the real bound) | the slowest are `python-compile` ≈ 7.9 s on a cold bytecode cache (26 Python processes), `unit` ≈ 4.8 s, `unit-verify` ≈ 1.3 s (17 units) and `decky-selftest`/`status-selftest` ≈ 1.2 s; the total `--fast` run is ≈ 58 s, including the medium suites |
+| medium | 5–60 s | `firstrun` ≈ 13.5 s (it runs `oxp3-verify` twice; timeout stays 120 s), `health` ≈ 7.7 s (one live verify), `cli-contracts` ≈ 6.7 s (all `--help`/flag probes) and `gen-docs` ≈ 4.9 s (it runs the unit discovery for the HANDOVER block); a cold `npm ci` or a first container `dnf install` would also land here |
 | slow / network | > 60 s or requires the network | `fp-libfprint` only (skipped by default; with `OXP3_REPO_TEST_NETWORK=1` the container fallback installs `glib2-devel libgusb-devel` first) |
 
 The tier is documentation in `--list`; the timeout is what actually bounds a
@@ -346,25 +358,20 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 | run | result |
 |---|---|
-| `tools/repo-test.sh --fast` | 33 rows: **27 pass, 0 fail, 6 skip**, exit 0, ≈ 46 s (`firstrun` runs the verifier twice and `health` runs it once more) |
-| `tools/repo-test.sh --full` | 33 rows expected: **31 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
-| `tools/repo-test.sh --list` | 33 suites; 28 run in `--fast`, 33 in `--full` |
-| `python3 -m unittest discover -s tests/unit -q` | `Ran 658 tests ... OK (skipped=1)`, ≈ 4.5 s |
+| `tools/repo-test.sh --fast` | 34 rows: **28 pass, 0 fail, 6 skip**, exit 0, ≈ 58 s (`firstrun` 13.5 s, `health` 7.7 s, `cli-contracts` 6.7 s, `gen-docs` 4.9 s) |
+| `tools/repo-test.sh --only cli-contracts` | 1 row: 1 pass, exit 0, ≈ 6.7 s (`--only` selects only the matching suite) |
+| `tools/repo-test.sh --list` | 34 suites; 29 run in `--fast`, 34 in `--full` |
+| `python3 -m unittest discover -s tests/unit -q` | `Ran 658 tests ... OK (skipped=1)`, ≈ 4.6 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
-| deliberately broken copy in `/tmp`, `--only fp-python` | 1 fail, exit 1, failing command + log path printed |
-| root container `--fast` | 15 pass / 0 fail / 10 skip, exit 0 |
-| non-root container `--fast` | 16 pass / 0 fail / 9 skip, exit 0 |
+| deliberately broken copy in `/tmp`, `--only fp-python` (earlier round) | 1 fail, exit 1, failing command + log path printed |
+| root container `--fast` (earlier round) | 15 pass / 0 fail / 10 skip, exit 0 |
+| non-root container `--fast` (earlier round) | 16 pass / 0 fail / 9 skip, exit 0 |
 
 The six fast-mode skips are the five full-only suites plus `shellcheck`; they
-are enumerated in the table on every run, not implied.
-
-*Added after this snapshot:* the `gamewrap`, `gen-docs`, `firstrun` and `wizard`
-suites (later rounds add more; the table above is authoritative). A
-fresh `--fast` on 2026-11-09 reported **32 suites: 26 pass, 0 fail, 6 skip**, and
-`--list` reports 27 suites run in `--fast`, 32 in `--full` (the `unit` row has
-since grown to 634 cases, see [UNIT-TESTS.md](UNIT-TESTS.md)). The `firstrun`
-suite is the one to watch when timing: it exercises the collector's self-test,
-the live `--check-only --json` and a `--dry-run`, which runs `oxp3-verify` twice.
+are enumerated in the table on every run, not implied. `--full` was not re-run
+in this round. The authoritative current numbers are `tools/repo-test.sh --list`
+and the generated `handover-state` block in [HANDOVER.md](HANDOVER.md), not any
+count copied into this document.
 
 ## 10. Open points
 

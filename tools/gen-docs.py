@@ -4,9 +4,10 @@
 docs/hw/components.yaml is the single source of truth for per-component facts
 (state, summary, implementation paths, doc link, root requirement, install and
 verification steps, dependencies, caveats, last validation). This tool validates
-that file and renders the three tables that used to be hand-maintained in
-docs/hw/README.md (state matrix), docs/INSTALL-HW.md (install/verify matrix) and
-README.md (summary), between explicit markers:
+that file and renders the three component tables that used to be hand-maintained
+in docs/hw/README.md (state matrix), docs/INSTALL-HW.md (install/verify matrix)
+and README.md (summary), plus the volatile-count block in docs/HANDOVER.md that
+used to be re-typed by hand, between explicit markers:
 
     <!-- BEGIN GENERATED: hw-state ... -->
     ...generated table...
@@ -14,6 +15,9 @@ README.md (summary), between explicit markers:
 
 Prose outside the markers is never read, rewritten or reflowed. Output is
 deterministic: no timestamps, no environment values, so `--check` can run in CI.
+The handover block derives its numbers from their sources each run (the component
+data, tools/oxp3-verify.sh, tools/repo-test.sh and tests/unit) and states in the
+block how each number was obtained.
 
     tools/gen-docs.py              same as --check (the safe default)
     tools/gen-docs.py --check      exit 1 when a generated block is stale
@@ -30,6 +34,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 
 PROG = "gen-docs"
@@ -38,6 +43,8 @@ VERSION = "1.0.0"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = "docs/hw/components.yaml"
 VERIFY_TOOL = "tools/oxp3-verify.sh"
+REPO_TEST_TOOL = "tools/repo-test.sh"
+UNIT_TESTS_DIR = "tests/unit"
 
 STATES = ("working", "partial", "blocked", "not-a-gap", "awaiting-install")
 ROOT_VALUES = ("yes", "no", "partial", "not-applicable")
@@ -279,6 +286,79 @@ def declared_checks():
     if not ids:
         raise Problem("no check ids parsed from %s - did its record() format change?" % VERIFY_TOOL)
     return ids
+
+
+# ---------------------------------------------------------------------------
+# volatile counts for the HANDOVER block
+#
+# Every value here is derived from its source of truth, never typed into the
+# document. The block says how each one was obtained so a reader can re-run the
+# derivation by hand.
+# ---------------------------------------------------------------------------
+def declared_suite_counts():
+    """Return (total, fast) parsed from the def_suite registry in repo-test.sh."""
+    path = os.path.join(REPO, REPO_TEST_TOOL)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        raise Problem("cannot read %s: %s" % (REPO_TEST_TOOL, exc))
+    rows = re.findall(r"^def_suite[ \t]+([a-z][a-z0-9-]*)[ \t]+(fast|full)[ \t]", text, re.M)
+    if not rows:
+        raise Problem("no def_suite registrations parsed from %s - did its format change?"
+                      % REPO_TEST_TOOL)
+    fast = sum(1 for _name, mode in rows if mode == "fast")
+    return len(rows), fast
+
+
+def _static_unit_test_count():
+    """Count `def test*` methods under tests/unit, used only as a fallback."""
+    total = 0
+    for path in sorted(glob.glob(os.path.join(REPO, UNIT_TESTS_DIR, "test_*.py"))):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                total += len(re.findall(r"^[ \t]*def test[A-Za-z0-9_]*[ \t]*\(", fh.read(), re.M))
+        except OSError as exc:
+            raise Problem("cannot read %s: %s" % (os.path.relpath(path, REPO), exc))
+    return total
+
+
+def unit_test_count():
+    """Return (count, how) for tests/unit.
+
+    The authoritative number is what unittest itself reports, so the block and
+    the `unit` repo-test suite cannot disagree. Only when discovery cannot run
+    at all do we fall back to a static count - and then the block says so.
+    """
+    cmd = [sys.executable, "-m", "unittest", "discover", "-s", UNIT_TESTS_DIR, "-q"]
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    try:
+        res = subprocess.run(cmd, cwd=REPO, env=env, capture_output=True,
+                             text=True, timeout=300)
+        output = (res.stdout or "") + (res.stderr or "")
+        match = re.search(r"^Ran (\d+) tests? in ", output, re.M)
+        if match:
+            return int(match.group(1)), (
+                "run `python3 -m unittest discover -s %s -q` and parse `Ran N tests` "
+                "(the same discovery `tools/repo-test.sh` uses)" % UNIT_TESTS_DIR)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    static = _static_unit_test_count()
+    if not static:
+        raise Problem("cannot count tests in %s: unittest discovery did not run and no "
+                      "`def test*` methods were found" % UNIT_TESTS_DIR)
+    return static, (
+        "static count of `def test*` methods under %s because `python3 -m unittest "
+        "discover -s %s -q` did not run in this environment" % (UNIT_TESTS_DIR, UNIT_TESTS_DIR))
+
+
+def component_state_counts(components):
+    """Return {state: [components]} for every fixed state, in STATES order."""
+    groups = {state: [] for state in STATES}
+    for comp in components:
+        groups[comp["state"]].append(comp)
+    return groups
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +622,13 @@ def _link(doc, from_dir):
     return "[%s](%s)" % (os.path.basename(doc), rel.replace(os.sep, "/"))
 
 
+def _md_link(doc, from_dir):
+    """Link labelled with the doc stem, as HANDOVER's hand-written table did."""
+    rel = os.path.relpath(os.path.join(REPO, doc), os.path.join(REPO, from_dir))
+    return "[%s](%s)" % (os.path.splitext(os.path.basename(doc))[0],
+                         rel.replace(os.sep, "/"))
+
+
 def _state(comp):
     return comp["state"]
 
@@ -642,6 +729,47 @@ def render_readme_summary(components, _unmapped, _global):
     return "\n".join(out) + "\n"
 
 
+def render_handover_state(components, _unmapped, _global):
+    groups = component_state_counts(components)
+    total = len(components)
+    present = [state for state in STATES if groups[state]]
+    suite_total, suite_fast = declared_suite_counts()
+    tests, tests_how = unit_test_count()
+    checks = len(declared_checks())
+
+    out = [
+        "State roll-up and the volatile counts this page used to re-type. Every value below is",
+        "computed by `tools/gen-docs.py` from the named source; **do not hand-edit this block**.",
+        "",
+        "**%d components**: %s." % (
+            total, ", ".join("**%d** `%s`" % (len(groups[state]), state)
+                             for state in present)),
+        "Counted from the `state:` field of each component in `docs/hw/components.yaml`.",
+        "",
+        "| state | components (doc link) |",
+        "|---|---|",
+    ]
+    for state in present:
+        members = ", ".join("%s (%s)" % (comp["id"], _md_link(comp["doc"], "docs"))
+                            for comp in groups[state])
+        out.append("| `%s` (%d) | %s |" % (state, len(groups[state]), members))
+    out += [
+        "| **total** (%d) | every component in the data file; add a component there, not here |"
+        % total,
+        "",
+        "| volatile fact | value | how this number was obtained |",
+        "|---|---|---|",
+        "| checks declared by `%s` | **%d** ids | counted from its `record`/`simple_ind` "
+        "lines, the same extraction the harness uses for its inventory; the default-run "
+        "pass/fail/skip split is host data, not a repository fact |" % (VERIFY_TOOL, checks),
+        "| suites in `%s` | **%d** (**%d** in `--fast`, **%d** in `--full`) | parsed from "
+        "the `def_suite` registrations and their mode column |"
+        % (REPO_TEST_TOOL, suite_total, suite_fast, suite_total),
+        "| tests in `%s` | **%d** | %s |" % (UNIT_TESTS_DIR, tests, tests_how),
+    ]
+    return "\n".join(out) + "\n"
+
+
 BLOCKS = (
     # name, target file, renderer, one-line description
     ("hw-state", "docs/hw/README.md", render_hw_state,
@@ -650,6 +778,8 @@ BLOCKS = (
      "install/verify matrix with the oxp3-verify.sh check ids"),
     ("readme-summary", "README.md", render_readme_summary,
      "short summary table of the headline components"),
+    ("handover-state", "docs/HANDOVER.md", render_handover_state,
+     "component state roll-up plus the volatile counts copied into the handover page"),
 )
 
 BEGIN_RE = re.compile(r"^<!-- BEGIN GENERATED: (?P<name>[a-z-]+)(?:[ ].*)? -->$")
@@ -758,10 +888,11 @@ def usage():
   tools/gen-docs.py --write    rewrite the generated blocks in place
   tools/gen-docs.py --help     this text
 
-Generated blocks (markers, never hand-edited):
+Generated blocks (markers, never hand-edited; --check fails when one drifts):
   hw-state        docs/hw/README.md      state matrix
   install-verify  docs/INSTALL-HW.md     install/verify matrix
   readme-summary  README.md              summary table
+  handover-state  docs/HANDOVER.md       state roll-up + volatile counts
 
 Exit: 0 in sync/written, 1 stale block, 2 usage or validation error.
 Data file and schema: %s (documented in docs/hw/REGISTRY.md).""" % (
