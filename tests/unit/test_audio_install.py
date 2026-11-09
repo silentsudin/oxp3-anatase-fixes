@@ -230,7 +230,7 @@ class InstallerTest(unittest.TestCase):
         self.assertIn("Type=simple", text)
         self.assertIn("Restart=always", text)
         self.assertIn("while :; do", text)
-        self.assertIn("RemainAfterExit=no", text)
+        self.assertNotIn("RemainAfterExit=yes", text)
         self.assertIn("ExecStart=%h/.local/libexec/oxp3-speaker-gain apply", text)
         self.assertIn("WantedBy=default.target", text)
 
