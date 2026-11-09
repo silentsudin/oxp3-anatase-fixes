@@ -1,0 +1,50 @@
+[Unit]
+Description=OneXPlayer 3 userspace fan curve (software approximation of the EC curve)
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes
+# Opt-in: the EC's own automatic fan control is fine for most use. Enable this
+# only if you want a temperature->PWM curve, because it holds the fan in
+# manual mode while it runs (and hands it back to the EC when stopped).
+#   sudo install -D -m 0644 files/oxp3-fan-curve.service /etc/systemd/system/
+#   sudo systemctl enable --now oxp3-fan-curve.service
+# Curve: /etc/oxp3/fan-curve (lines "<degC> <pwm 0-255>"), built-in default otherwise.
+ConditionPathExistsGlob=/sys/devices/platform/oxp-platform/hwmon/hwmon*/pwm1
+After=hhd.service oxp3-power-profile.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/oxp3-powerctl fan curve --interval 2
+# SIGTERM makes the tool restore the EC's automatic mode before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=10
+User=root
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ReadWritePaths=/sys/devices/platform/oxp-platform /sys/devices/virtual/thermal
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target
