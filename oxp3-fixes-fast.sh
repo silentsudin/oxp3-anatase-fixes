@@ -29,7 +29,8 @@
 # Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware
 #                              --skip-mesa --skip-xess --skip-extras --skip-sched --stock-dmc
 #                              (--skip-sched leaves the gaming CPU scheduler alone; --stock-dmc keeps
-#                               Anatase's display DMC firmware)
+#                               Anatase's display DMC firmware; --skip-hw leaves the hardware fixes
+#                               (home button/LEDs, power units) from tools/oxp3-hw-install.sh alone)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
 #              OXP3_CACHE   (default ~/.cache/oxp3-fixes)
 set -euo pipefail
@@ -46,7 +47,8 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_FLATPAK=0 SKIP_SCHED=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_FLATPAK=0 SKIP_SCHED=0 SKIP_HW=0
+[[ ${OXP3_SKIP_HW:-0} == 1 ]] && SKIP_HW=1
 cmd="${1:-}"; shift || true
 for a in "$@"; do
     case $a in
@@ -59,6 +61,7 @@ for a in "$@"; do
         --skip-mesa) SKIP_MESA=1 ;;
         --skip-flatpak) SKIP_FLATPAK=1 ;;
         --skip-sched) SKIP_SCHED=1 ;;
+        --skip-hw) SKIP_HW=1 ;;
         --skip-xess) SKIP_XESS=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
@@ -897,6 +900,15 @@ do_install() {
         say "OneXPlayer 3 services (sudo)"
         install_extras
     fi
+    # Hardware fixes that live outside the /usr overlay (they survive updates in /etc and
+    # /usr/local): home button + top LEDs (udev rule + user unit) and the power/fan units.
+    # The volume rocker keeps the hhd patch path above; use tools/oxp3-hw-install.sh --volume
+    # for the oxp3-voltap daemon instead (the two are alternatives, see docs/INSTALL-HW.md).
+    if (( !SKIP_HW )) && [[ -x $here/tools/oxp3-hw-install.sh ]]; then
+        say "hardware fixes: home button/LEDs + power units (sudo)"
+        sudo "$here/tools/oxp3-hw-install.sh" --leds --power ||
+            echo "WARNING: hardware fixes (leds/power units) failed - see above" >&2
+    fi
 
     # 1. kernel modules + firmware: xe loads from the initramfs, so both are layered with
     #    rpm-ostree and the initramfs regenerated. That makes a new deployment, which doesn't keep
@@ -1010,6 +1022,10 @@ do_uninstall() {
     sudo rm -f /etc/systemd/system/oxp3-gaming-sched.service
     sudo systemctl daemon-reload
     uninstall_extras
+    if [[ -x $here/tools/oxp3-hw-install.sh ]]; then
+        sudo "$here/tools/oxp3-hw-install.sh" --uninstall --leds --power ||
+            echo "WARNING: removing the hardware units failed - see above" >&2
+    fi
     uninstall_xess
     if [[ -r $FLATPAK_MESA_LIST ]]; then remove_flatpak_mesa; refresh_flatpak_runtime; fi
     remove_mesa_fast
@@ -1051,6 +1067,9 @@ do_status() {
         [[ -n $site ]] && git -C "$site" apply --check -R -p1 "$hp" >/dev/null 2>&1 && n=$((n + 1))
     done
     echo "  volume rocker: $n/${#HHD_PATCHES[@]} hhd patches applied$( [[ -e $VOLUME_HWDB ]] && echo ', force-release on')"
+    if [[ -x $here/tools/oxp3-hw-install.sh ]]; then
+        "$here/tools/oxp3-hw-install.sh" --status 2>/dev/null | tail -n +2 | sed 's/^/  /' || true
+    fi
     status_xess
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }

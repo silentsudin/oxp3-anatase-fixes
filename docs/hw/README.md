@@ -17,9 +17,24 @@ Nothing vendor-proprietary is in this repo: only our own code and our own docume
 | Battery health, charge limit, bypass, adaptive TDP | charge limit + charge-inhibit ('bypass' approximation) reachable; EC bypass byte + charger tier not exposed; adaptive TDP daemon shipped (opt-in) | `tools/oxp3-powerctl.py battery`, `tools/oxp3-adaptivetdp.py`, unit | [battery-tdp.md](battery-tdp.md) | yes |
 | Camera / IPU7 | **no camera hardware on this unit** (all OVTI/INT3472 `_STA=0`, no IPU7 function); not a Linux gap | `tools/oxp3-imu.py` (sensor diagnostics only) | [camera-imu.md](camera-imu.md) | n/a |
 | IMU / gyro | **works** (BMI260 on i2c-10EC5280:00, IIO 100 Hz, HHD `sync_gyro` into the emulated Steam Controller) | `tools/oxp3-imu.py`, `files/oxp3-bmi160.conf` | [camera-imu.md](camera-imu.md) | no |
-| Remaining gaps | ranked audit (SAGV, HDR/vibrance, EC fan curves, charging bypass byte, camera only on other SKUs) | — | [gap-audit.md](gap-audit.md) | mixed |
+| SAGV / memory-frequency point | **no Linux interface exists** (boot-time `xe.enable_sagv` only, and it only disables); vendor path recovered (MCHBAR+0x5DA0/0x5DA4); read-only status + power-measurement tooling shipped | `tools/oxp3-sagv.sh`, `files/rapl-power` (now publishes `dram`/`psys`) | [sagv.md](sagv.md) | no to measure; yes to refresh `rapl-power` |
+| Display HDR / vibrance / colour | **panel is 10-bit PQ/HDR10 wide gamut** and Plasma 6.7 toggles it; Gamemode needs two gamescope flags; our shader + ICC shipped | `tools/display/` (display-mode.sh, vibrance.sh, oxp3-edid.py, oxp3-icc.py, oxp3-vibrance.fx) | [hdr-vibrance.md](hdr-vibrance.md) | only for the Gamemode flag |
+| Remaining gaps | ranked audit (SAGV, EC fan curves, charging bypass byte, camera only on other SKUs) | — | [gap-audit.md](gap-audit.md) | mixed |
 
-## Recommended install order
+## Install
+
+One entry point for the whole hardware set:
+
+```sh
+sudo tools/oxp3-hw-install.sh --all     # per-component flags: --volume --leds --sleep --bluetooth
+                                        # --power --rgb --imu --audio; see --help
+```
+
+Prerequisites, the ordered single command set, per-component opt-outs, the verification matrix
+(exact command + expected output for every fix), uninstall and per-component rollback are in
+[../INSTALL-HW.md](../INSTALL-HW.md).
+
+### Manual order (what the orchestrator runs, per component)
 
 1. `sudo tools/oxp3-voltap/install.sh install --hwdb`
 2. `sudo install -m 0644 tools/oxp3-hid.rules /etc/udev/rules.d/90-oxp3-hid.rules && sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw --action=change`
@@ -32,7 +47,10 @@ Nothing vendor-proprietary is in this repo: only our own code and our own docume
 7. Audio: `tools/audio/eq-on.sh` (no root).
 8. RGB keeper: `install -m 0644 tools/oxp3-rgbd.toml.example ~/.config/oxp3-rgb.toml` then
    `systemctl --user enable --now oxp3-rgbd.service` (after step 2; see [rgb-coverage.md](rgb-coverage.md)).
-9. Status: build the Decky plugin (`tools/decky-oxp3-status/`) or run `tools/oxp3-status.sh` headless.
+9. Display: `tools/display/display-mode.sh status` (nothing changes), then optionally `hdr on`; per-game
+   saturation is `tools/display/vibrance.sh install && tools/display/vibrance.sh set 35` — no root. HDR in
+   the Gamemode session is the only privileged part: [hdr-vibrance.md](hdr-vibrance.md) §5.2.
+10. Status: build the Decky plugin (`tools/decky-oxp3-status/`) or run `tools/oxp3-status.sh` headless.
 
 ## Known traps (learned the hard way)
 

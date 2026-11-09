@@ -1,0 +1,756 @@
+#!/bin/bash
+# oxp3-hw-install.sh - one entry point for every OneXPlayer 3 hardware fix in this repo.
+#
+# Each component keeps its own installer/tool; this script only orchestrates them, so a single
+# command installs (or removes) the whole hardware set coherently:
+#
+#   tools/oxp3-hw-install.sh --all             install everything (root; run it with sudo)
+#   tools/oxp3-hw-install.sh --volume --leds   pick components (root)
+#   tools/oxp3-hw-install.sh --audio           user scope only (no root needed)
+#   tools/oxp3-hw-install.sh --uninstall --all remove everything
+#   tools/oxp3-hw-install.sh --status          read-only state report
+#   tools/oxp3-hw-install.sh --dry-run --all   print every command, change nothing
+#
+# Components and their implementation:
+#   volume     tools/oxp3-voltap/install.sh          (daemon + hwdb + unit)
+#   leds       this script: udev rule + user unit     (tools/oxp3-homebtn.py, oxp3-led.py)
+#   sleep      this script: files/oxp3-sleep-* units, tools/oxp3-sleep-*
+#   bluetooth  tools/oxp3-bt-firmware.sh             (upstream firmware into updates/ + initramfs)
+#   power      tools/oxp3-power-install.sh           (oxp3-powerctl, boot/resume, fan, adaptive TDP)
+#   rgb        this script: shared udev rule + user config/unit (tools/oxp3-rgbd.py)
+#   imu        this script: files/oxp3-bmi160.conf   (keeps the BMI260 driver bound)
+#   audio      tools/audio/install-user.sh           (speaker EQ, user scope)
+#
+# Root model: the hardware components write to /etc, /usr/local/libexec and /sys, so they need
+# root.  The user-scope halves (home-button unit, RGB keeper, speaker EQ, status) are always run
+# as the *invoking* user - the one who called sudo - via runuser, never as root.  A dry run and
+# --status never need root.
+#
+# Safety: no vendor blobs, no kernel or EC pokes beyond what each component's own installer does,
+# idempotent (re-running changes nothing it already applied), and --root=DIR installs everything
+# into a scratch prefix for offline validation.
+#
+# Docs: docs/INSTALL-HW.md (single install guide), docs/hw/README.md (state matrix).
+set -euo pipefail
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo=$(CDPATH= cd -- "$here/.." && pwd)
+
+PREFIX=""
+DRY_RUN=0
+ACTION=install
+PURGE_CONFIG=0
+AUDIO_ACTIVATE=0
+IMU_RELOAD=0
+POWER_PROFILE=""
+BATTERY_LIMIT=""
+BATTERY_BYPASS=""
+BT_ARGS=(--persist=items)
+POWER_ARGS=()
+SELECTED=()
+TARGET_USER=""
+ORIG_ARGS=("$@")
+SUDO_SHIM_DIR=""
+
+# fixed component order: root-heavy first, user scope last
+ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio)
+
+say() { printf '\n== %s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
+    cat <<'EOF'
+
+Options:
+  --all                     every component (volume sleep bluetooth power imu leds rgb audio)
+  --volume --leds --sleep --bluetooth --power --rgb --imu --audio
+                            select components (repeatable; --all selects every one)
+  --uninstall               remove the selected components (keeps user config unless --purge-config)
+  --purge-config            with --uninstall: also remove ~/.config/oxp3-rgb.toml and oxp3-voltap.conf
+  --status                  read-only state report, no root needed
+  --dry-run, -n             print every command, execute nothing (no root needed)
+  --root DIR                install into DIR instead of / (offline simulation; component
+                            installers that write to / are skipped, systemd/udev are not run)
+  --user NAME               user whose user-scope files are installed/removed (default: SUDO_USER)
+  --audio-activate          after --audio, run tools/audio/eq-on.sh (restarts the user PipeWire)
+  --imu-reload              after --imu, reload bmi160_i2c/bmi260_i2c now instead of next boot
+  --fan-curve               pass --fan-curve to tools/oxp3-power-install.sh (opt-in fan daemon)
+  --adaptive-tdp            pass --adaptive-tdp to tools/oxp3-power-install.sh (installed inactive)
+  --power-profile NAME      after --power, save quiet|balanced|performance as the boot profile
+  --battery-limit N|off     after --power, save the charge limit (50-100 or off)
+  --battery-bypass on|off   after --power, save charge-inhibit ('bypass') on/off
+  --bt-persist MODE         items (default) | omit | none, passed to oxp3-bt-firmware.sh
+  --bt-with-ddc             also install intel/ibt-00a0-0291-pci.ddc
+  --bt-no-reload            do not reload btintel_pcie during --bluetooth
+  --bt-from PATH            use local firmware copies instead of downloading
+  -h, --help                this help
+
+Exit codes: 0 ok, 1 error, 2 usage.
+EOF
+}
+
+# ---------------------------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------------------------
+# prefix an absolute path with --root (no-op otherwise)
+p() { printf '%s%s' "$PREFIX" "$1"; }
+
+run() {
+    if (( DRY_RUN )); then
+        printf '  [dry-run]'
+        printf ' %q' "$@"
+        printf '\n'
+        return 0
+    fi
+    printf '  +'
+    printf ' %q' "$@"
+    printf '\n'
+    "$@"
+}
+
+skip_prefixed() { printf '  [root-prefix] skipped: %s\n' "$*"; }
+
+install_file() { # mode src dst
+    local mode=$1 src=$2 dst=$3
+    run install -D -m"$mode" "$src" "$dst"
+}
+
+# Render one of our units for the current checkout path.  The repo path must not contain
+# whitespace, or the unquoted ExecStart in these units would be split by systemd.
+render_unit() { # src
+    [[ $repo != *[[:space:]]* ]] ||
+        die "the checkout path contains whitespace ($repo); systemd ExecStart in the user units cannot represent it - move the repo or install the user units by hand"
+    sed -e "s|%h/git/linux_scratch/oxp3-anatase-fixes|$repo|g" \
+        -e "s|/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes|$repo|g" "$1"
+}
+
+user_home() { # user
+    getent passwd "$1" | cut -d: -f6
+}
+
+resolve_user() {
+    local u=${TARGET_USER:-${OXP3_USER:-${SUDO_USER:-}}}
+    if [[ -z $u ]]; then
+        if (( EUID != 0 )); then u=$(id -un); fi
+    fi
+    [[ -n $u ]] ||
+        die "no unprivileged user to wire the user-scope parts for; rerun with sudo from your desktop session, or pass --user NAME"
+    [[ $u != root ]] ||
+        die "refusing to install the user-scope parts as root; run '$0' with sudo from your user session, or pass --user NAME"
+    id -u "$u" >/dev/null 2>&1 || die "no such user: $u"
+    TARGET_USER=$u
+}
+
+needs_user_scope() {
+    local c
+    for c in "${SELECTED[@]}"; do
+        case $c in leds|rgb|audio) return 0 ;; esac
+    done
+    return 1
+}
+
+needs_root_scope() {
+    local c
+    for c in "${SELECTED[@]}"; do
+        case $c in audio) ;; *) return 0 ;; esac
+    done
+    return 1
+}
+
+# As the invoking user (needed for --user systemctl/pactl/install into $HOME).  Never root.
+as_user_run() {
+    local u=$TARGET_USER uid home
+    uid=$(id -u "$u")
+    home=$(user_home "$u")
+    if (( DRY_RUN )); then
+        printf '  [dry-run] as %s:' "$u"
+        printf ' %q' "$@"
+        printf '\n'
+        return 0
+    fi
+    if [[ -n $PREFIX ]]; then
+        env HOME="$PREFIX$home" XDG_CONFIG_HOME="$PREFIX$home/.config" "$@"
+    elif [[ $(id -u) -eq $uid ]]; then
+        env HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+            XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
+    else
+        runuser -u "$u" -- env HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+            XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
+    fi
+}
+
+# systemctl --user for the invoking user; a missing session bus is a warning, not a failure
+# (the unit is installed and starts at next login).
+user_systemctl() {
+    local u=$TARGET_USER uid
+    uid=$(id -u "$u")
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "systemctl --user $*"
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        printf '  [dry-run] as %s: systemctl --user' "$u"
+        printf ' %q' "$@"
+        printf '\n'
+        return 0
+    fi
+    if [[ ! -d /run/user/$uid ]]; then
+        warn "no user manager for $u (/run/user/$uid missing); unit installed, start it after logging in: systemctl --user enable --now $1"
+        return 0
+    fi
+    as_user_run systemctl --user "$@" ||
+        warn "systemctl --user $* failed for $u (session bus?); the unit is installed and starts at next login"
+}
+
+# install/refresh one user unit (rendered) and enable it now
+install_user_unit() { # src unit-name
+    local src=$1 name=$2 home dst tmp
+    home=$(user_home "$TARGET_USER")
+    dst="$PREFIX$home/.config/systemd/user/$name"
+    if (( DRY_RUN )); then
+        printf '  [dry-run] render %s for %s -> %s\n' "$src" "$repo" "$dst"
+        user_systemctl daemon-reload
+        user_systemctl enable "$name"
+        user_systemctl start "$name"
+        return 0
+    fi
+    tmp=$(mktemp)
+    render_unit "$src" >"$tmp"
+    run install -D -m0644 "$tmp" "$dst"
+    rm -f "$tmp"
+    if (( EUID == 0 )); then
+        chown "$TARGET_USER:$(id -gn "$TARGET_USER")" "$dst" 2>/dev/null || true
+        # the directory chain above $HOME/.config may have been created by root
+        chown "$TARGET_USER:$(id -gn "$TARGET_USER")" \
+            "$PREFIX$home/.config" "$PREFIX$home/.config/systemd" \
+            "$PREFIX$home/.config/systemd/user" 2>/dev/null || true
+    fi
+    user_systemctl daemon-reload
+    user_systemctl enable "$name"
+    if user_systemctl is-active --quiet "$name"; then
+        user_systemctl restart "$name"
+    else
+        user_systemctl start "$name"
+    fi
+}
+
+remove_user_unit() { # unit-name
+    local name=$1 home dst
+    home=$(user_home "$TARGET_USER")
+    dst="$PREFIX$home/.config/systemd/user/$name"
+    user_systemctl disable --now "$name" 2>/dev/null || true
+    run rm -f "$dst"
+    user_systemctl daemon-reload 2>/dev/null || true
+}
+
+# Component scripts call `sudo` internally.  When we are already root, put a no-op sudo wrapper
+# first in PATH so they work even on images without sudo and never prompt.
+setup_sudo_shim() {
+    (( EUID == 0 )) || return 0
+    (( DRY_RUN )) && return 0
+    SUDO_SHIM_DIR=$(mktemp -d "${TMPDIR:-/tmp}/oxp3-hw-sudo.XXXXXX")
+    cat >"$SUDO_SHIM_DIR/sudo" <<'EOF'
+#!/bin/sh
+# oxp3-hw-install.sh: already root; make the component installer's `sudo` a no-op.
+exec "$@"
+EOF
+    chmod 0700 "$SUDO_SHIM_DIR/sudo"
+    PATH="$SUDO_SHIM_DIR:$PATH"
+    export PATH
+    trap 'rm -rf "$SUDO_SHIM_DIR"' EXIT
+}
+
+unit_state() { # unit -> enabled/active
+    local en=- ac=-
+    if [[ -n $PREFIX ]]; then
+        printf 'n/a'
+        return
+    fi
+    systemctl is-enabled --quiet "$1" 2>/dev/null && en=enabled
+    systemctl is-active --quiet "$1" 2>/dev/null && ac=active
+    printf '%s/%s' "$en" "$ac"
+}
+
+user_unit_state() { # unit -> enabled/active
+    local u=$TARGET_USER uid out
+    [[ -n $PREFIX ]] && { printf 'n/a'; return; }
+    uid=$(id -u "$u" 2>/dev/null) || { printf '?'; return; }
+    [[ -d /run/user/$uid ]] || { printf 'no-session'; return; }
+    out=$(as_user_run systemctl --user is-enabled "$1" 2>/dev/null || true)
+    [[ $out == enabled ]] || out=-
+    if as_user_run systemctl --user is-active --quiet "$1" 2>/dev/null; then
+        out="$out/active"
+    else
+        out="$out/-"
+    fi
+    printf '%s' "$out"
+}
+
+# ---------------------------------------------------------------------------------------------
+# components: install
+# ---------------------------------------------------------------------------------------------
+comp_volume_install() {
+    say "volume rocker (oxp3-voltap daemon + force-release hwdb)"
+    [[ -n $PREFIX ]] && { skip_prefixed "tools/oxp3-voltap/install.sh install --hwdb (writes to /)"; return; }
+    run "$repo/tools/oxp3-voltap/install.sh" install --hwdb
+}
+
+HID_RULES_DONE=0
+install_hid_rules() {
+    (( HID_RULES_DONE )) && return 0
+    local dst
+    dst=$(p /etc/udev/rules.d/90-oxp3-hid.rules)
+    say "vendor HID access for the logged-in seat (udev rule)"
+    install_file 0644 "$repo/tools/oxp3-hid.rules" "$dst"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "udevadm control --reload-rules; udevadm trigger (hidraw, uinput)"
+    elif (( DRY_RUN )); then
+        printf '  [dry-run] udevadm control --reload-rules\n'
+        printf '  [dry-run] udevadm trigger --subsystem-match=hidraw --action=change\n'
+        printf '  [dry-run] udevadm trigger --subsystem-match=misc --sysname-match=uinput --action=change\n'
+    else
+        run udevadm control --reload-rules
+        run udevadm trigger --subsystem-match=hidraw --action=change
+        run udevadm trigger --subsystem-match=misc --sysname-match=uinput --action=change
+    fi
+    HID_RULES_DONE=1
+}
+
+comp_leds_install() {
+    say "home button + top LEDs (udev rule + user unit)"
+    install_hid_rules
+    install_user_unit "$repo/tools/oxp3-homebtn.service" oxp3-homebtn.service
+}
+
+comp_sleep_install() {
+    local x
+    say "suspend/resume (wake-source policy + suspend log)"
+    for x in oxp3-sleep-wakeup oxp3-sleep-log; do
+        install_file 0755 "$repo/files/$x" "$(p "/usr/local/libexec/$x")"
+    done
+    for x in oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service; do
+        install_file 0644 "$repo/files/$x" "$(p "/etc/systemd/system/$x")"
+    done
+    install_file 0644 "$repo/files/99-oxp3-sleep-wakeup.rules" \
+        "$(p /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules)"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "systemctl/udevadm for the sleep units"
+        return
+    fi
+    run systemctl daemon-reload
+    run systemctl enable --now oxp3-sleep-wakeup.service
+    run systemctl enable oxp3-sleep-pre.service oxp3-sleep-log.service
+    run udevadm control --reload-rules
+    run udevadm trigger --action=change --subsystem-match=usb --subsystem-match=pci
+}
+
+comp_bluetooth_install() {
+    say "Bluetooth firmware (upstream linux-firmware set into /usr/lib/firmware/updates)"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "tools/oxp3-bt-firmware.sh ${BT_ARGS[*]} (writes to /)"
+        return
+    fi
+    run "$repo/tools/oxp3-bt-firmware.sh" "${BT_ARGS[@]}"
+}
+
+comp_power_install() {
+    say "power envelope + fan (PL1/PL2/PL4 units, battery limit optional)"
+    if [[ -n $PREFIX ]]; then
+        if (( ${#POWER_ARGS[@]} )); then
+            skip_prefixed "tools/oxp3-power-install.sh install ${POWER_ARGS[*]} (writes to /)"
+        else
+            skip_prefixed "tools/oxp3-power-install.sh install (writes to /)"
+        fi
+    else
+        run "$repo/tools/oxp3-power-install.sh" install "${POWER_ARGS[@]}"
+        if [[ -n $POWER_PROFILE ]]; then
+            run "$(p /usr/local/libexec/oxp3-powerctl)" profile "$POWER_PROFILE" --save
+        fi
+        if [[ -n $BATTERY_LIMIT ]]; then
+            run "$(p /usr/local/libexec/oxp3-powerctl)" battery limit "$BATTERY_LIMIT" --save
+        fi
+        if [[ -n $BATTERY_BYPASS ]]; then
+            run "$(p /usr/local/libexec/oxp3-powerctl)" battery bypass "$BATTERY_BYPASS" --save
+        fi
+    fi
+}
+
+comp_imu_install() {
+    say "IMU: keep the BMI260 driver bound (bmi160_i2c blacklist)"
+    install_file 0644 "$repo/files/oxp3-bmi160.conf" "$(p /etc/modprobe.d/oxp3-bmi160.conf)"
+    if (( IMU_RELOAD )) && [[ -z $PREFIX ]]; then
+        run bash -c 'modprobe -r bmi160_i2c 2>/dev/null || true; modprobe bmi260_i2c 2>/dev/null || true'
+    else
+        printf '  blacklist is read at boot; apply now with: sudo modprobe -r bmi160_i2c; sudo modprobe bmi260_i2c\n'
+    fi
+}
+
+comp_rgb_install() {
+    say "body RGB keeper (shared udev rule + user config/unit)"
+    install_hid_rules
+    local home dst
+    home=$(user_home "$TARGET_USER")
+    dst="$PREFIX$home/.config/oxp3-rgb.toml"
+    if [[ -e $dst ]]; then
+        printf '  keeping existing %s\n' "$dst"
+    else
+        as_user_run install -D -m0644 "$repo/tools/oxp3-rgbd.toml.example" "$dst"
+    fi
+    install_user_unit "$repo/tools/oxp3-rgbd.service" oxp3-rgbd.service
+}
+
+comp_audio_install() {
+    say "speaker EQ (user scope, no root)"
+    as_user_run "$repo/tools/audio/install-user.sh"
+    if (( AUDIO_ACTIVATE )) && [[ -z $PREFIX ]]; then
+        as_user_run "$repo/tools/audio/eq-on.sh" ||
+            warn "the EQ drop-in is installed; run tools/audio/eq-on.sh after logging in"
+    else
+        printf '  activate with: tools/audio/eq-on.sh   (restarts the user PipeWire, makes the EQ sink default)\n'
+    fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# components: uninstall
+# ---------------------------------------------------------------------------------------------
+comp_volume_uninstall() {
+    say "volume rocker"
+    [[ -n $PREFIX ]] && { skip_prefixed "tools/oxp3-voltap/install.sh uninstall (writes to /)"; return; }
+    run "$repo/tools/oxp3-voltap/install.sh" uninstall
+    if (( PURGE_CONFIG )); then
+        run rm -f "$(p /etc/oxp3-voltap.conf)"
+    else
+        printf '  keeping /etc/oxp3-voltap.conf (--purge-config removes it)\n'
+    fi
+}
+
+# remove the shared HID rule only when neither user daemon needs it any more
+maybe_remove_hid_rule() {
+    local home other dst
+    home=$(user_home "$TARGET_USER")
+    if [[ $1 == leds ]]; then
+        other="$PREFIX$home/.config/systemd/user/oxp3-rgbd.service"
+    else
+        other="$PREFIX$home/.config/systemd/user/oxp3-homebtn.service"
+    fi
+    if [[ -e $other ]]; then
+        printf '  keeping 90-oxp3-hid.rules (still needed by %s)\n' "${other##*/}"
+        return 0
+    fi
+    dst=$(p /etc/udev/rules.d/90-oxp3-hid.rules)
+    run rm -f "$dst"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "udevadm control --reload-rules after removing the HID rule"
+    else
+        run udevadm control --reload-rules
+    fi
+}
+
+comp_leds_uninstall() {
+    say "home button unit"
+    remove_user_unit oxp3-homebtn.service
+    maybe_remove_hid_rule leds
+}
+
+comp_sleep_uninstall() {
+    local x
+    say "suspend/resume units"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "systemctl disable --now for the sleep units"
+    else
+        run systemctl disable --now oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service
+    fi
+    for x in oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service; do
+        run rm -f "$(p "/etc/systemd/system/$x")"
+    done
+    for x in oxp3-sleep-wakeup oxp3-sleep-log; do
+        run rm -f "$(p "/usr/local/libexec/$x")"
+    done
+    run rm -f "$(p /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules)"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "systemctl daemon-reload / udevadm reload after removing the sleep units"
+    else
+        run systemctl daemon-reload
+        run udevadm control --reload-rules
+        run udevadm trigger --action=change --subsystem-match=usb --subsystem-match=pci
+    fi
+}
+
+comp_bluetooth_uninstall() {
+    say "Bluetooth firmware"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "removal of the dracut conf and the firmware files (writes to /)"
+        return
+    fi
+    run rm -f "$(p /etc/dracut.conf.d/60-oxp3-bt-firmware.conf)"
+    if rpm -q --quiet oxp3-firmware 2>/dev/null; then
+        warn "the oxp3-firmware RPM owns the firmware files in this deployment; not deleting them by hand"
+        printf '  remove the layered package instead: ./oxp3-fixes-fast.sh uninstall   (or oxp3-fixes.sh uninstall)\n'
+    else
+        local f
+        for f in ibt-00a0-0291-iml.sfi ibt-00a0-0291-pci.sfi ibt-00a0-0291-pci.ddc; do
+            run rm -f "$(p "/usr/lib/firmware/updates/intel/$f")"
+        done
+    fi
+    printf '  the initramfs keeps its copy until the next deployment; a reboot restores whatever\n'
+    printf '  linux-firmware ships (Bluetooth is then dead again on this image - that is stock).\n'
+}
+
+comp_power_uninstall() {
+    say "power envelope + fan units"
+    [[ -n $PREFIX ]] && { skip_prefixed "tools/oxp3-power-install.sh uninstall (writes to /)"; return; }
+    run "$repo/tools/oxp3-power-install.sh" uninstall
+    printf '  /etc/oxp3/ (power.json, baseline, fan curve) is deliberately kept; the live RAPL limits\n'
+    printf '  return to the firmware values on reboot, or run: sudo /usr/local/libexec/oxp3-powerctl restore-baseline\n'
+}
+
+comp_imu_uninstall() {
+    say "IMU modprobe blacklist"
+    run rm -f "$(p /etc/modprobe.d/oxp3-bmi160.conf)"
+    printf '  affects the next boot only; the running bmi260 driver is left alone.\n'
+}
+
+comp_rgb_uninstall() {
+    local home cfg
+    say "body RGB keeper"
+    remove_user_unit oxp3-rgbd.service
+    if (( PURGE_CONFIG )); then
+        home=$(user_home "$TARGET_USER")
+        cfg="$PREFIX$home/.config/oxp3-rgb.toml"
+        run rm -f "$cfg"
+    else
+        printf '  keeping the RGB config (--purge-config removes it)\n'
+    fi
+    maybe_remove_hid_rule rgb
+}
+
+comp_audio_uninstall() {
+    local home cfg
+    say "speaker EQ (user scope)"
+    home=$(user_home "$TARGET_USER")
+    cfg="$PREFIX$home/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf"
+    if [[ -n $PREFIX ]]; then
+        run rm -f "$cfg"
+        return
+    fi
+    if [[ -d /run/user/$(id -u "$TARGET_USER") ]] && as_user_run "$repo/tools/audio/eq-off.sh"; then
+        :
+    else
+        warn "eq-off.sh could not reach the user session; removing the drop-in directly"
+        run rm -f "$cfg"
+        printf '  restart with: systemctl --user restart pipewire wireplumber\n'
+    fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# install / uninstall driver
+# ---------------------------------------------------------------------------------------------
+component_selected() {
+    local c
+    for c in "${SELECTED[@]}"; do [[ $c == "$1" ]] && return 0; done
+    return 1
+}
+
+run_selected() {
+    local action=$1 c
+    for c in "${ALL_COMPONENTS[@]}"; do
+        component_selected "$c" || continue
+        "comp_${c}_${action}"
+    done
+}
+
+print_verify_hints() {
+    if [[ -n $PREFIX ]]; then
+        say "verify"
+        printf '  (--root %s: systemd/udev were not touched, so verification belongs on the real host)\n' "$PREFIX"
+        return 0
+    fi
+    say "verify"
+    component_selected volume && printf '  tools/oxp3-hw-install.sh --status; press volume up/down; journalctl -u oxp3-voltap -b\n'
+    component_selected leds && printf '  systemctl --user status oxp3-homebtn; tools/oxp3-led.py status\n'
+    component_selected sleep && printf '  systemctl status oxp3-sleep-wakeup; tools/sleep-power-measure.sh audit\n'
+    component_selected bluetooth && printf '  bluetoothctl show; ls /sys/class/bluetooth\n'
+    component_selected power && printf '  /usr/local/libexec/oxp3-powerctl status; systemctl status oxp3-power-profile\n'
+    component_selected imu && printf '  tools/oxp3-imu.py selftest\n'
+    component_selected rgb && printf '  systemctl --user status oxp3-rgbd; tools/oxp3-rgbd.py --check\n'
+    component_selected audio && printf '  pactl list sinks short | grep oxp3_speaker_eq; tools/audio/eq_response.py\n'
+    printf '  tools/oxp3-status.sh          # the full read-only matrix (docs/INSTALL-HW.md)\n'
+}
+
+do_install_or_uninstall() {
+    local action=$1
+    [[ ${#SELECTED[@]} -gt 0 ]] || die "no component selected; use --all or one of --volume --leds --sleep --bluetooth --power --rgb --imu --audio (see --help)"
+
+    # user-scope target: only resolve when something needs it (audio is user-only; leds/rgb
+    # install a user unit and therefore also need it)
+    if needs_user_scope; then
+        resolve_user
+    fi
+
+    # root policy: dry run and --root never need root; only --audio may run unprivileged
+    if (( EUID != 0 )) && [[ -z $PREFIX ]] && (( !DRY_RUN )); then
+        if needs_root_scope; then
+            local q=()
+            local a
+            for a in "${ORIG_ARGS[@]}"; do q+=("$(printf '%q' "$a")"); done
+            die "the selected hardware components write to /etc and /usr/local and need root; rerun as:
+  sudo $0 ${q[*]}"
+        fi
+    fi
+
+    if (( EUID == 0 )) && [[ -z $PREFIX ]] && (( !DRY_RUN )); then
+        setup_sudo_shim
+    fi
+
+    if (( DRY_RUN )); then
+        printf 'dry run: nothing is changed. Components: %s\n' "${SELECTED[*]}"
+    fi
+
+    run_selected "$action"
+
+    if (( !DRY_RUN )); then
+        if [[ $action == install ]]; then
+            print_verify_hints
+            if [[ -z $PREFIX ]] && { component_selected bluetooth || component_selected imu; }; then
+                printf '\nReboot needed for: the Bluetooth initramfs (regenerated at the next deployment) '
+                printf 'and the IMU blacklist.\n'
+            fi
+        else
+            say "uninstall complete"
+            printf '  user config kept unless --purge-config was given; /etc/oxp3 kept by the power uninstaller.\n'
+        fi
+    fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------------------------
+yes_no() { if [[ -e "$1" ]]; then printf yes; else printf no; fi; }
+prefixed_yes_no() { yes_no "$(p "$1")"; }
+
+print_status() {
+    local home f n lim beh
+    if [[ -z $TARGET_USER ]]; then
+        TARGET_USER=${SUDO_USER:-$(id -un)}
+        [[ $TARGET_USER == root ]] && TARGET_USER=$(id -un)
+    fi
+    home=$(user_home "$TARGET_USER" 2>/dev/null || echo "$HOME")
+
+    local where="live system"
+    [[ -n $PREFIX ]] && where="root-prefix $PREFIX"
+    say "oxp3 hardware fixes ($where)"
+    printf '  libexec:      vol=%s sleep-wakeup=%s sleep-log=%s powerctl=%s adaptivetdp=%s\n' \
+        "$(prefixed_yes_no /usr/local/libexec/oxp3-voltap)" \
+        "$(prefixed_yes_no /usr/local/libexec/oxp3-sleep-wakeup)" \
+        "$(prefixed_yes_no /usr/local/libexec/oxp3-sleep-log)" \
+        "$(prefixed_yes_no /usr/local/libexec/oxp3-powerctl)" \
+        "$(prefixed_yes_no /usr/local/libexec/oxp3-adaptivetdp)"
+    printf '  udev rules:   hid=%s sleep-wakeup=%s volume-hwdb=%s\n' \
+        "$(prefixed_yes_no /etc/udev/rules.d/90-oxp3-hid.rules)" \
+        "$(prefixed_yes_no /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules)" \
+        "$(prefixed_yes_no /etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb)"
+    printf '  units:        vol=%s sleep=%s pre=%s log=%s profile=%s resume=%s fan=%s adaptivetdp=%s\n' \
+        "$(unit_state oxp3-voltap.service)" "$(unit_state oxp3-sleep-wakeup.service)" \
+        "$(unit_state oxp3-sleep-pre.service)" "$(unit_state oxp3-sleep-log.service)" \
+        "$(unit_state oxp3-power-profile.service)" "$(unit_state oxp3-power-resume.service)" \
+        "$(unit_state oxp3-fan-curve.service)" "$(unit_state oxp3-adaptivetdp.service)"
+    printf '  user units:   homebtn=%s rgbd=%s (user %s)\n' \
+        "$(user_unit_state oxp3-homebtn.service)" "$(user_unit_state oxp3-rgbd.service)" "$TARGET_USER"
+    printf '  power:        profile-file=%s live PL1/PL2/PL4=%s/%s/%s W\n' \
+        "$(prefixed_yes_no /etc/oxp3/power.json)" \
+        "$(( $(cat /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 ))" \
+        "$(( $(cat /sys/class/powercap/intel-rapl:0/constraint_1_power_limit_uw 2>/dev/null || echo 0) / 1000000 ))" \
+        "$(( $(cat /sys/class/powercap/intel-rapl:0/constraint_2_power_limit_uw 2>/dev/null || echo 0) / 1000000 ))"
+    lim=$(cat /sys/class/power_supply/BAT0/charge_control_end_threshold 2>/dev/null || echo n/a)
+    beh=$(cat /sys/class/power_supply/BAT0/charge_behaviour 2>/dev/null || echo n/a)
+    printf '  battery:      limit=%s%% behaviour=%s\n' "$lim" "$beh"
+    n=0
+    for f in ibt-00a0-0291-iml.sfi ibt-00a0-0291-pci.sfi; do
+        [[ -e "$(p "/usr/lib/firmware/updates/intel/$f")" ]] && n=$((n + 1))
+    done
+    printf '  bluetooth:    fw-in-updates=%s/2 dracut-conf=%s hci0=%s\n' "$n" \
+        "$(prefixed_yes_no /etc/dracut.conf.d/60-oxp3-bt-firmware.conf)" \
+        "$(yes_no /sys/class/bluetooth/hci0)"
+    printf '  imu:          modprobe-blacklist=%s\n' \
+        "$(prefixed_yes_no /etc/modprobe.d/oxp3-bmi160.conf)"
+    printf '  rgb:          config=%s effect=%s\n' \
+        "$(yes_no "$PREFIX$home/.config/oxp3-rgb.toml")" \
+        "$(sed -n 's/^[[:space:]]*effect[[:space:]]*=[[:space:]]*//p' "$PREFIX$home/.config/oxp3-rgb.toml" 2>/dev/null | head -1 | tr -d '"' | tr -d "'" | sed 's/[[:space:]]*$//')"
+    printf '  audio:        eq-dropin=%s\n' \
+        "$(yes_no "$PREFIX$home/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf")"
+}
+
+# ---------------------------------------------------------------------------------------------
+# argument parsing
+# ---------------------------------------------------------------------------------------------
+add_component() {
+    local c=$1 x
+    for x in "${SELECTED[@]}"; do [[ $x == "$c" ]] && return 0; done
+    SELECTED+=("$c")
+}
+
+while (( $# )); do
+    case $1 in
+        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--imu|--audio)
+            add_component "${1#--}" ;;
+        --all) for c in "${ALL_COMPONENTS[@]}"; do add_component "$c"; done ;;
+        --uninstall|--remove) ACTION=uninstall ;;
+        --status) ACTION=status ;;
+        --dry-run|-n) DRY_RUN=1 ;;
+        --purge-config) PURGE_CONFIG=1 ;;
+        --root) [[ $# -ge 2 ]] || die "--root needs a directory"; PREFIX=${2%/}; shift
+                [[ -n $PREFIX ]] || die "--root=/ is not a simulation"; ;;
+        --root=*) PREFIX=${1#*=}; PREFIX=${PREFIX%/}
+                  [[ -n $PREFIX ]] || die "--root=/ is not a simulation" ;;
+        --user) [[ $# -ge 2 ]] || die "--user needs a name"; TARGET_USER=$2; shift ;;
+        --user=*) TARGET_USER=${1#*=} ;;
+        --audio-activate) AUDIO_ACTIVATE=1 ;;
+        --imu-reload) IMU_RELOAD=1 ;;
+        --fan-curve) POWER_ARGS+=(--fan-curve) ;;
+        --adaptive-tdp) POWER_ARGS+=(--adaptive-tdp) ;;
+        --power-profile) [[ $# -ge 2 ]] || die "--power-profile needs quiet|balanced|performance"
+                         POWER_PROFILE=$2; shift ;;
+        --battery-limit) [[ $# -ge 2 ]] || die "--battery-limit needs 50-100 or off"; BATTERY_LIMIT=$2; shift ;;
+        --battery-bypass) [[ $# -ge 2 ]] || die "--battery-bypass needs on or off"; BATTERY_BYPASS=$2; shift ;;
+        --bt-persist) [[ $# -ge 2 ]] || die "--bt-persist needs items|omit|none"
+                       BT_ARGS=(--persist="$2"); shift ;;
+        --bt-persist=*) BT_ARGS=(--persist="${1#*=}") ;;
+        --bt-with-ddc) BT_ARGS+=(--with-ddc) ;;
+        --bt-no-reload) BT_ARGS+=(--no-reload) ;;
+        --bt-from) [[ $# -ge 2 ]] || die "--bt-from needs a path"; BT_ARGS+=(--from "$2"); shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "unknown option: $1 (try --help)" ;;
+    esac
+    shift
+done
+
+if [[ $ACTION != status ]]; then
+    case $POWER_PROFILE in ""|quiet|balanced|performance) ;; *) die "--power-profile must be quiet, balanced or performance" ;; esac
+    case $BATTERY_LIMIT in ""|off|[5-9][0-9]|100) ;; *) die "--battery-limit must be 50-100 or off" ;; esac
+    case $BATTERY_BYPASS in ""|on|off) ;; *) die "--battery-bypass must be on or off" ;; esac
+
+    if [[ -n $POWER_PROFILE || -n $BATTERY_LIMIT || -n $BATTERY_BYPASS || ${#POWER_ARGS[@]} -gt 0 ]]; then
+        component_selected power || die "the power options (--power-profile/--battery-*/--fan-curve/--adaptive-tdp) need --power"
+        [[ $ACTION == install ]] || die "the power options only apply to install, not --uninstall"
+    fi
+    if (( AUDIO_ACTIVATE )); then
+        component_selected audio || die "--audio-activate needs --audio"
+    fi
+    if (( IMU_RELOAD )); then
+        component_selected imu || die "--imu-reload needs --imu"
+    fi
+fi
+
+if [[ -n $PREFIX ]]; then
+    [[ -d $PREFIX ]] || die "--root directory does not exist: $PREFIX"
+    PREFIX=$(CDPATH= cd -- "$PREFIX" && pwd)
+fi
+
+if [[ $ACTION == status ]]; then
+    print_status
+    exit 0
+fi
+
+do_install_or_uninstall "$ACTION"

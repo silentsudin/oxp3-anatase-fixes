@@ -13,8 +13,9 @@ here, so `build` + `install` reapplies it to whatever Anatase ships next.
 | MangoHud | CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs | Anatase's MangoHud rebuilt with `patches/mangohud`, same overlay |
 | kernel modules | xe: VBT VS/PE-O backport (white dots, HDR retoggle black screen), 7.3 VRR/DSB flip timing, resume out-of-memory fix, 7.2.8-7.2.13 stable fixes, IBC v3 on PTL, eDP HDR switches. iwlwifi/iwlmld and btintel/btintel_pcie: 7.2.13 stable and 7.3/7.4 fixes | built for the installed Anatase kernel, signed with your MOK, layered as `kmod-oxp3` in `updates/` with a regenerated initramfs |
 | firmware | display DMC v2.20 (v2.36 caps VRR at about 74 fps), Bluetooth 24.80, CPU microcode 0x11c | `oxp3-firmware`, layered with the modules, in `/usr/lib/firmware/updates` (searched first, also by dracut) |
-| `rapl-power` | CPU/GPU power for the overlay without opening the RAPL counters to users | `/usr/local/libexec` + `/etc/systemd/system` |
+| `rapl-power` | CPU/GPU power for the overlay without opening the RAPL counters to users; also publishes `dram` (memory rail) and `psys` (platform) so the SAGV/memory-frequency effect is measurable without root ([docs/hw/sagv.md](docs/hw/sagv.md)) | `/usr/local/libexec` + `/etc/systemd/system` |
 | extras | TDP above 25 W actually applied, speakers after boot/resume, volume rocker no longer sticks, no 5 s wait on suspend, GPU power reading on every boot; only the lid, power button, sleep button and RTC alarm can wake it, and every resume logs what woke it ([docs/hw/sleep-power.md](docs/hw/sleep-power.md)) | services and configs in `/etc`; the hhd volume patch in the `/usr` overlay |
+| SAGV / memory frequency | **no Linux control exists**: Windows pins the SAGV/QCLK-GV point through an MCHBAR register pair, while Linux only has the boot-time `xe.enable_sagv` switch (disable-only, 0400) and the kernel lets PCU firmware pick the point. Read-only status/probe tooling shipped, plus memory/platform power domains so the effect can be measured ([docs/hw/sagv.md](docs/hw/sagv.md)) | nothing is installed; `tools/oxp3-sagv.sh` is read-only and needs no root |
 | fingerprint | **not supported and not fixable by config**: the reader is a Betterlife `ACPI\BF63112` module on Intel LPSS SPI, with no kernel driver, no libfprint driver and no udev binding. Hardware ID, the Windows match-in-sensor command set and the byte-exact SPI frame (0xAA/0x4C/CRC-32) are recorded, plus a read-only userspace probe and a driver skeleton ([docs/hw/fingerprint.md](docs/hw/fingerprint.md)) | nothing is installed; `tools/fingerprint/` holds the probe and the skeleton, the privileged bring-up steps are in the doc |
 
 You keep booting the stock Anatase kernel; only the modules above are replaced. Kernel
@@ -137,6 +138,15 @@ systemctl reboot
 
 Then leave and re-enter Gamemode. If neither the kernel nor the firmware changed, the single
 `install` is enough.
+
+The **hardware fixes** (volume rocker, home button + LEDs, body RGB, suspend/wake policy, Bluetooth
+firmware, power envelope/fan/battery, IMU, speaker EQ) have their own entry point and single guide:
+
+```sh
+sudo tools/oxp3-hw-install.sh --all      # flags and opt-outs: --help; guide: docs/INSTALL-HW.md
+```
+
+`install` above also calls it for the home-button/LED and power units; `--skip-hw` skips that.
 
 **Install only the Mesa/ANV performance patches** (what the figures above come from):
 
@@ -370,6 +380,9 @@ Intel has no equivalent of AMD's `gpu_metrics`: every source of CPU/iGPU power i
 counter, root-only since CVE-2020-8694 (PLATYPUS). `rapl-power` (root, no capabilities,
 sandboxed) is the only reader and publishes 1 s averages rounded to 0.1 W in
 `/run/rapl-power/<domain>`; MangoHud reads those (CPU = package - uncore, GPU = uncore).
+Domains published: `package-0`, `core`, `uncore`, plus `dram` (memory domain) and `psys` (whole
+platform), which is what `tools/oxp3-sagv.sh measure` reads to quantify SAGV (the memory-frequency
+switching Windows pins per profile, see [docs/hw/sagv.md](docs/hw/sagv.md)).
 `oxp3-rapl-pp1` reloads `intel_rapl_msr` once at boot if it registered no uncore (GPU) zone.
 
 ### Extras (`files/`)

@@ -3,24 +3,28 @@
 #
 # The powercap energy_uj counters are root-only since CVE-2020-8694 (PLATYPUS), a side
 # channel that needs many fine-grained energy readings. This service is the only reader:
-# every second it writes the average power of the package-0, core and uncore (Intel iGPU)
-# domains over that second, rounded to 0.1 W, to /run/rapl-power/<domain name>.
+# every second it writes the average power of the package-0, core, uncore (Intel iGPU),
+# dram (memory rail) and psys (whole platform) domains over that second, rounded to 0.1 W,
+# to /run/rapl-power/<domain name>. dram/psys are what the SAGV measurements need
+# (docs/hw/sagv.md): dram is the rail SAGV modulates, psys the whole SoC/board.
 # That is the same kind of data AMD exposes to all users in gpu_metrics.
 set -u
 
 INTERVAL=1
-OUT=/run/rapl-power            # created by systemd (RuntimeDirectory=rapl-power)
+OUT=${RAPL_POWER_OUT:-/run/rapl-power}   # systemd RuntimeDirectory=rapl-power, or override for tests
+ROOT=${RAPL_POWER_ROOT:-/sys/class/powercap}   # powercap root, overridable so the loop can be tested
 
 declare -A file max prev
-for z in /sys/class/powercap/intel-rapl:* /sys/class/powercap/amd-rapl:*; do
+for z in "$ROOT"/intel-rapl:* "$ROOT"/amd-rapl:*; do
     [[ -r $z/energy_uj && -r $z/name ]] || continue
     read -r name < "$z/name"
-    case $name in package-0|core|uncore) ;; *) continue ;; esac
+    case $name in package-0|core|uncore|dram|psys) ;; *) continue ;; esac
     [[ -n ${file[$name]:-} ]] && continue        # first (MSR based) zone wins
     file[$name]=$z/energy_uj
     read -r max[$name] < "$z/max_energy_range_uj" || max[$name]=0
 done
-(( ${#file[@]} )) || { echo "rapl-power: no RAPL package/core/uncore domains" >&2; exit 1; }
+(( ${#file[@]} )) || { echo "rapl-power: no RAPL package/core/uncore/dram/psys domains" >&2; exit 1; }
+[[ -d $OUT ]] || mkdir -p "$OUT" || { echo "rapl-power: cannot create $OUT" >&2; exit 1; }
 
 for name in "${!file[@]}"; do read -r prev[$name] < "${file[$name]}"; done
 t_prev=${EPOCHREALTIME/./}

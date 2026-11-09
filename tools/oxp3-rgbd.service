@@ -4,11 +4,12 @@ Documentation=file:///var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/h
 # The vendor hidraw node must be usable by this user (tools/oxp3-hid.rules).
 After=graphical-session.target
 PartOf=graphical-session.target
+# Stay inert until the user has written a config (install the example first).
+# ConditionPathExists belongs in [Unit], not [Service] (systemd-analyze verify would ignore it).
+ConditionPathExists=%h/.config/oxp3-rgb.toml
 
 [Service]
 Type=simple
-# Stay inert until the user has written a config (install the example first).
-ConditionPathExists=%h/.config/oxp3-rgb.toml
 Environment=PYTHONUNBUFFERED=1
 # Adjust the path if the checkout lives elsewhere.
 ExecStart=%h/git/linux_scratch/oxp3-anatase-fixes/tools/oxp3-rgbd.py
