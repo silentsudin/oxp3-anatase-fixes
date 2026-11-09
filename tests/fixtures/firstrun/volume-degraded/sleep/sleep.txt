@@ -1,0 +1,46 @@
+== sleep capability
+
+  /sys/power/mem_sleep     [s2idle] deep
+  /sys/power/state         freeze mem
+  /sys/power/disk          [disabled]
+
+== suspend_stats (this boot)
+  success              1
+  fail                 0
+  failed_suspend       0
+  failed_resume        0
+  last_failed_dev      
+  last_failed_errno    0
+  last_failed_step     
+  last_hw_sleep        8600000000
+  max_hw_sleep         523986009990
+  total_hw_sleep       8600000000
+
+== wake sources
+== /proc/acpi/wakeup (enabled entries)
+  LID0  S3  *enabled  platform:PNP0C0D:00
+  XHCI  S3  *enabled  pci:0000:00:14.0
+
+== /sys/class/wakeup (armed sources)
+  wakeup0                  device:15                          active=0 events=0
+  wakeup23                 0000:00:1c.0                       active=0 events=0
+
+== repository audit (tools/sleep-power-measure.sh audit, read-only)
+== suspend capability
+mem_sleep       : [s2idle] deep
+state           : freeze mem 
+hibernate (disk): [disabled]
+lockdown        : none [integrity] confidentiality
+platform_profile: balanced
+
+== kernel suspend record (this boot)
+  success            1
+  fail               0
+  last_failed_dev    
+  last_hw_sleep      8600000000
+  (root shows the S0ix residency and the pmc_core blocker lists)
+
+== suspend inhibitors
+  WHO              UID  USER  PID    COMM            WHAT                                                                       WHY                                                        MODE
+
+  0 inhibitors listed.

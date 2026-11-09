@@ -194,6 +194,11 @@ path, a size and a sha256, exactly as [PROVENANCE.md](PROVENANCE.md) requires.
 
 ## 7. How a later session should read it
 
+**Shortcut:** run `tools/oxp3-triage.py <bundle>` first — it reads every file below,
+derives a per-fix verdict and a ranked action list, and cites the file and line for each
+finding ([TRIAGE.md](TRIAGE.md)). Read the rest of this section when the triage says
+`unknown` or when you need the raw bytes.
+
 1. `MANIFEST.json` — `counts` (what was readable), `checklist` (what was still open),
    `artifacts[*].status/exit_code/truncated` (what to trust), `redaction` (what was
    removed), `journal.available` (whether the journal rows are meaningful).

@@ -1,0 +1,4 @@
+# journal for the oxp3 units
+# command: journalctl -b --no-pager -o short-precise -n 600 -u oxp3-*
+# exit:    0
+

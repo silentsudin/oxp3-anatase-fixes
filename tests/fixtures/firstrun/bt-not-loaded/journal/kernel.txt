@@ -1,0 +1,5 @@
+# kernel lines: bluetooth/suspend/audio/GPU
+# command: journalctl -b -k --no-pager -o short-precise -n 800 --grep=bluetooth|hci0|btintel|suspend|PM:|snd_|sof-|xe |drm
+# exit:    0
+
+Nov 09 03:58:11.100000 <host> kernel: Bluetooth: hci0: Failed to load Intel firmware file intel/ibt-00a0-0291-iml.sfi (-2)

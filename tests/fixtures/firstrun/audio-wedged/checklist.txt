@@ -1,0 +1,27 @@
+oxp3 first-run checklist - OneXPlayer 3 hardware fixes
+repo:   ~/git/linux_scratch/oxp3-anatase-fixes
+user:   <user>   home: ~   root: no
+kernel: 7.2.7-an28.fc45.x86_64
+
+ #  step                               state    detail
+---  ---------------------------------- -------- ------------------------------
+  1  driver stack (kernel, Mesa, gamesc ok       
+  2  hardware install (libexec helpers) ok       
+  3  udev rules + volume force-release  ok       
+  4  sleep trigger policy (logind drop- ok       
+  5  logind restarted after the drop-in ok       
+  6  suspend policy units enabled       ok       
+  7  Bluetooth firmware (updates/ + ini ok       
+  8  power envelope (PL1/PL2/PL4)       ok       
+  9  battery charge limit / inhibit     ok       
+ 10  IMU modprobe blacklist             ok       
+ 11  speaker EQ drop-in                 pending  drop-in present, sink not loaded
+ 12  RGB keeper config                  ok       
+ 13  home button / LED user unit        ok       
+ 14  HDR / ICC / vibrance tooling       ok       
+ 15  XMX driver + per-game ICD          ok       
+ 16  Decky status plugin                ok       
+ 17  a real suspend recorded since boot ok       
+ 18  evidence bundle collected          ok       
+
+checklist: 18 row(s)

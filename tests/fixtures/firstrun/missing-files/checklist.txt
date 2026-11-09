@@ -1,0 +1,9 @@
+oxp3 first-run checklist - OneXPlayer 3 hardware fixes
+kernel: 7.2.7-an28.fc45.x86_64
+
+ #  step                               state    detail
+---  ---------------------------------- -------- ------------------------------
+  1  hardware install (libexec helpers) todo     0/5 helpers installed
+  2  Bluetooth firmware (updates/ + initram todo     firmware 0/2
+
+checklist: 0 ok, 2 todo

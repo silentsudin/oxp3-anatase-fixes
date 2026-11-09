@@ -1,0 +1,6 @@
+# journal for the oxp3 units
+# command: journalctl -b --no-pager -o short-precise -n 600 -u oxp3-*
+# exit:    0
+
+Nov 09 03:59:02.100000 <host> oxp3-voltap[7120]: device lost: /dev/input/event23 disappeared; retrying in 1s
+Nov 09 03:59:03.120000 <host> oxp3-voltap[7120]: DEGRADED: every candidate is held or refused (EBUSY): /dev/input/event4: [Errno 16] Device or resource busy; status=degraded-busy exit=3; retrying in 1s

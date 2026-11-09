@@ -1,0 +1,26 @@
+== installed rules and drop-ins
+
+  /etc/udev/rules.d/90-oxp3-hid.rules                              present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      hidraw access rule                                           2026-11-09T03:58:00Z  410 B
+  /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules                     present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      sleep wakeup rule                                            2026-11-09T03:58:00Z  410 B
+  /etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb                   present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      volume force-release hwdb                                    2026-11-09T03:58:00Z  410 B
+  /etc/polkit-1/rules.d/49-oxp3-suspend.rules                      present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      suspend polkit rule                                          2026-11-09T03:58:00Z  410 B
+  /etc/systemd/logind.conf.d/60-oxp3-sleep.conf                    present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      logind sleep policy                                          2026-11-09T03:58:00Z  410 B
+  /etc/modprobe.d/oxp3-bmi160.conf                                 present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      IMU blacklist                                                2026-11-09T03:58:00Z  410 B
+  /etc/dracut.conf.d/60-oxp3-bt-firmware.conf                      present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      Bluetooth initramfs drop-in                                  2026-11-09T03:58:00Z  410 B
+  /etc/oxp3/power.json                                             present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      saved power profile                                          2026-11-09T03:58:00Z  410 B
+
+== volume hwdb
+  /etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  /etc/udev/hwdb.bin present, mtime 2026-11-09T04:00:00Z
+
+== udevadm verify on the installed rules
+  /etc/udev/rules.d/90-oxp3-hid.rules: clean
+  /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules: clean

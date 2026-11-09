@@ -1,0 +1,23 @@
+== identity
+kernel           : 7.2.7-an28.fc45.x86_64
+os               : Anatase
+arch             : x86_64
+boot_id          : (redacted: bare UUIDs are treated as device identifiers)
+uptime_s         : 42696.63
+euid             : 1000
+repo             : ~/git/linux_scratch/oxp3-anatase-fixes
+git              : {"branch": "main", "dirty": "", "dirty_lines": "0", "head": "eb384f7"}
+
+== /proc/cmdline
+BOOT_IMAGE=(hd0,gpt2)/ostree/anatase/vmlinuz-7.2.7-an28.fc45.x86_64 rhgb quiet root=UUID=<redacted:uuid> rw xe.enable_panel_replay=0
+
+== DMI / board identifiers (values redacted by policy)
+  sys_vendor       ONE-NETBOOK
+  product_name     ONEXPLAYER 3
+  board_name       ONEXPLAYER 3
+  bios_version     5.09
+  bios_date        08/10/2026
+  product_serial   (not readable)
+
+== module parameters (xe / xe.enable_*)
+  enable_sagv                              0

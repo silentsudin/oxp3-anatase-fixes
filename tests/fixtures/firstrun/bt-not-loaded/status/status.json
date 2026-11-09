@@ -1,0 +1,270 @@
+{
+  "schema": 1,
+  "version": "1.0.0",
+  "generated_at": "2026-11-09T04:06:40Z",
+  "overall": "ok",
+  "counts": {
+    "ok": 28,
+    "warn": 3,
+    "fail": 0,
+    "unknown": 0,
+    "na": 0
+  },
+  "host": {
+    "user": "<redacted-user>",
+    "home": "<redacted-home>",
+    "kernel": "7.2.7-an28.fc45.x86_64",
+    "hostname": "<redacted-host>"
+  },
+  "game": null,
+  "env_sources": [
+    {
+      "name": "Heroic config",
+      "live": false,
+      "keys": 8
+    }
+  ],
+  "groups": [
+    {
+      "id": "mesa",
+      "title": "mesa",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "mesa.host",
+          "label": "mesa.host",
+          "state": "ok",
+          "value": "ec418f04e589965a (match)",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "mesa.env.vk_driver_files",
+          "label": "mesa.env.vk_driver_files",
+          "state": "ok",
+          "value": "libvulkan_intel.so -> XMX driver 4b1d55ea9483417f",
+          "detail": "",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "xmx",
+      "title": "xmx",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "xmx.icd",
+          "label": "xmx.icd",
+          "state": "ok",
+          "value": "icd-xmx.json -> xmx driver",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "xmx.helper",
+          "label": "xmx.helper",
+          "state": "ok",
+          "value": "xmx-cm-compile-nodgrf.sh",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "xmx.igc",
+          "label": "xmx.igc",
+          "state": "ok",
+          "value": "ocloc-25.18.1",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "xmx.shim",
+          "label": "xmx.shim",
+          "state": "ok",
+          "value": "igdext64.dll present",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "xmx.driver",
+          "label": "xmx.driver",
+          "state": "ok",
+          "value": "4b1d55ea9483417f (match)",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "xmx.kernels",
+          "label": "xmx.kernels",
+          "state": "ok",
+          "value": "30 kernel(s)",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "xmx.trace",
+          "label": "xmx.trace",
+          "state": "ok",
+          "value": "igdext_trace.log 562 lines",
+          "detail": "",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "sched",
+      "title": "sched",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "sched.state",
+          "label": "sched.state",
+          "state": "warn",
+          "value": "disabled",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "sched.scx_cosmos",
+          "label": "sched.scx_cosmos",
+          "state": "warn",
+          "value": "not running",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "sched.unit",
+          "label": "sched.unit",
+          "state": "warn",
+          "value": "not installed",
+          "detail": "",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "xe",
+      "title": "xe",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "xe.module",
+          "label": "xe.module",
+          "state": "ok",
+          "value": "layered (xe.ko.xz)",
+          "detail": "",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "rapl",
+      "title": "rapl",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "rapl.service",
+          "label": "rapl.service",
+          "state": "ok",
+          "value": "active",
+          "detail": "",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "power",
+      "title": "power",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "power.pl1",
+          "label": "power.pl1",
+          "state": "ok",
+          "value": "35.00 W / 35.00 W",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "power.profile",
+          "label": "power.profile",
+          "state": "ok",
+          "value": "balanced",
+          "detail": "",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "flatpak",
+      "title": "flatpak",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "flatpak.runtime",
+          "label": "flatpak.runtime",
+          "state": "ok",
+          "value": "4d043cc2851a11fd (recorded)",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "flatpak.steam_env",
+          "label": "flatpak.steam_env",
+          "state": "ok",
+          "value": "xmx-cm-compile-nodgrf.sh",
+          "detail": "",
+          "path": ""
+        }
+      ]
+    },
+    {
+      "id": "sys",
+      "title": "sys",
+      "state": "ok",
+      "indicators": [
+        {
+          "id": "sys.kernel",
+          "label": "sys.kernel",
+          "state": "ok",
+          "value": "7.2.7-an28.fc45.x86_64",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "sys.gpu",
+          "label": "sys.gpu",
+          "state": "ok",
+          "value": "8086:B080 (xe), Mesa 27.0.0",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "sys.cpu",
+          "label": "sys.cpu",
+          "state": "ok",
+          "value": "governor powersave x14; EPP balance_power x14",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "sys.battery",
+          "label": "sys.battery",
+          "state": "ok",
+          "value": "80%, Charging",
+          "detail": "",
+          "path": ""
+        },
+        {
+          "id": "sys.thermal",
+          "label": "sys.thermal",
+          "state": "ok",
+          "value": "CPU package 55\u00b0C, max 55\u00b0C",
+          "detail": "",
+          "path": ""
+        }
+      ]
+    }
+  ],
+  "notes": []
+}

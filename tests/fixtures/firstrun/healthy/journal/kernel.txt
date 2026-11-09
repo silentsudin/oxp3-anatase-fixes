@@ -1,0 +1,6 @@
+# kernel lines: bluetooth/suspend/audio/GPU
+# command: journalctl -b -k --no-pager -o short-precise -n 800 --grep=bluetooth|hci0|btintel|suspend|PM:|snd_|sof-|xe |drm
+# exit:    0
+
+Nov 09 00:04:31.120000 <host> kernel: Bluetooth: hci0: Found Intel (R) Bluetooth 6.0, firmware variant 0x01
+Nov 09 00:04:31.240000 <host> kernel: PM: suspend entry (s2idle)

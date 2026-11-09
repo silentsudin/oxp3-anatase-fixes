@@ -1,0 +1,16 @@
+== platform profile
+
+  current : balanced
+  choices : low-power balanced performance
+
+== saved profile (/etc/oxp3/power.json)
+  {"profile": "balanced", "pl1_uw": "35000000"}
+
+== powercap / RAPL
+== intel-rapl-mmio:0
+  constraint_0_name              long_term
+  constraint_0_power_limit_uw    35000000
+  constraint_1_name              short_term
+  constraint_1_power_limit_uw    52000000
+  constraint_2_name              peak_power
+  constraint_2_power_limit_uw    122000000

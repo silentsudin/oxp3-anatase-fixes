@@ -1,0 +1,26 @@
+== session environment (graphics variables only)
+
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json
+
+== driver candidates (sha256 of the shipped bytes)
+
+  /usr/lib64/libvulkan_intel.so                                  present   ec418f04e589965adeb26da96fb282915e3dfd7ab98b0d6eab69f9878f3578e9
+
+== per-game ICD files
+  ~/.config/xess-xmx/icd-xmx.json               present   bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  ~/.config/xess-xmx/oxp3-env.sh                present   bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  ~/.config/xess-xmx/flatpak-env.sh             MISSING   
+
+== XMX kernel cache
+  ~/.cache/xess-xmx/kernels: 30 entries
+    0436535cffb0dad9_b080_605b6597.cmk
+    07103134d39b8579_b080_605b6597.cmk
+
+== compiler (IGC / ocloc)
+  ocloc: not found (no PATH entry, no ~/.local/share/xess-xmx install)
+
+== Steam Flatpak overrides
+  [Environment]
+  force_vk_vendor=0
+  ANV_CM_HELPER=~/.local/share/xess-xmx/tools/cm-compile.sh
+  VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer

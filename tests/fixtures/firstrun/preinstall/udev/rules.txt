@@ -1,0 +1,19 @@
+== installed rules and drop-ins
+
+  /etc/udev/rules.d/90-oxp3-hid.rules                              MISSING  
+  /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules                     MISSING  
+  /etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb                   MISSING  
+  /etc/polkit-1/rules.d/49-oxp3-suspend.rules                      MISSING  
+  /etc/systemd/logind.conf.d/60-oxp3-sleep.conf                    MISSING  
+  /etc/modprobe.d/oxp3-bmi160.conf                                 present   aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      IMU blacklist                                                2026-11-09T03:58:00Z  410 B
+  /etc/dracut.conf.d/60-oxp3-bt-firmware.conf                      MISSING  
+  /etc/oxp3/power.json                                             MISSING  
+
+== volume hwdb
+  (no 84-oxp3-volume-keys*.hwdb installed)
+  /etc/udev/hwdb.bin present, mtime 2026-11-08T16:16:31Z
+
+== udevadm verify on the installed rules
+  /etc/udev/rules.d/90-oxp3-hid.rules: not installed
+  /etc/udev/rules.d/99-oxp3-sleep-wakeup.rules: not installed

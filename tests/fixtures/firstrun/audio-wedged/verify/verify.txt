@@ -1,0 +1,68 @@
+oxp3-verify 1.0.0  mode=default  kernel=7.2.7-an28.fc45.x86_64  root=no
+
+[PASS  ] -          vol.unit               daemon running (active)
+[PASS  ] -          vol.grab               grabbed /dev/input/event23 (hhd virtual)
+[PASS  ] -          vol.topology           hhd-virtual selected (hhd vbtn)
+[PASS  ] -          vol.holder             physical AT keyboard held by hhd
+[PASS  ] -          vol.hwdb               compiled; force-release entry present
+[PASS  ] -          hid.rule               udev rule installed
+[PASS  ] -          led.status             protocol readable on /dev/hidraw4
+[PASS  ] -          led.zones              5 zones, 11 presets
+[PASS  ] -          hid.access             /dev/hidraw4 writable by user
+[PASS  ] -          homebtn.unit           unit active
+[PASS  ] -          homebtn.mapping        --key homepage, no --exec
+[PASS  ] -          homebtn.press          press decoded this boot
+[SKIP  ] -          led.write              gated: only with --full
+[PASS  ] -          rgbd.unit              unit active, config present
+[PASS  ] -          rgbd.check             5 zones / 10 frames encode
+[PASS  ] -          life.fd                hidraw + event/uinput fds live
+[PASS  ] -          life.reconnect         one device loss, recovered
+[SKIP  ] -          life.sim               gated: only with --full
+[PASS  ] -          sleep.mem              mem_sleep: [s2idle] deep
+[PASS  ] -          sleep.stats            last s2idle sleep 8.4s (success=1, fail=0)
+[PASS  ] -          sleep.units            3/3 enabled and active
+[PASS  ] -          sleep.wakeup           9 wake sources disarmed as documented
+[PASS  ] -          sleep.trigger          drop-in parsed; pkcheck yes; no sleep block
+[PASS  ] -          sleep.audit            capability and record readable
+[SKIP  ] -          sleep.suspend          gated: needs --full, --with-changes and OXP3_ALLOW_SUSPEND=1
+[PASS  ] -          bt.files               2/2 pinned files present
+[PASS  ] -          bt.dracut              drop-in present; initramfs carries the blobs
+[PASS  ] -          bt.journal             no firmware-load failure this boot
+[PASS  ] -          bt.controller          btmgmt sees the controller
+[PASS  ] -          bt.diag                files ok=2/2, journal failure=0
+[PASS  ] -          pwr.zones              both zones readable
+[PASS  ] -          pwr.pl1                PL1 35 W on both zones (tdp-sync invariant holds)
+[PASS  ] -          pwr.profile            balanced == saved balanced
+[PASS  ] -          pwr.fan                auto mode, pwm 51/255 (enable=2), 1399 rpm
+[PASS  ] -          pwr.adaptive           inactive and disabled (opt-in not used)
+[PASS  ] -          pwr.rapl               active
+[PASS  ] -          bat.threshold          charge_control_end_threshold=80
+[PASS  ] -          bat.behaviour          charge_behaviour: [auto] inhibit-charge
+[PASS  ] -          aud.scripts            eq-on.sh and eq-off.sh executable
+[PASS  ] -          aud.server             audio server reachable
+[FAIL  ] -          aud.eq                 drop-in installed but oxp3_speaker_eq.sink is missing
+[UNKNOWN] -          aud.dummy              only auto_null (Dummy Output) visible
+[PASS  ] -          aud.model              8-band model reproduces (pre-gain -8 dB)
+[PASS  ] -          dsp.hdr                HDR=disabled, WCG=disabled
+[PASS  ] -          dsp.icc                no ICC profile applied (panel profile: none)
+[PASS  ] -          dsp.panel              EDID reports 10-bit PQ/HDR10 wide gamut
+[PASS  ] -          dsp.vibrance           shader present
+[PASS  ] -          gfx.mesa               ec418f04e589965a (match)
+[PASS  ] -          gfx.xmx.driver         4b1d55ea9483417f (match)
+[PASS  ] -          gfx.xmx.helper         xmx-cm-compile-nodgrf.sh
+[PASS  ] -          gfx.xmx.igc            ocloc-25.18.1
+[PASS  ] -          gfx.xmx.kernels        30 kernel(s)
+[PASS  ] -          gfx.xmx.icd            icd-xmx.json -> xmx driver
+[PASS  ] -          gfx.xmx.trace          igdext_trace.log found (562 lines)
+[PASS  ] -          gfx.xe                 layered (xe.ko.xz)
+[PASS  ] -          gfx.working            state matches the recorded working build
+[SKIP  ] -          sched.state            gaming scheduler not installed (opt-in)
+[SKIP  ] -          sched.scx              gaming scheduler not installed (opt-in)
+[SKIP  ] -          sched.unit             not installed (opt-in)
+[PASS  ] -          decky.dir              plugin dir with plugin.json/main.py/dist
+[PASS  ] -          decky.backend          backend imports
+[PASS  ] -          decky.status           overall=ok (ok=25 warn=0 fail=0 unknown=0)
+[PASS  ] -          imu.selftest           RESULT: PASS (0 warning(s))
+[PASS  ] -          imu.iio                ACPI 10EC5280 selected
+
+== summary: 64 checks -> exit 1

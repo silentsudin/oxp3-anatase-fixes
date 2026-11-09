@@ -1,0 +1,25 @@
+== system units (systemctl show)
+
+oxp3-voltap.service              load=loaded    file=enabled    active=active    sub=running    restarts=0   exec=0
+oxp3-sleep-wakeup.service        load=loaded    file=enabled    active=active    sub=running    restarts=0   exec=0
+oxp3-sleep-pre.service           load=loaded    file=enabled    active=active    sub=running    restarts=0   exec=0
+oxp3-sleep-log.service           load=loaded    file=enabled    active=active    sub=running    restarts=0   exec=0
+oxp3-power-profile.service       load=loaded    file=enabled    active=inactive  sub=dead       restarts=0   exec=0
+oxp3-power-resume.service        load=loaded    file=enabled    active=inactive  sub=dead       restarts=0   exec=0
+oxp3-fan-curve.service           load=loaded    file=enabled    active=inactive  sub=dead       restarts=0   exec=0
+oxp3-adaptivetdp.service         load=loaded    file=enabled    active=inactive  sub=dead       restarts=0   exec=0
+oxp3-tdp-sync.service            load=loaded    file=enabled    active=inactive  sub=dead       restarts=0   exec=0
+oxp3-rapl-pp1.service            load=loaded    file=enabled    active=inactive  sub=dead       restarts=0   exec=0
+oxp3-gaming-sched.service        load=not-found file=           active=inactive  sub=dead       restarts=0   exec=0
+oxp3-xpad-sleep.service          load=loaded    file=enabled    active=inactive  sub=dead       restarts=0   exec=0
+oxp3-audio-resume@.service       template unit: see list-unit-files
+rapl-power.service               load=loaded    file=enabled    active=active    sub=running  restarts=0   exec=0
+
+== systemctl --failed
+
+(none)
+
+== systemctl list-unit-files 'oxp3-*'
+
+oxp3-audio-resume@.service indirect disabled
+oxp3-rapl-pp1.service      enabled  disabled

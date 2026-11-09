@@ -1,0 +1,174 @@
+{
+  "schema": 1,
+  "tool": "oxp3-firstrun",
+  "version": "1.0.0",
+  "generated_at": "2026-11-09T04:06:52Z",
+  "mode": "collect",
+  "out": "/tmp/fixture-bundle",
+  "repo": "~/git/linux_scratch/oxp3-anatase-fixes",
+  "root": false,
+  "kernel": "7.2.7-an28.fc45.x86_64",
+  "os": "Anatase",
+  "limits": {
+    "max_bytes": 5242880,
+    "max_lines": 2000
+  },
+  "counts": {
+    "artifacts": 2,
+    "ok": 0,
+    "missing": 0,
+    "denied": 0,
+    "unavailable": 0,
+    "timeout": 0,
+    "error": 0,
+    "skipped": 0,
+    "truncated": 0
+  },
+  "journal": {
+    "available": true,
+    "detail": "ok",
+    "files": [
+      "journal/oxp3-units.txt",
+      "journal/kernel.txt",
+      "journal/sleep-tag.txt",
+      "journal/oxp3-user-units.txt"
+    ]
+  },
+  "redaction": {
+    "total": 0,
+    "rules": {},
+    "files_with_matches": 0
+  },
+  "checklist": [
+    {
+      "id": "driver-stack",
+      "title": "driver stack (kernel, Mesa, gamescope)",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "hw-install",
+      "title": "hardware install (libexec helpers)",
+      "state": "todo",
+      "detail": "0/5 helpers installed",
+      "command": ""
+    },
+    {
+      "id": "udev-rules",
+      "title": "udev rules + volume force-release hwdb",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "sleep-policy",
+      "title": "sleep trigger policy (logind drop-in + polkit)",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "logind-restart",
+      "title": "logind restarted after the drop-in",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "sleep-units",
+      "title": "suspend policy units enabled",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "bluetooth",
+      "title": "Bluetooth firmware (updates/ + initramfs)",
+      "state": "todo",
+      "detail": "firmware 0/2, dracut missing",
+      "command": ""
+    },
+    {
+      "id": "power-profile",
+      "title": "power envelope (PL1/PL2/PL4)",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "battery-care",
+      "title": "battery charge limit / inhibit",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "imu-blacklist",
+      "title": "IMU modprobe blacklist",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "audio-eq",
+      "title": "speaker EQ drop-in",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "rgb-config",
+      "title": "RGB keeper config",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "homebtn-unit",
+      "title": "home button / LED user unit",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "display",
+      "title": "HDR / ICC / vibrance tooling",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "xmx",
+      "title": "XMX driver + per-game ICD",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "decky-plugin",
+      "title": "Decky status plugin",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    },
+    {
+      "id": "suspend-evidence",
+      "title": "a real suspend recorded since boot",
+      "state": "todo",
+      "detail": "success=?",
+      "command": ""
+    },
+    {
+      "id": "collector",
+      "title": "evidence bundle collected",
+      "state": "unknown",
+      "detail": "not collected",
+      "command": ""
+    }
+  ],
+  "artifacts": [],
+  "notes": [],
+  "complete": true,
+  "partial_data": false
+}

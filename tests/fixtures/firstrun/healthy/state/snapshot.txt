@@ -1,0 +1,3 @@
+== environment
+kernel: 7.2.7-an28.fc45.x86_64
+uptime: 42696.63s

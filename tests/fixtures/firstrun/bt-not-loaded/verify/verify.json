@@ -1,0 +1,596 @@
+{
+  "schema": 1,
+  "tool": "oxp3-verify",
+  "version": "1.0.0",
+  "generated_at": "2026-11-09T04:06:30Z",
+  "mode": "default",
+  "root": false,
+  "with_changes": false,
+  "kernel": "7.2.7-an28.fc45.x86_64",
+  "counts": {
+    "total": 64,
+    "pass": 55,
+    "fail": 3,
+    "skip": 6,
+    "unknown": 0
+  },
+  "exit_code": 1,
+  "checks": [
+    {
+      "id": "vol.unit",
+      "group": "volume",
+      "title": "oxp3-voltap service",
+      "state": "pass",
+      "summary": "daemon running (active)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "vol.grab",
+      "group": "volume",
+      "title": "volume event device grabbed",
+      "state": "pass",
+      "summary": "grabbed /dev/input/event23 (hhd virtual)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "vol.topology",
+      "group": "volume",
+      "title": "volume device selection",
+      "state": "pass",
+      "summary": "hhd-virtual selected (hhd vbtn)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "vol.holder",
+      "group": "volume",
+      "title": "physical AT keyboard holder",
+      "state": "pass",
+      "summary": "physical AT keyboard held by hhd",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "vol.hwdb",
+      "group": "volume",
+      "title": "force-release hwdb",
+      "state": "pass",
+      "summary": "compiled; force-release entry present",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "hid.rule",
+      "group": "leds",
+      "title": "hidraw udev rule",
+      "state": "pass",
+      "summary": "udev rule installed",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "led.status",
+      "group": "leds",
+      "title": "vendor HID protocol visible",
+      "state": "pass",
+      "summary": "protocol readable on /dev/hidraw4",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "led.zones",
+      "group": "leds",
+      "title": "addressable RGB zones",
+      "state": "pass",
+      "summary": "5 zones, 11 presets",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "hid.access",
+      "group": "leds",
+      "title": "hidraw node writable by user",
+      "state": "pass",
+      "summary": "/dev/hidraw4 writable by user",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "homebtn.unit",
+      "group": "leds",
+      "title": "home-button unit",
+      "state": "pass",
+      "summary": "unit active",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "homebtn.mapping",
+      "group": "leds",
+      "title": "home button maps to KEY_HOMEPAGE",
+      "state": "pass",
+      "summary": "--key homepage, no --exec",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "homebtn.press",
+      "group": "leds",
+      "title": "a real button press was decoded",
+      "state": "pass",
+      "summary": "press decoded this boot",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "led.write",
+      "group": "leds",
+      "title": "LED write accepted by the device",
+      "state": "skip",
+      "summary": "gated: only with --full",
+      "detail": "",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "rgbd.unit",
+      "group": "leds",
+      "title": "RGB keeper unit and config",
+      "state": "pass",
+      "summary": "unit active, config present",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "rgbd.check",
+      "group": "leds",
+      "title": "RGB config encodes",
+      "state": "pass",
+      "summary": "5 zones / 10 frames encode",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "life.fd",
+      "group": "daemons",
+      "title": "daemons hold live device fds",
+      "state": "pass",
+      "summary": "hidraw + event/uinput fds live",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "life.reconnect",
+      "group": "daemons",
+      "title": "device loss recovered",
+      "state": "pass",
+      "summary": "one device loss, recovered",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "life.sim",
+      "group": "daemons",
+      "title": "lifecycle simulation",
+      "state": "skip",
+      "summary": "gated: only with --full",
+      "detail": "",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "sleep.mem",
+      "group": "sleep",
+      "title": "s2idle selected",
+      "state": "pass",
+      "summary": "mem_sleep: [s2idle] deep",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "sleep.stats",
+      "group": "sleep",
+      "title": "a real suspend happened",
+      "state": "pass",
+      "summary": "last s2idle sleep 8.4s (success=1, fail=0)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "sleep.units",
+      "group": "sleep",
+      "title": "wake policy applied at boot",
+      "state": "pass",
+      "summary": "3/3 enabled and active",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "sleep.wakeup",
+      "group": "sleep",
+      "title": "wake sources disarmed",
+      "state": "pass",
+      "summary": "9 wake sources disarmed as documented",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "sleep.trigger",
+      "group": "sleep",
+      "title": "a suspend request has a permitted path",
+      "state": "pass",
+      "summary": "drop-in parsed; pkcheck yes; no sleep block",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "sleep.audit",
+      "group": "sleep",
+      "title": "suspend record readable",
+      "state": "pass",
+      "summary": "capability and record readable",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "sleep.suspend",
+      "group": "sleep",
+      "title": "real s2idle cycle",
+      "state": "skip",
+      "summary": "gated: needs --full, --with-changes and OXP3_ALLOW_SUSPEND=1",
+      "detail": "",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "bt.files",
+      "group": "bluetooth",
+      "title": "pinned firmware files",
+      "state": "pass",
+      "summary": "2/2 pinned files present",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "bt.dracut",
+      "group": "bluetooth",
+      "title": "initramfs carries the firmware",
+      "state": "pass",
+      "summary": "drop-in present; initramfs carries the blobs",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "bt.journal",
+      "group": "bluetooth",
+      "title": "no firmware-load failure this boot",
+      "state": "fail",
+      "summary": "kernel logged a firmware load failure",
+      "detail": "Nov 09 03:58:11 <host> kernel: Bluetooth: hci0: Failed to load Intel firmware file intel/ibt-00a0-0291-iml.sfi (-2)",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "bt.controller",
+      "group": "bluetooth",
+      "title": "controller visible",
+      "state": "fail",
+      "summary": "hci0 exists but btmgmt lists 0 controllers (no firmware)",
+      "detail": "",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "bt.diag",
+      "group": "bluetooth",
+      "title": "firmware diagnosis",
+      "state": "fail",
+      "summary": "action needed (action)",
+      "detail": "files ok=2/2, journal failure=1",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "pwr.zones",
+      "group": "power",
+      "title": "both RAPL package zones",
+      "state": "pass",
+      "summary": "both zones readable",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "pwr.pl1",
+      "group": "power",
+      "title": "TDP sync invariant",
+      "state": "pass",
+      "summary": "PL1 35 W on both zones (tdp-sync invariant holds)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "pwr.profile",
+      "group": "power",
+      "title": "saved profile applied",
+      "state": "pass",
+      "summary": "balanced == saved balanced",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "pwr.fan",
+      "group": "power",
+      "title": "EC fan node sane",
+      "state": "pass",
+      "summary": "auto mode, pwm 51/255 (enable=2), 1399 rpm",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "pwr.adaptive",
+      "group": "power",
+      "title": "adaptive TDP inert/consistent",
+      "state": "pass",
+      "summary": "inactive and disabled (opt-in not used)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "pwr.rapl",
+      "group": "power",
+      "title": "rapl-power publishes values",
+      "state": "pass",
+      "summary": "active",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "bat.threshold",
+      "group": "battery",
+      "title": "charge limit reachable",
+      "state": "pass",
+      "summary": "charge_control_end_threshold=80",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "bat.behaviour",
+      "group": "battery",
+      "title": "charge inhibit reachable",
+      "state": "pass",
+      "summary": "charge_behaviour: [auto] inhibit-charge",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "aud.scripts",
+      "group": "audio",
+      "title": "EQ can be toggled",
+      "state": "pass",
+      "summary": "eq-on.sh and eq-off.sh executable",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "aud.server",
+      "group": "audio",
+      "title": "audio session exists",
+      "state": "pass",
+      "summary": "audio server reachable",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "aud.eq",
+      "group": "audio",
+      "title": "filter-chain sink loaded",
+      "state": "pass",
+      "summary": "oxp3_speaker_eq.sink is the default sink",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "aud.dummy",
+      "group": "audio",
+      "title": "no Dummy Output fallback",
+      "state": "pass",
+      "summary": "default sink: oxp3_speaker_eq.sink",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "aud.model",
+      "group": "audio",
+      "title": "8-band model intact",
+      "state": "pass",
+      "summary": "8-band model reproduces (pre-gain -8 dB)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "dsp.hdr",
+      "group": "display",
+      "title": "compositor state readable",
+      "state": "pass",
+      "summary": "HDR=disabled, WCG=disabled",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "dsp.icc",
+      "group": "display",
+      "title": "ICC state readable",
+      "state": "pass",
+      "summary": "no ICC profile applied (panel profile: none)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "dsp.panel",
+      "group": "display",
+      "title": "panel EDID claims",
+      "state": "pass",
+      "summary": "EDID reports 10-bit PQ/HDR10 wide gamut",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "dsp.vibrance",
+      "group": "display",
+      "title": "saturation shader present",
+      "state": "pass",
+      "summary": "shader present",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.mesa",
+      "group": "graphics",
+      "title": "host Mesa build",
+      "state": "pass",
+      "summary": "ec418f04e589965a (match)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.xmx.driver",
+      "group": "graphics",
+      "title": "XMX driver build",
+      "state": "pass",
+      "summary": "4b1d55ea9483417f (match)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.xmx.helper",
+      "group": "graphics",
+      "title": "nodgrf compile helper",
+      "state": "pass",
+      "summary": "xmx-cm-compile-nodgrf.sh",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.xmx.igc",
+      "group": "graphics",
+      "title": "IGC/ocloc present",
+      "state": "pass",
+      "summary": "ocloc-25.18.1",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.xmx.kernels",
+      "group": "graphics",
+      "title": "XMX kernel cache",
+      "state": "pass",
+      "summary": "30 kernel(s)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.xmx.icd",
+      "group": "graphics",
+      "title": "per-game XMX ICD",
+      "state": "pass",
+      "summary": "icd-xmx.json -> xmx driver",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.xmx.trace",
+      "group": "graphics",
+      "title": "igdext trace produced",
+      "state": "pass",
+      "summary": "igdext_trace.log found (562 lines)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.xe",
+      "group": "graphics",
+      "title": "patched xe.ko loaded",
+      "state": "pass",
+      "summary": "layered (xe.ko.xz)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "gfx.working",
+      "group": "graphics",
+      "title": "recorded working build matches",
+      "state": "pass",
+      "summary": "state matches the recorded working build",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "sched.state",
+      "group": "sched",
+      "title": "sched_ext enabled",
+      "state": "skip",
+      "summary": "gaming scheduler not installed (opt-in)",
+      "detail": "",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "sched.scx",
+      "group": "sched",
+      "title": "scx_cosmos running",
+      "state": "skip",
+      "summary": "gaming scheduler not installed (opt-in)",
+      "detail": "",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "sched.unit",
+      "group": "sched",
+      "title": "gaming-scheduler unit",
+      "state": "skip",
+      "summary": "not installed (opt-in)",
+      "detail": "",
+      "remediation": "fix: see docs/VALIDATION.md"
+    },
+    {
+      "id": "decky.dir",
+      "group": "decky",
+      "title": "plugin installed",
+      "state": "pass",
+      "summary": "plugin dir with plugin.json/main.py/dist",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "decky.backend",
+      "group": "decky",
+      "title": "backend imports",
+      "state": "pass",
+      "summary": "backend imports",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "decky.status",
+      "group": "decky",
+      "title": "status backend agrees",
+      "state": "pass",
+      "summary": "overall=ok (ok=25 warn=0 fail=0 unknown=0)",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "imu.selftest",
+      "group": "imu",
+      "title": "IMU usable",
+      "state": "pass",
+      "summary": "RESULT: PASS (0 warning(s))",
+      "detail": "",
+      "remediation": ""
+    },
+    {
+      "id": "imu.iio",
+      "group": "imu",
+      "title": "IIO device selection",
+      "state": "pass",
+      "summary": "ACPI 10EC5280 selected",
+      "detail": "",
+      "remediation": ""
+    }
+  ]
+}

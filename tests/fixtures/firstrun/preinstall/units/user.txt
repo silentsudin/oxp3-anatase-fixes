@@ -1,0 +1,11 @@
+== user units (systemctl --user show)
+
+oxp3-homebtn.service             missing (no data)
+oxp3-rgbd.service                missing (no data)
+oxp3-audio-route.service         load=loaded    file=enabled    active=active    sub=running
+
+== files (user scope, from the invoking user's home)
+  ~/.config/oxp3-rgb.toml                                    missing
+  ~/.config/systemd/user/oxp3-homebtn.service                missing
+  ~/.config/systemd/user/oxp3-rgbd.service                   missing
+  ~/.config/xess-xmx/icd-xmx.json                            missing

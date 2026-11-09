@@ -1,0 +1,174 @@
+{
+  "schema": 1,
+  "tool": "oxp3-firstrun",
+  "version": "1.0.0",
+  "generated_at": "2026-11-09T04:06:52Z",
+  "mode": "collect",
+  "out": "/tmp/fixture-bundle",
+  "repo": "~/git/linux_scratch/oxp3-anatase-fixes",
+  "root": false,
+  "kernel": "7.2.7-an28.fc45.x86_64",
+  "os": "Anatase",
+  "limits": {
+    "max_bytes": 5242880,
+    "max_lines": 2000
+  },
+  "counts": {
+    "artifacts": 22,
+    "ok": 22,
+    "missing": 0,
+    "denied": 0,
+    "unavailable": 0,
+    "timeout": 0,
+    "error": 0,
+    "skipped": 0,
+    "truncated": 0
+  },
+  "journal": {
+    "available": true,
+    "detail": "ok",
+    "files": [
+      "journal/oxp3-units.txt",
+      "journal/kernel.txt",
+      "journal/sleep-tag.txt",
+      "journal/oxp3-user-units.txt"
+    ]
+  },
+  "redaction": {
+    "total": 0,
+    "rules": {},
+    "files_with_matches": 0
+  },
+  "checklist": [
+    {
+      "id": "driver-stack",
+      "title": "driver stack (kernel, Mesa, gamescope)",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "hw-install",
+      "title": "hardware install (libexec helpers)",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "udev-rules",
+      "title": "udev rules + volume force-release hwdb",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "sleep-policy",
+      "title": "sleep trigger policy (logind drop-in + polkit)",
+      "state": "ok",
+      "detail": "drop-in present, polkit present",
+      "command": ""
+    },
+    {
+      "id": "logind-restart",
+      "title": "logind restarted after the drop-in",
+      "state": "pending",
+      "detail": "drop-in newer than logind start (2026-11-09T03:41:12Z)",
+      "command": ""
+    },
+    {
+      "id": "sleep-units",
+      "title": "suspend policy units enabled",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "bluetooth",
+      "title": "Bluetooth firmware (updates/ + initramfs)",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "power-profile",
+      "title": "power envelope (PL1/PL2/PL4)",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "battery-care",
+      "title": "battery charge limit / inhibit",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "imu-blacklist",
+      "title": "IMU modprobe blacklist",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "audio-eq",
+      "title": "speaker EQ drop-in",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "rgb-config",
+      "title": "RGB keeper config",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "homebtn-unit",
+      "title": "home button / LED user unit",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "display",
+      "title": "HDR / ICC / vibrance tooling",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "xmx",
+      "title": "XMX driver + per-game ICD",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "decky-plugin",
+      "title": "Decky status plugin",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    },
+    {
+      "id": "suspend-evidence",
+      "title": "a real suspend recorded since boot",
+      "state": "todo",
+      "detail": "success=0 fail=0 hw_sleep=0",
+      "command": ""
+    },
+    {
+      "id": "collector",
+      "title": "evidence bundle collected",
+      "state": "ok",
+      "detail": "",
+      "command": ""
+    }
+  ],
+  "artifacts": [],
+  "notes": [],
+  "complete": true,
+  "partial_data": false
+}

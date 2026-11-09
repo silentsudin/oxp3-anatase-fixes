@@ -1,0 +1,13 @@
+== Decky plugin inventory
+
+  plugin dir: ~/homebrew/plugins (14 plugin(s))
+    SDH-CssLoader
+    StorageCleaner
+    vibrantDeck
+
+== oxp3-status plugin
+  not installed (no ~/homebrew/plugins/oxp3-status)
+
+== loader unit / zip
+  plugin_loader.service: active
+  built zip: (not built here)

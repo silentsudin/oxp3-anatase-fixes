@@ -1,0 +1,11 @@
+== user units (systemctl --user show)
+
+oxp3-homebtn.service             load=loaded    file=enabled    active=active    sub=running
+oxp3-rgbd.service                load=loaded    file=enabled    active=active    sub=running
+oxp3-audio-route.service         load=loaded    file=enabled    active=active    sub=running
+
+== files (user scope, from the invoking user's home)
+  ~/.config/oxp3-rgb.toml                                    present
+  ~/.config/systemd/user/oxp3-homebtn.service                present
+  ~/.config/systemd/user/oxp3-rgbd.service                   present
+  ~/.config/xess-xmx/icd-xmx.json                            present

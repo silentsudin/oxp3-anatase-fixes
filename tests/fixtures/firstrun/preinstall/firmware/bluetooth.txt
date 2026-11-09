@@ -1,0 +1,19 @@
+== pinned Bluetooth firmware (paths and hashes only, never the bytes)
+
+  /usr/lib/firmware/updates/intel/ibt-00a0-0291-iml.sfi                  present   63056 B  69beb77387a79a75e741ff6f88f782a0fc44c8b2efcc7bcb41c413122928026
+      mtime 2026-11-08T14:02:11Z
+  /usr/lib/firmware/updates/intel/ibt-00a0-0291-pci.sfi                  present   998916 B  6ea03de60bdd6231387f561fbae53b1aaedfd906437b3c2216b45df1d4f01e45
+      mtime 2026-11-08T14:02:11Z
+
+== module state
+
+  btintel_pcie     loaded
+  btintel          loaded
+  bluetooth        loaded
+  modinfo btintel_pcie: /lib/modules/7.2.7-an28.fc45.x86_64/updates/drivers/bluetooth/btintel_pcie.ko.xz
+
+== controller / initramfs drop-in
+
+  /sys/class/bluetooth/hci0 present
+  /etc/dracut.conf.d/60-oxp3-bt-firmware.conf MISSING
+  (the running initramfs only carries the files after a rebuild and reboot)

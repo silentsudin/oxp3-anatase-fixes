@@ -1,0 +1,16 @@
+== Decky plugin inventory
+
+  plugin dir: ~/homebrew/plugins (15 plugin(s))
+    SDH-CssLoader
+    StorageCleaner
+    vibrantDeck
+
+== oxp3-status plugin
+  plugin.json            present   cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  dist/index.js          present   dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  main.py                present   eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  version: 1.0.0  name: OXP3 Status
+
+== loader unit / zip
+  plugin_loader.service: active
+  built zip: (not built here)
