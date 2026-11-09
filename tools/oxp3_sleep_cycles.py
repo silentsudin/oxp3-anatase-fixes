@@ -9,7 +9,8 @@ that cost per hour".  This tool:
   1. records the baseline (battery energy/percentage/status, AC, platform
      profile, PL1, temperatures, the ACPI and device wake sources that are
      armed, and every ``/sys/class/wakeup`` event counter),
-  2. arms an RTC wake with ``rtcwake -m mem -s SECONDS`` so the machine always
+  2. arms an RTC wake (``rtcwake -m no``) and suspends through logind, so the
+     normal sleep.target path (and the EC) is exercised and the machine always
      returns (the RTC interface is a hard precondition; see
      ``docs/SLEEP-TEST.md`` for the fallbacks),
   3. performs N cycles of real suspend/resume (default 3 x 60 s),
@@ -1892,7 +1893,10 @@ def _preflight(opts, root="/"):
 
 def _print_preflight(errors, warnings, opts):
     commands = [
-        "rtcwake -m mem -s %d -d %s -v" % (opts.sleep_s, opts.rtc or "rtc0"),
+        ("rtcwake -m mem -s %d -d %s -v"
+         if getattr(opts, "direct", False) else
+         "rtcwake -m no -s %d -d %s -v && systemctl suspend")
+        % (opts.sleep_s, opts.rtc or "rtc0"),
         "journalctl -k -b --since=@<cycle-start-epoch> --until=@<resume-epoch> "
         "--no-pager -o short-iso",
         "rtcwake -m disable -d %s" % (opts.rtc or "rtc0"),
