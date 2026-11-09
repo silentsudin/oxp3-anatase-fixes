@@ -669,6 +669,16 @@ comp_bluetooth_install() {
         return
     fi
     run "$repo/tools/oxp3-bt-firmware.sh" "${BT_ARGS[@]}"
+
+    # The probe runs before switch_root and btintel_pcie has no MODULE_FIRMWARE()
+    # entries, so dracut cannot carry the blobs: reload after the real root is up.
+    say "Bluetooth boot-time reload (picks the firmware up after switch_root)"
+    run install -D -m 0755 "$repo/files/oxp3-bt-reload.sh" "$(p /usr/local/libexec/oxp3-bt-reload)"
+    run install -D -m 0644 "$repo/files/oxp3-bt-reload.service" "$(p /etc/systemd/system/oxp3-bt-reload.service)"
+    if [[ -z $PREFIX ]]; then
+        run systemctl daemon-reload
+        run systemctl enable --now oxp3-bt-reload.service
+    fi
 }
 
 comp_power_install() {
@@ -886,6 +896,8 @@ comp_bluetooth_uninstall() {
         skip_prefixed "removal of the dracut conf and the firmware files (writes to /)"
         return
     fi
+    run systemctl disable --now oxp3-bt-reload.service 2>/dev/null || true
+    run rm -f "$(p /etc/systemd/system/oxp3-bt-reload.service)" "$(p /usr/local/libexec/oxp3-bt-reload)"
     local conf tool
     conf=$(p /etc/dracut.conf.d/60-oxp3-bt-firmware.conf)
     tool=$(rollback_tool)

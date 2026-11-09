@@ -1948,6 +1948,14 @@ check_sleep() {
     fi
     [ "$pol_ok" -eq 1 ] && rulekv=$(parse_polkit_rule <"$pol")
     pk=$(pkcheck_verdict org.freedesktop.login1.suspend)
+    # /etc/polkit-1/rules.d is 0750 root:polkitd, so an unprivileged run cannot
+    # stat the rule file even when it is installed. The authoritative answer is
+    # pkcheck, which asks polkit itself whether this user may suspend.
+    if [ "$pol_ok" -eq 0 ] && [ ! -r "$(dirname "$pol")" ]; then
+        case ${pk:-} in
+            yes|YES|allowed|ALLOWED|auth_admin_keep|auth_admin|no-challenge*) pol_ok=1 ;;
+        esac
+    fi
     if have systemd-inhibit; then
         inh=$(systemd-inhibit --list --no-pager 2>/dev/null | parse_inhibitors)
         bsleep=$(printf '%s\n' "$inh" | sed -n 's/^BLOCK_SLEEP=//p')

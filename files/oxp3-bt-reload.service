@@ -1,0 +1,15 @@
+[Unit]
+Description=Reload Intel CNVi Bluetooth so the firmware in /usr/lib/firmware/updates loads
+Documentation=file:/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/hw/bluetooth.md
+After=bluetooth.service systemd-modules-load.service
+Wants=bluetooth.service
+ConditionPathExists=/usr/lib/firmware/updates/intel/ibt-00a0-0291-iml.sfi
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-bt-reload
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

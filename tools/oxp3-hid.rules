@@ -11,7 +11,7 @@
 #
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", \
   ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="fe00", \
-  ATTRS{bInterfaceNumber}=="02", \
+  ENV{ID_USB_INTERFACE_NUM}=="02", \
   TAG+="uaccess", MODE="0660", GROUP="input"
 
 # Virtual keyboard used by oxp3-homebtn.py.  Harmless if the seat ACL is
