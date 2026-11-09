@@ -826,7 +826,7 @@ components:
       summary: "nothing is installed; tools/fingerprint/ holds the probe and the compile-checked skeleton"
     verify:
       - command: "python3 -m unittest discover -s tools/fingerprint/tests"
-        expect: "Ran 289 tests ... OK"
+        expect: "Ran 388 tests ... OK"
       - command: "tools/fingerprint/tests/run-c-tests.sh"
         expect: "ok: 324 checks, 10 vectors (podman fallback when no host compiler)"
     dependencies: []
@@ -835,7 +835,7 @@ components:
       - "the probe needs spidev bound and root, and the driver needs libfprint's internal API"
     last_validated:
       date: 2026-11-09
-      evidence: "2026-11-09: 289 Python tests OK (incl. SPI transport and _CRS parser), 324 C checks/10 vectors, session crypto OK; syntax-real OK against libfprint v1.94.9"
+      evidence: "2026-11-09: 388 Python tests OK (incl. SPI transport and _CRS parser), 324 C checks/10 vectors, session crypto OK; syntax-real OK against libfprint v1.94.9"
 
   # -------------------------------------------------------------------------
   # Diagnostics

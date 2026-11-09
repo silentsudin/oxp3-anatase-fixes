@@ -134,7 +134,7 @@ Areas and what is actually proven:
   shebang (`bash` first, then `sh`, so `#!/usr/bin/env sh` is covered).
 * **Python** — `py_compile` on every tracked `.py` plus the extensionless
   `tools/oxp3-voltap/oxp3-voltap`; bytecode goes to the log dir, never the
-  checkout. Then the 289-test fingerprint protocol + SPI/ACPI suite and the fixture/vector
+  checkout. Then the 388-test fingerprint protocol + SPI/ACPI suite and the fixture/vector
   drift check (the latter imports the generator and compares in memory, so the
   checked-in fixtures are not rewritten).
 * **volume daemon end to end** — opt-in `voltap-integration`

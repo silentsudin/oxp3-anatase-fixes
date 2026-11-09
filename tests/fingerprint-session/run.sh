@@ -561,6 +561,97 @@ else
     pass "a write-shape dry run wrote no table"
 fi
 
+# ---------------------------------------------------------------- 15. --try-link
+# The link sweep against the fixture's fake spidev node and a nonexistent GPIO
+# chip: every cell fails closed, but the flag must reach the probe and the
+# 16-cell table must land in link.json and in summary.json.
+fixture "$TMP/link" clean
+mkdir -p "$TMP/session-link"
+printf 'y\ny\nprobe\n' | "$S" --root "$TMP/link" --out "$TMP/session-link" \
+    --try-link --irq-pin 18 --reset-pin 16 \
+    --gpio-chip "$TMP/link/dev/gpiochip1" --allow-reset \
+    --link-settles 10,150 \
+    >"$TMP/link.out" 2>&1
+link_rc=$?
+show_log "$TMP/link.out"
+if [ "$link_rc" -eq 1 ]; then
+    pass "--try-link runs to a link verdict (exit 1 = no plausible answer)"
+else
+    fail "--try-link runs to a link verdict (exit $link_rc)"
+fi
+unbound "$TMP/link" && pass "--try-link restored the previous binding" \
+    || fail "--try-link restored the previous binding"
+contains "$TMP/session-link/commands.txt" '--try-link' \
+    && pass "the session passes --try-link to the probe" \
+    || fail "the session passes --try-link to the probe"
+contains "$TMP/session-link/commands.txt" '--link-json' \
+    && pass "the session passes an explicit --link-json path" \
+    || fail "the session passes an explicit --link-json path"
+contains "$TMP/session-link/commands.txt" '--link-settles 10,150' \
+    && pass "the settle list reaches the probe" \
+    || fail "the settle list reaches the probe"
+if [ -s "$TMP/session-link/link.json" ]; then
+    pass "the link table lands in the transcript (link.json)"
+else
+    fail "the link table lands in the transcript (link.json)"
+fi
+if python3 - "$TMP/session-link/link.json" <<'PYLINK'
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["planned"] == 16, data["planned"]
+assert len(data["cells"]) == 16, len(data["cells"])
+assert data["outcome"] == "no-plausible-answer", data["outcome"]
+first = data["cells"][0]
+assert first["mode"] == 0, first["mode"]
+assert first["speed_hz"] == 1000000, first["speed_hz"]
+assert first["settle_ms"] == 10, first["settle_ms"]
+assert first["verdict"] == "error", first["verdict"]
+assert data["cells"][3]["mode"] == 3, data["cells"][3]["mode"]
+assert data["cells"][4]["speed_hz"] == 4000000, data["cells"][4]["speed_hz"]
+assert data["cells"][8]["settle_ms"] == 150, data["cells"][8]["settle_ms"]
+assert "no protocol-plausible answer" in data["verdict"], data["verdict"]
+PYLINK
+then
+    pass "link.json has 16 cells and the documented shape"
+else
+    fail "link.json has 16 cells and the documented shape"
+fi
+contains "$TMP/session-link/probe-readonly.txt" 'mode speed' \
+    && pass "the compact link table is in the probe transcript" \
+    || fail "the compact link table is in the probe transcript"
+contains "$TMP/session-link/probe-readonly.txt" '0xA1 (first 16B)' \
+    && pass "the compact table shows the 0xA1 window" \
+    || fail "the compact table shows the 0xA1 window"
+contains "$TMP/session-link/summary.json" '"link"' \
+    && pass "summary.json records the link table" \
+    || fail "summary.json records the link table"
+contains "$TMP/session-link/summary.json" '"link:0xA0/0xC1/0xA1"' \
+    && pass "summary.json names the link read set" \
+    || fail "summary.json names the link read set"
+if python3 -m json.tool "$TMP/session-link/summary.json" >/dev/null 2>&1; then
+    pass "summary.json stays valid JSON with link embedded"
+else
+    fail "summary.json stays valid JSON with link embedded"
+fi
+# A dry run must print the whole grid without opening a device or writing a table.
+"$S" --dry-run --root "$TMP/link" --try-link --irq-pin 18 --reset-pin 16 \
+    --gpio-chip gpiochip1 --allow-reset --link-settles 10,150,300 \
+    >"$TMP/link-plan.txt" 2>&1
+if [ $? -eq 0 ] && contains "$TMP/link-plan.txt" '24 cells' \
+   && contains "$TMP/link-plan.txt" 'settle 10,150,300 ms' \
+   && contains "$TMP/link-plan.txt" '--try-link'; then
+    pass "a link dry run shows the 24-cell grid with the optional 300 ms settle"
+else
+    fail "a link dry run shows the 24-cell grid with the optional 300 ms settle"
+fi
+if [ -e "$TMP/link/link.json" ]; then
+    fail "a link dry run wrote no table"
+else
+    pass "a link dry run wrote no table"
+fi
+
 printf -- '------------------------------------------------------------------------\n'
 if [ "$FAILED" -eq 0 ]; then
     printf 'fingerprint-session: %d checks passed\n' "$COUNT"

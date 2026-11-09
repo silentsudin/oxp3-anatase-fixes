@@ -1357,3 +1357,701 @@ def write_report(report: MatrixReport, path: str) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(report.to_dict(), handle, indent=2, sort_keys=True)
         handle.write("\n")
+
+
+# ---------------------------------------------------------------------------
+# Link sweep (--try-link): SPI mode x clock x settle, DLL-exact read frame
+# ---------------------------------------------------------------------------
+#
+# The 2026-11-09 hardware transcript (docs/state/fp-session-20261109T124024Z)
+# showed the BF63112 answering register reads deterministically after a reset
+# pulse, but with an implausible payload: 0xA0 returned project 0x7f50 and the
+# 0xC1 sensor-info bytes were the ASCII "2" repeated (0x32 = 0x64 >> 1).  That
+# signature is a sampling-edge error, a clock that is too fast for this wiring,
+# or a module that needs longer to settle after reset.  This matrix turns those
+# three hypotheses into one bounded, read-only sweep:
+#
+# * SPI mode 0, 1, 2, 3 (the spidev node is opened once per cell with the mode
+#   set, then closed),
+# * 1 MHz and 4 MHz (the ACPI value is 4 MHz; slower is the first thing to try
+#   when the edge is in doubt),
+# * 10 ms and 150 ms settle after the (pinned) reset pulse, plus 300 ms when the
+#   caller asks for it.
+#
+# Each cell reads 0xA0 (7 B), 0xC1 (9 B) and 0xA1 (64 B) with the DLL-exact
+# one-byte-selector frame, i.e. `selector` + N receive clocks and no lead bytes
+# (docs/hw/fingerprint-transport.md §8.9), using a short per-cell timeout.
+#
+# The verdicts are deliberately action-oriented and are computed only from
+# reused protocol parsers (`protocol.FirmwareInfo`, `protocol.SensorInfo`):
+#
+# * `plausible-fw`    0xA0's project byte is in {1,2,3,4,6}, the version is not
+#                     0/0xFFFFFFFF, and the state byte is 0x00..0x0f,
+# * `plausible-info`  0xC1's width/height are each 1..4096 and width*height is
+#                     at most LINK_MAX_IMAGE_BYTES (an image a driver could
+#                     actually request, not 4096x4096),
+# * `byte-shift-detected`  a non-mode-0 answer equals the same read at mode 0
+#                     (same speed/settle) sampled one bit earlier or later;
+#                     this is the proof that the sampling edge is wrong,
+# * `all-zeros`, `all-0xff`  every answer has that constant value,
+# * `timeout`         a read produced no bytes and its deadline fired,
+# * `error`           the device/GPIO could not be opened,
+# * `malformed`       bytes came back but none of the above applies.
+#
+# Precedence per cell: plausible-fw > plausible-info > byte-shift-detected >
+# all-zeros > all-0xff > timeout > error > malformed.  The sweep never stops
+# early: the whole grid is the result.
+
+LINK_SCHEMA = 1
+
+#: One short timeout per cell.  400 ms covers a 64-byte transfer plus the IRQ
+#: wait at 4 MHz and keeps a fully malformed 16-cell table quick.
+LINK_TIMEOUT_MS = 400
+
+#: Sweep dimensions, in the order the probe documents them.
+LINK_MODES: tuple[int, ...] = (0, 1, 2, 3)
+LINK_SPEEDS_HZ: tuple[int, ...] = (1_000_000, 4_000_000)
+LINK_SETTLES_MS: tuple[int, ...] = (10, 150)
+
+#: A sensor image larger than this is not a geometry a driver would request.
+LINK_MAX_IMAGE_BYTES = 1 << 20
+
+#: A firmware state byte outside 0x00..0x0f is treated as implausible; the
+#: recovered driver only stores/logs it, so this is a deliberately wide band.
+LINK_MAX_FW_STATE = 0x0F
+
+#: The three reads, in table order.  The read length is the recovered layout
+#: length exactly: the DLL-exact read frame has no length field, so the caller
+#: asks for the number of bytes the answer is known to have.
+LINK_QUERIES: tuple[MatrixQuery, ...] = (
+    MatrixQuery("fw", 0xA0, 7, 7, "firmware version / project"),
+    MatrixQuery("info", 0xC1, 9, 9, "sensor geometry + flags"),
+    MatrixQuery("scheme", 0xA1, 64, 64, "module scheme table"),
+)
+
+LINK_ALLOWED_OPS: frozenset[int] = frozenset(q.opcode for q in LINK_QUERIES)
+
+#: Link verdicts.  Only the two `plausible-*` values are success.
+PLAUSIBLE_FW = "plausible-fw"
+PLAUSIBLE_INFO = "plausible-info"
+BYTE_SHIFT = "byte-shift-detected"
+LINK_ZEROS = "all-zeros"
+LINK_ALL_FF = "all-0xff"
+LINK_TIMEOUT = "timeout"
+LINK_ERROR = "error"
+
+_LINK_FAILURE_VERDICTS = frozenset(
+    {LINK_ZEROS, LINK_ALL_FF, LINK_TIMEOUT, LINK_ERROR, EMPTY})
+_LINK_PLAUSIBLE = frozenset({PLAUSIBLE_FW, PLAUSIBLE_INFO})
+
+
+@dataclasses.dataclass(frozen=True)
+class LinkCell:
+    """One combination of SPI mode, clock and post-reset settle."""
+
+    index: int
+    mode: int
+    speed_hz: int
+    settle_ms: int
+
+    def label(self) -> str:
+        return (f"{self.index}: mode={self.mode} "
+                f"speed={_speed_label(self.speed_hz)} "
+                f"settle={self.settle_ms}ms")
+
+
+def _speed_label(speed_hz: int) -> str:
+    if speed_hz % 1_000_000 == 0:
+        return f"{speed_hz // 1_000_000}MHz"
+    if speed_hz % 1000 == 0:
+        return f"{speed_hz // 1000}kHz"
+    return f"{speed_hz}Hz"
+
+
+def plan_link(*, modes=LINK_MODES, speeds_hz=LINK_SPEEDS_HZ,
+              settles_ms=LINK_SETTLES_MS) -> tuple[LinkCell, ...]:
+    """Return the deterministic link sweep, settle x speed x mode.
+
+    Mode 0 comes first within each (settle, speed) pair so its answer is the
+    reference for :data:`BYTE_SHIFT` in the same run.  The order is otherwise
+    the one the table prints: short settle first, slow clock first.
+    """
+    modes = tuple(int(mode) for mode in modes)
+    speeds_hz = tuple(int(speed) for speed in speeds_hz)
+    settles_ms = tuple(int(ms) for ms in settles_ms)
+    if not modes:
+        raise ValueError("the link sweep needs at least one SPI mode")
+    for mode in modes:
+        if mode not in (0, 1, 2, 3):
+            raise ValueError(f"unknown SPI mode {mode!r}; choose 0..3")
+    if len(set(modes)) != len(modes):
+        raise ValueError("the link sweep modes must be unique")
+    if not speeds_hz or any(speed <= 0 for speed in speeds_hz):
+        raise ValueError("link speeds must be a non-empty list of Hz > 0")
+    if len(set(speeds_hz)) != len(speeds_hz):
+        raise ValueError("the link sweep speeds must be unique")
+    if not settles_ms or any(ms < 0 for ms in settles_ms):
+        raise ValueError("settle delays must be a non-empty list of ms >= 0")
+    if len(set(settles_ms)) != len(settles_ms):
+        raise ValueError("the link sweep settle delays must be unique")
+    cells = []
+    for settle in settles_ms:
+        for speed in speeds_hz:
+            for mode in modes:
+                cells.append(LinkCell(len(cells) + 1, mode, speed, settle))
+    return tuple(cells)
+
+
+def validate_link_queries(queries) -> tuple[MatrixQuery, ...]:
+    """Refuse any link query outside the read-only 0xA0/0xC1/0xA1 set."""
+    queries = validate_queries(queries)
+    for query in queries:
+        if query.opcode not in LINK_ALLOWED_OPS:
+            raise MatrixRefused(
+                f"opcode 0x{query.opcode:02x} is not a link-sweep query; "
+                f"allowed: "
+                + ", ".join(f"0x{op:02x}" for op in sorted(LINK_ALLOWED_OPS)))
+    return queries
+
+
+@dataclasses.dataclass(frozen=True)
+class LinkCheck:
+    """The interpretation of one link answer."""
+
+    verdict: str
+    detail: str
+    fields: dict | None = None
+
+    @property
+    def plausible(self) -> bool:
+        return self.verdict in _LINK_PLAUSIBLE
+
+
+def _fw_plausible(data: bytes) -> LinkCheck:
+    if len(data) < protocol.FirmwareInfo.SIZE:
+        return LinkCheck(MALFORMED,
+                         f"fw answer is {len(data)}B; need "
+                         f"{protocol.FirmwareInfo.SIZE}")
+    try:
+        firmware = protocol.FirmwareInfo.parse(data[:protocol.FirmwareInfo.SIZE])
+    except protocol.ProtocolError as exc:
+        return LinkCheck(MALFORMED, f"fw answer does not parse: {exc}")
+    problems = []
+    if firmware.project_hi not in PROJECTS:
+        problems.append(
+            f"project byte 0x{firmware.project_hi:02x} is not in "
+            f"{{{', '.join(str(k) for k in sorted(PROJECTS))}}}")
+    if firmware.version in (0, 0xFFFFFFFF):
+        problems.append(f"version 0x{firmware.version:08x} is a blank value")
+    if firmware.state > LINK_MAX_FW_STATE:
+        problems.append(
+            f"state byte 0x{firmware.state:02x} is outside 0x00.."
+            f"0x{LINK_MAX_FW_STATE:02x}")
+    fields = {"state": firmware.state, "project": firmware.project_hi,
+              "project_lo": firmware.project_lo,
+              "project_name": PROJECTS.get(firmware.project_hi),
+              "version": firmware.version}
+    if problems:
+        return LinkCheck(MALFORMED, "; ".join(problems), fields)
+    return LinkCheck(
+        PLAUSIBLE_FW,
+        f"fw project={PROJECTS[firmware.project_hi]} "
+        f"state=0x{firmware.state:02x} version=0x{firmware.version:08x}",
+        fields)
+
+
+def _info_plausible(data: bytes) -> LinkCheck:
+    if len(data) < protocol.SensorInfo.SIZE:
+        return LinkCheck(MALFORMED,
+                         f"info answer is {len(data)}B; need "
+                         f"{protocol.SensorInfo.SIZE}")
+    try:
+        info = protocol.SensorInfo.parse(data[:protocol.SensorInfo.SIZE])
+    except protocol.ProtocolError as exc:
+        return LinkCheck(MALFORMED, f"info answer does not parse: {exc}")
+    fields = {"field0": info.field0, "field2": info.field2,
+              "width": info.width, "height": info.height,
+              "flags": info.flags, "pixels": info.pixels}
+    if not 1 <= info.width <= 4096 or not 1 <= info.height <= 4096:
+        return LinkCheck(
+            MALFORMED,
+            f"geometry {info.width}x{info.height} is outside 1..4096", fields)
+    if info.pixels > LINK_MAX_IMAGE_BYTES:
+        return LinkCheck(
+            MALFORMED,
+            f"geometry {info.width}x{info.height} = {info.pixels}B is larger "
+            f"than {LINK_MAX_IMAGE_BYTES}B", fields)
+    return LinkCheck(
+        PLAUSIBLE_INFO,
+        f"sensor={info.width}x{info.height} image={info.pixels}B "
+        f"flags=0x{info.flags:02x}", fields)
+
+
+def analyze_link_answer(opcode: int, data: bytes) -> LinkCheck:
+    """Classify one answer against the explicit link verdicts.
+
+    Only the read-only link opcodes are accepted.  0xA0 and 0xC1 reuse the
+    recovered protocol records; 0xA1 is a diagnostic table (it feeds the
+    byte-shift and all-zeros/all-0xff verdicts but has no plausibility rule of
+    its own, because its meaning is not decoded).
+    """
+    if opcode not in LINK_ALLOWED_OPS:
+        raise MatrixRefused(
+            f"opcode 0x{opcode:02x} is not a link-sweep query; allowed: "
+            + ", ".join(f"0x{op:02x}" for op in sorted(LINK_ALLOWED_OPS)))
+    data = bytes(data)
+    if not data:
+        return LinkCheck(EMPTY, "no bytes were read back")
+    if _all_byte(data, 0x00):
+        return LinkCheck(LINK_ZEROS, f"{len(data)}B of 0x00")
+    if _all_byte(data, 0xFF):
+        return LinkCheck(LINK_ALL_FF, f"{len(data)}B of 0xFF")
+    if opcode == 0xA0:
+        return _fw_plausible(data)
+    if opcode == 0xC1:
+        return _info_plausible(data)
+    return LinkCheck(MALFORMED,
+                     f"scheme table {len(data)}B (no plausibility rule)")
+
+
+def _shifted_by_one(reference: bytes, candidate: bytes) -> str | None:
+    """Return ``"left"``/``"right"``/``"either"`` when cand = ref shifted 1 bit.
+
+    ``"left"`` means ``cand[i] = (ref[i] << 1) | (ref[i+1] >> 7)``; ``"right"``
+    is the mirror.  Byte i-1..i+1 are compared (interior bytes only, so the
+    missing neighbour at either end cannot create a false match).  All-zero and
+    all-0xFF streams, equal streams and streams shorter than 3 bytes never
+    match.
+    """
+    reference = bytes(reference)
+    candidate = bytes(candidate)
+    n = min(len(reference), len(candidate))
+    if n < 3:
+        return None
+    for stream in (reference, candidate):
+        if _all_byte(stream, 0x00) or _all_byte(stream, 0xFF):
+            return None
+    if reference[:n] == candidate[:n]:
+        return None
+    left = True
+    right = True
+    for index in range(1, n - 1):
+        left_expected = ((reference[index] << 1)
+                         | (reference[index + 1] >> 7)) & 0xFF
+        right_expected = ((reference[index] >> 1)
+                          | (reference[index - 1] << 7)) & 0xFF
+        if candidate[index] != left_expected:
+            left = False
+        if candidate[index] != right_expected:
+            right = False
+    if left and right:
+        return "either"
+    if left:
+        return "left"
+    if right:
+        return "right"
+    return None
+
+
+def detect_link_shift(cell: LinkCell, reads, reference) -> dict | None:
+    """Compare every answer with the mode-0 answer of the same speed/settle."""
+    if cell.mode == 0 or reference is None:
+        return None
+    matches = []
+    for read in reads:
+        ref_read = reference.read_for(read.query.opcode)
+        if ref_read is None:
+            continue
+        direction = _shifted_by_one(ref_read.read.data, read.read.data)
+        if direction is None:
+            continue
+        matches.append({
+            "opcode": f"0x{read.query.opcode:02x}",
+            "command": read.query.name,
+            "direction": direction,
+            "reference_cell": reference.cell.index,
+        })
+    return {"matches": matches} if matches else None
+
+
+@dataclasses.dataclass(frozen=True)
+class LinkRead:
+    """One read inside a link cell."""
+
+    query: MatrixQuery
+    read: ReadResult
+    check: LinkCheck
+
+
+@dataclasses.dataclass(frozen=True)
+class LinkAttempt:
+    """One sweep cell with its three reads and the action verdict."""
+
+    cell: LinkCell
+    reads: tuple[LinkRead, ...]
+    verdict: LinkCheck
+    shift: dict | None = None
+
+    def read_for(self, opcode: int) -> LinkRead | None:
+        for read in self.reads:
+            if read.query.opcode == opcode:
+                return read
+        return None
+
+    def hex_for(self, opcode: int) -> str:
+        read = self.read_for(opcode)
+        return read.read.data.hex(" ") if read is not None else ""
+
+    def to_dict(self) -> dict:
+        return {
+            "index": self.cell.index,
+            "mode": self.cell.mode,
+            "speed_hz": self.cell.speed_hz,
+            "speed": _speed_label(self.cell.speed_hz),
+            "settle_ms": self.cell.settle_ms,
+            "verdict": self.verdict.verdict,
+            "detail": self.verdict.detail,
+            "fields": self.verdict.fields,
+            "byte_shift": self.shift,
+            "answers": {
+                read.query.name: {
+                    "opcode": f"0x{read.query.opcode:02x}",
+                    "read_len": read.query.read_len,
+                    "bytes": len(read.read.data),
+                    "hex": read.read.data.hex(" "),
+                    "error": read.read.error,
+                    "irq": read.read.irq,
+                    "verdict": read.check.verdict,
+                    "detail": read.check.detail,
+                    "fields": read.check.fields,
+                } for read in self.reads
+            },
+        }
+
+
+def _link_cell_verdict(cell: LinkCell, reads: tuple[LinkRead, ...],
+                       shift: dict | None) -> LinkCheck:
+    """Apply the documented precedence to one cell's three answers."""
+    by_opcode = {read.query.opcode: read for read in reads}
+
+    for opcode in (0xA0, 0xC1):
+        read = by_opcode.get(opcode)
+        if read is not None and read.check.verdict in _LINK_PLAUSIBLE:
+            return read.check
+
+    if shift is not None:
+        matches = shift["matches"]
+        first = matches[0]
+        return LinkCheck(
+            BYTE_SHIFT,
+            "the answer is the mode-0 answer of the same speed/settle sampled "
+            f"one bit {first['direction']} ({first['command']} "
+            f"{first['opcode']}); the sampling edge is wrong")
+
+    data = [read.read.data for read in reads]
+    errors = [read.read.error for read in reads if read.read.error]
+    if data and all(blob and _all_byte(blob, 0x00) for blob in data):
+        return LinkCheck(LINK_ZEROS, "every answer is all 0x00")
+    if data and all(blob and _all_byte(blob, 0xFF) for blob in data):
+        return LinkCheck(LINK_ALL_FF, "every answer is all 0xFF")
+    if any(not read.read.data and read.read.error.startswith("timeout")
+           for read in reads):
+        first = next(read for read in reads
+                     if not read.read.data
+                     and read.read.error.startswith("timeout"))
+        return LinkCheck(LINK_TIMEOUT,
+                         f"{first.query.name}: {first.read.error}")
+    if data and all(not blob for blob in data) and errors:
+        return LinkCheck(LINK_ERROR, "; ".join(errors))
+    details = "; ".join(
+        f"{read.query.name}: {read.check.detail}" for read in reads
+        if read.check.verdict not in (EMPTY,))
+    return LinkCheck(MALFORMED, details or "no interpretable answer")
+
+
+def _link_counts_text(attempts) -> str:
+    counts: dict[str, int] = {}
+    for attempt in attempts:
+        counts[attempt.verdict.verdict] = (
+            counts.get(attempt.verdict.verdict, 0) + 1)
+    order = [PLAUSIBLE_FW, PLAUSIBLE_INFO, BYTE_SHIFT, LINK_ZEROS, LINK_ALL_FF,
+             LINK_TIMEOUT, LINK_ERROR, MALFORMED, EMPTY]
+    return ", ".join(f"{counts[v]} {v}" for v in order if counts.get(v))
+
+
+@dataclasses.dataclass
+class LinkReport:
+    """The complete link sweep, printable and JSON-serialisable."""
+
+    cells: tuple[LinkCell, ...]
+    attempts: list[LinkAttempt]
+    queries: tuple[MatrixQuery, ...]
+    timeout_ms: int
+    context: dict
+
+    def _winning(self, verdicts) -> list[LinkAttempt]:
+        return [attempt for attempt in self.attempts
+                if attempt.verdict.verdict in verdicts]
+
+    @property
+    def outcome(self) -> str:
+        if self._winning({PLAUSIBLE_FW}):
+            return PLAUSIBLE_FW
+        if self._winning({PLAUSIBLE_INFO}):
+            return PLAUSIBLE_INFO
+        if self._winning({BYTE_SHIFT}):
+            return BYTE_SHIFT
+        counts = {attempt.verdict.verdict for attempt in self.attempts}
+        if counts and counts <= {MALFORMED}:
+            return "all-malformed"
+        return "no-plausible-answer"
+
+    @property
+    def verdict(self) -> str:
+        total = len(self.attempts)
+        fw = self._winning({PLAUSIBLE_FW})
+        if fw:
+            best = fw[0]
+            return (f"PLAUSIBLE FW at cell {best.cell.index}/{len(self.cells)} "
+                    f"(mode {best.cell.mode}, "
+                    f"{_speed_label(best.cell.speed_hz)}, settle "
+                    f"{best.cell.settle_ms} ms): {best.verdict.detail}")
+        info = self._winning({PLAUSIBLE_INFO})
+        if info:
+            best = info[0]
+            return (f"PLAUSIBLE INFO at cell {best.cell.index}/"
+                    f"{len(self.cells)} (mode {best.cell.mode}, "
+                    f"{_speed_label(best.cell.speed_hz)}, settle "
+                    f"{best.cell.settle_ms} ms): {best.verdict.detail}")
+        shifted = self._winning({BYTE_SHIFT})
+        if shifted:
+            best = shifted[0]
+            return (f"BYTE SHIFT at cell {best.cell.index}/{len(self.cells)} "
+                    f"(mode {best.cell.mode}, "
+                    f"{_speed_label(best.cell.speed_hz)}, settle "
+                    f"{best.cell.settle_ms} ms): {best.verdict.detail}")
+        counts = _link_counts_text(self.attempts)
+        verdicts = {attempt.verdict.verdict for attempt in self.attempts}
+        if verdicts == {MALFORMED}:
+            return (f"all {total}/{len(self.cells)} cells returned bytes that "
+                    f"match no recovered layout ({counts}): the bus clocks at "
+                    f"every mode/speed/settle, so this points at the device "
+                    f"not being initialised or answering an unknown frame, not "
+                    f"at the sampling edge")
+        if verdicts == {LINK_ZEROS}:
+            return (f"all {total}/{len(self.cells)} cells returned all-zero "
+                    f"answers: the bus clocks but MISO is never driven, so "
+                    f"this points at the device not being initialised (reset "
+                    f"line/polarity, power state) or the IRQ-first ordering, "
+                    f"not at the link parameters")
+        if verdicts == {LINK_ALL_FF}:
+            return (f"all {total}/{len(self.cells)} cells returned all-0xFF: "
+                    f"nothing drives the bus at any mode/speed/settle; check "
+                    f"chip select/controller and whether the module is held in "
+                    f"reset")
+        if verdicts == {LINK_TIMEOUT}:
+            return (f"all {total}/{len(self.cells)} cells timed out before "
+                    f"returning bytes: the transfer/interrupt path is failing, "
+                    f"not the sampling edge; check the IRQ pin/edge and "
+                    f"bytes_tx")
+        return (f"no protocol-plausible answer in {total}/{len(self.cells)} "
+                f"cells ({counts}): the link parameters are not the whole "
+                f"problem; see the table")
+
+    def to_dict(self) -> dict:
+        return {
+            "schema": LINK_SCHEMA,
+            "tool": "oxp3-fp-probe --try-link",
+            "outcome": self.outcome,
+            "verdict": self.verdict,
+            "timeout_ms": self.timeout_ms,
+            "planned": len(self.cells),
+            "attempted": len(self.attempts),
+            "modes": sorted({cell.mode for cell in self.cells}),
+            "speeds_hz": sorted({cell.speed_hz for cell in self.cells}),
+            "settles_ms": sorted({cell.settle_ms for cell in self.cells}),
+            "context": dict(self.context),
+            "queries": [{
+                "command": q.name,
+                "opcode": f"0x{q.opcode:02x}",
+                "read_len": q.read_len,
+            } for q in self.queries],
+            "cells": [attempt.to_dict() for attempt in self.attempts],
+        }
+
+    def render_table(self) -> list[str]:
+        lines = ["#  mode speed   settle 0xA0                    "
+                 "0xC1                  0xA1 (first 16B)                  verdict"]
+        for attempt in self.attempts:
+            fw = attempt.hex_for(0xA0) or "(none)"
+            info = attempt.hex_for(0xC1) or "(none)"
+            scheme = attempt.hex_for(0xA1)
+            if scheme:
+                scheme = " ".join(scheme.split(" ")[:16])
+            else:
+                scheme = "(none)"
+            lines.append(
+                f"{attempt.cell.index:>2} {attempt.cell.mode:>4} "
+                f"{_speed_label(attempt.cell.speed_hz):>7} "
+                f"{attempt.cell.settle_ms:>5}ms "
+                f"{fw:<23} {info:<21} {scheme:<48} "
+                f"{attempt.verdict.verdict}")
+        return lines
+
+
+def run_link(cells, *, connect, timeout_ms: int = LINK_TIMEOUT_MS,
+             queries=LINK_QUERIES, context: dict | None = None) -> LinkReport:
+    """Run the complete link sweep (no early stop) and classify every cell.
+
+    ``connect(cell)`` returns an object with ``read(opcode, read_len)`` and an
+    optional ``close()``.  The callable is the only place that touches
+    hardware; the unit tests inject a fake, so this function performs no I/O.
+    """
+    cells = tuple(cells)
+    queries = validate_link_queries(queries)
+    timeout_ms = int(timeout_ms)
+    if timeout_ms <= 0:
+        raise ValueError("link timeout must be > 0")
+    raw: list[tuple[LinkCell, tuple[LinkRead, ...]]] = []
+    for cell in cells:
+        session = connect(cell)
+        reads = []
+        try:
+            for query in queries:
+                try:
+                    result = session.read(query.opcode, query.read_len)
+                except (spi.SpiError, OSError) as exc:
+                    result = ReadResult(b"", f"error: {exc}")
+                if not isinstance(result, ReadResult):
+                    result = ReadResult(
+                        bytes(getattr(result, "data", b"")),
+                        str(getattr(result, "error", "")),
+                        str(getattr(result, "irq", "")))
+                data = bytes(result.data or b"")
+                error = result.error or ""
+                if error and not data and error.startswith("timeout"):
+                    check = LinkCheck(LINK_TIMEOUT, error)
+                elif error and not data:
+                    check = LinkCheck(LINK_ERROR, error)
+                else:
+                    check = analyze_link_answer(query.opcode, data)
+                reads.append(LinkRead(query, result, check))
+        finally:
+            close = getattr(session, "close", None)
+            if callable(close):
+                close()
+        raw.append((cell, tuple(reads)))
+    references = {
+        (cell.speed_hz, cell.settle_ms): LinkAttempt(cell, reads, LinkCheck(
+            EMPTY, "reference"))
+        for cell, reads in raw if cell.mode == 0
+    }
+    attempts = []
+    for cell, reads in raw:
+        reference = references.get((cell.speed_hz, cell.settle_ms))
+        shift = detect_link_shift(cell, reads, reference)
+        verdict = _link_cell_verdict(cell, reads, shift)
+        attempts.append(LinkAttempt(cell, reads, verdict, shift))
+    return LinkReport(cells, attempts, queries, timeout_ms,
+                      dict(context or {}))
+
+
+class SpiLinkSession:
+    """One link-sweep cell on the real GPIO/SPI backends.
+
+    The reset line is pulsed once per cell with the pinned polarity, then the
+    cell's settle delay is applied, then the interrupt line is requested with
+    the pinned edge and a fresh :class:`~fpbf63112.spi.SpiTransport` opens the
+    spidev node with this cell's mode/speed - so the node is opened once per
+    cell with the mode set.  :class:`~fpbf63112.spi.SpiTransport` still enforces
+    the read allowlist and refuses destructive opcodes by opcode and selector.
+    """
+
+    def __init__(self, cell: LinkCell, *, spidev_path: str,
+                 reset_active_low: bool = False,
+                 edge: str = "rising",
+                 bits_per_word: int | None = None,
+                 gpio_chip: str | None = None,
+                 reset_pin: int | None = None, irq_pin: int | None = None,
+                 irq_active_low: bool = False,
+                 timeout_ms: int = LINK_TIMEOUT_MS,
+                 gpio_backend: str | None = "auto",
+                 sleep=time.sleep):
+        self.cell = cell
+        self.spidev_path = spidev_path
+        self.reset_active_low = bool(reset_active_low)
+        self.edge = edge
+        self.bits_per_word = bits_per_word
+        self.gpio_chip = gpio_chip
+        self.reset_pin = reset_pin
+        self.irq_pin = irq_pin
+        self.irq_active_low = bool(irq_active_low)
+        self.timeout_ms = int(timeout_ms)
+        self.gpio_backend = gpio_backend
+        self._sleep = sleep
+        self._reset = None
+        self._irq = None
+        self._transport = None
+
+    def open(self) -> "SpiLinkSession":
+        if self._transport is not None:
+            return self
+        if self.reset_pin is None:
+            raise spi.SpiError("the link sweep pulses the reset line, but no "
+                               "reset pin was configured")
+        self._reset = spi.GpioResetLine(
+            self.reset_pin, chip=self.gpio_chip,
+            active_low=self.reset_active_low, backend=self.gpio_backend)
+        self._reset.pulse()
+        if self.cell.settle_ms:
+            self._sleep(self.cell.settle_ms / 1000.0)
+        if self.irq_pin is None:
+            raise spi.SpiError("the link sweep needs an interrupt line")
+        self._irq = spi.GpioIrqWaiter(
+            self.irq_pin, chip=self.gpio_chip, edge=self.edge,
+            active_low=self.irq_active_low, backend=self.gpio_backend)
+        self._transport = spi.SpiTransport(
+            self.spidev_path, speed_hz=self.cell.speed_hz,
+            mode=self.cell.mode, bits_per_word=self.bits_per_word,
+            allow_writes=True, read_allowlist=LINK_ALLOWED_OPS, irq=self._irq)
+        return self
+
+    def read(self, opcode: int, read_len: int) -> ReadResult:
+        try:
+            self.open()
+        except (spi.SpiError, OSError) as exc:
+            return ReadResult(b"", f"error: {exc}", "error")
+        limit = self.timeout_ms
+        # DLL-exact read shape: one selector byte, then read_len receive bytes.
+        plan = spi.build_plan(opcode, read_len=read_len,
+                              timeout_ms=limit, total_ms=limit)
+        try:
+            data = self._transport.execute(plan)
+        except spi.SpiTimeout as exc:
+            return ReadResult(self._received(), f"timeout: {exc}", "none")
+        except spi.SpiError as exc:
+            return ReadResult(self._received(), f"error: {exc}", "error")
+        irq = "fired" if self._transport.last_irq is not None else "unknown"
+        return ReadResult(data, "", irq)
+
+    def _received(self) -> bytes:
+        io = getattr(self._transport, "_io", None)
+        message = getattr(io, "last_message", ()) if io is not None else ()
+        return b"".join(message)
+
+    def close(self) -> None:
+        if self._transport is not None:
+            self._transport.close()
+            self._transport = None
+        if self._reset is not None:
+            try:
+                self._reset.close()
+            finally:
+                self._reset = None
+
+
+def write_link_report(report: LinkReport, path: str) -> None:
+    """Write the link table as stable, pretty JSON."""
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(report.to_dict(), handle, indent=2, sort_keys=True)
+        handle.write("\n")

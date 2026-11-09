@@ -7,7 +7,7 @@ library (`tools/fingerprint/fpbf63112/`), the recovered SPI/SPB transport
 (`fpbf63112/spi.py`), a `_CRS` parser (`fpbf63112/acpi.py`) and a probe with
 `--transport spi --spidev --allow-writes --dry-run` and `acpi_info`, plus a
 driver that compiles against libfprint 1.94's internal driver API. The Python
-suite is now 289 tests and all SPI/ACPI behaviour is exercised offline, but
+suite is now 388 tests and all SPI/ACPI behaviour is exercised offline, but
 **nothing has run against the sensor** (see
 `tools/fingerprint/README.md`). The remaining unknowns are listed in
 [Open points](#open-points); two of them need root on this unit.
@@ -401,7 +401,7 @@ driver cannot start.
 | file | what it is |
 |---|---|
 | `tools/fingerprint/oxp3-fp-probe.py` | bring-up probe. Default `--transport spi` sends the recovered selector + two-entry SPB transaction (`--spidev` and `--allow-writes` required for I/O); `--dry-run` prints exact plans with no I/O; `acpi_info --crs FILE` parses an extracted `_CRS` offline. `--transport frame` keeps the old `0xAA`/CRC experiment. Refuses destructive opcodes by opcode *and* selector. Stdlib only. |
-| `tools/fingerprint/fpbf63112/matrix.py` | the `--try-matrix` planner/runner (reset polarity x settle x IRQ edge) and the `--try-write-shape` planner/runner (selector bit 0 x padding x read length), valid-answer parsers with CRCs and candidate-offset shift analysis, JSON reports; transport-agnostic so tests use a fake transport |
+| `tools/fingerprint/fpbf63112/matrix.py` | the `--try-matrix` planner/runner (reset polarity x settle x IRQ edge), the `--try-write-shape` planner/runner (selector bit 0 x padding x read length) and the `--try-link` planner/runner (SPI mode x clock x settle, with plausible-fw/plausible-info/byte-shift-detected/all-zeros/all-0xff/timeout/error/malformed verdicts), valid-answer parsers with CRCs and candidate-offset shift analysis, JSON reports; transport-agnostic so tests use a fake transport |
 | `tools/fingerprint/fpbf63112/spi.py` | recovered SPI/SPB transport: selector computation, two `spi_ioc_transfer` entries per command, recovered 1000/2030 (5000/10010 image, 2000/4016 restore) timeouts, IRQ waiters (gpiod v1/v2, sysfs, poll), reset pulse, cancel settle, and the allowlist/destructive gates |
 | `tools/fingerprint/fpbf63112/acpi.py` | raw `_CRS` resource-template parser for `SpiSerialBus`, `GpioInt`, `GpioIo`, I2C and IRQ items; validates lengths/offsets and reduces them to `SpiConnection` (speed, mode, bits, CS, IRQ, reset) |
 | `tools/fingerprint/fpbf63112/aml.py` | finds and validates the FPRT `_CRS` resource template in the raw DSDT AML, so the runbook does not depend on `iasl` or on copying bytes out of ASL by hand |
@@ -409,7 +409,7 @@ driver cannot start.
 | `tools/fingerprint/fpbf63112/` | protocol library (stdlib only): frame build/parse, CRC-32, offset arithmetic, command table, GET_IMG reassembly, retry state machine, `Session`/`open_session` |
 | `tools/fingerprint/fpbf63112/crypto.py` | session crypto (stdlib only): SM3, SM4 (ECB/CBC), SM2 over sm2p256v1, GM/T 0003 KDF, the 0xA2 handshake, the secure-frame transform, a bounded variant search, vector self-test and benchmark |
 | `tools/fingerprint/bf63112_session_openssl.c/.h` | the same handshake in C via OpenSSL (EVP SM3/SM4 + `EC_POINT_mul` for the shared point); standalone compile check, not wired into the SPI driver (0xA2 is a write and is not allowlisted) |
-| `tools/fingerprint/tests/` | 289 unittest tests incl. fuzz/property round-trips, synthetic device transcripts, the SM2/SM3/SM4 vectors and a synthetic end-to-end handshake, `test_driver_derived.py` (layouts recovered from the driver), `test_spi.py` (spidev ABI, selectors, timeouts, IRQ/reset, gates, probe dry-run/refusals) and `test_acpi.py` (constructed `_CRS` buffers and malformed cases); shared frame vectors for the C implementation |
+| `tools/fingerprint/tests/` | 388 unittest tests incl. fuzz/property round-trips, synthetic device transcripts, the SM2/SM3/SM4 vectors and a synthetic end-to-end handshake, `test_driver_derived.py` (layouts recovered from the driver), `test_spi.py` (spidev ABI, selectors, timeouts, IRQ/reset, gates, probe dry-run/refusals) and `test_acpi.py` (constructed `_CRS` buffers and malformed cases); shared frame vectors for the C implementation |
 | `tools/fingerprint/bf63112_proto.h/.c` | dependency-free C11 protocol core shared with the driver |
 | `tools/fingerprint/libfprint-bf63112.c` | libfprint driver: selector/two-entry SPI transport, open/close/suspend/resume, 0xC1 sensor info and 0xA0 firmware query, optional reset/IRQ from the environment; enrol/verify/identify refuse with `NOT_SUPPORTED` until the payloads are decoded. Syntax-checked (`-Wall -Wextra -Werror`) against libfprint v1.94.9 headers; see `tools/fingerprint/README.md` |
 | `tools/fingerprint/README.md` | proven vs inferred vs unknown, test commands, privileged probe steps, upstreaming path |
@@ -507,6 +507,12 @@ Steps 1, 2, 4 and 5 are read-only; step 3 is the only state change (the
    --reset-pin 16 --gpio-chip gpiochip1 --reset-polarity active-high
    --settle-ms 10 --irq-edge rising --allow-reset` (guide:
    [fingerprint-transport.md §8.8](fingerprint-transport.md#88-the-try-write-shape-guide)).
+   For the 2026-11-09 readable-but-implausible answers (`0x7F50`, `0xC1` =
+   `32 32 ...`), sweep the link instead with the reset settings pinned:
+   `sudo tools/fingerprint/oxp3-fp-session.sh --try-link --irq-pin 18
+   --reset-pin 16 --gpio-chip gpiochip1 --reset-polarity active-high
+   --irq-edge rising --allow-reset` (guide:
+   [fingerprint-transport.md §8.10](fingerprint-transport.md#810-the-try-link-sweep-mode-x-clock-x-settle)).
 
 ## Safety
 
@@ -575,7 +581,7 @@ what is left needs the hardware.
    an unpopulated second source or a phantom node; harmless, but a driver
    should match `BF63112:00`-style enumeration rather than assume one device.
 6. **The probe has never run** - the SPI transport, ACPI parser and CLI are
-   implemented and offline-tested (289 tests), and the first execution is the
+   implemented and offline-tested (388 tests), and the first execution is the
    bring-up itself; expect to tune `--speed`/`--mode`/`--irq-edge` and to
    discover whether the device clocks the answer in the first transfer or
    raises `GpioInt` first.

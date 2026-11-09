@@ -47,7 +47,10 @@ needs `--allow-reset`, an IRQ pin and a reset pin; the table is written to
 `matrix.json`), `--try-write-shape` (the follow-up experiment: selector bit 0
 x write padding after the selector x read length, for `0xA0` then `0xA1`/`0xC1`;
 needs `--allow-reset`, an IRQ pin and a reset pin; the table is written to
-`write-shape.json`), `--reset-polarity active-high|active-low` and
+`write-shape.json`), `--try-link` (the link-parameter sweep after a readable
+but implausible answer: SPI mode 0/1/2/3 x 1/4 MHz x settle 10/150 ms, plus
+300 ms with `--link-settles`; needs `--allow-reset`, an IRQ pin and a reset
+pin; the table is written to `link.json`), `--reset-polarity active-high|active-low` and
 `--settle-ms N` (the now-known-good electrical settings; defaults
 active-high/10 ms), `--allow-takeover`, `--crs FILE` (use an already-extracted
 resource template),
@@ -107,7 +110,7 @@ restored).
 | 4 | **plan** | print every following command, then ask `Proceed?` | no |
 | 5 | **bind** | print the commands, ask once (the takeover question names the driver being displaced), then `modprobe spidev` (only if not loaded), write `spidev` to `driver_override`, write the device name to `spidev/bind`; read every write back; discover the new `/dev/spidevN.M` from sysfs | **yes** |
 | 6 | **dry run** | run the probe with `--dry-run`: the exact selector byte and two-entry transfer for each read, no device opened | no |
-| 7 | **read** | print the exact gated command, then require the literal word `probe` (`skip` stops before touching the sensor; anything else refuses). Runs only `fw scheme info` (`0xA0`, `0xA1`, `0xC1`) unless `--reads` narrows it - never enrol/identify/remove/JTAG/restore/update. With `--try-matrix` the probe instead runs the 18-cell polarity/settle/edge matrix (table -> `matrix.json`); with `--try-write-shape` it runs the 60-cell selector/padding/read-length experiment (table -> `write-shape.json`) | talks to the sensor (read-only; both experiments also pulse the reset line, already gated by `--allow-reset`) |
+| 7 | **read** | print the exact gated command, then require the literal word `probe` (`skip` stops before touching the sensor; anything else refuses). Runs only `fw scheme info` (`0xA0`, `0xA1`, `0xC1`) unless `--reads` narrows it - never enrol/identify/remove/JTAG/restore/update. With `--try-matrix` the probe instead runs the 18-cell polarity/settle/edge matrix (table -> `matrix.json`); with `--try-write-shape` it runs the 60-cell selector/padding/read-length experiment (table -> `write-shape.json`); with `--try-link` it runs the 16-cell (24 with `--link-settles 10,150,300`) mode/clock/settle sweep with the DLL-exact read frame (table -> `link.json`) | talks to the sensor (read-only; all three experiments also pulse the reset line, already gated by `--allow-reset`) |
 | 8 | **restore** | see §3; then verify | **yes** |
 | 9 | **summary** | `summary.json`, `README.txt`, the journal and the transcript are written | transcript only |
 
@@ -169,6 +172,8 @@ so treat it as host-specific data and do not commit it.
 | `probe-dryrun.txt` | the probe's `--dry-run` byte plan |
 | `probe-readonly.txt` | the device's answers (only when the word `probe` was typed) |
 | `matrix.json` | the `--try-matrix` table: every cell (polarity, settle, edge), the bytes read, the verdict, the winning cell (or the all-attempts verdict); same content embedded in `summary.json` |
+| `write-shape.json` | the `--try-write-shape` table: every selector/padding/read-length cell, the bytes, the CRC offset and candidate offset; same content embedded in `summary.json` under `write_shape` |
+| `link.json` | the `--try-link` table: every mode/clock/settle cell with 0xA0/0xC1/0xA1 bytes and the action verdict; same content embedded in `summary.json` under `link` |
 | `answers.tsv` | the parsed answers: command, byte count, hex, interpretation |
 | `sys-before.txt`, `sys-after.txt` | driver / override / module / node / `bytes_tx`, before and after |
 | `commands.txt` | the exact probe commands, for copy/paste |
@@ -177,7 +182,7 @@ so treat it as host-specific data and do not commit it.
 
 `summary.json` (schema 1) top-level keys: `schema tool version unique_name
 run_id started_at finished_at mode fixture root_prefix host transcript device
-acpi binding mutations probe restore unknowns files`.
+acpi binding mutations probe matrix write_shape link restore unknowns files`.
 
 * `acpi`: `method` (`sysfs-dsdt`, `acpidump`, `crs-argument`, `resumed`),
   `crs_sha256`, `crs_bytes`, `speed_hz`, `mode`, `bits`, `chip_select`,
@@ -194,6 +199,12 @@ acpi binding mutations probe restore unknowns files`.
   `write-shape.json` object (`outcome`, `verdict`, `planned`, `attempted`,
   `cells[]` with `selector`, `padding`, `read_len`, `hex`, `aa_offset`, `crc`,
   `candidate_offset`, `verdict`, and `shift_summary`).
+* `link`: `null` unless `--try-link` ran, otherwise the complete `link.json`
+  object (`outcome` one of `plausible-fw`/`plausible-info`/
+  `byte-shift-detected`/`no-plausible-answer`/`all-malformed`, `verdict`,
+  `planned`, `attempted`, `modes`, `speeds_hz`, `settles_ms`, and `cells[]`
+  with `mode`, `speed_hz`, `settle_ms`, `verdict`, `byte_shift` and the three
+  `answers`).
 * `restore`: `attempted`, `verified`, `exit`, `driver`, `override`, `notes[]`.
 * `unknowns[]`: the remaining open questions, computed from what actually
   happened (e.g. "no GpioInt in `_CRS`", "no firmware answer was parsed",
@@ -233,9 +244,10 @@ ok    spidev module unloaded again
 ok    restore verified: driver=none override= module_loaded=0
 ```
 
-**These bytes are the shape, not a captured transcript**: no `0xA0`/`0xA1`/`0xC1`
-answer has ever been captured on this unit. Read them as follows (layouts from
-`fingerprint.md`, recovered from the USB branch):
+**These bytes are the expected shape**: until the 2026-11-09 run no
+`0xA0`/`0xA1`/`0xC1` answer had been captured on this unit; §5.3 and §5.4
+record the first real (still implausible) answers. Read the shape as follows
+(layouts from `fingerprint.md`, recovered from the USB branch):
 
 * `fw` (`0xA0`) must be **7 bytes**: `state:u8`, project `hi/lo` (the project
   table is BOE MOC / HUAHONG MOUSE MOC / DYW MOH / NATION TEST /
@@ -437,6 +449,76 @@ embedded in `summary.json` under `write_shape`, and `README.txt` names the
 outcome. Repeat a winning row's exact selector/padding/read length in a normal
 `--reads` run before trusting it.
 
+### 5.4 The link sweep after a readable but implausible answer
+
+The 2026-11-09 real run (`docs/state/fp-session-20261109T124024Z`) showed the
+first deterministic answers: one selector byte then N receive bytes, mode 0 at
+4 MHz, after an **active-high** reset pulse on `gpiochip1` line 16, 10 ms
+settle, IRQ line 18. But the payload is implausible: `0xA0` reports project
+`0x7F50` (not in `{1,2,3,4,6}`) and with `0xA1` the 9-byte `0xC1` answer starts
+`32 32 32 32 ...` - ASCII `"2222"`, i.e. `0x64 >> 1`. That is the signature of
+a **wrong sampling edge**, a **clock too fast for this wiring**, or a **module
+that needs longer to settle after reset**. `--try-link` walks exactly those
+three in one bounded, read-only run, with the reset polarity and IRQ edge
+pinned:
+
+* SPI **mode 0, 1, 2, 3** (the spidev node is opened once per cell with the
+  mode set),
+* **1 MHz and 4 MHz** (ACPI says 4 MHz; slower is the first thing to try when
+  the edge is in doubt),
+* settle after the reset pulse: **10 ms and 150 ms**, plus **300 ms** when
+  `--link-settles 10,150,300` is given,
+* each cell reads **0xA0 (7 B), 0xC1 (9 B), 0xA1 (64 B)** with the DLL-exact
+  one-selector-byte frame and a 400 ms per-cell timeout.
+
+That is **16 cells** by default (2 speeds x 2 settles x 4 modes), 24 with the
+optional 300 ms settle. The exact owner command is:
+
+```sh
+sudo tools/fingerprint/oxp3-fp-session.sh \
+    --try-link \
+    --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 \
+    --reset-polarity active-high --irq-edge rising --allow-reset
+```
+
+`--allow-reset` is mandatory (every cell re-pulses line 16 with the pinned
+polarity), and the probe still refuses anything outside `0xA0`/`0xC1`/`0xA1`
+by opcode **and** selector. The probe command is recorded in `commands.txt`;
+the table lands in `link.json` and, under `link`, in `summary.json`. Its
+compact console form is one row per cell:
+
+```
+#  mode speed   settle 0xA0                    0xC1                  0xA1 (first 16B)         verdict
+ 1    0    1MHz    10ms ff 7f 50 03 00 00 00   32 32 32 32 32 32 32 32 32 32 32 ...          malformed
+ ...
+ 4    3    1MHz    10ms 00 02 00 01 02 03 04   00 00 00 00 40 00 40 00 00 04 00 ...          plausible-fw
+```
+
+The verdicts are the action rules, in this precedence per cell
+(`plausible-fw` > `plausible-info` > `byte-shift-detected` > `all-zeros` >
+`all-0xff` > `timeout` > `error` > `malformed`):
+
+| verdict | rule | what to do |
+|---|---|---|
+| `plausible-fw` | `0xA0`'s project byte (layout `+1`) is in `{1,2,3,4,6}`, the version (`+3:u32`) is not `0`/`0xFFFFFFFF`, and the state byte (`+0`) is `0x00..0x0f` | use that mode/speed/settle in a normal read and then in the driver |
+| `plausible-info` | `0xC1`'s width/height (`+4`/`+6`) are each `1..4096` and `width*height` is at most 1 MiB | use that mode/speed/settle; `0xA0` still needs a plausible answer before trusting the link |
+| `byte-shift-detected` | a non-mode-0 answer equals the **mode-0** answer of the same speed/settle sampled one bit earlier or later (interior bytes compared) | the sampling edge is wrong: use the mode that reports this, not mode 0 |
+| `all-zeros` | every answer is `0x00` | the bus clocks but MISO is never driven; the device is not initialised (reset/power) |
+| `all-0xff` | every answer is `0xFF` | nothing on the bus (chip select/controller) or the module is held in reset |
+| `timeout` | a read produced no bytes before its deadline | the IRQ/pin or the transfer failed; check `bytes_tx` |
+| `error` | the GPIO/spidev node could not be opened | fix the device/line selection first |
+| `malformed` | bytes came back but no rule above applies | the link clocks data but the answer shape is unknown |
+
+**How to read the table.** If mode 0 is all `malformed` and mode 3 is
+`plausible-fw`/`plausible-info` (or reports `byte-shift-detected`), the edge
+was wrong - the device was answering all along, sampled on the wrong clock
+edge. If every mode at both speeds and both settles is `malformed` (or all
+`all-zeros`), the link parameters are not the problem: the module is not
+initialised (reset polarity/line, power state) or it expects the interrupt
+before it answers, not another SPI mode. `byte-shift-detected` is not success:
+it says which mode recovers the stream, so repeat that mode in a normal read
+before changing the driver.
+
 ## 6. Handing the transcript back
 
 Give the whole `docs/state/fp-session-*` directory (or just `summary.json` +
@@ -516,7 +598,7 @@ GPIOs.
 ## 9. Offline testing (what is covered without root or a sensor)
 
 `tools/fingerprint/oxp3-fp-session.sh --selftest` (74 checks) and
-`tests/fingerprint-session/run.sh` (77 checks) build fake `/sys` trees with
+`tests/fingerprint-session/run.sh` (108 checks) build fake `/sys` trees with
 `--fixture-init DIR --variant ...` and drive the **real script** against them:
 
 * the AML scan and `acpi_info` on a synthetic DSDT whose `_CRS` is an SPI
@@ -541,7 +623,12 @@ GPIOs.
 * `--try-matrix` reaches the probe against a fake spidev node and a
   nonexistent GPIO chip path, every cell fails closed, and the 18-attempt
   `matrix.json` (plus its embedded copy and outcome in `summary.json`) is
-  asserted in the transcript.
+  asserted in the transcript;
+* `--try-write-shape` and `--try-link` get the same treatment: the flag and
+  its explicit JSON path reach the probe, every cell fails closed against the
+  fake node/GPIO, and the 60-cell `write-shape.json` / 16-cell `link.json`
+  (plus the embedded copy and outcome in `summary.json`, and the compact table
+  in `probe-readonly.txt`) are asserted.
 
 The fixture root emulates the kernel side effects inside the tree (the driver
 symlink and `/dev` node a real `bind` produces) - it is test support, never used
@@ -577,6 +664,11 @@ or without the sensor, and never binds anything).
   first answer stays all-zero with the lines configured, the next experiment is
   to reorder that (wait for the edge, then clock the read), which is a code
   change, not a new runbook flag.
+* The **link parameters** (mode/clock/settle) are swept by `--try-link`; the
+  transcript's implausible `0xA0`/`0xC1` payloads are exactly what it exists to
+  explain. A `byte-shift-detected` cell identifies the sampling edge; all
+  malformed at every cell points at the device not being initialised, not at
+  the link.
 * The **write shape** is the open question after the shifted answer: whether
   the device consumes bytes after the selector, whether the read flag is
   selector bit 0, and how many leading bytes precede the real payload. The

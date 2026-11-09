@@ -469,6 +469,20 @@ def main(argv=None):
                          "(default: write-shape.json in the current directory)")
     ap.add_argument("--write-shape-timeout-ms", type=int, default=400,
                     help="per-cell write-shape timeout in ms (default 400)")
+    ap.add_argument("--try-link", action="store_true",
+                    help="sweep the SPI link with the reset settings pinned: "
+                         "modes 0/1/2/3 x 1/4 MHz x 10/150 ms (plus 300 ms "
+                         "with --link-settles) and read 0xA0/0xC1/0xA1 with "
+                         "the DLL-exact read shape; table -> link.json")
+    ap.add_argument("--link-json", default=None,
+                    help="write the link sweep table to this JSON file "
+                         "(default: link.json in the current directory)")
+    ap.add_argument("--link-timeout-ms", type=int, default=400,
+                    help="per-cell link-sweep timeout in ms (default 400)")
+    ap.add_argument("--link-settles", default="10,150",
+                    help="comma-separated settle delays after reset in ms "
+                         "(default 10,150; add 300 for the optional third "
+                         "value)")
     ap.add_argument("--read-shape", choices=("frame", "selector"),
                     default="frame",
                     help="read frame: 'frame' (default) = the selector plus "
@@ -485,6 +499,28 @@ def main(argv=None):
         print("refusing: --try-matrix and --try-write-shape are separate "
               "experiments; run one at a time", file=sys.stderr)
         return 2
+
+    if args.try_link:
+        if args.transport != "spi":
+            print("refusing: --try-link is the SPI link sweep; the frame "
+                  "transport has no mode/speed semantics", file=sys.stderr)
+            return 2
+        if args.try_matrix or args.try_write_shape:
+            print("refusing: --try-link is a separate experiment; run one at "
+                  "a time", file=sys.stderr)
+            return 2
+        if args.commands:
+            print("refusing: --try-link sends its own allowlisted queries "
+                  "(0xA0/0xC1/0xA1); do not name commands", file=sys.stderr)
+            return 2
+        if args.op is not None:
+            print("refusing: --try-link does not take --op", file=sys.stderr)
+            return 2
+        if not 100 <= args.link_timeout_ms <= 2000:
+            print("refusing: --link-timeout-ms must be 100..2000",
+                  file=sys.stderr)
+            return 2
+        return run_spi_link(args)
 
     if args.try_write_shape:
         if args.transport != "spi":
@@ -880,6 +916,156 @@ def run_spi_write_shape(args):
         return 1
     print(f"write-shape: table written to {out_path}")
     return 0 if report.winning is not None else 1
+
+
+def _parse_settles(text):
+    """Parse ``--link-settles`` ("10,150,300") into a tuple of ms."""
+    items = [item for item in str(text).replace(",", " ").split() if item]
+    if not items:
+        raise ValueError("--link-settles needs at least one delay in ms")
+    settles = []
+    for item in items:
+        try:
+            value = int(item)
+        except ValueError:
+            raise ValueError(f"--link-settles: {item!r} is not an integer "
+                             f"number of milliseconds") from None
+        if not 0 <= value <= 5000:
+            raise ValueError(f"--link-settles: {value} ms is outside 0..5000")
+        settles.append(value)
+    return tuple(settles)
+
+
+def run_spi_link(args):
+    """``--try-link``: sweep SPI mode x clock x reset settle, read-only.
+
+    The reset settings are pinned (polarity from ``--reset-polarity``, IRQ edge
+    from ``--irq-edge``); only the three link parameters move.  Every cell reads
+    the DLL-exact frame for the allowlisted 0xA0 (7 B), 0xC1 (9 B) and 0xA1
+    (64 B).
+    """
+    spi = _load_spi()
+    acpi = _load_acpi()
+    matrix = _load_matrix()
+    try:
+        params = _spi_parameters(args, spi, acpi)
+        settles = _parse_settles(args.link_settles)
+        cells = matrix.plan_link(settles_ms=settles)
+    except (spi.SpiError, ValueError) as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+    # The recovered link is 8 bits per word; the runbook passes the _CRS value
+    # explicitly, a direct probe run gets the ACPI default here.
+    bits = params["bits"] if params["bits"] is not None else 8
+
+    if args.dry_run:
+        print(f"dry-run: link sweep spidev={args.spidev or '(unset)'} "
+              f"allow_writes={args.allow_writes} "
+              f"gpio_backend={args.gpio_backend or 'auto'}")
+        print(f"         pinned reset polarity={args.reset_polarity} "
+              f"edge={params['edge']} bits={bits} "
+              f"chip={args.gpio_chip or '(unset)'} irq={params['gpio']} "
+              f"reset={params['reset_gpio']} "
+              f"timeout={args.link_timeout_ms}ms")
+        print(f"link: {len(cells)} cells (mode 0/1/2/3 x 1/4 MHz x settle "
+              f"{'/'.join(str(ms) for ms in settles)} ms); each cell reads "
+              f"0xA0 7B + 0xC1 9B + 0xA1 64B with the DLL-exact selector-only "
+              f"frame")
+        for cell in cells:
+            print(f" {cell.index:>2} mode={cell.mode} "
+                  f"speed={matrix._speed_label(cell.speed_hz)} "
+                  f"settle={cell.settle_ms:>3}ms -> 0xA0 7B, 0xC1 9B, 0xA1 64B")
+        print("link: verdicts are plausible-fw / plausible-info / "
+              "byte-shift-detected / all-zeros / all-0xff / timeout / "
+              "error / malformed")
+        print("dry-run: no device or GPIO is opened; no JSON is written")
+        return 0
+
+    if not args.spidev:
+        print("refusing: --spidev /dev/spidevN.M is required for a real link "
+              "sweep (there is no default device)", file=sys.stderr)
+        return 2
+    if not args.allow_writes:
+        print("refusing: --allow-writes is required before any SPI transfer "
+              "(even a read)", file=sys.stderr)
+        return 2
+    if params["gpio"] is None:
+        print("refusing: --try-link needs the GpioInt line (--gpio N or a "
+              "_CRS that carries it); the known-good edge is rising",
+              file=sys.stderr)
+        return 2
+    if params["reset_gpio"] is None:
+        print("refusing: --try-link needs the GpioIo reset line (--reset-gpio "
+              "N or a _CRS that carries it)", file=sys.stderr)
+        return 2
+    if not args.allow_reset:
+        print("refusing: --try-link pulses the reset line once per cell; pass "
+              "--allow-reset", file=sys.stderr)
+        return 2
+    if args.gpio_backend == "poll":
+        print("refusing: --gpio-backend poll cannot drive the reset line; "
+              "use auto, chardev, gpiod or sysfs", file=sys.stderr)
+        return 2
+
+    out_path = os.path.abspath(args.link_json or "link.json")
+    parent = os.path.dirname(out_path) or "."
+    if not os.path.isdir(parent):
+        print(f"refusing: the --link-json directory does not exist: {parent}",
+              file=sys.stderr)
+        return 2
+
+    if args.speed is not None or args.mode is not None:
+        print("link: --speed/--mode are ignored; the sweep sets both per cell",
+              file=sys.stderr)
+    print(f"link: {len(cells)} cells, per-cell timeout "
+          f"{args.link_timeout_ms}ms, read-only queries 0xA0/0xC1/0xA1")
+    print(f"link: spidev={args.spidev} chip={args.gpio_chip or '(unset)'} "
+          f"irq={params['gpio']} reset={params['reset_gpio']} "
+          f"reset_polarity={args.reset_polarity} edge={params['edge']} "
+          f"bits={bits}")
+
+    active_low = args.reset_polarity == "active-low"
+
+    def connect(cell):
+        return matrix.SpiLinkSession(
+            cell, spidev_path=args.spidev,
+            reset_active_low=active_low, edge=params["edge"],
+            bits_per_word=bits, gpio_chip=args.gpio_chip,
+            reset_pin=params["reset_gpio"], irq_pin=params["gpio"],
+            irq_active_low=bool(params["active_low"]),
+            timeout_ms=args.link_timeout_ms, gpio_backend=args.gpio_backend)
+
+    context = {
+        "spidev": args.spidev,
+        "gpio_chip": args.gpio_chip,
+        "irq_pin": params["gpio"],
+        "reset_pin": params["reset_gpio"],
+        "reset_polarity": args.reset_polarity,
+        "irq_edge": params["edge"],
+        "irq_active_low": bool(params["active_low"]),
+        "bits_per_word": bits,
+        "gpio_backend": args.gpio_backend or "auto",
+        "settles_ms": list(settles),
+    }
+    try:
+        report = matrix.run_link(
+            cells, connect=connect, timeout_ms=args.link_timeout_ms,
+            context=context)
+    except matrix.MatrixRefused as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+
+    for line in report.render_table():
+        print(line)
+    print(f"link: {report.verdict}")
+    try:
+        matrix.write_link_report(report, out_path)
+    except OSError as exc:
+        print(f"link: could not write {out_path}: {exc}", file=sys.stderr)
+        return 1
+    print(f"link: table written to {out_path}")
+    return 0 if report.outcome in (matrix.PLAUSIBLE_FW,
+                                   matrix.PLAUSIBLE_INFO) else 1
 
 
 def run_spi(args, cmds):

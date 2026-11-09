@@ -63,6 +63,7 @@
 #   <out>/probe-readonly.txt the read-only answers (only when the probe ran)
 #   <out>/matrix.json        the --try-matrix table (only with --try-matrix)
 #   <out>/write-shape.json   the --try-write-shape table (only with --try-write-shape)
+#   <out>/link.json          the --try-link sweep table (only with --try-link)
 #   <out>/sys-before.txt     driver/override/module state before any change
 #   <out>/sys-after.txt      the same after the restore
 #   <out>/commands.txt       the exact commands, for copy/paste
@@ -107,6 +108,14 @@
 #                                  --reset-polarity/--settle-ms/--irq-edge and a
 #                                  short per-cell timeout; needs --allow-reset, an
 #                                  IRQ pin and a reset pin; table -> write-shape.json
+#   --try-link                     one bounded read-only sweep of the link with
+#                                  the reset settings pinned (active-high,
+#                                  --irq-edge, --settle-ms are not swept): SPI
+#                                  mode 0/1/2/3 x 1/4 MHz x settle 10/150 ms
+#                                  (300 ms with --link-settles), reading
+#                                  0xA0/0xC1/0xA1 with the DLL-exact frame;
+#                                  needs --allow-reset, an IRQ pin and a reset
+#                                  pin; table -> link.json
 #   --allow-existing-bind          use a spidev bind this session did not create
 #                                  (never unbound by us)
 #   --allow-takeover               take the device from another driver; it is
@@ -156,6 +165,8 @@ ALLOW_EXISTING=0
 ALLOW_RESET=0
 TRY_MATRIX=0
 TRY_WRITE_SHAPE=0
+TRY_LINK=0
+LINK_SETTLES="10,150"
 RESET_POLARITY="active-high"
 SETTLE_MS=10
 NO_IRQ=0
@@ -211,6 +222,9 @@ while [ "$#" -gt 0 ]; do
         --allow-reset) ALLOW_RESET=1; shift ;;
         --try-matrix) TRY_MATRIX=1; shift ;;
         --try-write-shape) TRY_WRITE_SHAPE=1; shift ;;
+        --try-link) TRY_LINK=1; shift ;;
+        --link-settles) [ "$#" -ge 2 ] || exit 2; LINK_SETTLES=$2; shift 2 ;;
+        --link-settles=*) LINK_SETTLES=${1#*=}; shift ;;
         --reset-polarity)
             [ "$#" -ge 2 ] || exit 2; RESET_POLARITY=$2; shift 2 ;;
         --reset-polarity=*) RESET_POLARITY=${1#*=}; shift ;;
@@ -258,12 +272,35 @@ if [ "$TRY_MATRIX" = 1 ] && [ "$TRY_WRITE_SHAPE" = 1 ]; then
     printf '%s: --try-matrix and --try-write-shape are separate experiments; run one at a time\n' "$PROG" >&2
     exit 2
 fi
+if [ "$TRY_LINK" = 1 ] && { [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; }; then
+    printf '%s: --try-link is a separate experiment; run one at a time\n' "$PROG" >&2
+    exit 2
+fi
+case $LINK_SETTLES in
+    ''|*[!0-9,]*)
+        printf '%s: --link-settles must be a comma-separated list of ms values\n' "$PROG" >&2
+        exit 2 ;;
+esac
+IFS=, read -ra LINK_SETTLE_VALUES <<<"$LINK_SETTLES"
+for _settle in "${LINK_SETTLE_VALUES[@]}"; do
+    case $_settle in
+        ''|*[!0-9]*)
+            printf '%s: --link-settles must be a comma-separated list of ms values\n' "$PROG" >&2
+            exit 2 ;;
+    esac
+    [ "$_settle" -le 5000 ] || { printf '%s: --link-settles values must be 0..5000\n' "$PROG" >&2; exit 2; }
+done
+unset _settle
 if [ "$TRY_MATRIX" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
     printf '%s: --try-matrix pulses the reset line in some combinations; pass --allow-reset\n' "$PROG" >&2
     exit 2
 fi
 if [ "$TRY_WRITE_SHAPE" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
     printf '%s: --try-write-shape pulses the reset line for every cell; pass --allow-reset\n' "$PROG" >&2
+    exit 2
+fi
+if [ "$TRY_LINK" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
+    printf '%s: --try-link pulses the reset line once per cell; pass --allow-reset\n' "$PROG" >&2
     exit 2
 fi
 
@@ -316,6 +353,7 @@ PROBE_RC=""
 PROBE_RAN=0
 MATRIX_OUTCOME=""
 WRITE_SHAPE_OUTCOME=""
+LINK_OUTCOME=""
 RESTORED=0
 RESTORE_RC=""
 RESTORE_NOTES=()
@@ -433,7 +471,7 @@ state_load() {
             EXTERNAL_BIND|MODULE_LOADED_BEFORE|MODULE_LOADED_BY_US|SPIDEV_PATH|SPIDEV_NAME|\
             CRS_SHA|CRS_METHOD|CONN_SPEED|CONN_MODE|CONN_BITS|CONN_IRQ|CONN_EDGE|\
             CONN_ACTIVE_LOW|CONN_RESET|IRQ_USED|PROBE_RAN|PROBE_RC|RESTORED|RUN_ID|READS|ROOT|\
-            TRY_MATRIX|TRY_WRITE_SHAPE|RESET_POLARITY|SETTLE_MS)
+            TRY_MATRIX|TRY_WRITE_SHAPE|TRY_LINK|RESET_POLARITY|SETTLE_MS|LINK_SETTLES)
                 # The key list above is closed, so assigning the variable by
                 # name cannot be influenced by the file's contents.
                 STATE_KEYS+=("$k"); STATE_VALS[$k]=$v
@@ -475,6 +513,8 @@ sync_state() {
     state_set ROOT "$ROOT"
     state_set TRY_MATRIX "$TRY_MATRIX"
     state_set TRY_WRITE_SHAPE "$TRY_WRITE_SHAPE"
+    state_set TRY_LINK "$TRY_LINK"
+    state_set LINK_SETTLES "$LINK_SETTLES"
     state_set RESET_POLARITY "$RESET_POLARITY"
     state_set SETTLE_MS "$SETTLE_MS"
     state_save
@@ -878,6 +918,18 @@ parse_crs() { # run the probe's acpi_info and interpret the keys
         note "write-shape mode  : reset polarity $RESET_POLARITY, settle ${SETTLE_MS} ms, edge ${CONN_EDGE:-rising} (pinned, not swept)"
         note "write-shape cells : selector bit0 0/1 x padding 0..4+phase x read layout/64; 0xA0 then 0xA1/0xC1; 400 ms/cell"
     fi
+    if [ "$TRY_LINK" = 1 ]; then
+        if [ -z "$CONN_IRQ" ] || [ "$NO_IRQ" = 1 ]; then
+            fail "--try-link needs the GpioInt line (--irq-pin N); the known-good edge is rising"
+            return 1
+        fi
+        if [ -z "$CONN_RESET" ]; then
+            fail "--try-link needs the GpioIo reset line (--reset-pin N)"
+            return 1
+        fi
+        note "link sweep        : reset polarity $RESET_POLARITY, edge ${CONN_EDGE:-rising} pinned; settles $LINK_SETTLES ms"
+        note "link cells        : SPI mode 0/1/2/3 x 1/4 MHz x each settle; 0xA0 7B, 0xC1 9B, 0xA1 64B per cell"
+    fi
     return 0
 }
 
@@ -885,8 +937,10 @@ parse_crs() { # run the probe's acpi_info and interpret the keys
 probe_args() { # mode(dry|real) -> words
     local mode=$1 out=""
     out="--spidev $(sq "${SPIDEV_PATH:-/dev/spidevN.M}")"
-    [ -n "$CONN_SPEED" ] && out+=" --speed $CONN_SPEED"
-    [ -n "$CONN_MODE" ] && out+=" --mode $CONN_MODE"
+    if [ "$TRY_LINK" != 1 ]; then
+        [ -n "$CONN_SPEED" ] && out+=" --speed $CONN_SPEED"
+        [ -n "$CONN_MODE" ] && out+=" --mode $CONN_MODE"
+    fi
     [ -n "$CONN_BITS" ] && out+=" --bits $CONN_BITS"
     out+=" --reset-polarity $RESET_POLARITY --settle-ms $SETTLE_MS"
     [ -n "$GPIO_BACKEND" ] && out+=" --gpio-backend $GPIO_BACKEND"
@@ -900,7 +954,8 @@ probe_args() { # mode(dry|real) -> words
     # gated by the probe's own allowlists and reset gate.
     [ "$TRY_MATRIX" = 1 ] && out+=" --try-matrix"
     [ "$TRY_WRITE_SHAPE" = 1 ] && out+=" --try-write-shape"
-    if [ "$mode" = dry ] && { [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; } && [ -n "$CONN_RESET" ]; then
+    [ "$TRY_LINK" = 1 ] && out+=" --try-link --link-settles $LINK_SETTLES"
+    if [ "$mode" = dry ] && { [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; } && [ -n "$CONN_RESET" ]; then
         # The dry run shows the reset line too; it never pulses it.
         out+=" --reset-gpio $CONN_RESET"
         [ "$IRQ_USED" != 1 ] && [ -n "$GPIO_CHIP" ] && out+=" --gpio-chip $GPIO_CHIP"
@@ -920,12 +975,15 @@ probe_args() { # mode(dry|real) -> words
         if [ "$TRY_WRITE_SHAPE" = 1 ]; then
             out+=" --write-shape-json $(sq "$T/write-shape.json")"
         fi
+        if [ "$TRY_LINK" = 1 ]; then
+            out+=" --link-json $(sq "$T/link.json")"
+        fi
     fi
     printf '%s' "$out"
 }
 
 probe_reads() { # the positional command list (empty in an experiment mode)
-    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; then
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; then
         return 0
     fi
     printf '%s' "$READS"
@@ -936,6 +994,8 @@ probe_reads_label() { # what the summary records as the read set
         printf 'matrix:0xA0/0xA1/0xC1'
     elif [ "$TRY_WRITE_SHAPE" = 1 ]; then
         printf 'write-shape:0xA0/0xA1/0xC1'
+    elif [ "$TRY_LINK" = 1 ]; then
+        printf 'link:0xA0/0xC1/0xA1'
     else
         printf '%s' "$READS"
     fi
@@ -976,6 +1036,10 @@ print_plan() {
     if [ "$TRY_WRITE_SHAPE" = 1 ]; then
         note "--try-write-shape: reset polarity $RESET_POLARITY, settle ${SETTLE_MS} ms, edge ${CONN_EDGE:-rising}"
         note "60 cells (selector bit0 x padding x read length; 0xA0 then 0xA1/0xC1); table -> write-shape.json"
+    fi
+    if [ "$TRY_LINK" = 1 ]; then
+        note "--try-link: SPI mode 0/1/2/3 x 1/4 MHz x settle $LINK_SETTLES ms"
+        note "$(( ${#LINK_SETTLE_VALUES[@]} * 8 )) cells; reset polarity $RESET_POLARITY and edge ${CONN_EDGE:-rising} pinned; 0xA0/0xC1/0xA1 per cell; table -> link.json"
     fi
     note "$(probe_command real)"
     printf ' 4. restore\n'
@@ -1573,7 +1637,7 @@ phase_dryrun() {
     fi
     printf '$ %s\n' "$(probe_command dry)"
     # shellcheck disable=SC2086
-    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; then
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; then
         python3 -I -B "$PROBE" $(probe_args dry) --dry-run >"$out" 2>&1 || rc=$?
     else
         python3 -I -B "$PROBE" $(probe_args dry) --dry-run $READS >"$out" 2>&1 || rc=$?
@@ -1598,6 +1662,10 @@ phase_probe() {
         note "write-shape queries: 0xA0, then 0xA1/0xC1 (allowlist enforced)"
         note "write-shape cells: selector bit0 0/1 x padding 0..4+phase x read layout/64; 400 ms/cell"
         note "electrical settings: reset $RESET_POLARITY, settle ${SETTLE_MS} ms, edge ${CONN_EDGE:-rising}"
+    elif [ "$TRY_LINK" = 1 ]; then
+        note "link queries: 0xA0 (7 B), 0xC1 (9 B), 0xA1 (64 B) per cell (allowlist enforced)"
+        note "link cells: SPI mode 0/1/2/3 x 1/4 MHz x settle $LINK_SETTLES ms; 400 ms/cell"
+        note "pinned settings: reset $RESET_POLARITY, edge ${CONN_EDGE:-rising}"
     else
         note "allowlisted reads: $READS"
     fi
@@ -1630,7 +1698,7 @@ phase_probe() {
     printf '$ %s\n' "$(probe_command real)"
     printf '%s\n' "$(probe_command real)" >>"$T/commands.txt"
     # shellcheck disable=SC2086
-    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; then
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; then
         python3 -I -B "$PROBE" $(probe_args real) >"$out" 2>&1 || rc=$?
     else
         python3 -I -B "$PROBE" $(probe_args real) $READS >"$out" 2>&1 || rc=$?
@@ -1659,6 +1727,16 @@ phase_probe() {
         else
             WRITE_SHAPE_OUTCOME="missing"
             fail "the probe did not write $T/write-shape.json"
+        fi
+    fi
+    if [ "$TRY_LINK" = 1 ]; then
+        if [ -s "$T/link.json" ]; then
+            LINK_OUTCOME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("outcome","unknown"))' "$T/link.json" 2>/dev/null || printf unknown)
+            journal answer link "outcome=${LINK_OUTCOME:-unknown}"
+            note "link outcome: ${LINK_OUTCOME:-unknown} (full table: link.json)"
+        else
+            LINK_OUTCOME="missing"
+            fail "the probe did not write $T/link.json"
         fi
     fi
     if [ "$rc" -ne 0 ]; then
@@ -1742,6 +1820,28 @@ compute_unknowns() {
                     ;;
                 *)
                     add_unknown "the matrix did not produce a readable outcome; see matrix.json in this transcript"
+                    ;;
+            esac
+        fi
+        if [ "$TRY_LINK" = 1 ]; then
+            case $LINK_OUTCOME in
+                plausible-fw)
+                    add_unknown "the link sweep found a plausible 0xA0 answer; repeat that mode/speed/settle in a normal read before trusting it"
+                    ;;
+                plausible-info)
+                    add_unknown "the link sweep found a plausible 0xC1 geometry but no plausible 0xA0; repeat that mode/speed/settle in a normal read and check the firmware query"
+                    ;;
+                byte-shift-detected)
+                    add_unknown "the link sweep found an answer that is the mode-0 answer shifted by one bit: the sampling edge (mode) is wrong, not the device; use the reported mode/speed/settle"
+                    ;;
+                all-malformed)
+                    add_unknown "the link sweep read bytes at every mode/speed/settle but none matched the recovered layouts; this points at the device not being initialised (reset/power) or an unknown answer frame, not at the link parameters"
+                    ;;
+                no-plausible-answer)
+                    add_unknown "the link sweep produced no protocol-plausible answer; see link.json for the per-cell bytes and verdicts"
+                    ;;
+                *)
+                    add_unknown "the link sweep did not produce a readable outcome; see link.json in this transcript"
                     ;;
             esac
         fi
@@ -1844,6 +1944,13 @@ write_summary() {
         else
             printf '  "write_shape": null,\n'
         fi
+        if [ -s "$T/link.json" ] && python3 -m json.tool "$T/link.json" >/dev/null 2>&1; then
+            printf '  "link": '
+            cat "$T/link.json"
+            printf ',\n'
+        else
+            printf '  "link": null,\n'
+        fi
         printf '  "restore": {"attempted": %s, "verified": %s, "exit": %s, "driver": %s, "override": %s, "notes": [' \
             "$([ "$RESTORED" = 1 ] && printf true || printf false)" \
             "$([ "$RESTORE_RC" = 0 ] && printf true || printf false)" \
@@ -1864,7 +1971,7 @@ write_summary() {
             printf '%s' "$(json_str "$u")"
         done
         printf '],\n'
-        printf '  "files": {"journal": "journal.tsv", "console": "session.log", "acpi_info": "acpi-info.txt", "crs": "fprt-crs.bin", "dry_run": "probe-dryrun.txt", "readonly": "probe-readonly.txt", "matrix": "matrix.json", "write_shape": "write-shape.json", "commands": "commands.txt"}\n'
+        printf '  "files": {"journal": "journal.tsv", "console": "session.log", "acpi_info": "acpi-info.txt", "crs": "fprt-crs.bin", "dry_run": "probe-dryrun.txt", "readonly": "probe-readonly.txt", "matrix": "matrix.json", "write_shape": "write-shape.json", "link": "link.json", "commands": "commands.txt"}\n'
         printf '}\n'
     } >"$f"
 
@@ -1889,6 +1996,7 @@ write_summary() {
         printf '# reads: %s (ran=%s exit=%s)\n' "$(probe_reads_label)" "$PROBE_RAN" "${PROBE_RC:-n/a}"
         [ "$TRY_MATRIX" = 1 ] && printf '# matrix: %s (matrix.json)\n' "${MATRIX_OUTCOME:-unknown}"
         [ "$TRY_WRITE_SHAPE" = 1 ] && printf '# write-shape: %s (write-shape.json)\n' "${WRITE_SHAPE_OUTCOME:-unknown}"
+        [ "$TRY_LINK" = 1 ] && printf '# link: %s (link.json)\n' "${LINK_OUTCOME:-unknown}"
         printf '# hand this directory back for analysis: summary.json + journal.tsv\n'
     } >"$T/README.txt" 2>/dev/null || true
     return 0
@@ -2146,6 +2254,9 @@ interactive_session() {
 
     if [ -f "$T/session.state" ]; then
         state_load "$T/session.state"
+        # A resumed run may carry a different --link-settles list than the
+        # command line default; recompute the derived array from the state.
+        IFS=, read -ra LINK_SETTLE_VALUES <<<"$LINK_SETTLES"
         if [ "$RESUME" = 1 ]; then
             if [ -n "$ROOT" ] && [ -d "$ROOT" ] && [ "$FIXTURE" != 1 ]; then
                 FIXTURE=1

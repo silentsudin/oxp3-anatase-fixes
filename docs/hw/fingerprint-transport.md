@@ -456,6 +456,15 @@ sudo python3 tools/fingerprint/oxp3-fp-probe.py --try-matrix \
     --spidev /dev/spidev0.0 --gpio 18 --gpio-chip gpiochip1 \
     --reset-gpio 16 --allow-reset --allow-writes \
     --matrix-json /tmp/oxp3-fp-matrix.json
+# the link sweep (mode x clock x settle) after a readable but implausible answer
+python3 tools/fingerprint/oxp3-fp-probe.py --try-link --dry-run \
+    --spidev /dev/spidev0.0 --gpio 18 --gpio-chip gpiochip1 \
+    --reset-gpio 16 --allow-reset --allow-writes
+sudo python3 tools/fingerprint/oxp3-fp-probe.py --try-link \
+    --spidev /dev/spidev0.0 --gpio 18 --gpio-chip gpiochip1 \
+    --reset-gpio 16 --allow-reset --allow-writes \
+    --reset-polarity active-high --irq-edge rising \
+    --link-settles 10,150 --link-json /tmp/oxp3-fp-link.json
 ```
 
 A real transfer requires **both** an explicit device path and `--allow-writes`
@@ -535,7 +544,7 @@ make -C tools/fingerprint syntax-real LIBFPRINT_SRC=/tmp/libfprint-1.94.9 \
 * `spi-test`: `test_spi: 225 checks, 0 failures` (gcc 16.2.1 in
   `localhost/oxp3-fixes-build:f45`).
 * `proto-test`: `ok: 324 checks, 10 vectors` (unchanged).
-* Python suite: `Ran 289 tests ... OK`.
+* Python suite: `Ran 388 tests ... OK`.
 * `syntax` (stub): OK; `syntax-real` against v1.94.9: `syntax-real: OK`
   (only `fp-enums.h`/`fpi-enums.h` empty placeholders, as the script documents).
 * `gpiod-syntax`: `OK (libgpiod v2)` with libgpiod-devel 2.3.1. The v1
@@ -892,6 +901,65 @@ short answers, non-zero lead bytes and a corrupt CRC). The probe defaults to
 the DLL-exact one-byte frame for comparison. Unit coverage is
 `tests/fingerprint/test_spi.py::TestReadFrame` and `TestReadAnswer`.
 
+## 8.10 The try-link sweep: mode x clock x settle
+
+After the 2026-11-09 real run the link answers deterministically (`0xA0` 7 B,
+`0xA1` 64 B, `0xC1` 9 B, one selector byte then N receive clocks), but the
+payload is implausible: project `0x7F50` and `0xC1` bytes `32 32 32 32 ...`
+(ASCII `"2222"` = `0x64 >> 1`). The three remaining explanations are the SPI
+sampling edge (mode), the clock (1 MHz vs the ACPI 4 MHz), and the settle after
+the reset pulse (10/150/300 ms). `--try-link` (runbook: `--try-link`) walks
+them in one bounded, read-only run with the reset polarity and IRQ edge pinned:
+
+* **mode 0, 1, 2, 3** - a fresh `SpiTransport` per cell, so the spidev node is
+  opened once with that mode set and closed again,
+* **1 MHz and 4 MHz**,
+* **10 ms and 150 ms** after the reset pulse, plus 300 ms with
+  `--link-settles 10,150,300`,
+
+for 2 x 2 x 4 = **16 cells** (24 with the optional settle). Every cell reads
+`0xA0` (7 B), `0xC1` (9 B) and `0xA1` (64 B) with the **DLL-exact read frame**
+of §8.9 (one selector byte, then N receive clocks; no lead, no padding), at a
+400 ms per-cell timeout. There is no early stop: the whole grid is the result.
+
+The console table and `link.json` have one row/record per cell with the mode,
+clock, settle, the three answers (0xA1 truncated to its first 16 bytes for the
+console; the full 64 bytes stay in JSON) and one verdict. The verdict rules, in
+per-cell precedence:
+
+| verdict | explicit rule |
+|---|---|
+| `plausible-fw` | `0xA0` project byte (layout `+1`) in `{1,2,3,4,6}`, version (`+3:u32`) not `0`/`0xFFFFFFFF`, state (`+0`) in `0x00..0x0f` |
+| `plausible-info` | `0xC1` width (`+4`) and height (`+6`) each `1..4096`, and `width*height` <= 1 MiB |
+| `byte-shift-detected` | a non-mode-0 answer equals the mode-0 answer of the **same speed/settle** sampled one bit earlier or later (`cand[i] = (ref[i]<<1) | (ref[i+1]>>7)` or the mirror, interior bytes only) |
+| `all-zeros` | every answer is `0x00` |
+| `all-0xff` | every answer is `0xFF` |
+| `timeout` | a read returned no bytes before its deadline |
+| `error` | the spidev/GPIO node could not be opened |
+| `malformed` | bytes came back but none of the above applies |
+
+Only `plausible-fw`/`plausible-info` are success (the probe exits 0); a
+`byte-shift-detected` sweep exits 1 but proves the edge was wrong. The
+interpretation is the one the owner needs:
+
+* **mode 0 all malformed + mode 3 plausible-fw/plausible-info** -> the sampling
+  edge was wrong; the device was answering on the other edge. Use that mode,
+  speed and settle in a normal read, then in the driver.
+* **all malformed (or all-zeros) at every mode/speed/settle** -> the link
+  parameters are not the problem. The module is not initialised (reset line or
+  polarity, power state) or it expects the interrupt before it answers; do not
+  keep sweeping modes.
+* **mode 0 plausible, mode 3 byte-shift** -> mode 0 is right; the shift at mode
+  3 is the expected mirror image and not a second candidate.
+* **plausible-info but no plausible-fw** -> the link works; `0xA0`'s answer
+  layout (or the command itself) still needs explaining.
+
+The sweep is strictly read-only: only `0xA0`/`0xC1`/`0xA1` can be sent,
+`SpiTransport` re-checks the read allowlist and the destructive
+opcode/selector gate, and the reset pulse needs `--allow-reset`.
+`link.json` is embedded in `summary.json` under `link`; the flag is forwarded
+by the runbook (the exact command is in `commands.txt`).
+
 ## 9. Next steps
 
 **If the goal is this unit (SPI-only, the realistic path).** This is the exact
@@ -992,6 +1060,10 @@ explanation and as the fallback if the script cannot run.
   settle and a rising edge, and normal reads now default to that
   (`--reset-polarity`, `--settle-ms`); `--try-matrix` (8.7) still sweeps the
   older hypotheses for a different unit;
+* the link parameters - `--try-link` (§8.10) sweeps mode x clock x settle
+  because the first readable answers were implausible (`0x7F50`, `0x32`
+  repeated). A `byte-shift-detected` cell names the sampling edge; an
+  all-malformed grid moves the suspicion to the device not being initialised;
 * the controller-side values (speed/mode/bits) and whether the PXA2xx PIO path
   with no DMA channels at 1 MHz behaves; and
 * what the `00 00 00` / `00 00` lead really is. The wire frame that lands the

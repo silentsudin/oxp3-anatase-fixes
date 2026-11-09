@@ -614,5 +614,338 @@ class TestProbeWriteShapeIntegration(unittest.TestCase):
             self.assertIn("write-shape", text)
 
 
+# ---------------------------------------------------------------------------
+# --try-link: link sweep planner, analysis, runner and probe wiring
+# ---------------------------------------------------------------------------
+
+class LinkFakeSession:
+    """A fake link transport: canned bytes per (mode, speed, settle, opcode)."""
+
+    def __init__(self, cell, answers, closed):
+        self.cell = cell
+        self.answers = answers
+        self.closed = closed
+
+    def read(self, opcode, read_len):
+        value = self.answers.get(
+            (self.cell.mode, self.cell.speed_hz, self.cell.settle_ms, opcode))
+        if value is None:
+            value = b"\x00" * read_len
+        if callable(value):
+            return value(opcode, read_len)
+        return matrix.ReadResult(bytes(value), irq="fired")
+
+    def close(self):
+        self.closed.append(self.cell.index)
+
+
+def run_link_fake(answers, cells=None, closed=None, timeout_ms=400):
+    cells = tuple(cells or matrix.plan_link())
+    closed = closed if closed is not None else []
+
+    def connect(cell):
+        return LinkFakeSession(cell, answers, closed)
+
+    return matrix.run_link(cells, connect=connect, timeout_ms=timeout_ms), closed
+
+
+class TestLinkPlanner(unittest.TestCase):
+    def test_default_sweep_is_16_cells_in_documented_order(self):
+        cells = matrix.plan_link()
+        self.assertEqual(len(cells), 16)
+        self.assertEqual([c.index for c in cells], list(range(1, 17)))
+        self.assertEqual([c.mode for c in cells[:4]], [0, 1, 2, 3])
+        self.assertEqual(cells[0].speed_hz, 1_000_000)
+        self.assertEqual(cells[0].settle_ms, 10)
+        self.assertEqual(cells[4].speed_hz, 4_000_000)
+        self.assertEqual(cells[8].settle_ms, 150)
+        self.assertEqual({c.mode for c in cells}, {0, 1, 2, 3})
+        self.assertEqual({c.speed_hz for c in cells}, {1_000_000, 4_000_000})
+        self.assertEqual({c.settle_ms for c in cells}, {10, 150})
+
+    def test_optional_300ms_settle_triples_the_grid(self):
+        cells = matrix.plan_link(settles_ms=(10, 150, 300))
+        self.assertEqual(len(cells), 24)
+        self.assertEqual({c.settle_ms for c in cells}, {10, 150, 300})
+
+    def test_planner_rejects_bad_dimensions(self):
+        with self.assertRaises(ValueError):
+            matrix.plan_link(modes=())
+        with self.assertRaises(ValueError):
+            matrix.plan_link(modes=(0, 4))
+        with self.assertRaises(ValueError):
+            matrix.plan_link(modes=(0, 0))
+        with self.assertRaises(ValueError):
+            matrix.plan_link(speeds_hz=())
+        with self.assertRaises(ValueError):
+            matrix.plan_link(speeds_hz=(0,))
+        with self.assertRaises(ValueError):
+            matrix.plan_link(settles_ms=())
+        with self.assertRaises(ValueError):
+            matrix.plan_link(settles_ms=(-1,))
+
+    def test_queries_are_the_dll_exact_layout_lengths(self):
+        self.assertEqual([(q.name, q.opcode, q.read_len)
+                          for q in matrix.LINK_QUERIES],
+                         [("fw", 0xA0, 7), ("info", 0xC1, 9),
+                          ("scheme", 0xA1, 64)])
+
+    def test_allowlist_refuses_anything_else(self):
+        self.assertEqual(matrix.LINK_ALLOWED_OPS, {0xA0, 0xA1, 0xC1})
+        for bad in (0x2D, 0xB3, 0xC0):
+            with self.assertRaises(matrix.MatrixRefused):
+                matrix.validate_link_queries(
+                    (matrix.MatrixQuery("bad", bad, 1, 1),))
+        with self.assertRaises(matrix.MatrixRefused):
+            matrix.analyze_link_answer(0xB0, b"\x00" * 7)
+        with self.assertRaises(matrix.MatrixRefused):
+            matrix.analyze_link_answer(0x2D, b"\x00")
+
+
+class TestLinkAnalysis(unittest.TestCase):
+    def test_plausible_firmware(self):
+        check = matrix.analyze_link_answer(0xA0, VALID_FW)
+        self.assertEqual(check.verdict, matrix.PLAUSIBLE_FW)
+        self.assertEqual(check.fields["project"], 2)
+        self.assertEqual(check.fields["version"], 0x04030201)
+
+    def test_zero_version_and_bad_state_are_not_plausible(self):
+        blank = bytes([0x00, 0x02, 0x00, 0, 0, 0, 0])
+        self.assertEqual(matrix.analyze_link_answer(0xA0, blank).verdict,
+                         matrix.MALFORMED)
+        bad_state = bytes([0xFF, 0x02, 0x00, 1, 2, 3, 4])
+        self.assertEqual(matrix.analyze_link_answer(0xA0, bad_state).verdict,
+                         matrix.MALFORMED)
+
+    def test_implausible_project_is_malformed(self):
+        observed = bytes([0xFF, 0x7F, 0x50, 0x03, 0, 0, 0])
+        check = matrix.analyze_link_answer(0xA0, observed)
+        self.assertEqual(check.verdict, matrix.MALFORMED)
+        self.assertIn("project", check.detail)
+
+    def test_plausible_sensor_info_and_absurd_geometry(self):
+        self.assertEqual(matrix.analyze_link_answer(0xC1, VALID_INFO).verdict,
+                         matrix.PLAUSIBLE_INFO)
+        absurd = bytes([0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0])
+        self.assertEqual(matrix.analyze_link_answer(0xC1, absurd).verdict,
+                         matrix.MALFORMED)
+        huge = bytes([0, 0, 0, 0, 0x00, 0x10, 0x00, 0x10, 0])  # 4096x4096
+        self.assertEqual(matrix.analyze_link_answer(0xC1, huge).verdict,
+                         matrix.MALFORMED)
+
+    def test_constant_and_empty_answers(self):
+        self.assertEqual(matrix.analyze_link_answer(0xA0, b"\x00" * 7).verdict,
+                         matrix.LINK_ZEROS)
+        self.assertEqual(matrix.analyze_link_answer(0xA0, b"\xff" * 7).verdict,
+                         matrix.LINK_ALL_FF)
+        self.assertEqual(matrix.analyze_link_answer(0xA0, b"").verdict,
+                         matrix.EMPTY)
+
+    def test_shift_detection_is_one_bit_and_not_degenerate(self):
+        reference = b"\x64" * 9
+        right = b"\x32" * 9
+        self.assertEqual(matrix._shifted_by_one(reference, right), "right")
+        left = bytes((((reference[i] << 1) | (reference[i + 1] >> 7)) & 0xFF)
+                     for i in range(8)) + b"\x00"
+        self.assertEqual(matrix._shifted_by_one(reference, left), "left")
+        self.assertIsNone(matrix._shifted_by_one(b"\x00" * 9, b"\x00" * 9))
+        self.assertIsNone(matrix._shifted_by_one(b"\xff" * 9, b"\x7f" * 9))
+        self.assertIsNone(matrix._shifted_by_one(reference, reference))
+        self.assertIsNone(matrix._shifted_by_one(b"\x64" * 9, b"\x55" * 9))
+
+
+class TestLinkRunner(unittest.TestCase):
+    def test_plausible_fw_at_a_non_default_mode(self):
+        answers = {(3, 1_000_000, 150, 0xA0): VALID_FW}
+        report, closed = run_link_fake(answers)
+        self.assertEqual(report.outcome, matrix.PLAUSIBLE_FW)
+        winning = [a for a in report.attempts
+                   if a.verdict.verdict == matrix.PLAUSIBLE_FW]
+        self.assertEqual(len(winning), 1)
+        self.assertEqual((winning[0].cell.mode, winning[0].cell.speed_hz,
+                          winning[0].cell.settle_ms), (3, 1_000_000, 150))
+        self.assertIn("PLAUSIBLE FW", report.verdict)
+        self.assertEqual(len(closed), 16)
+
+    def test_plausible_info_without_firmware(self):
+        answers = {(2, 4_000_000, 10, 0xA0):
+                       b"\x7f\x50\x03\x00\x00\x00\x00",
+                   (2, 4_000_000, 10, 0xC1): VALID_INFO}
+        report, _closed = run_link_fake(answers)
+        self.assertEqual(report.outcome, matrix.PLAUSIBLE_INFO)
+        self.assertIn("PLAUSIBLE INFO", report.verdict)
+
+    def test_byte_shift_between_mode_0_and_mode_3(self):
+        answers = {
+            (0, 1_000_000, 10, 0xC1): b"\x64" * 9,
+            (3, 1_000_000, 10, 0xC1): b"\x32" * 9,
+        }
+        report, _closed = run_link_fake(answers)
+        self.assertEqual(report.outcome, matrix.BYTE_SHIFT)
+        shifted = [a for a in report.attempts
+                   if a.verdict.verdict == matrix.BYTE_SHIFT]
+        self.assertEqual(len(shifted), 1)
+        self.assertEqual(shifted[0].cell.mode, 3)
+        self.assertEqual(shifted[0].shift["matches"][0]["direction"], "right")
+        self.assertIn("sampling edge is wrong", report.verdict)
+
+    def test_all_zeros_and_all_ff(self):
+        zeros, _ = run_link_fake({})
+        self.assertEqual(zeros.outcome, "no-plausible-answer")
+        self.assertTrue(all(a.verdict.verdict == matrix.LINK_ZEROS
+                            for a in zeros.attempts))
+        self.assertIn("all-zero", zeros.verdict)
+        all_ff = {(mode, speed, settle, query.opcode):
+                      b"\xff" * query.read_len
+                  for mode in matrix.LINK_MODES
+                  for speed in matrix.LINK_SPEEDS_HZ
+                  for settle in matrix.LINK_SETTLES_MS
+                  for query in matrix.LINK_QUERIES}
+        report, _ = run_link_fake(all_ff)
+        self.assertTrue(all(a.verdict.verdict == matrix.LINK_ALL_FF
+                            for a in report.attempts))
+        self.assertIn("0xFF", report.verdict)
+
+    def test_all_timeouts(self):
+        answers = {}
+        for mode in matrix.LINK_MODES:
+            for speed in matrix.LINK_SPEEDS_HZ:
+                for settle in matrix.LINK_SETTLES_MS:
+                    for query in matrix.LINK_QUERIES:
+                        answers[(mode, speed, settle, query.opcode)] = (
+                            lambda opcode, read_len: matrix.ReadResult(
+                                b"", "timeout: deadline", "none"))
+        report, _ = run_link_fake(answers)
+        self.assertTrue(all(a.verdict.verdict == matrix.LINK_TIMEOUT
+                            for a in report.attempts))
+        self.assertIn("timed out", report.verdict)
+
+    def test_all_malformed_reports_the_not_initialised_reading(self):
+        answers = {(mode, speed, settle, opcode): b"\x11\x22\x33\x44\x55\x66\x77"
+                   for mode in matrix.LINK_MODES
+                   for speed in matrix.LINK_SPEEDS_HZ
+                   for settle in matrix.LINK_SETTLES_MS
+                   for opcode in matrix.LINK_ALLOWED_OPS}
+        # Pad the bytes to the query length so analysis sees the full answer.
+        for key in list(answers):
+            opcode = key[3]
+            read_len = {0xA0: 7, 0xC1: 9, 0xA1: 64}[opcode]
+            answers[key] = (answers[key] * read_len)[:read_len]
+        report, _ = run_link_fake(answers)
+        self.assertEqual(report.outcome, "all-malformed")
+        self.assertIn("device not being initialised", report.verdict)
+
+    def test_json_is_complete_and_serialisable(self):
+        import json
+        report, _ = run_link_fake({(3, 1_000_000, 150, 0xA0): VALID_FW})
+        blob = json.dumps(report.to_dict())
+        data = json.loads(blob)
+        self.assertEqual(data["schema"], 1)
+        self.assertEqual((data["planned"], data["attempted"]), (16, 16))
+        self.assertEqual(data["outcome"], matrix.PLAUSIBLE_FW)
+        self.assertEqual(data["cells"][11]["mode"], 3)
+        self.assertEqual(data["cells"][11]["verdict"], matrix.PLAUSIBLE_FW)
+        self.assertEqual(data["cells"][0]["answers"]["fw"]["read_len"], 7)
+
+    def test_report_table_shows_mode_speed_settle_and_all_three_hex(self):
+        report, _ = run_link_fake({(0, 1_000_000, 10, 0xA0): VALID_FW,
+                                   (0, 1_000_000, 10, 0xC1): VALID_INFO,
+                                   (0, 1_000_000, 10, 0xA1):
+                                       bytes([4, 0, 1] + [0] * 61)})
+        table = "\n".join(report.render_table())
+        self.assertIn("mode", table)
+        self.assertIn("0xA0", table)
+        self.assertIn("0xC1", table)
+        self.assertIn("0xA1", table)
+        self.assertIn("plausible-fw", table)
+        self.assertIn("00 02 00 01 02 03 04", table)
+
+
+class TestSpiLinkSession(unittest.TestCase):
+    def test_without_a_reset_pin_it_fails_closed(self):
+        cell = matrix.plan_link()[0]
+        session = matrix.SpiLinkSession(cell, spidev_path="/dev/null")
+        result = session.read(0xA0, 7)
+        self.assertIn("error", result.error)
+        self.assertIn("reset", result.error)
+        self.assertEqual(result.data, b"")
+
+
+class TestProbeLinkIntegration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.probe = support.load_probe()
+
+    def run_probe(self, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = self.probe.main(argv)
+        return rc, out.getvalue()
+
+    def test_probe_link_dry_run_plans_16_cells_and_does_no_io(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "link.json")
+            rc, text = self.run_probe([
+                "--try-link", "--dry-run", "--spidev", "/dev/spidev0.0",
+                "--gpio", "18", "--gpio-chip", "gpiochip1",
+                "--reset-gpio", "16", "--allow-reset", "--allow-writes",
+                "--link-json", path])
+            self.assertEqual(rc, 0)
+            self.assertIn("link: 16 cells", text)
+            self.assertIn("mode=3", text)
+            self.assertIn("settle=150ms", text)
+            self.assertFalse(os.path.exists(path),
+                             "a dry run must not write the link JSON")
+
+    def test_probe_link_dry_run_accepts_the_optional_300ms_settle(self):
+        rc, text = self.run_probe([
+            "--try-link", "--dry-run", "--spidev", "/dev/spidev0.0",
+            "--link-settles", "10,150,300"])
+        self.assertEqual(rc, 0)
+        self.assertIn("link: 24 cells", text)
+        self.assertIn("settle=300ms", text)
+
+    def test_probe_refuses_command_names_in_link_mode(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main(["--try-link", "fw"])
+        self.assertEqual(rc, 2)
+
+    def test_probe_refuses_link_without_allow_reset(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main([
+                "--try-link", "--spidev", "/dev/spidev0.0", "--gpio", "18",
+                "--reset-gpio", "16", "--allow-writes"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--allow-reset", out.getvalue())
+
+    def test_probe_link_writes_the_table_even_when_every_cell_fails(self):
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            spidev = os.path.join(tmp, "spidev0.0")
+            open(spidev, "w").close()
+            path = os.path.join(tmp, "link.json")
+            rc, text = self.run_probe([
+                "--try-link", "--spidev", spidev, "--gpio", "18",
+                "--gpio-chip", os.path.join(tmp, "gpiochip1"),
+                "--reset-gpio", "16", "--allow-reset", "--allow-writes",
+                "--reset-polarity", "active-high", "--irq-edge", "rising",
+                "--link-json", path])
+            self.assertEqual(rc, 1)
+            self.assertTrue(os.path.exists(path))
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.assertEqual((data["planned"], data["attempted"]), (16, 16))
+            self.assertEqual(data["outcome"], "no-plausible-answer")
+            self.assertIn("link:", text)
+
+
 if __name__ == "__main__":
     unittest.main()
