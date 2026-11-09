@@ -88,6 +88,7 @@ components:
       summary: "Anatase's Mesa package rebuilt at the pinned main commit with patches/mesa (x86_64 + i686), same overlay"
       entrypoint: "./oxp3-fixes-fast.sh install"
     verify:
+      - id: gfx.gamescope
       - id: gfx.mesa
         expect: "the host driver prefix matches the recorded build"
       - id: gfx.working

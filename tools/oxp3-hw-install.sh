@@ -74,7 +74,7 @@ ORIG_ARGS=("$@")
 SUDO_SHIM_DIR=""
 
 # fixed component order: root-heavy first, user scope last
-ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio sched gfx hdr xmx mango decky)
+ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio sched gfx gamescope hdr xmx mango decky)
 
 say() { printf '\n== %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -86,7 +86,7 @@ usage() {
 
 Options:
   --all                     every component (volume sleep bluetooth power imu leds rgb audio decky)
-  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --sched --gfx --hdr --xmx --mango --decky
+  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --sched --gfx --gamescope --hdr --xmx --mango --decky
                             select components (repeatable; --all selects every one)
   --volume-daemon           with --volume: install the LEGACY oxp3-voltap daemon
                             (grabs an input device; with hhd running it only
@@ -827,9 +827,9 @@ comp_xmx_install() {
     # The host environment is written even before a game exists: the "session env
     # not set" state is what the wrapper sources, independent of a per-game shim.
     as_user_run "$repo/tools/xmx-write-env.sh" || warn "could not write ~/.config/xess-xmx/oxp3-env.sh"
-    # Without the session environment, games use the host Mesa and never load the
-    # XMX/CM driver; this is what puts the modified driver in the game's way.
-    as_user_run "$repo/tools/xmx-session.sh" install || warn "could not write the XMX session environment"
+    # Deliberately NOT a session-wide VK_ICD override: that would also put gamescope
+    # on the XMX/CM driver, which breaks PQ HDR composition. Per-game XMX goes through
+    # tools/xmx-run.sh (or the launch option it prints).
     if (( ${#appids[@]} == 0 )); then
         as_user_run "$tool" status | sed 's/^/  /'
         printf '  no Flatpak Steam Proton prefix exists yet, so there is no game shim to place.\n'
@@ -886,6 +886,30 @@ comp_mango_install() {
         printf '  patched MangoHud extracted; oxp3-mangohud-keep.service re-applies it on every boot\n'
     else
         warn "MangoHud extraction failed; see the output above"
+    fi
+}
+
+comp_gamescope_install() {
+    say "gamescope with the PQ HDR patch (AMOLED black-screen fix)"
+    local rel
+    rel=$(rpm -q --qf '%{RELEASE}\n' gamescope 2>/dev/null | head -1)
+    if [[ $rel == *oxp3* ]]; then
+        printf '  patched gamescope already installed (%s)\n' "$rel"
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        printf '  [dry-run] extract the cached gamescope oxp3 RPMs into the /usr overlay + enable oxp3-gamescope-keep.service\n'
+        return 0
+    fi
+    install -D -m0755 "$repo/files/oxp3-gamescope-keep.sh" "$PREFIX/usr/local/libexec/oxp3-gamescope-keep"
+    install -D -m0644 "$repo/files/oxp3-gamescope-keep.service" \
+        "$PREFIX/etc/systemd/system/oxp3-gamescope-keep.service"
+    systemctl daemon-reload
+    systemctl enable oxp3-gamescope-keep.service
+    if "$PREFIX/usr/local/libexec/oxp3-gamescope-keep"; then
+        printf '  patched gamescope installed; oxp3-gamescope-keep.service re-applies it on every boot\n'
+    else
+        warn "gamescope extraction failed"
     fi
 }
 
@@ -1380,7 +1404,7 @@ add_component() {
 
 while (( $# )); do
     case $1 in
-        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--sched|--gfx|--hdr|--xmx|--mango|--decky)
+        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--sched|--gfx|--gamescope|--hdr|--xmx|--mango|--decky)
             add_component "${1#--}"
             [[ $1 == --volume ]] && VOLUME_MODE=plugin ;;
         --volume-daemon)

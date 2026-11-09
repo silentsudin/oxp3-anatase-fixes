@@ -70,7 +70,7 @@ OK = "OK"
 WARN = "WARN"
 FAIL = "FAIL"
 
-COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "audio", "sched", "gfx", "hdr", "xmx", "mango", "decky")
+COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "audio", "sched", "gfx", "gamescope", "hdr", "xmx", "mango", "decky")
 ROOT_COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "sched", "gfx", "hdr", "mango", "decky")
 USER_COMPONENTS = ("leds", "rgb", "audio", "xmx")
 DAEMON_COMPONENTS = ("volume", "leds", "rgb", "power")
@@ -165,6 +165,11 @@ COMPONENT_FILES = {
         "{home}/.local/share/xess-xmx-release",
         "{home}/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so",
         "{home}/.config/xess-xmx",
+    ),
+    "gamescope": (
+        "/usr/bin/gamescope",
+        "/etc/systemd/system/oxp3-gamescope-keep.service",
+        "/usr/local/libexec/oxp3-gamescope-keep",
     ),
     "hdr": (
         "/usr/libexec/anatase-gamemode",

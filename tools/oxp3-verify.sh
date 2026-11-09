@@ -2073,6 +2073,18 @@ check_sleep() {
         fi
     fi
 
+    local gs_sha=/var/lib/oxp3-fixes/gamescope.sha256 gs_want gs_cur gs_rel
+    gs_rel=$(rpm -q --qf '%{RELEASE}\n' gamescope 2>/dev/null | head -1)
+    gs_want=$(cat "$gs_sha" 2>/dev/null | head -1)
+    gs_cur=$(sha256sum /usr/bin/gamescope 2>/dev/null | cut -d' ' -f1)
+    if [ -n "$gs_want" ] && [ "$gs_cur" = "$gs_want" ]; then
+        record gfx.gamescope graphics "gamescope PQ HDR build" PASS "patched build installed (recorded digest)" "$gs_want" ""
+    elif [ "${gs_rel}" != "${gs_rel#*oxp3}" ]; then
+        record gfx.gamescope graphics "gamescope PQ HDR build" PASS "patched build installed (release $gs_rel)" "" ""
+    else
+        record gfx.gamescope graphics "gamescope PQ HDR build" FAIL "stock gamescope (${gs_rel:-absent}) has no PQ HDR; Gamemode HDR is black or washed out" "expected the oxp3 build from patches/gamescope" "sudo tools/oxp3-hw-install.sh --gamescope ; docs/hw/hdr-vibrance.md"
+    fi
+
     local nv_n=/sys/class/nvme/nvme0 nv_lat nv_force
     if [ ! -d "$nv_n" ]; then
         record sleep.nvme sleep "NVMe power states allowed" SKIP "no NVMe controller present" "" ""
@@ -3603,7 +3615,7 @@ run_selftest() {
         decky.backend decky.dir decky.loaded decky.status \
         dsp.hdr dsp.gamemodehdr dsp.icc dsp.panel dsp.vibrance \
         fan.curvedup fan.savemode \
-        gfx.mesa gfx.working gfx.xe gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc \
+        gfx.mesa gfx.gamescope gfx.working gfx.xe gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc \
         gfx.xmx.icd gfx.xmx.kernels gfx.xmx.trace \
         hhd.busy hhd.grab hhd.unit \
         hid.access hid.node hid.rule \

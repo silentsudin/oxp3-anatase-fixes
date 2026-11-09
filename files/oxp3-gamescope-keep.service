@@ -1,0 +1,12 @@
+[Unit]
+Description=OXP3: install the patched gamescope (PQ HDR) into the writable /usr overlay
+After=local-fs.target
+Before=display-manager.service
+ConditionPathExists=/usr/local/libexec/oxp3-gamescope-keep
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-gamescope-keep
+
+[Install]
+WantedBy=multi-user.target
