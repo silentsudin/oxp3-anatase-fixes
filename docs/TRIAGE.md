@@ -81,7 +81,7 @@ FINDINGS               : one block per triggered rule: severity, rule id, confid
 ACTIONS                : deduplicated and ranked; each with why, severity, root needed
 RULES                  : how many evaluated/triggered/clear/unknown, plus the unknowns
 EVIDENCE GAPS          : what is missing and therefore what cannot be concluded
-notes                  : limits of the bundle (e.g. powerdevilrc not collected)
+notes                  : limits of the bundle (e.g. a missing session/power.txt)
 ```
 
 `--json` emits the same data as a stable document:
@@ -156,7 +156,7 @@ installation count.
 
 ## 3. Rule catalogue
 
-All 31 rules, `id` · severity · what it reads → what it concludes. `--list-rules` prints
+All 32 rules, `id` · severity · what it reads → what it concludes. `--list-rules` prints
 the same table from the code, so this section cannot drift for long.
 
 **Bluetooth** — the root cause is the initramfs, never the files.
@@ -172,7 +172,8 @@ the same table from the code, so this section cannot drift for long.
 
 | rule | sev | reads → conclusion |
 |---|---|---|
-| `power.power-key-poweroff` | critical | `sleep/sleep.txt` inhibitors, `udev/rules.txt`, `verify_json` → PowerDevil holds a `block` on `handle-*` and there is no logind policy ⇒ the power key's fallback is `poweroff`; with the drop-in present the KDE action decides instead (and `powerdevilrc` is **not** in the bundle — stated in the finding) |
+| `power.power-key-poweroff` | critical | `session/power.txt`, `sleep/sleep.txt` inhibitors, `udev/rules.txt`, `verify_json` → PowerDevil holds a `block` on `handle-*` and the recorded `PowerButtonAction` decides what the key does. No drop-in + `PowerButtonAction` ≠ Sleep (enum 1) ⇒ the key powers off / does nothing instead of sleeping (critical). Drop-in present + an explicit non-Sleep value ⇒ PowerDevil still wins the key event and overrides the logind policy (medium, explains the precedence). `PowerButtonAction` unset means PowerDevil's built-in default, which the bundle cannot read ⇒ `unknown`; artifact absent ⇒ `unknown` and the report says why |
+| `polkit.no-session-agent` | medium | `session/power.txt` → no `polkit-kde-authentication-agent-1` / `polkit-gnome-authentication-agent-1` is running ⇒ a Gamescope/Gamemode session has no agent at all, so a polkit action that needs an interactive decision (notably `login1.suspend` from a non-active seat) is denied instead of prompting; the shipped `49-oxp3-suspend.rules` is the non-interactive path |
 | `sleep.trigger-uninstalled` | high | `udev`, `verify_json`, `checklist` → no logind drop-in / polkit rule ⇒ no suspend path that works without a desktop session |
 | `sleep.logind-not-restarted` | high | `checklist` (`logind-restart`), `manifest`, `udev` → the drop-in is newer than logind's start ⇒ logind has not read it; restart it (cross-checked against the file evidence, so a contradictory checklist reports `unknown`) |
 | `sleep.no-attempt` | info/medium | `sleep`, `checklist`, `verify_json` → `success=0` ⇒ nothing asked the kernel to sleep; **not proof** that suspend is broken. `max_hw_sleep≈524 s` with `success=0` is stale; `journalctl -k` implies `-b`, so history needs `-b all` |
@@ -312,11 +313,18 @@ so a verdict cannot be satisfied by one file alone.
 | `volume-degraded` | `DEGRADED: … (EBUSY)` in this boot's unit journal | `volume.degraded-busy`, `volume` broken |
 | `missing-files` | a manifest and a checklist, nothing else | only `bundle.gaps`; every fix `unknown`; no rule says `clear` without its file |
 
+The four `session/power.txt` variants are distributed across these bundles:
+`preinstall` = PowerDevil owns the key, no logind drop-in, `PowerButtonAction=3` (critical)
+and no polkit agent; `sleep-never-triggered` = drop-in present but PowerDevil overrides it
+(medium, precedence); `healthy`/`bt-not-loaded`/`xmx-no-trace`/`audio-wedged`/
+`volume-degraded` = `PowerButtonAction=1` (Sleep) with the agent running (clear);
+`missing-files` = the artifact is absent (unknown, listed in `session_power`).
+
 Checks:
 
 ```sh
-tools/oxp3-triage.py --selftest                    # 258 assertions over the fixtures
-python3 -m unittest discover -s tests/unit -p 'test_triage.py' -q   # 37 unit tests
+tools/oxp3-triage.py --selftest                    # 273 assertions over the fixtures
+python3 -m unittest discover -s tests/unit -p 'test_triage.py' -q   # 43 unit tests
 tools/repo-test.sh --only triage                   # the suite in the repo runner
 ```
 
@@ -327,11 +335,14 @@ over-claiming, and that a bundle with no evidence produces `unknown` rather than
 
 ## 7. Open points
 
-* **`powerdevilrc` is not in the bundle.** The power-key/lid rule can see the logind
-  policy and the inhibitor, but not the KDE action (`PowerButtonAction`, `LidAction`,
-  `AutoSuspendAction`), so it states that limit instead of guessing. Adding
-  `~/.config/powerdevilrc` (and maybe `~/.config/kscreen/`) to the collector would close
-  it; that is a `oxp3_firstrun.py` change, deliberately not made here.
+* **`powerdevilrc` is now collected (closed 2026-11-09).** `session/power.txt` carries
+  the `kreadconfig6`/`kreadconfig5` values for `PowerButtonAction`, `LidAction`,
+  `AutoSuspend` and `AutoSuspendAction` (AC and Battery, flat and the Plasma 6 nested
+  `[AC][SuspendAndShutdown]` group), a ≤60-line redacted excerpt of the file, and the
+  session polkit-agent probe. The rule now cites the exact recorded value. The one
+  remaining limit is honest: an **unset** `PowerButtonAction` means PowerDevil's
+  built-in default, which is not in the file, so the rule stays `unknown` instead of
+  guessing what the KCM would show.
 * **No complete firstrun bundle was committed under `docs/state/` yet** — that directory
   currently holds the earlier loose snapshots (`verify-*.json`, `oxp3-status-*.json`,
   `snapshot-*.txt`), which the tool reads as a `state-dir`. The first `--collect` drop
@@ -343,9 +354,10 @@ over-claiming, and that a bundle with no evidence produces `unknown` rather than
   changes, the constant, [VALIDATION.md](VALIDATION.md) and the fixture must change
   together, otherwise the finding is wrong. That is intentional — it is how a
   behaviour change becomes visible.
-* **Session type is inferred.** The bundle does not record `XDG_SESSION_TYPE`, so the
-  report derives Wayland/KDE from the `kscreen-doctor` output and the user session bus,
-  and says `inferred`. The same collector change as `powerdevilrc` would make it exact.
+* **Session type is partly explicit now.** `session/power.txt` records logind's
+  `Type=wayland`/`x11`, which the summary uses when present; the *desktop* (KDE) is
+  still inferred from the `kscreen-doctor` output and the user session bus, and the
+  report says `inferred`.
 * **The hhd volume-rocker patch is only partly visible.** The rules can see
   `DEGRADED:` and the verifier's `vol.*` rows, but not hhd's own state; the "pick one
   path" conclusion stays a human decision (docs/hw/volume-buttons.md).

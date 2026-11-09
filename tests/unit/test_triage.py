@@ -66,7 +66,8 @@ class FixtureSetTest(unittest.TestCase):
         # The tool trusts the firstrun layout: if the collector changes a path, this
         # test fails instead of the triage silently going blind.
         for key in ("manifest", "verify_json", "status_json", "units_system", "udev",
-                    "firmware", "sleep", "audio", "xmx", "env", "journal_kernel"):
+                    "firmware", "sleep", "session_power", "audio", "xmx", "env",
+                    "journal_kernel"):
             rel = TRIAGE.ARTIFACTS[key][0]
             with self.subTest(artifact=key):
                 self.assertTrue(
@@ -98,6 +99,7 @@ class FindingsTest(unittest.TestCase):
                 "sleep.trigger-uninstalled", "bt.dracut-missing", "sleep.no-attempt",
                 "xmx.flatpak-helper", "xmx.trace-absent", "verify.not-installed",
                 "decky.not-installed", "power.profile-unsaved", "volume.not-installed",
+                "polkit.no-session-agent",
             ]),
         )
         states = fix_states(report)
@@ -429,6 +431,88 @@ class CliTest(unittest.TestCase):
         result = self.run_tool("--version")
         self.assertEqual(result.returncode, 0)
         self.assertIn("oxp3-triage", result.stdout)
+
+
+class SessionPowerTest(unittest.TestCase):
+    """session/power.txt: PowerDevil's recorded action decides the power key."""
+
+    def rule(self, report, rule_id):
+        return next(item for item in report["rules"] if item["id"] == rule_id)
+
+    def test_missing_artifact_is_unknown_not_guessed(self):
+        report = analyse_fixture("missing-files")
+        rule = self.rule(report, "power.power-key-poweroff")
+        self.assertEqual(rule["state"], "unknown")
+        self.assertFalse(rule["reads_present"]["session_power"])
+        self.assertIn("session/power.txt", rule["conclusion"])
+        self.assertNotIn("does not collect powerdevilrc", rule["conclusion"])
+
+    def test_healthy_power_policy_is_clear(self):
+        report = analyse_fixture("healthy")
+        rule = self.rule(report, "power.power-key-poweroff")
+        self.assertEqual(rule["state"], "clear")
+        self.assertTrue(rule["reads_present"]["session_power"])
+        self.assertIn("PowerButtonAction=1", rule["conclusion"])
+
+    def test_powerdevil_owns_key_without_dropin_is_critical(self):
+        report = analyse_fixture("preinstall")
+        finding = next(f for f in report["findings"]
+                       if f["rule"] == "power.power-key-poweroff")
+        self.assertEqual(finding["severity"], "critical")
+        self.assertIn("PowerButtonAction=3", finding["conclusion"])
+        self.assertIn("shuts the machine down", finding["conclusion"])
+        self.assertIn("no logind drop-in", finding["conclusion"])
+        files = {e["file"] for e in finding["evidence"]}
+        self.assertIn("session/power.txt", files)
+        self.assertIn("udev/rules.txt", files)
+        self.assertIn("sleep/sleep.txt", files)
+
+    def test_dropin_present_powerdevil_override_explains_precedence(self):
+        report = analyse_fixture("sleep-never-triggered")
+        finding = next(f for f in report["findings"]
+                       if f["rule"] == "power.power-key-poweroff")
+        self.assertEqual(finding["severity"], "medium")
+        self.assertIn("PowerButtonAction=3", finding["conclusion"])
+        self.assertIn("wins the event", finding["conclusion"])
+        self.assertIn("only governs a session where PowerDevil is not running",
+                      finding["conclusion"])
+
+    def test_no_session_polkit_agent_is_reported(self):
+        report = analyse_fixture("preinstall")
+        finding = next(f for f in report["findings"]
+                       if f["rule"] == "polkit.no-session-agent")
+        self.assertIn("Gamescope/Gamemode", finding["conclusion"])
+        self.assertTrue(any(e["file"] == "session/power.txt"
+                            for e in finding["evidence"]))
+        healthy = analyse_fixture("healthy")
+        rule = self.rule(healthy, "polkit.no-session-agent")
+        self.assertEqual(rule["state"], "clear")
+
+    def test_unset_power_button_action_stays_unknown(self):
+        # The real host records no PowerButtonAction, so PowerDevil's built-in
+        # default decides; the bundle must not turn that into a finding.
+        with tempfile.TemporaryDirectory(prefix="oxp3-triage-unset-") as tmp:
+            root = Path(tmp) / "bundle"
+            shutil.copytree(str(FIXTURES / "healthy"), str(root))
+            (root / "session" / "power.txt").write_text(
+                "# session/power.txt (PowerButtonAction unset)\n"
+                "== logind session facts\n\n"
+                "  Type=wayland\n"
+                "== KDE PowerDevil settings (powerdevilrc)\n\n"
+                "  AC.PowerButtonAction                   = (unset)\n"
+                "  AC.LidAction                           = (unset)\n"
+                "== ~/.config/powerdevilrc\n\n  exists  : no\n"
+                "== session polkit agent (Gamemode has none)\n\n"
+                "  session polkit agent: present\n")
+            bundle = TRIAGE.resolve_input(str(root))
+            try:
+                report = TRIAGE.analyse(bundle)
+            finally:
+                bundle.close()
+        rule = self.rule(report, "power.power-key-poweroff")
+        self.assertEqual(rule["state"], "unknown")
+        self.assertIn("built-in default", rule["conclusion"])
+        self.assertEqual(report["findings"], [])
 
 
 class KnowledgeTest(unittest.TestCase):

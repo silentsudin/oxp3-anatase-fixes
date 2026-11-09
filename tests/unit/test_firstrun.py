@@ -544,10 +544,10 @@ class FixtureCollectTest(unittest.TestCase):
         paths = self.relpaths(arts)
         for required in ("verify/verify.json", "status/status.json", "units/system.txt",
                          "units/user.txt", "udev/rules.txt", "firmware/bluetooth.txt",
-                         "power/power.txt", "sleep/sleep.txt", "audio/audio.txt",
-                         "display/display.txt", "gfx/xmx.txt", "decky/decky.txt",
-                         "system/environment.txt", "system/hardware.txt",
-                         "journal/kernel.txt"):
+                         "power/power.txt", "sleep/sleep.txt", "session/power.txt",
+                         "audio/audio.txt", "display/display.txt", "gfx/xmx.txt",
+                         "decky/decky.txt", "system/environment.txt",
+                         "system/hardware.txt", "journal/kernel.txt"):
             self.assertIn(required, paths)
 
     def test_missing_tools_become_missing_status_not_an_exception(self):
@@ -598,6 +598,73 @@ class FixtureCollectTest(unittest.TestCase):
         show = [cmd for cmd in self.runner.seen if cmd.startswith("systemctl show --no-pager")]
         self.assertTrue(show)
         self.assertNotIn("oxp3-audio-resume@.service", show[0])
+
+    def test_session_power_artifact_has_all_four_blocks(self):
+        self.ctx.available_tools = {"loginctl", "kreadconfig6", "pgrep", "systemctl"}
+        self.tree.write("home/.config/powerdevilrc",
+                        "[AC][SuspendAndShutdown]\nPowerButtonAction=1\n")
+        self.runner.responses = [
+            ("loginctl list-sessions", FR.CmdResult(
+                ["loginctl"], 0,
+                "SESSION  UID USER   SEAT  LEADER CLASS   TTY  IDLE SINCE\n"
+                "     42 1000 tester seat0 146697 user    tty7 no   -\n")),
+            ("loginctl show-session self", FR.CmdResult(
+                ["loginctl"], 1, "", "Caller does not belong to any known session.")),
+            ("loginctl show-session 42", FR.CmdResult(
+                ["loginctl"], 0,
+                "Type=wayland\nClass=user\nActive=yes\nState=active\nIdleHint=no\n")),
+            ("kreadconfig6 --file powerdevilrc --group AC --key PowerButtonAction",
+             FR.CmdResult(["kreadconfig6"], 0, "1\n")),
+            ("pgrep -af polkit-kde-authentication-agent-1", FR.CmdResult(
+                ["pgrep"], 0, "147061 /usr/libexec/kf6/polkit-kde-authentication-agent-1\n")),
+            ("pgrep -af polkit-gnome-authentication-agent-1",
+             FR.CmdResult(["pgrep"], 1, "")),
+        ]
+        arts = FR.collect_all(self.ctx, self.facts, self.opts)
+        art = next(a for a in arts if a.relpath == "session/power.txt")
+        self.assertEqual(art.status, "ok")
+        for needle in ("== logind session facts", "Type=wayland",
+                       "loginctl show-session 42",
+                       "== KDE PowerDevil settings", "AC.PowerButtonAction",
+                       "== ~/.config/powerdevilrc", "PowerButtonAction=1",
+                       "== session polkit agent", "session polkit agent: present"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, art.text)
+        # The excerpt is read from the invoking user's home, not the process CWD.
+        self.assertIn("--- begin ~/.config/powerdevilrc ---", art.text)
+
+    def test_session_power_artifact_is_redacted(self):
+        self.ctx.available_tools = {"loginctl", "pgrep", "systemctl"}
+        self.tree.write("home/.config/powerdevilrc",
+                        "[AC][SuspendAndShutdown]\nauto=1\n")
+        self.runner.responses = [
+            ("loginctl list-sessions", FR.CmdResult(
+                ["loginctl"], 0,
+                "SESSION UID USER SEAT LEADER CLASS TTY IDLE\n"
+                "42 1000 tester seat0 1 user tty2 no -\n")),
+            ("loginctl show-session self", FR.CmdResult(
+                ["loginctl"], 0, "Type=wayland\nClass=user\n")),
+            ("pgrep -af polkit-kde-authentication-agent-1",
+             FR.CmdResult(["pgrep"], 1, "")),
+            ("pgrep -af polkit-gnome-authentication-agent-1",
+             FR.CmdResult(["pgrep"], 1, "")),
+        ]
+        arts = FR.collect_all(self.ctx, self.facts, self.opts)
+        art = next(a for a in arts if a.relpath == "session/power.txt")
+        red = redactor(home=str(self.ctx.home))
+        FR.finalize_artifacts([art], FR.Limits(max_bytes=64 * 1024, max_lines=500), red)
+        self.assertNotIn("tester", art.text)
+        self.assertNotIn("box", art.text)
+        self.assertIn("<user>", art.text)
+        self.assertIn("session polkit agent: absent", art.text)
+
+    def test_session_power_degrades_when_tools_are_missing(self):
+        self.ctx.available_tools = {"systemctl"}
+        arts = FR.collect_all(self.ctx, self.facts, self.opts)
+        art = next(a for a in arts if a.relpath == "session/power.txt")
+        self.assertIn("unknown (tool missing: loginctl)", art.text)
+        self.assertIn("unknown (tool missing: kreadconfig6 and kreadconfig5)", art.text)
+        self.assertIn("unknown (tool missing: pgrep)", art.text)
 
     def test_env_subset_only_reports_graphics_variables(self):
         ctx = FR.Context(env={"VK_ICD_FILENAMES": "/x", "SECRET_TOKEN": "y", "PATH": "/bin"})

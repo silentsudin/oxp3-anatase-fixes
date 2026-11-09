@@ -27,6 +27,14 @@ MESA = "ec418f04e589965adeb26da96fb282915e3dfd7ab98b0d6eab69f9878f3578e9"
 XMX = "4b1d55ea9483417f3f1d0f5c2b7c1f1a4e8c9b0d2a6f3e5c7b9d1f3a5c7e9b0d"
 BAD_XMX = "dcc0f2c4a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c"
 
+# A live Plasma session: PowerDevil holds the handle-* block inhibitor, so logind
+# does not act on the key events and the PowerDevil action decides.
+POWERDEVIL_INHIBITOR = (
+    "PowerDevil       1000 <user> 147067 org_kde_powerde "
+    "handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch "
+    "KDE handles power events   block"
+)
+
 GROUP = {
     "vol.": "volume",
     "hid.": "leds",
@@ -608,6 +616,81 @@ def power(mem="balanced", saved=True):
     return "\n".join(lines) + "\n"
 
 
+def session_power(pba=None, lid=None, auto=None, auto_action=None,
+                  config_present=True, agent=True, logind=True):
+    """One session/power.txt variant.
+
+    ``pba``/``lid`` are PowerDevil action enums (0 nothing, 1 sleep, 2 hibernate,
+    3 shutdown, 4 lock, 8 logout); None means the key is not recorded, so
+    PowerDevil's built-in default applies. ``agent=None`` models pgrep missing.
+    """
+    lines = ["# Session power policy: logind, PowerDevil, session polkit agent",
+             "# status:  ok", "", "== logind session facts", ""]
+    if logind:
+        lines += [
+            "-- loginctl show-session self -p Type -p Class -p Active -p IdleHint -p State",
+            "  Type=wayland", "  Class=user", "  Active=yes", "  State=active",
+            "  IdleHint=no", "",
+            "-- loginctl list-sessions",
+            "  SESSION  UID USER  SEAT  LEADER CLASS   TTY  IDLE SINCE",
+            "       43 1000 <user> seat0 146697 user    tty7 no   -",
+            "",
+        ]
+    else:
+        lines += ["  unknown (tool missing: loginctl) - session facts not readable", ""]
+    lines += ["== KDE PowerDevil settings (powerdevilrc)", "",
+              "  tool: kreadconfig6",
+              "  file: powerdevilrc"]
+    values = {"PowerButtonAction": pba, "LidAction": lid,
+              "AutoSuspend": auto, "AutoSuspendAction": auto_action}
+    for group in ("AC", "Battery"):
+        for key in ("PowerButtonAction", "LidAction", "AutoSuspend", "AutoSuspendAction"):
+            value = values[key]
+            lines.append("  %-38s = %s" % ("%s.%s" % (group, key),
+                                           "(unset)" if value is None else value))
+    lines += ["  note: Plasma 6 stores these keys in [AC][SuspendAndShutdown] /",
+              "        [Battery][SuspendAndShutdown]; AutoSuspendAction is a timeout in",
+              "        seconds (0 = never), not an action.",
+              "  note: kreadconfig reads the config of the user this collector runs as;",
+              "        the excerpt below is from ~/.config/powerdevilrc.", "",
+              "== ~/.config/powerdevilrc", "",
+              "  path    : ~/.config/powerdevilrc"]
+    if config_present:
+        body = []
+        for group in ("AC", "Battery"):
+            recorded = [(key, value) for key, value in values.items() if value is not None]
+            if recorded:
+                body.append("[%s][SuspendAndShutdown]" % group)
+                body.extend("%s=%s" % (key, value) for key, value in recorded)
+        if not body:
+            body = ["[AC][SuspendAndShutdown]", "AutoSuspendAction=0"]
+        lines += ["  exists  : yes", "  excerpt : first %d line(s)" % len(body),
+                  "  --- begin ~/.config/powerdevilrc ---"]
+        lines.extend("    " + line for line in body)
+        lines.append("  --- end ~/.config/powerdevilrc ---")
+    else:
+        lines += ["  exists  : no",
+                  "  (PowerDevil has not written a config; its built-in defaults apply)"]
+    lines += ["", "== session polkit agent (Gamemode has none)", ""]
+    if agent is None:
+        lines += ["  unknown (tool missing: pgrep)",
+                  "  session polkit agent: unknown (tool missing: pgrep)"]
+    elif agent:
+        lines += [
+            "  polkit-kde-authentication-agent-1  : running (pid 147061)",
+            "      147061 /usr/libexec/kf6/polkit-kde-authentication-agent-1",
+            "  polkit-gnome-authentication-agent-1 : not running (pgrep exit 1)",
+            "  session polkit agent: present",
+        ]
+    else:
+        lines += [
+            "  polkit-kde-authentication-agent-1  : not running (pgrep exit 1)",
+            "  polkit-gnome-authentication-agent-1 : not running (pgrep exit 1)",
+            "  session polkit agent: absent",
+        ]
+    return "\n".join(lines) + "\n"
+
+
 def display(hdr="disabled"):
     return "\n".join([
         "== display-mode status (kscreen-doctor, ANSI stripped)", "",
@@ -735,7 +818,7 @@ def base_files(root, table, *, checklist_states, indicators, overall, counts,
                verify_exit, fw=None, sleep=None, audio_txt=None, xmx_txt=None,
                udev_txt=None, units_txt=None, journal_kernel=None, journal_units=None,
                env=None, power_txt=None, display_txt=None, decky_txt=None,
-               user_txt=None, hardware=True, uptime=42696.63):
+               user_txt=None, session_txt=None, hardware=True, uptime=42696.63):
     (root / "verify").mkdir(parents=True, exist_ok=True)
     (root / "status").mkdir(exist_ok=True)
     (root / "state").mkdir(exist_ok=True)
@@ -748,6 +831,7 @@ def base_files(root, table, *, checklist_states, indicators, overall, counts,
     (root / "display").mkdir(exist_ok=True)
     (root / "gfx").mkdir(exist_ok=True)
     (root / "decky").mkdir(exist_ok=True)
+    (root / "session").mkdir(exist_ok=True)
     (root / "system").mkdir(exist_ok=True)
     (root / "journal").mkdir(exist_ok=True)
     rows = checklist_rows(checklist_states)
@@ -804,8 +888,8 @@ def base_files(root, table, *, checklist_states, indicators, overall, counts,
     (root / "firmware/bluetooth.txt").write_text(fw if fw is not None else firmware(
         dracut=True))
     (root / "sleep/sleep.txt").write_text(
-        sleep if sleep is not None else sleep_txt(success=1, last_hw=8600000000,
-                                                  inhibitors=[]))
+        sleep if sleep is not None else sleep_txt(
+            success=1, last_hw=8600000000, inhibitors=[POWERDEVIL_INHIBITOR]))
     (root / "audio/audio.txt").write_text(
         audio_txt if audio_txt is not None else audio())
     (root / "display/display.txt").write_text(
@@ -823,6 +907,9 @@ def base_files(root, table, *, checklist_states, indicators, overall, counts,
         (root / "system/hardware.txt").unlink(missing_ok=True)
     (root / "power/power.txt").write_text(
         power_txt if power_txt is not None else power())
+    (root / "session/power.txt").write_text(
+        session_txt if session_txt is not None else session_power(
+            pba="1", lid="1", auto="false", auto_action="0", agent=True))
     (root / "journal/kernel.txt").write_text(kernel_journal(journal_kernel or []))
     (root / "journal/oxp3-units.txt").write_text(unit_journal(journal_units or []))
     (root / "journal/oxp3-user-units.txt").write_text(unit_journal([]))
@@ -900,6 +987,8 @@ def preinstall(root):
                decky_txt=decky(False),
                user_txt=user_units(homebtn=False, rgbd=False, bus=True),
                power_txt=power(saved=False),
+               session_txt=session_power(pba="3", lid="3", auto="false",
+                                         auto_action="0", agent=False),
                journal_kernel=["Nov 09 00:04:22.900000 <host> kernel: snd_sof: "
                                "sof_ipc4_widget_setup: ipc4: widget parse error",
                                "Nov 08 16:15:18.349280 <host> kernel: Bluetooth: hci0: "
@@ -997,6 +1086,8 @@ def sleep_never_triggered(root):
                udev_txt=udev({}, hwdb_present=True, logind_dropin=True, polkit=True,
                              dracut=True, power_json=True,
                              hwdb_mtime="2026-11-09T03:58:00Z"),
+               session_txt=session_power(pba="3", lid="3", auto="false",
+                                         auto_action="0", agent=True),
                sleep=sleep_txt(success=0, last_hw=0, inhibitors=[
                    "HandheldDaemon   0    root  6810   systemd-inhibit sleep       "
                    "Handheld Daemon: Restore HDMI-CEC state before sleep   delay",

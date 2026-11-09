@@ -1,0 +1,58 @@
+# Session power policy: logind, PowerDevil, session polkit agent
+# status:  ok
+
+== logind session facts
+
+-- loginctl show-session self -p Type -p Class -p Active -p IdleHint -p State
+  Type=wayland
+  Class=user
+  Active=yes
+  State=active
+  IdleHint=no
+
+-- loginctl list-sessions
+  SESSION  UID USER  SEAT  LEADER CLASS   TTY  IDLE SINCE
+       43 1000 <user> seat0 146697 user    tty7 no   -
+
+== KDE PowerDevil settings (powerdevilrc)
+
+  tool: kreadconfig6
+  file: powerdevilrc
+  AC.PowerButtonAction                   = 1
+  AC.LidAction                           = 1
+  AC.AutoSuspend                         = false
+  AC.AutoSuspendAction                   = 0
+  Battery.PowerButtonAction              = 1
+  Battery.LidAction                      = 1
+  Battery.AutoSuspend                    = false
+  Battery.AutoSuspendAction              = 0
+  note: Plasma 6 stores these keys in [AC][SuspendAndShutdown] /
+        [Battery][SuspendAndShutdown]; AutoSuspendAction is a timeout in
+        seconds (0 = never), not an action.
+  note: kreadconfig reads the config of the user this collector runs as;
+        the excerpt below is from ~/.config/powerdevilrc.
+
+== ~/.config/powerdevilrc
+
+  path    : ~/.config/powerdevilrc
+  exists  : yes
+  excerpt : first 10 line(s)
+  --- begin ~/.config/powerdevilrc ---
+    [AC][SuspendAndShutdown]
+    PowerButtonAction=1
+    LidAction=1
+    AutoSuspend=false
+    AutoSuspendAction=0
+    [Battery][SuspendAndShutdown]
+    PowerButtonAction=1
+    LidAction=1
+    AutoSuspend=false
+    AutoSuspendAction=0
+  --- end ~/.config/powerdevilrc ---
+
+== session polkit agent (Gamemode has none)
+
+  polkit-kde-authentication-agent-1  : running (pid 147061)
+      147061 /usr/libexec/kf6/polkit-kde-authentication-agent-1
+  polkit-gnome-authentication-agent-1 : not running (pgrep exit 1)
+  session polkit agent: present

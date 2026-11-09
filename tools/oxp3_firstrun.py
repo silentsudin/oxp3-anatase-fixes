@@ -144,6 +144,22 @@ KERNEL_JOURNAL_GREP = (
     "ucsi|i2c_hid|hid-generic"
 )
 
+# The KDE power keys this collector reads. PowerDevil 6 keeps them in the nested
+# KConfig group [AC][SuspendAndShutdown] / [Battery][SuspendAndShutdown], which a
+# flat --group AC read does not see (docs/hw/sleep-power.md 2.5 / R1). Both forms
+# are probed so the artifact is explicit about what KConfig returns.
+POWERDEVIL_GROUPS: Tuple[str, ...] = ("AC", "Battery")
+POWERDEVIL_SUBGROUP = "SuspendAndShutdown"
+POWERDEVIL_KEYS: Tuple[str, ...] = (
+    "PowerButtonAction", "LidAction", "AutoSuspend", "AutoSuspendAction",
+)
+# pgrep -a matches the (truncated) process name only; -f makes the full argv
+# searchable, which these long names need or the check is a silent false negative.
+POLKIT_AGENTS: Tuple[str, ...] = (
+    "polkit-kde-authentication-agent-1",
+    "polkit-gnome-authentication-agent-1",
+)
+
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -1254,6 +1270,191 @@ def _env_subset(env: Dict[str, str]) -> str:
     return "\n".join(rows) if rows else "(none of the graphics variables are set in this session)"
 
 
+def _clip(text: str, limit: int = 240) -> str:
+    """One bounded, ANSI-free line (a config value can be arbitrarily long)."""
+    text = strip_ansi(str(text)).rstrip()
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
+
+def _session_id_from_list(text: str) -> Optional[str]:
+    """Pick the desktop session id out of ``loginctl list-sessions`` output.
+
+    ``loginctl show-session self`` fails when the collector is not run from inside
+    the graphical session (a SSH/agent context), so the list is the fallback. The
+    columns are ID UID USER SEAT LEADER CLASS TTY ACTIVE [IDLE SINCE]; a "user"
+    class row on a seat is the seat session, a "manager" row is not.
+    """
+    fallback: Optional[str] = None
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 6 or not parts[0].isdigit():
+            continue
+        session_id, _uid, _user, seat, _leader, klass = parts[:6]
+        if klass != "user":
+            continue
+        if seat not in ("-", "seat0") and fallback is None:
+            fallback = session_id
+        if seat == "seat0":
+            return session_id
+    return fallback
+
+
+def _logind_session_dump(ctx: Context) -> List[str]:
+    """The logind facts that decide who acts on the power/suspend/lid keys."""
+    lines: List[str] = []
+    if not ctx.which("loginctl"):
+        lines += ["  unknown (tool missing: loginctl) - session facts not readable", ""]
+        return lines
+    props = ("Type", "Class", "Active", "IdleHint", "State")
+    prop_args = [arg for name in props for arg in ("-p", name)]
+    listed = ctx.run(["loginctl", "list-sessions"], 30)
+    shown = ctx.run(["loginctl", "show-session", "self", *prop_args], 30)
+    source = "self"
+    self_failure = ""
+    if not (shown.ok and shown.out.strip()):
+        self_failure = _clip(first_line(shown.err) or shown.reason() or "no output", 160)
+        session_id = _session_id_from_list(listed.out) if listed.ok else None
+        if session_id:
+            shown = ctx.run(["loginctl", "show-session", session_id, *prop_args], 30)
+            source = session_id
+    lines.append("-- loginctl show-session %s %s" % (
+        source, " ".join("-p " + name for name in props)))
+    if source != "self" and self_failure:
+        lines.append("  (self failed: %s; using the seat session from list-sessions)"
+                     % self_failure)
+    if shown.ok and shown.out.strip():
+        lines.extend("  " + _clip(line) for line in shown.out.splitlines() if line.strip())
+    else:
+        lines.append("  unknown (loginctl show-session self failed: %s)"
+                     % (self_failure or _clip(first_line(shown.err) or shown.reason()
+                                             or "no output", 160)))
+    lines += ["", "-- loginctl list-sessions"]
+    if listed.ok and listed.out.strip():
+        for line in listed.out.splitlines()[:25]:
+            lines.append("  " + _clip(line))
+        if len(listed.out.splitlines()) > 25:
+            lines.append("  ... (%d more session row(s) omitted)" % (len(listed.out.splitlines()) - 25))
+    else:
+        lines.append("  unknown (loginctl list-sessions failed: %s)"
+                     % (_clip(first_line(listed.err) or listed.reason() or "no output", 160)))
+    lines.append("")
+    return lines
+
+
+def _kde_power_dump(ctx: Context) -> List[str]:
+    """PowerDevil's configured power-key/lid values, read through kreadconfig."""
+    lines: List[str] = ["== KDE PowerDevil settings (powerdevilrc)", ""]
+    tool = next((name for name in ("kreadconfig6", "kreadconfig5") if ctx.which(name)), None)
+    if tool is None:
+        lines += [
+            "  unknown (tool missing: kreadconfig6 and kreadconfig5)",
+            "  (the powerdevilrc excerpt below is still authoritative for explicit values)",
+            "",
+        ]
+        return lines
+    others = [name for name in ("kreadconfig6", "kreadconfig5")
+              if name != tool and ctx.which(name)]
+    lines.append("  tool: %s%s" % (
+        tool, (" (fallback available: %s)" % others[0]) if others else ""))
+    lines.append("  file: powerdevilrc")
+    for group in POWERDEVIL_GROUPS:
+        for key in POWERDEVIL_KEYS:
+            argv = [tool, "--file", "powerdevilrc", "--group", group, "--key", key]
+            res = ctx.run(argv, 20)
+            value = _clip(strip_ansi(res.out).strip())
+            if not value:
+                value = "(unset)" if res.ok else "(unreadable: %s)" % (
+                    res.reason() or "no output")
+            lines.append("  %-38s = %s" % ("%s.%s" % (group, key), value))
+            # Plasma 6 nests the same keys one group deeper; the flat read above
+            # cannot see them, so probe the documented nested group too.
+            nested = ctx.run(
+                [tool, "--file", "powerdevilrc", "--group", group,
+                 "--group", POWERDEVIL_SUBGROUP, "--key", key], 20)
+            nested_value = _clip(strip_ansi(nested.out).strip()) if nested.ok else ""
+            if nested_value and nested_value != value:
+                lines.append("  %-38s = %s" % (
+                    "%s.%s.%s" % (group, POWERDEVIL_SUBGROUP, key), nested_value))
+    lines += [
+        "  note: Plasma 6 stores these keys in [AC][SuspendAndShutdown] /",
+        "        [Battery][SuspendAndShutdown]; AutoSuspendAction is a timeout in",
+        "        seconds (0 = never), not an action.",
+        "  note: kreadconfig reads the config of the user this collector runs as;",
+        "        the excerpt below is from ~/.config/powerdevilrc.",
+        "",
+    ]
+    return lines
+
+
+def _powerdevilrc_dump(ctx: Context) -> List[str]:
+    """A bounded excerpt of the KDE config the PowerDevil values come from."""
+    rel = ".config/powerdevilrc"
+    lines: List[str] = ["== ~/.config/powerdevilrc", ""]
+    lines.append("  path    : ~/" + rel)
+    try:
+        exists = ctx.hp(rel).exists()
+    except OSError:
+        exists = False
+    lines.append("  exists  : %s" % ("yes" if exists else "no"))
+    if not exists:
+        lines += [
+            "  (PowerDevil has not written a config; its built-in defaults apply)",
+            "",
+        ]
+        return lines
+    body = ctx.read_home(rel)
+    if body is None:
+        lines += ["  unreadable (permission denied)", ""]
+        return lines
+    excerpt = strip_ansi(body).splitlines()[:60]
+    lines.append("  excerpt : first %d line(s)" % len(excerpt))
+    lines.append("  --- begin ~/.config/powerdevilrc ---")
+    lines.extend("    " + _clip(line, 300) for line in excerpt)
+    lines.append("  --- end ~/.config/powerdevilrc ---")
+    lines.append("")
+    return lines
+
+
+def _polkit_agent_dump(ctx: Context) -> List[str]:
+    """Whether a session polkit agent can answer an authentication prompt.
+
+    A Gamemode/Gamescope session has none, so any polkit action that needs an
+    interactive decision (notably login1.suspend on a non-active seat) is denied
+    instead of prompting; the shipped polkit rule is the non-interactive path.
+    """
+    lines: List[str] = ["== session polkit agent (Gamemode has none)", ""]
+    if not ctx.which("pgrep"):
+        lines += [
+            "  unknown (tool missing: pgrep)",
+            "  session polkit agent: unknown (tool missing: pgrep)",
+            "",
+        ]
+        return lines
+    running: List[str] = []
+    failed = False
+    for pattern in POLKIT_AGENTS:
+        res = ctx.run(["pgrep", "-af", pattern], 15)
+        output = strip_ansi(res.out).strip()
+        if res.ok and output:
+            running.append(pattern)
+            rows = output.splitlines()[:5]
+            pid = rows[0].split()[0] if rows[0].split() else "?"
+            lines.append("  %-34s : running (pid %s)" % (pattern, pid))
+            lines.extend("      " + _clip(row) for row in rows)
+        else:
+            if res.rc not in (0, 1):
+                failed = True
+            lines.append("  %-34s : not running (pgrep exit %d)" % (pattern, res.rc))
+    if running:
+        lines.append("  session polkit agent: present")
+    elif failed:
+        lines.append("  session polkit agent: unknown (pgrep failed)")
+    else:
+        lines.append("  session polkit agent: absent")
+    lines.append("")
+    return lines
+
+
 def _powercap_dump(ctx: Context) -> List[str]:
     lines: List[str] = []
     base = ctx.sp("/sys/class/powercap")
@@ -1742,6 +1943,21 @@ def collect_all(ctx: Context, facts: Facts, opts: "Options") -> List[Artifact]:
     artifacts.append(Artifact("decky/decky.txt", "Decky plugin presence", "\n".join(decky_lines) + "\n",
                               priority=41))
 
+    # -- session / power key ------------------------------------------------
+    # The logind facts are cheap; the KDE half is the only place that records what
+    # PowerDevil will actually do with the power button and the lid (the sleep
+    # inhibitors prove it owns the events, not what it does with them).
+    session_lines = ["== logind session facts", ""]
+    session_lines += _logind_session_dump(ctx)
+    session_lines += _kde_power_dump(ctx)
+    session_lines += _powerdevilrc_dump(ctx)
+    session_lines += _polkit_agent_dump(ctx)
+    artifacts.append(Artifact(
+        "session/power.txt",
+        "logind session, PowerDevil power-key/lid policy, session polkit agent",
+        "\n".join(session_lines) + "\n", priority=45,
+    ))
+
     # -- journal ------------------------------------------------------------
     journal_specs = (
         ("journal/oxp3-units.txt", "journal for the oxp3 units",
@@ -2044,10 +2260,11 @@ def render_readme(
         "One read-only snapshot of the OneXPlayer 3 hardware fixes: the verifier, the",
         "status backend, unit states, udev/polkit/logind drop-ins, firmware presence and",
         "sha256 digests, power/battery/thermal state, suspend statistics and wake sources,",
-        "audio filter-chain state, HDR/ICC/vibrance state, the session's XMX environment,",
-        "the Decky plugin inventory, the kernel command line, lspci/lsusb, and bounded",
-        "journal slices for our units and for the bluetooth/suspend/audio/GPU kernel",
-        "messages.",
+        "the logind session and PowerDevil's power-key/lid policy (with a powerdevilrc",
+        "excerpt and the session polkit agent state), audio filter-chain state,",
+        "HDR/ICC/vibrance state, the session's XMX environment, the Decky plugin",
+        "inventory, the kernel command line, lspci/lsusb, and bounded journal slices for",
+        "our units and for the bluetooth/suspend/audio/GPU kernel messages.",
         "",
         "Nothing in the bundle was produced by writing to the system: the collector only",
         "reads files and runs read-only probes. No firmware blob, no binary and no vendor",
@@ -2069,6 +2286,7 @@ def render_readme(
         "  display/               HDR/ICC state, vibrance tooling",
         "  gfx/                   XMX session environment + driver hashes",
         "  decky/                 Decky plugin inventory",
+        "  session/               logind session, PowerDevil keys + powerdevilrc, polkit agent",
         "  system/                kernel, cmdline, DMI (serials redacted), lspci/lsusb",
         "  repo/                  repo-test --fast tail",
         "  journal/               bounded journal slices",
@@ -2105,7 +2323,8 @@ def render_readme(
         "------------------------------",
         "Start with MANIFEST.json: counts, checklist, and per-artifact status/limit info.",
         "Then verify/verify.json (the acceptance rows), units/system.txt (did the units",
-        "load), power/power.txt (live PL1/PL2/PL4) and journal/kernel.txt (the boot-level",
+        "load), power/power.txt (live PL1/PL2/PL4), session/power.txt (who owns the",
+        "power key and what PowerDevil is set to) and journal/kernel.txt (the boot-level",
         "story). docs/FIRSTRUN.md has the full reading order and the open points.",
         "",
     ]
@@ -2371,6 +2590,8 @@ def _selftest_bundle(checks: _Checker, root: Path) -> None:
     (repo / "docs" / "state").mkdir(parents=True, exist_ok=True)
     (home / ".config").mkdir(parents=True, exist_ok=True)
     (home / ".config" / "oxp3-rgb.toml").write_text("effect = 'wave'\n", encoding="utf-8")
+    (home / ".config" / "powerdevilrc").write_text(
+        "[AC][SuspendAndShutdown]\nAutoSuspendAction=0\n", encoding="utf-8")
 
     runner = StubRunner([
         ("systemctl show -p ActiveEnterTimestamp",
@@ -2429,6 +2650,17 @@ def _selftest_bundle(checks: _Checker, root: Path) -> None:
     checks.ok(any(a.relpath == "units/system.txt" for a in artifacts), "collection includes unit state")
     checks.ok(any(a.relpath == "journal/kernel.txt" for a in artifacts), "collection includes the kernel journal")
     checks.ok(any(a.status == "skipped" for a in artifacts), "collection records skipped optional data")
+    session = next((a for a in artifacts if a.relpath == "session/power.txt"), None)
+    checks.ok(session is not None, "collection includes the session power policy")
+    if session is not None:
+        checks.ok("== logind session facts" in session.text,
+                  "session artifact carries the logind session facts")
+        checks.ok("PowerButtonAction" in session.text,
+                  "session artifact carries the PowerDevil key values")
+        checks.ok("AutoSuspendAction=0" in session.text,
+                  "session artifact carries the powerdevilrc excerpt")
+        checks.ok("== session polkit agent" in session.text,
+                  "session artifact carries the polkit agent check")
 
     redactor = Redactor(build_literals(ctx.home, ctx.user, ctx.host))
     limits = Limits(max_bytes=200_000, max_lines=200)

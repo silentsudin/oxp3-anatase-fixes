@@ -86,6 +86,7 @@ ARTIFACTS: "OrderedDict[str, Tuple[str, Tuple[str, ...]]]" = OrderedDict(
         ("firmware", ("firmware/bluetooth.txt", ())),
         ("power", ("power/power.txt", ())),
         ("sleep", ("sleep/sleep.txt", ())),
+        ("session_power", ("session/power.txt", ())),
         ("audio", ("audio/audio.txt", ())),
         ("display", ("display/display.txt", ())),
         ("xmx", ("gfx/xmx.txt", ())),
@@ -665,6 +666,152 @@ def parse_inhibitors(bundle: Bundle) -> Optional[List[Dict[str, str]]]:
     return out
 
 
+def parse_session_power(bundle: Bundle) -> Optional[Dict[str, Any]]:
+    """logind session, PowerDevil values and the session polkit agent.
+
+    The collector writes the kreadconfig result twice (flat ``--group AC`` and the
+    nested ``[AC][SuspendAndShutdown]`` group Plasma 6 actually writes) and then a
+    bounded powerdevilrc excerpt. The excerpt is authoritative for explicit values,
+    because a flat KConfig read cannot see the nested group.
+    """
+    if not bundle.has("session_power"):
+        return None
+    out: Dict[str, Any] = {
+        "values": {},
+        "excerpt_groups": {},
+        "file_present": None,
+        "agent": None,
+        "agent_line": None,
+        "logind": {},
+        "logind_lines": {},
+    }
+    group: Optional[str] = None
+    in_excerpt = False
+    for number, line in enumerate(bundle.lines("session_power"), 1):
+        stripped = line.strip()
+        if stripped.startswith("--- begin ") and "powerdevilrc" in stripped:
+            in_excerpt = True
+            group = None
+            continue
+        if stripped.startswith("--- end ") and "powerdevilrc" in stripped:
+            in_excerpt = False
+            continue
+        if in_excerpt:
+            if stripped.startswith("[") and stripped.endswith("]"):
+                group = ".".join(re.findall(r"\[([^\]]+)\]", stripped))
+                out["excerpt_groups"].setdefault(group, {})
+            elif "=" in stripped and group:
+                key, value = stripped.split("=", 1)
+                out["excerpt_groups"][group][key.strip()] = (value.strip(), number)
+            continue
+        match = re.match(r"^\s+exists\s*:\s*(yes|no)\s*$", line)
+        if match:
+            out["file_present"] = match.group(1) == "yes"
+            continue
+        match = re.match(
+            r"^\s+(AC|Battery)\.(?:SuspendAndShutdown\.)?(\w+)\s+=\s+(.*?)\s*$", line)
+        if match:
+            name = "%s.%s" % (match.group(1), match.group(2))
+            out["values"][name] = {
+                "value": match.group(3).strip(),
+                "line": number,
+                "nested": "SuspendAndShutdown." in line.split("=")[0],
+            }
+            continue
+        match = re.match(r"^\s+session polkit agent:\s*(\w+)", line)
+        if match:
+            out["agent"] = match.group(1).lower()
+            out["agent_line"] = number
+            continue
+        match = re.match(r"^\s+(Type|Class|Active|IdleHint|State)=(\S+)", line)
+        if match:
+            out["logind"][match.group(1)] = match.group(2)
+            out["logind_lines"][match.group(1)] = number
+    return out
+
+
+POWERDEVIL_ENUM = {
+    "0": "nothing",
+    "1": "sleep",
+    "2": "hibernate",
+    "3": "shutdown",
+    "4": "lock",
+    "8": "logout",
+}
+POWERDEVIL_WORDS = (
+    ("hibernate", "hibernate"),
+    ("suspend", "sleep"),
+    ("sleep", "sleep"),
+    ("shutdown", "shutdown"),
+    ("poweroff", "shutdown"),
+    ("power off", "shutdown"),
+    ("shut down", "shutdown"),
+    ("nothing", "nothing"),
+    ("no action", "nothing"),
+    ("lock", "lock"),
+    ("logout", "logout"),
+    ("log out", "logout"),
+)
+
+
+def powerdevil_action_kind(raw: str) -> str:
+    """Classify a PowerDevil action value.
+
+    PowerDevil stores an enum integer (0 nothing, 1 sleep, 2 hibernate, 3 shutdown,
+    4 lock screen, 8 logout - docs/hw/sleep-power.md R1); an unset key means "use
+    PowerDevil's built-in default", which the bundle cannot read.
+    """
+    text = (raw or "").strip().lower()
+    if not text:
+        return "unset"
+    if text in POWERDEVIL_ENUM:
+        return POWERDEVIL_ENUM[text]
+    for word, kind in POWERDEVIL_WORDS:
+        if word in text:
+            return kind
+    return "unknown"
+
+
+def powerdevil_entry(
+    session: Optional[Dict[str, Any]], group: str, key: str
+) -> Optional[Dict[str, Any]]:
+    """Resolve one PowerDevil key: nested group, flat group, then the excerpt."""
+    if session is None:
+        return None
+    for name in ("%s.SuspendAndShutdown.%s" % (group, key), "%s.%s" % (group, key)):
+        entry = session["values"].get(name)
+        if entry and entry["value"] and not entry["value"].startswith("("):
+            return {"group": group, "key": key, "value": entry["value"],
+                    "line": entry["line"], "source": "kreadconfig"}
+    for name in ("%s.SuspendAndShutdown" % group, group):
+        hit = session["excerpt_groups"].get(name, {}).get(key)
+        if hit and hit[0]:
+            return {"group": group, "key": key, "value": hit[0],
+                    "line": hit[1], "source": "powerdevilrc excerpt"}
+    for name in ("%s.SuspendAndShutdown.%s" % (group, key), "%s.%s" % (group, key)):
+        entry = session["values"].get(name)
+        if entry and entry["value"].startswith("("):
+            return {"group": group, "key": key, "value": "",
+                    "line": entry["line"], "source": "kreadconfig %s" % entry["value"]}
+    return {"group": group, "key": key, "value": "", "line": None,
+            "source": "not recorded"}
+
+
+def powerdevil_effective(
+    session: Optional[Dict[str, Any]], key: str
+) -> Optional[Dict[str, Any]]:
+    """The AC value if explicitly set, else the Battery one, else AC's unset row."""
+    if session is None:
+        return None
+    ac = powerdevil_entry(session, "AC", key)
+    battery = powerdevil_entry(session, "Battery", key)
+    if ac and ac["value"]:
+        return ac
+    if battery and battery["value"]:
+        return battery
+    return ac or battery
+
+
 def parse_audio(bundle: Bundle) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "server": None,
@@ -819,6 +966,7 @@ class Facts:
     failed_units: List[str]
     suspend: Dict[str, Any]
     inhibitors: Optional[List[Dict[str, str]]]
+    session_power: Optional[Dict[str, Any]]
     audio: Dict[str, Any]
     xmx: Dict[str, Any]
     env: Dict[str, Any]
@@ -1141,70 +1289,237 @@ def bt_dracut_missing(f: Facts) -> Outcome:
 
 
 # -- Sleep / power key ------------------------------------------------------
+def _power_action_phrase(kind: str) -> str:
+    return {
+        "sleep": "suspends",
+        "hibernate": "hibernates (unavailable here: /sys/power/disk is [disabled])",
+        "shutdown": "shuts the machine down",
+        "nothing": "does nothing",
+        "lock": "locks the screen",
+        "logout": "logs out",
+        "unknown": "runs an action that is not Sleep",
+        "unset": "leaves the action to PowerDevil's built-in default",
+    }.get(kind, "does something else")
+
+
 @rule(
     "power.power-key-poweroff",
     "the power key would power the machine off instead of suspending",
     "critical",
     "sleep",
-    ("sleep", "udev", "verify_json"),
+    ("session_power", "sleep", "udev", "verify_json"),
 )
 def power_key_poweroff(f: Facts) -> Outcome:
-    inhibitors = f.inhibitors
-    dropin = _logind_dropin(f)
-    if inhibitors is None:
-        return Outcome("unknown", "no inhibitor list in the bundle (sleep audit missing)")
-    block = [row for row in inhibitors if row["mode"] == "block" and row["handles"]]
-    if not block:
-        return Outcome("clear", "no block inhibitor claims the power/suspend/lid keys")
-    if dropin is None:
-        return Outcome("unknown", "no logind drop-in evidence in the bundle")
+    session = f.session_power
+    if session is None:
+        return Outcome(
+            "unknown",
+            "session/power.txt is not in this bundle, so PowerDevil's effective "
+            "PowerButtonAction/LidAction cannot be read; the logind policy alone does not "
+            "decide the key while PowerDevil owns it. Collect again with "
+            "tools/oxp3-firstrun.sh --collect.",
+        )
+    if f.inhibitors is None:
+        return Outcome(
+            "unknown",
+            "session/power.txt is present, but sleep/sleep.txt has no inhibitor list, so "
+            "whether PowerDevil owns handle-power-key/handle-lid-switch is unknown.",
+        )
+    owners = [
+        row for row in f.inhibitors
+        if row["mode"] == "block" and row["handles"]
+        and "powerdevil" in row["who"].lower()
+    ]
     evidence: List[Evidence] = []
-    for row in block[:2]:
+    for row in owners[:1]:
         line = int(row.get("line") or 0)
         if line:
             evidence.append(f.bundle.evidence_line("sleep", line))
-    hit = f.bundle.first_line("udev", r"logind\.conf\.d/60-oxp3-sleep\.conf\s+(present|MISSING)")
-    if hit:
-        evidence.append(
-            f.bundle.evidence_line("udev", hit[0],
-                                   "logind policy: " + ("present" if dropin["present"] else "MISSING"))
+    dropin = _logind_dropin(f)
+    if dropin is None:
+        return Outcome(
+            "unknown",
+            "PowerDevil owns the keys, but there is no logind drop-in evidence in the bundle.",
         )
+    hit = f.bundle.first_line(
+        "udev", r"logind\.conf\.d/60-oxp3-sleep\.conf\s+(present|MISSING)")
+    if hit:
+        evidence.append(f.bundle.evidence_line(
+            "udev", hit[0],
+            "logind policy: " + ("present" if dropin["present"] else "MISSING")))
     check = f.check("sleep.trigger")
     if check is not None:
         evidence.append(f.ev_check("sleep.trigger"))
+
+    pba = powerdevil_effective(session, "PowerButtonAction")
+    lid = powerdevil_effective(session, "LidAction")
+    auto = powerdevil_effective(session, "AutoSuspend")
+    for entry in (pba, lid, auto):
+        if entry and entry.get("line"):
+            evidence.append(f.bundle.evidence_line(
+                "session_power", entry["line"],
+                "%s.%s = %s (%s)" % (entry["group"], entry["key"],
+                                     entry["value"] or "(unset)", entry["source"])))
+    pba_value = (pba or {}).get("value") or ""
+    lid_value = (lid or {}).get("value") or ""
+    auto_value = (auto or {}).get("value") or ""
+    pba_group = (pba or {}).get("group") or "AC"
+    lid_group = (lid or {}).get("group") or "AC"
+    pba_kind = powerdevil_action_kind(pba_value)
+    lid_kind = powerdevil_action_kind(lid_value)
+    parsed = (
+        "powerdevilrc: [%s] PowerButtonAction=%s (%s), [%s] LidAction=%s (%s), "
+        "AutoSuspend=%s" % (
+            pba_group, pba_value or "(unset)", pba_kind,
+            lid_group, lid_value or "(unset)", lid_kind,
+            auto_value or "(unset)",
+        )
+    )
+
+    if not owners:
+        return Outcome(
+            "unknown",
+            "PowerDevil does not hold a block inhibitor on handle-power-key/"
+            "handle-lid-switch in this bundle, so the KDE action is not what decides the "
+            "key; logind's own policy is covered by sleep.trigger-uninstalled. " + parsed,
+        )
+
     if dropin["present"]:
+        if pba_kind == "sleep":
+            return Outcome(
+                "clear",
+                "PowerDevil owns the key events and is explicitly set to Sleep, so the "
+                "power key suspends through PowerDevil; the logind drop-in "
+                "(HandlePowerKey=suspend) is the fallback for a session where PowerDevil is "
+                "not running. " + parsed,
+                evidence,
+            )
+        if pba_kind == "unset":
+            return Outcome(
+                "unknown",
+                "PowerDevil owns the key events and the logind drop-in is present, but "
+                "PowerButtonAction is not recorded in powerdevilrc, so PowerDevil's "
+                "built-in default decides the key and the bundle cannot read it. " + parsed,
+                evidence,
+            )
         return Outcome(
             "triggered",
-            "PowerDevil holds a block inhibitor for handle-power-key/handle-suspend-key/"
-            "handle-lid-switch, so logind does not act on those events while Plasma runs. "
-            "The drop-in is present, but the KDE action is what decides: with no explicit "
-            "PowerButtonAction/LidAction in powerdevilrc the key follows PowerDevil's "
-            "default, not logind's. This bundle does not collect powerdevilrc, so the "
-            "effective action cannot be read here.",
+            "PowerDevil owns handle-power-key/handle-suspend-key/handle-lid-switch with a "
+            "block inhibitor and powerdevilrc sets PowerButtonAction=%s, so on the KDE "
+            "desktop PowerDevil wins the event and the power key %s instead of "
+            "suspending; the logind drop-in (HandlePowerKey=suspend) is present but only "
+            "governs a session where PowerDevil is not running (console, Gamescope-only). "
+            "LidAction=%s (%s)." % (
+                pba_value or "(unset)", _power_action_phrase(pba_kind),
+                lid_value or "(unset)", lid_kind),
             evidence,
-            [Action("kreadconfig6 --file powerdevilrc --group AC --key PowerButtonAction",
-                    "read the effective KDE action (empty = KDE default)", privileged=False),
-             Action("System Settings > Power Management > Energy Saving: set 'When power "
-                    "button pressed' = Sleep and 'When laptop lid closed' = Sleep (AC and "
-                    "Battery)", "the KCM is the authoritative path for a key PowerDevil owns",
+            [Action(
+                "System Settings > Power Management > Energy Saving: set 'When power "
+                "button pressed' = Sleep and 'When laptop lid closed' = Sleep (AC and "
+                "Battery)",
+                "PowerDevil owns the key event, so the KCM is what decides it",
+                privileged=False),
+             Action("kreadconfig6 --file powerdevilrc --group AC --key PowerButtonAction",
+                    "read the effective KDE action back (empty = KDE default)",
                     privileged=False)],
             severity="medium",
         )
+
+    if pba_kind == "sleep":
+        return Outcome(
+            "clear",
+            "PowerDevil owns the key events and is explicitly set to Sleep, so the power "
+            "key suspends while Plasma runs. There is no logind drop-in, so a session "
+            "without PowerDevil still falls back to logind's compiled "
+            "HandlePowerKey=poweroff; that missing policy is sleep.trigger-uninstalled's "
+            "finding. " + parsed,
+            evidence,
+        )
+    if pba_kind == "unset":
+        return Outcome(
+            "unknown",
+            "PowerDevil owns the key events and there is no logind drop-in, but "
+            "PowerButtonAction is not recorded in powerdevilrc, so the bundle cannot tell "
+            "whether the key sleeps, powers off or does nothing (PowerDevil's built-in "
+            "default applies). The missing logind policy is sleep.trigger-uninstalled's "
+            "finding. " + parsed,
+            evidence,
+        )
     return Outcome(
         "triggered",
-        "PowerDevil claims handle-power-key/handle-suspend-key/handle-lid-switch with a "
-        "block inhibitor, and there is no logind drop-in either: every path that would "
-        "turn the key or the lid into a suspend is unowned, and logind's built-in default "
-        "for HandlePowerKey is poweroff. AutoSuspendAction/LidAction cannot be checked - "
-        "powerdevilrc is not part of the bundle.",
+        "There is no logind drop-in and PowerDevil owns handle-power-key with a block "
+        "inhibitor, and powerdevilrc sets PowerButtonAction=%s: the power key %s instead "
+        "of suspending. With PowerDevil gone (console, Gamescope-only, a rescue session) "
+        "logind's compiled default for HandlePowerKey is poweroff, so the same key shuts "
+        "the machine down. LidAction=%s (%s), AutoSuspend=%s." % (
+            pba_value or "(unset)", _power_action_phrase(pba_kind),
+            lid_value or "(unset)", lid_kind, auto_value or "(unset)"),
         evidence,
-        [Action("sudo tools/oxp3-hw-install.sh --sleep",
-                "installs the logind drop-in (HandlePowerKey=suspend) and the polkit rule"),
-         Action("sudo systemctl restart systemd-logind", "logind reads the drop-in at start"),
-         Action("System Settings > Power Management > Energy Saving: set 'When power button "
-                "pressed' = Sleep and 'When laptop lid closed' = Sleep (AC and Battery)",
-                "while PowerDevil runs it wins the key event, so both halves must agree",
-                privileged=False)],
+        [Action(
+            "System Settings > Power Management > Energy Saving: set 'When power button "
+            "pressed' = Sleep (AC and Battery) and 'When laptop lid closed' = Sleep",
+            "PowerDevil owns the key event, so the KCM is authoritative",
+            privileged=False),
+         Action("kreadconfig6 --file powerdevilrc --group AC --key PowerButtonAction",
+                "read the effective KDE action back (empty = KDE default)",
+                privileged=False),
+         Action("sudo tools/oxp3-hw-install.sh --sleep",
+                "installs the logind drop-in (HandlePowerKey=suspend) and the polkit rule "
+                "for a session without PowerDevil"),
+         Action("sudo systemctl restart systemd-logind", "logind reads the drop-in at start")],
+    )
+
+
+@rule(
+    "polkit.no-session-agent",
+    "no session polkit agent can answer an authentication prompt",
+    "medium",
+    "sleep",
+    ("session_power",),
+)
+def polkit_no_session_agent(f: Facts) -> Outcome:
+    session = f.session_power
+    if session is None or not session.get("agent"):
+        return Outcome(
+            "unknown",
+            "the session polkit agent state is not recorded in the bundle "
+            "(session/power.txt absent or without the pgrep probe).",
+        )
+    state = session["agent"]
+    line = session.get("agent_line")
+    evidence = [f.bundle.evidence_line("session_power", line)] if line else []
+    if state == "present":
+        return Outcome(
+            "clear",
+            "a session polkit authentication agent is running, so an interactive prompt "
+            "is possible on the desktop. A Gamescope/Gamemode session still has no agent "
+            "of its own; there the shipped polkit rule is the non-interactive path.",
+            evidence,
+        )
+    if state != "absent":
+        return Outcome(
+            "unknown",
+            "the session polkit agent state is %r, not a clear present/absent result."
+            % state,
+            evidence,
+        )
+    return Outcome(
+        "triggered",
+        "no session polkit authentication agent is running (pgrep found neither "
+        "polkit-kde-authentication-agent-1 nor polkit-gnome-authentication-agent-1). "
+        "In a Gamescope/Gamemode session there is no agent at all, so a polkit action "
+        "that needs an interactive decision - including login1.suspend when the request "
+        "is not from the active seat - is denied instead of prompting. That is why the "
+        "shipped 49-oxp3-suspend.rules must grant the wheel group without a prompt.",
+        evidence,
+        [Action("pkcheck --action-id org.freedesktop.login1.suspend --process $$",
+                "show which polkit decision applies to this session", privileged=False),
+         Action("systemctl --user status plasma-polkit-agent",
+                "on Plasma this user unit is the session agent; start it if it is not "
+                "running", privileged=False),
+         Action("sudo tools/oxp3-hw-install.sh --sleep",
+                "installs the polkit rule that permits wheel without a prompt (the "
+                "Gamemode path)")],
     )
 
 
@@ -2337,6 +2652,7 @@ def build_facts(bundle: Bundle) -> Facts:
         failed_units=parse_failed_units(bundle),
         suspend=parse_suspend(bundle),
         inhibitors=parse_inhibitors(bundle),
+        session_power=parse_session_power(bundle),
         audio=parse_audio(bundle),
         xmx=parse_xmx(bundle),
         env=env,
@@ -2592,6 +2908,10 @@ def session_summary(facts: Facts) -> Dict[str, Any]:
                 session_type = value.strip().lower()
             elif name in ("WAYLAND_DISPLAY", "DISPLAY") and session_type == "unknown":
                 session_type = "wayland" if name == "WAYLAND_DISPLAY" else "x11"
+    logind_type = (facts.session_power or {}).get("logind", {}).get("Type", "")
+    if session_type == "unknown" and logind_type in ("wayland", "x11", "mir"):
+        session_type = logind_type
+        sources.append("session/power.txt (logind Type=%s)" % logind_type)
     display_text = facts.bundle.text("display") or ""
     if "kscreen" in display_text.lower() or "connected outputs" in display_text.lower():
         desktop = "KDE Plasma (kscreen output)"
@@ -2763,10 +3083,26 @@ def build_notes(facts: Facts, findings: Sequence[Dict[str, Any]]) -> List[str]:
             "no rule fired: every rule whose evidence was present evaluated to clear."
         )
     if "power.power-key-poweroff" in triggered:
+        if facts.session_power is not None:
+            pba = powerdevil_effective(facts.session_power, "PowerButtonAction") or {}
+            lid = powerdevil_effective(facts.session_power, "LidAction") or {}
+            notes.append(
+                "session/power.txt was read: PowerDevil PowerButtonAction=%s, LidAction=%s "
+                "(the finding cites those lines)."
+                % (pba.get("value") or "(unset)", lid.get("value") or "(unset)")
+            )
+        else:
+            notes.append(
+                "session/power.txt is not in the bundle, so the effective KDE "
+                "power-key/lid action could not be read; the finding is based on the "
+                "inhibitor + logind policy only. Re-collect with "
+                "tools/oxp3-firstrun.sh --collect to include it."
+            )
+    if "polkit.no-session-agent" in triggered:
         notes.append(
-            "powerdevilrc is not part of the bundle, so the effective KDE power-key/lid "
-            "action could not be read; the finding is based on the inhibitor + logind "
-            "policy only (open point)."
+            "no session polkit authentication agent was found; in a Gamescope/Gamemode "
+            "session that is expected, and the shipped polkit rule is the only path that "
+            "does not need an interactive prompt."
         )
     if facts.verify is not None and not facts.verify.get("checks"):
         notes.append("verify/verify.json is present but carries no checks (unparsable?).")
@@ -2934,7 +3270,7 @@ EXPECTATIONS: Tuple[Tuple[str, Tuple[str, ...], Dict[str, str]], ...] = (
         ("bt.initramfs-stale", "power.power-key-poweroff", "sleep.trigger-uninstalled",
          "bt.dracut-missing", "sleep.no-attempt", "xmx.flatpak-helper", "xmx.trace-absent",
          "verify.not-installed", "decky.not-installed", "power.profile-unsaved",
-         "volume.not-installed"),
+         "volume.not-installed", "polkit.no-session-agent"),
         {"volume": "not-installed", "leds": "not-installed", "rgb": "not-installed",
          "daemons": "not-installed", "sleep": "not-installed", "power": "partial",
          "battery": "ok", "audio": "ok", "display": "ok", "graphics": "ok",

@@ -42,5 +42,6 @@ platform_profile: balanced
 
 == suspend inhibitors
   WHO              UID  USER  PID    COMM            WHAT                                                                       WHY                                                        MODE
+  PowerDevil       1000 <user> 147067 org_kde_powerde handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch KDE handles power events   block
 
-  0 inhibitors listed.
+  1 inhibitors listed.

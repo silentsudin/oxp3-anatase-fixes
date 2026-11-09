@@ -10,8 +10,8 @@ installed. It answers two questions in a single shot:
    with the live state of each step (and the exact fix command for the ones that are
    still open).
 2. *What evidence does a later session need?* — `--collect` writes a redacted bundle
-   (verifier + status + unit/udev/firmware/power/sleep/audio/display/XMX/decky state +
-   bounded journals) that can be handed back as-is, with no further round trips.
+   (verifier + status + unit/udev/firmware/power/sleep/session/audio/display/XMX/decky
+   state + bounded journals) that can be handed back as-is, with no further round trips.
 
 The tool is **strictly read-only**. It never writes outside its own bundle directory,
 never starts/stops/restarts a unit, never touches udev, sysfs, the EC or the initramfs,
@@ -102,6 +102,7 @@ Default output: `docs/state/firstrun-<YYYY-MM-DDTHHMMZ>/` (git-ignored). Overrid
 | `firmware/bluetooth.txt` | the two pinned Bluetooth firmware files as **path + size + sha256 only**, module state, `hci0`, the dracut drop-in body |
 | `power/power.txt` | platform profile + choices, every RAPL zone (MSR + MMIO constraints, tau, energy), battery/AC fields, thermals, `hwmon` fan state, the saved `power.json` |
 | `sleep/sleep.txt` | `mem_sleep`/`state`/`disk`, all `suspend_stats` counters, enabled ACPI wake sources, `/sys/class/wakeup` counts, the repo's read-only sleep audit |
+| `session/power.txt` | `loginctl show-session self` (fallback: the seat session id) for `Type`/`Class`/`Active`/`IdleHint`/`State`, `loginctl list-sessions`, the PowerDevil `PowerButtonAction`/`LidAction`/`AutoSuspend`/`AutoSuspendAction` values for AC and Battery read with `kreadconfig6` (and the Plasma 6 nested `[AC][SuspendAndShutdown]` group), a bounded ≤60-line `~/.config/powerdevilrc` excerpt, and whether a session polkit agent (`polkit-kde-authentication-agent-1` / `polkit-gnome-authentication-agent-1`) is running |
 | `audio/audio.txt` | ALSA/SOF cards, `pactl info`/sinks/default sink, filter-chain modules, the EQ drop-in (hash + body), audio user units, PipeWire/WirePlumber versions |
 | `display/display.txt` | `display-mode.sh status` (ANSI stripped) and `vibrance.sh status`, ICC profile directories |
 | `gfx/xmx.txt` | the session's graphics environment (allowlisted variables), sha256 of the host/XMX drivers, per-game ICD files, kernel-cache inventory, IGC `ocloc` (path + hash, not executed), Steam Flatpak overrides |
@@ -209,9 +210,11 @@ finding ([TRIAGE.md](TRIAGE.md)). Read the rest of this section when the triage 
    log on this boot (resume, hotplug, backoff, real fd)?
 5. `power/power.txt` — live PL1/PL2/PL4 on both RAPL zones, battery limit/behaviour,
    fan/thermal state; compare with the saved `power.json` body in the same file.
-6. `sleep/sleep.txt` + `journal/kernel.txt` — `suspend_stats`, armed wake sources and the
-   `PM:`/`s2idle` story. `success=0` means the suspend test had not happened yet, not that
-   suspend is broken.
+6. `sleep/sleep.txt` + `session/power.txt` + `journal/kernel.txt` — `suspend_stats`,
+   armed wake sources, who owns `handle-power-key`, and what PowerDevil is set to do with
+   the key and the lid. A missing `PowerButtonAction` means PowerDevil's built-in default
+   applies (the bundle cannot read it); a value other than `1` (Sleep) is the finding.
+   `success=0` means the suspend test had not happened yet, not that suspend is broken.
 7. `audio/audio.txt`, `display/display.txt`, `gfx/xmx.txt`, `firmware/bluetooth.txt` —
    the environment-specific half: filter chain, HDR/ICC, the session's XMX wiring, and
    whether the initramfs carries the Bluetooth firmware.
@@ -225,11 +228,12 @@ with `status: denied` (re-run as a user in `systemd-journal` or under `sudo`).
 
 ## 8. Tests
 
-* `python3 tools/oxp3_firstrun.py --selftest` — 83 checks over synthetic fixtures and
+* `python3 tools/oxp3_firstrun.py --selftest` — 88 checks over synthetic fixtures and
   stub commands: the redaction corpus (every rule + idempotency + sha256 preservation),
   the line/byte budget, a full bundle in a temporary directory (dry-run writes nothing,
-  the manifest stays valid and redacted, a second run is byte-identical), and the
-  checklist state machine (partial/pending/ok transitions).
+  the manifest stays valid and redacted, a second run is byte-identical), the
+  `session/power.txt` blocks (logind, PowerDevil, powerdevilrc excerpt, polkit agent),
+  and the checklist state machine (partial/pending/ok transitions).
 * `python3 -m unittest discover -s tests/unit -p 'test_firstrun.py' -q` — the same seams
   as unit tests, plus the collector inventory, degraded-status paths and the CLI contract.
 * `tools/repo-test.sh --fast --only firstrun` — the suite in the repository runner:
