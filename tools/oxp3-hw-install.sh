@@ -74,7 +74,7 @@ ORIG_ARGS=("$@")
 SUDO_SHIM_DIR=""
 
 # fixed component order: root-heavy first, user scope last
-ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio sched gfx decky)
+ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio sched gfx xmx mango decky)
 
 say() { printf '\n== %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -86,7 +86,7 @@ usage() {
 
 Options:
   --all                     every component (volume sleep bluetooth power imu leds rgb audio decky)
-  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --sched --gfx --decky
+  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --sched --gfx --xmx --mango --decky
                             select components (repeatable; --all selects every one)
   --volume-daemon           with --volume: install the LEGACY oxp3-voltap daemon
                             (grabs an input device; with hhd running it only
@@ -788,7 +788,7 @@ comp_gfx_install() {
     local tool=$repo/tools/oxp3-mesa-restore.sh
     [[ -x $tool ]] || { warn "missing $tool"; return 0; }
     if (( DRY_RUN )); then
-        printf '  [dry-run] %s status ; %s restore\n' "$tool" "$tool"
+        printf '  [dry-run] %s status ; %s restore ; install oxp3-mesa-keep.service + /usr/local/libexec/oxp3-mesa-keep\n' "$tool" "$tool"
         return 0
     fi
     if "$tool" restore; then
@@ -796,7 +796,56 @@ comp_gfx_install() {
     else
         warn "could not restore the known-good Mesa (see the tool output above)"
     fi
-    printf '  note: this is the usroverlay hotfix layer, cleared by reboot; the Flatpak runtime override is separate\n'
+    if (( ! DRY_RUN )); then
+        install -D -m0755 "$repo/files/oxp3-mesa-keep.sh" "$PREFIX/usr/local/libexec/oxp3-mesa-keep"
+        install -D -m0644 "$repo/files/oxp3-mesa-keep.service" \
+            "$PREFIX/etc/systemd/system/oxp3-mesa-keep.service"
+        systemctl daemon-reload
+        systemctl enable oxp3-mesa-keep.service
+        printf '  oxp3-mesa-keep.service enabled: the recorded Mesa is restored on every boot after the overlay is cleared\n'
+    fi
+}
+
+comp_xmx_install() {
+    say "XeSS XMX for Flatpak Steam (sandbox env + Proton shim)"
+    local tool=$repo/tools/oxp3-flatpak-xmx.sh
+    [[ -x $tool ]] || { warn "missing $tool"; return 0; }
+    if (( DRY_RUN )); then
+        printf '  [dry-run] as %s: %s install\n' "$TARGET_USER" "$tool"
+        return 0
+    fi
+    as_user_run "$tool" install
+    as_user_run "$tool" status | sed 's/^/  /'
+}
+
+comp_mango_install() {
+    say "MangoHud with Intel iGPU stats (patched build)"
+    local rel cache rpms=()
+    rel=$(rpm -q --qf '%{RELEASE}' mangohud 2>/dev/null | head -1)
+    if [[ $rel == *oxp3* ]]; then
+        printf '  patched mangohud already installed (%s)\n' "$rel"
+        return 0
+    fi
+    cache=$HOME/.cache/oxp3-fixes/out
+    [[ -d $cache ]] || cache=/var/home/"${TARGET_USER}"/.cache/oxp3-fixes/out
+    shopt -s nullglob
+    rpms=("$cache"/mangohud-*.x86_64.rpm "$cache"/mangohud-*.i686.rpm)
+    shopt -u nullglob
+    if (( ${#rpms[@]} == 0 )); then
+        warn "no patched mangohud RPM in $cache; build it with ./oxp3-fixes-fast.sh build"
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        printf '  [dry-run] rpm-ostree install %s\n' "${rpms[*]}"
+        return 0
+    fi
+    if rpm-ostree override replace "${rpms[@]}"; then
+        printf '  patched mangohud layered as an override; reboot to activate the Intel GPU power/temperature stats\n'
+    elif rpm-ostree install --idempotent "${rpms[@]}"; then
+        printf '  patched mangohud layered; reboot to activate the Intel GPU power/temperature stats\n'
+    else
+        warn "rpm-ostree could not layer the patched mangohud; see its output above"
+    fi
 }
 
 comp_decky_install() {
@@ -1279,7 +1328,7 @@ add_component() {
 
 while (( $# )); do
     case $1 in
-        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--sched|--gfx|--decky)
+        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--sched|--gfx|--xmx|--mango|--decky)
             add_component "${1#--}"
             [[ $1 == --volume ]] && VOLUME_MODE=plugin ;;
         --volume-daemon)

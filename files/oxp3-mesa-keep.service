@@ -1,0 +1,12 @@
+[Unit]
+Description=OXP3: restore the known-good Mesa build on the usroverlay before the session starts
+After=local-fs.target
+Before=display-manager.service
+ConditionPathExists=/usr/local/libexec/oxp3-mesa-keep
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-mesa-keep
+
+[Install]
+WantedBy=multi-user.target

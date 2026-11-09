@@ -3,7 +3,7 @@
 # changes: everything lands in ~/.config and ~/.local, and --undo puts back
 # exactly what was there.
 #
-#   install-user.sh               louder default profile (headroom -4 dB)
+#   install-user.sh               default profile (headroom -4 dB)
 #   install-user.sh --safe        safe profile (headroom -8 dB, cannot clip)
 #   install-user.sh --undo        restore the previous drop-in and remove our files
 #   install-user.sh --print-profile   print "<profile> <headroom_db>" and exit

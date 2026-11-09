@@ -3,7 +3,8 @@
 # user PipeWire/WirePlumber services once, wait for the sink and make it the default.
 # No root.  Reversible with eq-off.sh.
 #
-#   eq-on.sh            louder default profile (-4 dB headroom, +3.7 dB clipping
+#   eq-on.sh            default profile (-4 dB chain headroom) plus the loudness gain
+#                       staging: ALSA at maximum (gain-stage.sh) and 130% sink volume
 #                       risk at full scale because no limiter exists)
 #   eq-on.sh --safe     -8 dB headroom: cannot clip at 0 dBFS
 #   eq-on.sh --loud     the default, for symmetry
@@ -42,6 +43,10 @@ if [ -z "${id:-}" ]; then
   echo "EQ sink did not appear - check: journalctl --user -u pipewire -n 50" >&2
   exit 1
 fi
+# Gain staging for loudness: ALSA is put at maximum by gain-stage.sh (login and
+# resume), and the sink runs above 100% so the vendor EQ's -4 dB headroom does not
+# leave the speakers quiet.  PipeWire allows up to 150%; 130% is a 6.8 dB lift.
+pactl set-sink-volume "$id" 130% 2>/dev/null || true
 if ! pactl set-default-sink "$id" 2>/dev/null; then
   # PipeWire can answer "Not supported" for a filter-chain sink; set the default
   # through wireplumber's metadata instead.
