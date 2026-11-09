@@ -62,6 +62,7 @@
 #   <out>/probe-dryrun.txt   the probe's --dry-run byte plan
 #   <out>/probe-readonly.txt the read-only answers (only when the probe ran)
 #   <out>/matrix.json        the --try-matrix table (only with --try-matrix)
+#   <out>/write-shape.json   the --try-write-shape table (only with --try-write-shape)
 #   <out>/sys-before.txt     driver/override/module state before any change
 #   <out>/sys-after.txt      the same after the restore
 #   <out>/commands.txt       the exact commands, for copy/paste
@@ -78,6 +79,11 @@
 #   --no-irq                       never request the GpioInt; poll instead
 #   --gpio N                       override the GpioInt pin from _CRS
 #   --irq-edge rising|falling|both override the IRQ edge from _CRS
+#   --reset-polarity active-high|active-low
+#                                  reset line polarity (the settled value is
+#                                  active-high; also passed to normal reads)
+#   --settle-ms N                  settle delay after the reset pulse (default 10,
+#                                  the known-good value)
 #   --irq-pin N                    override the GpioInt pin (firmware may compute it
 #                                  at runtime via _INI/GNUM, so the template has 0)
 #   --reset-pin N                  override the GpioIo reset pin the same way
@@ -93,6 +99,14 @@
 #                                  x IRQ edge (rising/falling/both), 0xA0 then
 #                                  0xA1/0xC1 on a non-zero answer; needs --allow-reset,
 #                                  an IRQ pin and a reset pin; table -> matrix.json
+#   --try-write-shape              one bounded read-only experiment for the next
+#                                  unknown: selector bit 0 (clear/set) x write
+#                                  padding after the selector (0..4 zeros + the
+#                                  phase/arg hypothesis) x read length (layout/64 B)
+#                                  for 0xA0 then 0xA1/0xC1, with the pinned
+#                                  --reset-polarity/--settle-ms/--irq-edge and a
+#                                  short per-cell timeout; needs --allow-reset, an
+#                                  IRQ pin and a reset pin; table -> write-shape.json
 #   --allow-existing-bind          use a spidev bind this session did not create
 #                                  (never unbound by us)
 #   --allow-takeover               take the device from another driver; it is
@@ -141,6 +155,9 @@ ALLOW_TAKEOVER=0
 ALLOW_EXISTING=0
 ALLOW_RESET=0
 TRY_MATRIX=0
+TRY_WRITE_SHAPE=0
+RESET_POLARITY="active-high"
+SETTLE_MS=10
 NO_IRQ=0
 IRQ_PIN_OVERRIDE=""
 RESET_PIN_OVERRIDE=""
@@ -193,6 +210,12 @@ while [ "$#" -gt 0 ]; do
         --allow-existing-bind) ALLOW_EXISTING=1; shift ;;
         --allow-reset) ALLOW_RESET=1; shift ;;
         --try-matrix) TRY_MATRIX=1; shift ;;
+        --try-write-shape) TRY_WRITE_SHAPE=1; shift ;;
+        --reset-polarity)
+            [ "$#" -ge 2 ] || exit 2; RESET_POLARITY=$2; shift 2 ;;
+        --reset-polarity=*) RESET_POLARITY=${1#*=}; shift ;;
+        --settle-ms) [ "$#" -ge 2 ] || exit 2; SETTLE_MS=$2; shift 2 ;;
+        --settle-ms=*) SETTLE_MS=${1#*=}; shift ;;
         --irq-pin) [ "$#" -ge 2 ] || exit 2; IRQ_PIN_OVERRIDE=$2; shift 2 ;;
         --irq-pin=*) IRQ_PIN_OVERRIDE=${1#*=}; shift ;;
         --reset-pin) [ "$#" -ge 2 ] || exit 2; RESET_PIN_OVERRIDE=$2; shift 2 ;;
@@ -225,8 +248,22 @@ case $GPIO_BACKEND in
     ''|auto|gpiod|chardev|sysfs|poll) ;;
     *) printf '%s: --gpio-backend must be auto, gpiod, chardev, sysfs or poll\n' "$PROG" >&2; exit 2 ;;
 esac
+case $RESET_POLARITY in
+    active-high|active-low) ;;
+    *) printf '%s: --reset-polarity must be active-high or active-low\n' "$PROG" >&2; exit 2 ;;
+esac
+case $SETTLE_MS in ''|*[!0-9]*) printf '%s: --settle-ms must be a number\n' "$PROG" >&2; exit 2 ;; esac
+[ "$SETTLE_MS" -le 5000 ] || { printf '%s: --settle-ms must be 0..5000\n' "$PROG" >&2; exit 2; }
+if [ "$TRY_MATRIX" = 1 ] && [ "$TRY_WRITE_SHAPE" = 1 ]; then
+    printf '%s: --try-matrix and --try-write-shape are separate experiments; run one at a time\n' "$PROG" >&2
+    exit 2
+fi
 if [ "$TRY_MATRIX" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
     printf '%s: --try-matrix pulses the reset line in some combinations; pass --allow-reset\n' "$PROG" >&2
+    exit 2
+fi
+if [ "$TRY_WRITE_SHAPE" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
+    printf '%s: --try-write-shape pulses the reset line for every cell; pass --allow-reset\n' "$PROG" >&2
     exit 2
 fi
 
@@ -278,6 +315,7 @@ PROBE_DRYRUN_RC=""
 PROBE_RC=""
 PROBE_RAN=0
 MATRIX_OUTCOME=""
+WRITE_SHAPE_OUTCOME=""
 RESTORED=0
 RESTORE_RC=""
 RESTORE_NOTES=()
@@ -394,7 +432,8 @@ state_load() {
             DEV|ORIGINAL_DRIVER|PREV_OVERRIDE_HEX|OVERRIDE_EXISTED|OVERRIDE_CHANGED|BOUND_BY_US|\
             EXTERNAL_BIND|MODULE_LOADED_BEFORE|MODULE_LOADED_BY_US|SPIDEV_PATH|SPIDEV_NAME|\
             CRS_SHA|CRS_METHOD|CONN_SPEED|CONN_MODE|CONN_BITS|CONN_IRQ|CONN_EDGE|\
-            CONN_ACTIVE_LOW|CONN_RESET|IRQ_USED|PROBE_RAN|PROBE_RC|RESTORED|RUN_ID|READS|ROOT)
+            CONN_ACTIVE_LOW|CONN_RESET|IRQ_USED|PROBE_RAN|PROBE_RC|RESTORED|RUN_ID|READS|ROOT|\
+            TRY_MATRIX|TRY_WRITE_SHAPE|RESET_POLARITY|SETTLE_MS)
                 # The key list above is closed, so assigning the variable by
                 # name cannot be influenced by the file's contents.
                 STATE_KEYS+=("$k"); STATE_VALS[$k]=$v
@@ -434,6 +473,10 @@ sync_state() {
     state_set RUN_ID "$RUN_ID"
     state_set READS "$READS"
     state_set ROOT "$ROOT"
+    state_set TRY_MATRIX "$TRY_MATRIX"
+    state_set TRY_WRITE_SHAPE "$TRY_WRITE_SHAPE"
+    state_set RESET_POLARITY "$RESET_POLARITY"
+    state_set SETTLE_MS "$SETTLE_MS"
     state_save
 }
 
@@ -823,6 +866,18 @@ parse_crs() { # run the probe's acpi_info and interpret the keys
         note "matrix mode       : reset polarity active-low/active-high/hold x settle 10/150 ms x edge rising/falling/both"
         note "matrix queries    : 0xA0, then 0xA1/0xC1 only on a non-zero answer (allowlist enforced)"
     fi
+    if [ "$TRY_WRITE_SHAPE" = 1 ]; then
+        if [ -z "$CONN_IRQ" ] || [ "$NO_IRQ" = 1 ]; then
+            fail "--try-write-shape needs the GpioInt line (--irq-pin N)"
+            return 1
+        fi
+        if [ -z "$CONN_RESET" ]; then
+            fail "--try-write-shape needs the GpioIo reset line (--reset-pin N)"
+            return 1
+        fi
+        note "write-shape mode  : reset polarity $RESET_POLARITY, settle ${SETTLE_MS} ms, edge ${CONN_EDGE:-rising} (pinned, not swept)"
+        note "write-shape cells : selector bit0 0/1 x padding 0..4+phase x read layout/64; 0xA0 then 0xA1/0xC1; 400 ms/cell"
+    fi
     return 0
 }
 
@@ -833,6 +888,7 @@ probe_args() { # mode(dry|real) -> words
     [ -n "$CONN_SPEED" ] && out+=" --speed $CONN_SPEED"
     [ -n "$CONN_MODE" ] && out+=" --mode $CONN_MODE"
     [ -n "$CONN_BITS" ] && out+=" --bits $CONN_BITS"
+    out+=" --reset-polarity $RESET_POLARITY --settle-ms $SETTLE_MS"
     [ -n "$GPIO_BACKEND" ] && out+=" --gpio-backend $GPIO_BACKEND"
     if [ "$IRQ_USED" = 1 ] && [ -n "$CONN_IRQ" ]; then
         out+=" --gpio $CONN_IRQ"
@@ -840,10 +896,11 @@ probe_args() { # mode(dry|real) -> words
         [ -n "$CONN_EDGE" ] && out+=" --irq-edge $CONN_EDGE"
         [ "$CONN_ACTIVE_LOW" = 1 ] && out+=" --irq-active-low"
     fi
-    # The matrix owns its query list (0xA0/0xA1/0xC1), its edge and its
-    # polarity; it is still gated by the probe's own allowlist and reset gate.
+    # The experiments own their query list (0xA0/0xA1/0xC1); they are still
+    # gated by the probe's own allowlists and reset gate.
     [ "$TRY_MATRIX" = 1 ] && out+=" --try-matrix"
-    if [ "$mode" = dry ] && [ "$TRY_MATRIX" = 1 ] && [ -n "$CONN_RESET" ]; then
+    [ "$TRY_WRITE_SHAPE" = 1 ] && out+=" --try-write-shape"
+    if [ "$mode" = dry ] && { [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; } && [ -n "$CONN_RESET" ]; then
         # The dry run shows the reset line too; it never pulses it.
         out+=" --reset-gpio $CONN_RESET"
         [ "$IRQ_USED" != 1 ] && [ -n "$GPIO_CHIP" ] && out+=" --gpio-chip $GPIO_CHIP"
@@ -860,17 +917,25 @@ probe_args() { # mode(dry|real) -> words
         if [ "$TRY_MATRIX" = 1 ]; then
             out+=" --matrix-json $(sq "$T/matrix.json")"
         fi
+        if [ "$TRY_WRITE_SHAPE" = 1 ]; then
+            out+=" --write-shape-json $(sq "$T/write-shape.json")"
+        fi
     fi
     printf '%s' "$out"
 }
 
-probe_reads() { # the positional command list (empty in matrix mode)
-    [ "$TRY_MATRIX" = 1 ] || printf '%s' "$READS"
+probe_reads() { # the positional command list (empty in an experiment mode)
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; then
+        return 0
+    fi
+    printf '%s' "$READS"
 }
 
 probe_reads_label() { # what the summary records as the read set
     if [ "$TRY_MATRIX" = 1 ]; then
         printf 'matrix:0xA0/0xA1/0xC1'
+    elif [ "$TRY_WRITE_SHAPE" = 1 ]; then
+        printf 'write-shape:0xA0/0xA1/0xC1'
     else
         printf '%s' "$READS"
     fi
@@ -907,6 +972,10 @@ print_plan() {
     if [ "$TRY_MATRIX" = 1 ]; then
         note "--try-matrix: reset polarity active-low/active-high/hold x settle 10/150 ms x edge rising/falling/both"
         note "18 cells; 0xA0 then 0xA1/0xC1 only on a non-zero answer; table -> matrix.json"
+    fi
+    if [ "$TRY_WRITE_SHAPE" = 1 ]; then
+        note "--try-write-shape: reset polarity $RESET_POLARITY, settle ${SETTLE_MS} ms, edge ${CONN_EDGE:-rising}"
+        note "60 cells (selector bit0 x padding x read length; 0xA0 then 0xA1/0xC1); table -> write-shape.json"
     fi
     note "$(probe_command real)"
     printf ' 4. restore\n'
@@ -1504,7 +1573,7 @@ phase_dryrun() {
     fi
     printf '$ %s\n' "$(probe_command dry)"
     # shellcheck disable=SC2086
-    if [ "$TRY_MATRIX" = 1 ]; then
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; then
         python3 -I -B "$PROBE" $(probe_args dry) --dry-run >"$out" 2>&1 || rc=$?
     else
         python3 -I -B "$PROBE" $(probe_args dry) --dry-run $READS >"$out" 2>&1 || rc=$?
@@ -1525,6 +1594,10 @@ phase_probe() {
     if [ "$TRY_MATRIX" = 1 ]; then
         note "matrix queries: 0xA0, then 0xA1/0xC1 only on a non-zero answer"
         note "matrix cells: reset polarity active-low/active-high/hold x settle 10/150 ms x edge rising/falling/both"
+    elif [ "$TRY_WRITE_SHAPE" = 1 ]; then
+        note "write-shape queries: 0xA0, then 0xA1/0xC1 (allowlist enforced)"
+        note "write-shape cells: selector bit0 0/1 x padding 0..4+phase x read layout/64; 400 ms/cell"
+        note "electrical settings: reset $RESET_POLARITY, settle ${SETTLE_MS} ms, edge ${CONN_EDGE:-rising}"
     else
         note "allowlisted reads: $READS"
     fi
@@ -1557,7 +1630,7 @@ phase_probe() {
     printf '$ %s\n' "$(probe_command real)"
     printf '%s\n' "$(probe_command real)" >>"$T/commands.txt"
     # shellcheck disable=SC2086
-    if [ "$TRY_MATRIX" = 1 ]; then
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ]; then
         python3 -I -B "$PROBE" $(probe_args real) >"$out" 2>&1 || rc=$?
     else
         python3 -I -B "$PROBE" $(probe_args real) $READS >"$out" 2>&1 || rc=$?
@@ -1576,6 +1649,16 @@ phase_probe() {
         else
             MATRIX_OUTCOME="missing"
             fail "the probe did not write $T/matrix.json"
+        fi
+    fi
+    if [ "$TRY_WRITE_SHAPE" = 1 ]; then
+        if [ -s "$T/write-shape.json" ]; then
+            WRITE_SHAPE_OUTCOME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("outcome","unknown"))' "$T/write-shape.json" 2>/dev/null || printf unknown)
+            journal answer write-shape "outcome=${WRITE_SHAPE_OUTCOME:-unknown}"
+            note "write-shape outcome: ${WRITE_SHAPE_OUTCOME:-unknown} (full table: write-shape.json)"
+        else
+            WRITE_SHAPE_OUTCOME="missing"
+            fail "the probe did not write $T/write-shape.json"
         fi
     fi
     if [ "$rc" -ne 0 ]; then
@@ -1639,7 +1722,7 @@ compute_unknowns() {
         add_unknown "the GpioInt edge/polarity comes from _CRS (edge=${CONN_EDGE:-?}, active_low=${CONN_ACTIVE_LOW:-unknown}) but no sensor has exercised it"
     fi
     if [ -n "$CONN_RESET" ]; then
-        add_unknown "a GpioIo reset line exists (pin $CONN_RESET) but this session never pulsed it; polarity is assumed active-low"
+        add_unknown "a GpioIo reset line exists (pin $CONN_RESET); the session uses reset polarity $RESET_POLARITY and a ${SETTLE_MS} ms settle, but only the owner's hardware run can confirm that is stable"
     else
         add_unknown "_CRS exposes no GpioIo reset line; the module must come up out of reset"
     fi
@@ -1659,6 +1742,22 @@ compute_unknowns() {
                     ;;
                 *)
                     add_unknown "the matrix did not produce a readable outcome; see matrix.json in this transcript"
+                    ;;
+            esac
+        fi
+        if [ "$TRY_WRITE_SHAPE" = 1 ]; then
+            case $WRITE_SHAPE_OUTCOME in
+                valid-answer)
+                    add_unknown "the write-shape experiment found a valid answer; use that selector/padding/read length in a normal read before trusting it"
+                    ;;
+                shifted-only)
+                    add_unknown "the write-shape experiment saw the recovered layout only at a non-zero offset; the device consumes command bytes before driving MISO - see the per-cell candidate offsets in write-shape.json"
+                    ;;
+                no-valid-answer)
+                    add_unknown "the write-shape experiment tried every selector/padding/read-length cell and none parsed; the answer may still be shifted or use a write shape outside this matrix (see write-shape.json)"
+                    ;;
+                *)
+                    add_unknown "the write-shape experiment did not produce a readable outcome; see write-shape.json in this transcript"
                     ;;
             esac
         fi
@@ -1738,6 +1837,13 @@ write_summary() {
         else
             printf '  "matrix": null,\n'
         fi
+        if [ -s "$T/write-shape.json" ] && python3 -m json.tool "$T/write-shape.json" >/dev/null 2>&1; then
+            printf '  "write_shape": '
+            cat "$T/write-shape.json"
+            printf ',\n'
+        else
+            printf '  "write_shape": null,\n'
+        fi
         printf '  "restore": {"attempted": %s, "verified": %s, "exit": %s, "driver": %s, "override": %s, "notes": [' \
             "$([ "$RESTORED" = 1 ] && printf true || printf false)" \
             "$([ "$RESTORE_RC" = 0 ] && printf true || printf false)" \
@@ -1758,7 +1864,7 @@ write_summary() {
             printf '%s' "$(json_str "$u")"
         done
         printf '],\n'
-        printf '  "files": {"journal": "journal.tsv", "console": "session.log", "acpi_info": "acpi-info.txt", "crs": "fprt-crs.bin", "dry_run": "probe-dryrun.txt", "readonly": "probe-readonly.txt", "matrix": "matrix.json", "commands": "commands.txt"}\n'
+        printf '  "files": {"journal": "journal.tsv", "console": "session.log", "acpi_info": "acpi-info.txt", "crs": "fprt-crs.bin", "dry_run": "probe-dryrun.txt", "readonly": "probe-readonly.txt", "matrix": "matrix.json", "write_shape": "write-shape.json", "commands": "commands.txt"}\n'
         printf '}\n'
     } >"$f"
 
@@ -1782,6 +1888,7 @@ write_summary() {
         printf '# restore: %s\n' "$([ "$RESTORE_RC" = 0 ] && printf verified || printf NOT-verified)"
         printf '# reads: %s (ran=%s exit=%s)\n' "$(probe_reads_label)" "$PROBE_RAN" "${PROBE_RC:-n/a}"
         [ "$TRY_MATRIX" = 1 ] && printf '# matrix: %s (matrix.json)\n' "${MATRIX_OUTCOME:-unknown}"
+        [ "$TRY_WRITE_SHAPE" = 1 ] && printf '# write-shape: %s (write-shape.json)\n' "${WRITE_SHAPE_OUTCOME:-unknown}"
         printf '# hand this directory back for analysis: summary.json + journal.tsv\n'
     } >"$T/README.txt" 2>/dev/null || true
     return 0

@@ -979,3 +979,60 @@ class TestProbeCLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Experimental read write shapes (--try-write-shape)
+# ---------------------------------------------------------------------------
+
+class TestReadShapes(unittest.TestCase):
+    def test_shape_plan_is_selector_plus_padding_then_receive(self):
+        plan = spi.build_shape_plan(0xA0, selector_variant="read-bit0",
+                                    padding=b"\x00\x00", read_len=64,
+                                    timeout_ms=400, total_ms=400)
+        self.assertEqual(plan.selector, 0x41)
+        self.assertEqual(plan.shape.selector_variant, "read-bit0")
+        self.assertEqual(plan.transfers[0].tx, b"\x41\x00\x00")
+        self.assertEqual(plan.transfers[0].rx_len, 0)
+        self.assertEqual(plan.transfers[1].tx, b"")
+        self.assertEqual(plan.transfers[1].rx_len, 64)
+        self.assertEqual(plan.tx, b"\x41\x00\x00")
+        self.assertEqual(plan.answer_len, 64)
+
+    def test_shape_plan_rejects_writes_and_bad_input(self):
+        with self.assertRaises(ValueError):
+            spi.build_shape_plan(0xA0, read_len=0)
+        with self.assertRaises(ValueError):
+            spi.build_shape_plan(0xA0, selector_variant="write", read_len=7)
+        with self.assertRaises(ValueError):
+            spi.build_shape_plan(0xA0, padding=b"\x00" * 9, read_len=7)
+
+    def test_shape_executes_and_keeps_the_recovered_gate(self):
+        io_obj = RecordingIO(b"\x00" * 64)
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     read_allowlist=[0xA0], spi_io=io_obj)
+        plan = spi.build_shape_plan(0xA0, selector_variant="read-bit0",
+                                    padding=b"\x00", read_len=64,
+                                    timeout_ms=400, total_ms=400)
+        self.assertEqual(transport.execute(plan), b"\x00" * 64)
+        self.assertEqual(io_obj.messages[0][0].tx, b"\x41\x00")
+
+    def test_shape_selector_alias_of_a_destructive_opcode_is_refused(self):
+        # 0x02 (the read alias of JTAG's 0xC2) with selector bit 0 set is
+        # 0x05; masking bit 0 still yields JTAG's selector 0x04.
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     read_allowlist=[0x02],
+                                     spi_io=RecordingIO())
+        plan = spi.build_shape_plan(0x02, selector_variant="read-bit0",
+                                    read_len=7, timeout_ms=400, total_ms=400)
+        with self.assertRaises(spi.UnsafeCommand):
+            transport.execute(plan)
+
+    def test_shape_plan_not_on_allowlist_is_refused(self):
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     read_allowlist=[0xA1],
+                                     spi_io=RecordingIO())
+        plan = spi.build_shape_plan(0xA0, read_len=7, timeout_ms=400,
+                                    total_ms=400)
+        with self.assertRaises(spi.CommandNotAllowed):
+            transport.execute(plan)

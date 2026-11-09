@@ -402,6 +402,13 @@ def main(argv=None):
                          "IRQ-only). Default: $FPBF63112_GPIO_BACKEND or auto")
     ap.add_argument("--irq-edge", choices=("rising", "falling", "both"),
                     default=None, help="logical assertion edge")
+    ap.add_argument("--reset-polarity", choices=("active-high", "active-low"),
+                    default="active-high",
+                    help="reset line polarity (the settled value is "
+                         "active-high; default active-high)")
+    ap.add_argument("--settle-ms", type=int, default=10,
+                    help="settle delay in ms after the reset pulse before the "
+                         "first transfer (default 10, the known-good value)")
     ap.add_argument("--irq-active-low", action="store_true",
                     help="the interrupt line is asserted low")
     ap.add_argument("--reset-gpio", type=int, default=None,
@@ -450,10 +457,48 @@ def main(argv=None):
                          "matrix.json in the current directory)")
     ap.add_argument("--matrix-timeout-ms", type=int, default=1500,
                     help="per-attempt matrix timeout in ms (default 1500)")
+    ap.add_argument("--try-write-shape", action="store_true",
+                    help="find the correct read write shape: selector bit 0 "
+                         "(clear/set) x padding after the selector "
+                         "(0..4 zero bytes + the phase/arg hypothesis) x read "
+                         "length (layout/64 B), for 0xA0 then 0xA1/0xC1; uses "
+                         "--reset-polarity/--settle-ms/--irq-edge and a short "
+                         "per-cell timeout")
+    ap.add_argument("--write-shape-json", default=None,
+                    help="write the write-shape table to this JSON file "
+                         "(default: write-shape.json in the current directory)")
+    ap.add_argument("--write-shape-timeout-ms", type=int, default=400,
+                    help="per-cell write-shape timeout in ms (default 400)")
     args = ap.parse_args(argv)
 
     if args.crypto_selftest:
         return crypto_selftest()
+
+    if args.try_matrix and args.try_write_shape:
+        print("refusing: --try-matrix and --try-write-shape are separate "
+              "experiments; run one at a time", file=sys.stderr)
+        return 2
+
+    if args.try_write_shape:
+        if args.transport != "spi":
+            print("refusing: --try-write-shape is the SPI write-shape "
+                  "experiment; the frame transport has no selector/padding "
+                  "shape", file=sys.stderr)
+            return 2
+        if args.commands:
+            print("refusing: --try-write-shape sends its own allowlisted "
+                  "queries (0xA0/0xA1/0xC1); do not name commands",
+                  file=sys.stderr)
+            return 2
+        if args.op is not None:
+            print("refusing: --try-write-shape does not take --op",
+                  file=sys.stderr)
+            return 2
+        if not 100 <= args.write_shape_timeout_ms <= 2000:
+            print("refusing: --write-shape-timeout-ms must be 100..2000",
+                  file=sys.stderr)
+            return 2
+        return run_spi_write_shape(args)
 
     if args.try_matrix:
         if args.transport != "spi":
@@ -695,6 +740,132 @@ def run_spi_matrix(args):
     return 0 if report.winning is not None else 1
 
 
+def run_spi_write_shape(args):
+    """``--try-write-shape``: find the selector/padding/read-length shape.
+
+    The electrical settings are pinned (not swept): ``--reset-polarity``,
+    ``--settle-ms`` and ``--irq-edge``.  Every cell is a read-only 0xA0 (then
+    0xA1/0xC1) with a short timeout, so the whole experiment stays bounded.
+    """
+    spi = _load_spi()
+    acpi = _load_acpi()
+    matrix = _load_matrix()
+    try:
+        params = _spi_parameters(args, spi, acpi)
+        cells = matrix.plan_write_shape()
+    except (spi.SpiError, ValueError) as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        print(f"dry-run: write-shape spidev={args.spidev or '(unset)'} "
+              f"allow_writes={args.allow_writes} "
+              f"gpio_backend={args.gpio_backend or 'auto'}")
+        print(f"         speed={params['speed']} mode={params['mode']} "
+              f"bits={params['bits']} chip={args.gpio_chip or '(unset)'} "
+              f"irq={params['gpio']} reset={params['reset_gpio']} "
+              f"polarity={args.reset_polarity} settle={args.settle_ms}ms "
+              f"edge={params['edge']} timeout={args.write_shape_timeout_ms}ms")
+        print(f"write-shape: {len(cells)} cells (0xA0 then 0xA1/0xC1; "
+              f"selector bit0 x padding x read length)")
+        for cell in cells:
+            print(f" {cell.index:>2} op=0x{cell.query.opcode:02x} "
+                  f"selector=0x{cell.selector:02x} "
+                  f"padding={cell.padding_label:<5} read={cell.read_len:>2}B")
+        print("write-shape: success = a 0xAA/L/CRC-32 frame at any offset, or "
+              "the recovered bare layout at read offset 0")
+        print("dry-run: no device or GPIO is opened; no JSON is written")
+        return 0
+
+    if not args.spidev:
+        print("refusing: --spidev /dev/spidevN.M is required for a real "
+              "write-shape experiment (there is no default device)",
+              file=sys.stderr)
+        return 2
+    if not args.allow_writes:
+        print("refusing: --allow-writes is required before any SPI transfer "
+              "(even a read)", file=sys.stderr)
+        return 2
+    if params["gpio"] is None:
+        print("refusing: --try-write-shape needs the GpioInt line (--gpio N "
+              "or a _CRS that carries it)", file=sys.stderr)
+        return 2
+    if params["reset_gpio"] is None:
+        print("refusing: --try-write-shape needs the GpioIo reset line "
+              "(--reset-gpio N or a _CRS that carries it)", file=sys.stderr)
+        return 2
+    if not args.allow_reset:
+        print("refusing: --try-write-shape pulses the reset line; pass "
+              "--allow-reset", file=sys.stderr)
+        return 2
+    if args.gpio_backend == "poll":
+        print("refusing: --gpio-backend poll cannot drive the reset line; "
+              "use auto, chardev, gpiod or sysfs", file=sys.stderr)
+        return 2
+
+    out_path = os.path.abspath(args.write_shape_json or "write-shape.json")
+    parent = os.path.dirname(out_path) or "."
+    if not os.path.isdir(parent):
+        print(f"refusing: the --write-shape-json directory does not exist: "
+              f"{parent}", file=sys.stderr)
+        return 2
+
+    print(f"write-shape: {len(cells)} cells, per-cell timeout "
+          f"{args.write_shape_timeout_ms}ms, read-only queries 0xA0/0xA1/0xC1")
+    print(f"write-shape: spidev={args.spidev} chip={args.gpio_chip or '(unset)'} "
+          f"irq={params['gpio']} reset={params['reset_gpio']} "
+          f"polarity={args.reset_polarity} settle={args.settle_ms}ms "
+          f"edge={params['edge']}")
+
+    active_low = args.reset_polarity == "active-low"
+
+    def connect(cell):
+        return matrix.SpiWriteShapeSession(
+            cell, spidev_path=args.spidev,
+            reset_active_low=active_low, settle_ms=args.settle_ms,
+            edge=params["edge"], speed_hz=params["speed"],
+            mode=params["mode"], bits_per_word=params["bits"],
+            gpio_chip=args.gpio_chip, reset_pin=params["reset_gpio"],
+            irq_pin=params["gpio"],
+            irq_active_low=bool(params["active_low"]),
+            timeout_ms=args.write_shape_timeout_ms,
+            gpio_backend=args.gpio_backend)
+
+    context = {
+        "spidev": args.spidev,
+        "gpio_chip": args.gpio_chip,
+        "irq_pin": params["gpio"],
+        "reset_pin": params["reset_gpio"],
+        "reset_polarity": args.reset_polarity,
+        "settle_ms": args.settle_ms,
+        "irq_edge": params["edge"],
+        "irq_active_low": bool(params["active_low"]),
+        "speed_hz": params["speed"],
+        "mode": params["mode"],
+        "bits_per_word": params["bits"],
+        "gpio_backend": args.gpio_backend or "auto",
+    }
+    try:
+        report = matrix.run_write_shape(
+            cells, connect=connect, timeout_ms=args.write_shape_timeout_ms,
+            context=context)
+    except matrix.MatrixRefused as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+
+    for line in report.render_table():
+        print(line)
+    print(f"write-shape: {report.verdict}")
+    try:
+        matrix.write_shape_report(report, out_path)
+    except OSError as exc:
+        print(f"write-shape: could not write {out_path}: {exc}",
+              file=sys.stderr)
+        return 1
+    print(f"write-shape: table written to {out_path}")
+    return 0 if report.winning is not None else 1
+
+
 def run_spi(args, cmds):
     """Hardware SPI path: every gate is checked before any open()."""
     spi = _load_spi()
@@ -757,12 +928,14 @@ def run_spi(args, cmds):
     if params["reset_gpio"] is not None:
         reset = spi.GpioResetLine(
             params["reset_gpio"], chip=args.gpio_chip,
-            active_low=True, backend=args.gpio_backend)
+            active_low=(args.reset_polarity == "active-low"),
+            backend=args.gpio_backend)
     transport = spi.SpiTransport(
         args.spidev, speed_hz=params["speed"], mode=params["mode"],
         bits_per_word=params["bits"], allow_writes=True,
         read_allowlist=read_allowlist, irq=irq, reset=reset,
-        allow_reset=args.allow_reset)
+        allow_reset=args.allow_reset,
+        reset_settle_ms=args.settle_ms)
     print(f"spi: {transport.describe()}")
     rc = 0
     try:

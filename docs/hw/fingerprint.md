@@ -401,7 +401,7 @@ driver cannot start.
 | file | what it is |
 |---|---|
 | `tools/fingerprint/oxp3-fp-probe.py` | bring-up probe. Default `--transport spi` sends the recovered selector + two-entry SPB transaction (`--spidev` and `--allow-writes` required for I/O); `--dry-run` prints exact plans with no I/O; `acpi_info --crs FILE` parses an extracted `_CRS` offline. `--transport frame` keeps the old `0xAA`/CRC experiment. Refuses destructive opcodes by opcode *and* selector. Stdlib only. |
-| `tools/fingerprint/fpbf63112/matrix.py` | the `--try-matrix` planner/runner and valid-answer parser: reset polarity x settle x IRQ edge, explicit `0xAA`/CRC-32-or-bare layout check, JSON report; transport-agnostic so tests use a fake transport |
+| `tools/fingerprint/fpbf63112/matrix.py` | the `--try-matrix` planner/runner (reset polarity x settle x IRQ edge) and the `--try-write-shape` planner/runner (selector bit 0 x padding x read length), valid-answer parsers with CRCs and candidate-offset shift analysis, JSON reports; transport-agnostic so tests use a fake transport |
 | `tools/fingerprint/fpbf63112/spi.py` | recovered SPI/SPB transport: selector computation, two `spi_ioc_transfer` entries per command, recovered 1000/2030 (5000/10010 image, 2000/4016 restore) timeouts, IRQ waiters (gpiod v1/v2, sysfs, poll), reset pulse, cancel settle, and the allowlist/destructive gates |
 | `tools/fingerprint/fpbf63112/acpi.py` | raw `_CRS` resource-template parser for `SpiSerialBus`, `GpioInt`, `GpioIo`, I2C and IRQ items; validates lengths/offsets and reduces them to `SpiConnection` (speed, mode, bits, CS, IRQ, reset) |
 | `tools/fingerprint/fpbf63112/aml.py` | finds and validates the FPRT `_CRS` resource template in the raw DSDT AML, so the runbook does not depend on `iasl` or on copying bytes out of ASL by hand |
@@ -499,7 +499,14 @@ Steps 1, 2, 4 and 5 are read-only; step 3 is the only state change (the
    device expects the IRQ first. `cat
    /sys/bus/spi/devices/spi-BF63112:00/statistics/bytes_tx` tells you whether
    the transfers happened at all, even when the answer is garbage. The reset
-   line is only pulsed with `--reset-gpio N --allow-reset`.
+   line is only pulsed with `--reset-gpio N --allow-reset`, using the settled
+   `--reset-polarity active-high --settle-ms 10`. After a shifted answer (the
+   2026-11-09 run: `00 00 00 ff 7f 50 03` for `0xA0` vs `00 00 ff 7f 50 03`
+   for `0xA1`), run the one-command write-shape experiment:
+   `sudo tools/fingerprint/oxp3-fp-session.sh --try-write-shape --irq-pin 18
+   --reset-pin 16 --gpio-chip gpiochip1 --reset-polarity active-high
+   --settle-ms 10 --irq-edge rising --allow-reset` (guide:
+   [fingerprint-transport.md §8.8](fingerprint-transport.md#88-the-try-write-shape-guide)).
 
 ## Safety
 

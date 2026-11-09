@@ -44,7 +44,12 @@ the command say so), `--allow-existing-bind`,
 `--try-matrix` (one bounded read-only experiment: reset polarity
 active-low/active-high/hold x settle 10/150 ms x IRQ edge rising/falling/both;
 needs `--allow-reset`, an IRQ pin and a reset pin; the table is written to
-`matrix.json`), `--allow-takeover`, `--crs FILE` (use an already-extracted
+`matrix.json`), `--try-write-shape` (the follow-up experiment: selector bit 0
+x write padding after the selector x read length, for `0xA0` then `0xA1`/`0xC1`;
+needs `--allow-reset`, an IRQ pin and a reset pin; the table is written to
+`write-shape.json`), `--reset-polarity active-high|active-low` and
+`--settle-ms N` (the now-known-good electrical settings; defaults
+active-high/10 ms), `--allow-takeover`, `--crs FILE` (use an already-extracted
 resource template),
 `--gpio N` / `--irq-edge E` / `--gpio-chip NAME` (override the `_CRS` value
 for an experiment; the plan prints what it will use), `--irq-pin N` /
@@ -72,7 +77,7 @@ restored).
 | 4 | **plan** | print every following command, then ask `Proceed?` | no |
 | 5 | **bind** | print the commands, ask once (the takeover question names the driver being displaced), then `modprobe spidev` (only if not loaded), write `spidev` to `driver_override`, write the device name to `spidev/bind`; read every write back; discover the new `/dev/spidevN.M` from sysfs | **yes** |
 | 6 | **dry run** | run the probe with `--dry-run`: the exact selector byte and two-entry transfer for each read, no device opened | no |
-| 7 | **read** | print the exact gated command, then require the literal word `probe` (`skip` stops before touching the sensor; anything else refuses). Runs only `fw scheme info` (`0xA0`, `0xA1`, `0xC1`) unless `--reads` narrows it - never enrol/identify/remove/JTAG/restore/update. With `--try-matrix` the probe instead runs the 18-cell polarity/settle/edge matrix, which sends the same three queries and writes `matrix.json` | talks to the sensor (read-only; the matrix also pulses the reset line, already gated by `--allow-reset`) |
+| 7 | **read** | print the exact gated command, then require the literal word `probe` (`skip` stops before touching the sensor; anything else refuses). Runs only `fw scheme info` (`0xA0`, `0xA1`, `0xC1`) unless `--reads` narrows it - never enrol/identify/remove/JTAG/restore/update. With `--try-matrix` the probe instead runs the 18-cell polarity/settle/edge matrix (table -> `matrix.json`); with `--try-write-shape` it runs the 60-cell selector/padding/read-length experiment (table -> `write-shape.json`) | talks to the sensor (read-only; both experiments also pulse the reset line, already gated by `--allow-reset`) |
 | 8 | **restore** | see §3; then verify | **yes** |
 | 9 | **summary** | `summary.json`, `README.txt`, the journal and the transcript are written | transcript only |
 
@@ -155,6 +160,10 @@ acpi binding mutations probe restore unknowns files`.
   `matrix.json` object (`outcome`, `verdict`, `planned`, `attempted`,
   `attempts[]` with `polarity`, `settle_ms`, `edge`, `bytes_hex`, `queries[]`,
   and `winning`).
+* `write_shape`: `null` unless `--try-write-shape` ran, otherwise the complete
+  `write-shape.json` object (`outcome`, `verdict`, `planned`, `attempted`,
+  `cells[]` with `selector`, `padding`, `read_len`, `hex`, `aa_offset`, `crc`,
+  `candidate_offset`, `verdict`, and `shift_summary`).
 * `restore`: `attempted`, `verified`, `exit`, `driver`, `override`, `notes[]`.
 * `unknowns[]`: the remaining open questions, computed from what actually
   happened (e.g. "no GpioInt in `_CRS`", "no firmware answer was parsed",
@@ -276,7 +285,7 @@ The concrete numbers are the expected *shape* (§5), not a captured answer; the
 test is that the payload is no longer all zero and that `width*height` is a
 sane image size. **All zeros** now means "the bus clocked, but the sensor still
 did not drive MISO after a real reset pulse": the remaining suspects are the
-reset polarity (active-low is assumed), the possibility that the module wants
+reset polarity (the 2026-11-09 run settled active-high; `--reset-polarity` still allows active-low), the possibility that the module wants
 the interrupt *before* it answers (the probe clocks first and waits after), or
 that reset 16 is not the line this firmware actually toggles. **All `0xff`**
 means nothing answered on the bus at all (chip select/controller), and a
@@ -329,6 +338,74 @@ timeouts only -> interrupt pin/edge or the device is not running; a non-zero
 answer that does not parse -> the transport works but the framing/layout is
 wrong. If a cell wins, write down its polarity/settle/edge and repeat exactly
 that single setting in a normal `--reads` run before trusting it.
+
+### 5.3 The write-shape run after the shifted answer
+
+The 2026-11-09 matrix run found reset **active-high**, settle **10 ms**, edge
+**rising** (attempt 7/18). `0xA0` then answered 64 bytes starting
+`00 00 00 ff 7f 50 03` and `0xA1` answered `00 00 ff 7f 50 03` - the same
+payload with a different number of leading zero bytes, so the answer is
+shifted relative to our read window. `--try-write-shape` is the next step: it
+keeps the now-known-good electrical settings pinned and varies only the write
+shape, because the selector-only write may be consuming one or more bytes as
+command payload, or the read flag may live in selector bit 0.
+
+The exact owner command (one run, read-only, ~60 cells at 400 ms):
+
+```sh
+sudo tools/fingerprint/oxp3-fp-session.sh \
+    --try-write-shape \
+    --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 \
+    --reset-polarity active-high --settle-ms 10 --irq-edge rising \
+    --allow-reset
+```
+
+`--allow-reset` is mandatory (every cell re-pulses the reset line with the
+pinned polarity), and the probe still refuses anything outside
+`0xA0`/`0xA1`/`0xC1` by opcode **and** selector. The probe command is recorded
+in `commands.txt`; it is:
+
+```sh
+sudo python3 tools/fingerprint/oxp3-fp-probe.py --spidev /dev/spidev0.0 \
+    --speed 4000000 --mode 0 --bits 8 \
+    --reset-polarity active-high --settle-ms 10 \
+    --gpio 18 --gpio-chip gpiochip1 --irq-edge rising --irq-active-low \
+    --try-write-shape --allow-writes --reset-gpio 16 --allow-reset \
+    --write-shape-json docs/state/fp-session-<run>/write-shape.json
+```
+
+The matrix is deterministic: for `0xA0`, then `0xA1`, then `0xC1`; selector
+`(opcode & 0x3f) << 1` with bit 0 clear and set; 0/1/2/3/4 zero bytes and the
+two-zeros-plus-phase hypothesis written after the selector; read length equal
+to the recovered layout (7 B for `0xA0`, 9 B for `0xC1`) and 64 B. That is
+2 x 6 x (2 + 1 + 2) = 60 cells, stopping at the first cell that produces a
+valid answer. The console table reports the selector, padding, read length,
+the first 16 bytes, the offset of any `0xAA`, the CRC verdict and the **best
+candidate offset** of the plausible payload field:
+
+```
+#  cmd sel  pad   rd  first 16 bytes                    AA  crc   cand verdict
+ 1 fw   0x40 0       7 00 00 00 ff 7f 50 03 ...         -  none     - shifted
+```
+
+Success is narrower than the matrix's: a bare answer only counts when the
+recovered layout is anchored at read offset 0 (`0xA0` project byte in
+`{1,2,3,4,6}`, `0xC1` geometry `1..4096`, `0xA1` first word a plausible
+length/version `1..4096`). A layout that appears only at a non-zero offset is
+reported as `shifted` with that offset and does **not** stop the run - the
+point is to see whether padding moves the payload towards offset 0 (e.g.
+"payload starts at read offset 3 for padding 0, offset 2 for padding 1" means
+the device consumes one command byte per padding byte). A CRC-valid
+`0xAA | L:u32 | ... | CRC-32` frame is accepted at any offset.
+
+If every cell fails, `write-shape.json` still carries the bytes and offsets:
+all zeros/0xFF means no MISO drive at all; `timeout` with bytes means only the
+IRQ is wrong; a `shifted` candidate that moves one byte per padding byte
+identifies the byte the device consumes; a `crc-mismatch` at offset 0 means the
+framing is the USB frame but the length/CRC do not match. The same object is
+embedded in `summary.json` under `write_shape`, and `README.txt` names the
+outcome. Repeat a winning row's exact selector/padding/read length in a normal
+`--reads` run before trusting it.
 
 ## 6. Handing the transcript back
 
@@ -460,16 +537,21 @@ or without the sensor, and never binds anything).
   releases it on close. A sysfs export is a transient sysfs write inside that
   request, which is why the request is listed in the phase output; the chardev
   backend writes nothing outside its own request fd.
-* A **normal** read still assumes the reset line is **active-low** (ACPI
-  `GpioIo` has no polarity field). `--try-matrix` now tests active-low,
-  active-high and a no-pulse control in one run, so polarity is no longer a
-  reason to repeat a single-setting run - but the matrix has not run on the
-  sensor yet either.
+* A **normal** read uses the settled reset polarity **active-high** and a
+  10 ms settle (`--reset-polarity`/`--settle-ms`; the flags exist because the
+  2026-11-09 matrix run found that combination, not because ACPI carries it).
+  `--try-matrix` still sweeps active-low/active-high/hold and 10/150 ms for a
+  future unit, but it is no longer the first experiment on this one.
 * Whether the sensor needs the interrupt at all is still unproven: the probe
   clocks the selector/answer first and waits for the IRQ afterwards. If the
   first answer stays all-zero with the lines configured, the next experiment is
   to reorder that (wait for the edge, then clock the read), which is a code
   change, not a new runbook flag.
+* The **write shape** is the open question after the shifted answer: whether
+  the device consumes bytes after the selector, whether the read flag is
+  selector bit 0, and how many leading bytes precede the real payload. The
+  `--try-write-shape` run answers the first two and records the shift; a
+  candidate offset that moves with the padding is the relationship to use.
 * `acpidump` is used only when the sysfs DSDT cannot be read; that path is
   implemented but not exercised on this host (no `acpica-tools` here).
 * Whether the first read needs the IRQ before the answer, whether the module

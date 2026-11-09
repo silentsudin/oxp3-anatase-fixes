@@ -789,6 +789,34 @@ class SpiTransfer:
 
 
 @dataclasses.dataclass(frozen=True)
+class ReadShape:
+    """A non-standard *read* write shape, used by the ``--try-write-shape`` probe.
+
+    The recovered driver always sends exactly one selector byte before clocking
+    an answer.  The bring-up run suggests the sensor may instead expect the
+    selector plus one or more command bytes (phase/arg/padding) and may also
+    expect the read flag in selector bit 0.  This type keeps such a plan
+    explicit and auditable: ``selector_variant`` is ``"read"`` (bit 0 clear,
+    the recovered shape) or ``"read-bit0"`` (bit 0 set), and ``padding`` is
+    written immediately after the selector byte.
+    """
+
+    selector_variant: str = "read"
+    padding: bytes = b""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "padding", bytes(self.padding))
+        if self.selector_variant not in ("read", "read-bit0"):
+            raise ValueError(f"bad selector variant {self.selector_variant!r}")
+        if len(self.padding) > 8:
+            raise ValueError("write-shape padding is limited to 8 bytes")
+
+    @property
+    def selector_bit0(self) -> int:
+        return 1 if self.selector_variant == "read-bit0" else 0
+
+
+@dataclasses.dataclass(frozen=True)
 class SpiPlan:
     """One transaction, fully determined before any I/O happens.
 
@@ -806,16 +834,29 @@ class SpiPlan:
     transfers: tuple[SpiTransfer, ...]
     timeout_ms: int
     total_ms: int
+    shape: ReadShape | None = None
 
     def __post_init__(self) -> None:
         if self.operation not in ("read", "write"):
             raise ValueError(f"bad operation {self.operation!r}")
-        if self.selector != selector(self.opcode,
-                                     self.operation == "write"):
-            raise ValueError("selector does not match opcode/direction")
+        if self.shape is not None and self.operation != "read":
+            raise ValueError("a write shape only applies to a read plan")
+        if self.shape is None:
+            if self.selector != selector(self.opcode,
+                                         self.operation == "write"):
+                raise ValueError("selector does not match opcode/direction")
+        else:
+            base = selector(self.opcode, write=False)
+            if self.selector != base | self.shape.selector_bit0:
+                raise ValueError("shape selector does not match its variant")
+            if self.selector & 0x80:
+                raise ValueError("a read-shape selector must not set bit 7")
         if not self.transfers:
             raise ValueError("plan has no transfers")
-        if self.transfers[0].tx != bytes([self.selector]):
+        first_tx = bytes([self.selector])
+        if self.shape is not None:
+            first_tx += self.shape.padding
+        if self.transfers[0].tx != first_tx:
             raise ValueError("first transfer must be the selector byte")
         if self.operation == "read":
             if len(self.transfers) != 2:
@@ -911,6 +952,36 @@ def build_plan(opcode: int, *, operation: str = "read",
             timeout_ms if timeout_ms is not None else default_timeout,
             total_ms if total_ms is not None else default_total)
     raise ValueError(f"bad operation {operation!r}")
+
+
+def build_shape_plan(opcode: int, *, selector_variant: str = "read",
+                     padding: bytes = b"", read_len: int | None = None,
+                     timeout_ms: int | None = None,
+                     total_ms: int | None = None) -> SpiPlan:
+    """Build one read with an experimental selector/padding write shape.
+
+    This is the *only* way to put a selector other than
+    ``(opcode & 0x3f) << 1`` on the wire, and it stays read-only: the
+    direction bit (bit 7) is never set, only bit 0 can vary, and the caller
+    still has to pass the transport's read allowlist and destructive-opcode
+    gate.  ``read_len`` bytes are clocked after the selector plus ``padding``.
+    """
+    n = read_len if read_len is not None else 0
+    if n <= 0:
+        raise ValueError("read_len must be > 0")
+    shape = ReadShape(selector_variant, padding)
+    base = selector(opcode, write=False)
+    sel = base | shape.selector_bit0
+    default_timeout, default_total = default_timeouts(opcode)
+    transfers = (
+        SpiTransfer(bytes([sel]) + shape.padding, 0),
+        SpiTransfer(b"", n),
+    )
+    return SpiPlan(
+        opcode, "read", b"", n, sel, transfers,
+        timeout_ms if timeout_ms is not None else default_timeout,
+        total_ms if total_ms is not None else default_total,
+        shape=shape)
 
 
 def plan_command(command: "SpiCommand", **kwargs) -> SpiPlan:
@@ -1557,6 +1628,7 @@ class SpiTransport:
                  irq: GpioIrqWaiter | None = None,
                  reset: GpioResetLine | None = None,
                  allow_reset: bool = False,
+                 reset_settle_ms: int | None = None,
                  spi_io=None,
                  clock=time.monotonic,
                  sleep=time.sleep):
@@ -1573,6 +1645,8 @@ class SpiTransport:
         self.irq = irq
         self.reset_line = reset
         self.allow_reset = bool(allow_reset)
+        self.reset_settle_ms = (None if reset_settle_ms is None
+                                else int(reset_settle_ms))
         self._io = spi_io
         self._clock = clock
         self._sleep = sleep
@@ -1602,7 +1676,10 @@ class SpiTransport:
             raise UnsafeCommand(
                 f"opcode 0x{plan.opcode:02x} is "
                 f"{DESTRUCTIVE_OPS[plan.opcode]}: refusing unconditionally")
-        low = plan.selector & 0x7F
+        # Read-shape plans may set selector bit 0, so gate on bit 0 cleared:
+        # a variant selector must not alias a destructive opcode's selector
+        # either (e.g. 0x05 is still JTAG's 0x04 with the read flag set).
+        low = plan.selector & 0x7E
         if low in FORBIDDEN_SELECTORS:
             aliases = FORBIDDEN_SELECTORS[low]
             names = ", ".join(f"0x{op:02x} {DESTRUCTIVE_OPS[op]}"
@@ -1645,7 +1722,12 @@ class SpiTransport:
         if self.reset_line is not None and self.allow_reset:
             self.reset_line.pulse()
             # FUN_180016260: Sleep(0x32) after the reset target is opened.
-            self._sleep(RESET_OPEN_MS / 1000.0)
+            # The bring-up run settled on 10 ms after an active-high pulse, so
+            # an explicit value overrides the recovered 50 ms default.
+            settle = (RESET_OPEN_MS if self.reset_settle_ms is None
+                      else self.reset_settle_ms)
+            if settle:
+                self._sleep(settle / 1000.0)
 
     def close(self) -> None:
         if self._io is not None:

@@ -564,9 +564,10 @@ make -C tools/fingerprint syntax-real LIBFPRINT_SRC=/tmp/libfprint-1.94.9 \
   controller/line mapping is now resolved (GPI1/`gpiochip1`, IRQ 18, reset 16;
   §8.6), but no run has yet proven that the first answer depends on the
   interrupt;
-* the reset pulse polarity: `_CRS`/ACPI `GpioIo` carries no polarity and the
-  probe assumes active-low, so whether the module needs a pulse at all and
-  whether it is asserted low or high is still a hardware experiment;
+* the reset pulse polarity: `_CRS`/ACPI `GpioIo` carries no polarity, so it is
+  a measured property - the 2026-11-09 run settled on **active-high** with a
+  10 ms settle (§8.7); `--reset-polarity` still allows active-low for another
+  unit;
 * suspend/resume semantics: the driver closes the spidev node instead of
   sending the unproven 0xB6 SLEEP selector;
 * the answer length/record layouts for `0xA1` and the UID/count queries.
@@ -717,6 +718,69 @@ IRQ/reset pins, timeout) and every query's bytes/verdict, so an all-failed
 verdict names exactly which combinations were tried and the next session does
 not repeat them.
 
+### 8.8 The try-write-shape guide
+
+The matrix run on 2026-11-09 settled the electrical side: reset **active-high**,
+10 ms settle, **rising** edge. Attempt 7/18 then answered over SPI for the
+first time - `0xA0` returned 64 bytes starting `00 00 00 ff 7f 50 03`, and
+`0xA1` returned `00 00 ff 7f 50 03`: the same payload with a **different
+number of leading zero bytes**. The payload is shifted relative to our read
+window, so the next unknown is the write shape, not the wiring.
+
+`--try-write-shape` (runbook: `--try-write-shape`) holds the electrical
+settings pinned and varies only what the host writes before clocking MISO:
+
+* **selector bit 0** - the recovered read selector has bit 0 clear; the
+  alternative hypothesis is that bit 0 is the read flag,
+* **write padding after the selector** - 0, 1, 2, 3, 4 zero bytes, plus the
+  "two zeros then the command's phase byte" hypothesis,
+* **read length** - the recovered layout length and a full 64 bytes,
+
+for `0xA0`, then `0xA1`, then `0xC1`, 2 x 6 x (2 + 1 + 2) = **60 cells**, each
+with a 400 ms timeout. The probe stops at the first **valid** answer. Success
+is a CRC-valid `0xAA | L:u32 | ... | CRC-32` frame at any offset, or the bare
+recovered layout anchored at read offset 0 (`0xA0` project in
+`{1,2,3,4,6}`, `0xC1` geometry `1..4096`, `0xA1` first word `1..4096`). A bare
+layout found only at a non-zero offset is `shifted`, not success: it is
+reported with its offset so the padding-to-shift relationship is visible.
+
+The console table and `write-shape.json` have one record per cell:
+
+| field | meaning |
+|---|---|
+| `selector` | the actual byte written, e.g. `0x40` (read, bit 0 clear) or `0x41` (bit 0 set) |
+| `padding` / `padding_hex` | how many bytes followed the selector and what they were |
+| `read_len` | bytes clocked back |
+| `hex` | the complete answer |
+| `aa_offset` / `aa_offsets` | first (and all) `0xAA` positions, `null` when none |
+| `crc` | `ok`, `crc`, `short`, `bad-length` or `none` |
+| `candidate_offset` | best offset where the recovered field appears - the shift evidence |
+| `verdict` | `valid`, `shifted`, `zeros`, `all-ff`, `short`, `crc-mismatch`, `timeout`, `error`, ... |
+
+All-fail outcomes still carry the information:
+
+* **all `zeros`/`all-ff`** - the write shape did not get MISO driven at all;
+  the selector/padding matrix is exhausted and the next hypothesis is the
+  IRQ-first ordering (§8.5), not another padding count.
+* **`timeout` with bytes** - the data path works; only the IRQ edge/pin is
+  wrong. Those bytes are still scored for shift.
+* **`shifted` everywhere** - compare `candidate_offset` across paddings. If it
+  drops by one for every added padding byte, the device consumes one command
+  byte per padding byte; if it moves the other way (or not at all), the read
+  clock itself is being consumed and the next shape needs a longer command
+  prefix, not more padding.
+* **`crc-mismatch` at offset 0** - the 0xAA framing is present (USB branch
+  shape) but the L field/CRC does not validate; the answer is truncated or
+  preceded by a status byte.
+* **one `valid` cell** - its selector/padding/read length is the new write
+  shape; repeat it in a normal read before changing the driver.
+
+Only `0xA0`, `0xA1` and `0xC1` can be sent, `SpiTransport` re-checks the read
+allowlist and the destructive-opcode/selector gate (including with selector bit
+0 set, so `0x05` still aliases JTAG's `0x04`), and the reset pulse itself needs
+`--allow-reset`. `write-shape.json` is embedded in `summary.json` under
+`write_shape`.
+
 ## 9. Next steps
 
 **If the goal is this unit (SPI-only, the realistic path).** This is the exact
@@ -812,14 +876,18 @@ explanation and as the fallback if the script cannot run.
   static `SBFG` `GpioInt` is edge/active-high/wake-capable, but the real
   numbers (IRQ 18, reset 16) come from `_INI`/`GNUM` and must be passed with
   `--irq-pin`/`--reset-pin`;
-* the reset polarity - ACPI `GpioIo` has no polarity field, so a normal read
-  assumes the conventional active-low and requires `--allow-reset` explicitly;
-  `--try-matrix` (8.7) tests active-low, active-high and a no-pulse control in
-  one run;
+* the reset polarity - ACPI `GpioIo` has no polarity field, so it is a
+  measured property: the 2026-11-09 run settled on **active-high**, 10 ms
+  settle and a rising edge, and normal reads now default to that
+  (`--reset-polarity`, `--settle-ms`); `--try-matrix` (8.7) still sweeps the
+  older hypotheses for a different unit;
 * the controller-side values (speed/mode/bits) and whether the PXA2xx PIO path
   with no DMA channels at 1 MHz behaves; and
-* everything about the device's response to the first selector byte, including
-  whether it needs the 50 ms power/reset settle before accepting one.
+* the **write shape** after the first selector byte: the shifted answer
+  (`00 00 00 ff 7f 50 03` for `0xA0` vs `00 00 ff 7f 50 03` for `0xA1`) means
+  the payload starts at a non-zero read offset; whether the device consumes
+  padding bytes and whether selector bit 0 is the read flag is what
+  `--try-write-shape` (8.8) determines;
 
 **If a USB unit ever shows up (or for completeness):**
 

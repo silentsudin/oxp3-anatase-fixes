@@ -330,5 +330,289 @@ class TestProbeMatrixIntegration(unittest.TestCase):
         self.assertIn("--allow-reset", out.getvalue())
 
 
+
+
+# ---------------------------------------------------------------------------
+# --try-write-shape: planner, validator and runner
+# ---------------------------------------------------------------------------
+
+class ShapeFakeSession:
+    """A fake write-shape transport: canned bytes per cell index."""
+
+    def __init__(self, cell, answers, closed):
+        self.cell = cell
+        self.answers = answers
+        self.closed = closed
+
+    def read(self, opcode, read_len, *, selector_variant="read", padding=b"",
+             timeout_ms=None):
+        value = self.answers.get(self.cell.index)
+        if value is None:
+            value = b"\x00" * read_len
+        if callable(value):
+            return value(opcode, read_len, selector_variant, padding,
+                         timeout_ms)
+        return matrix.ReadResult(bytes(value), irq="fired")
+
+    def close(self):
+        self.closed.append(self.cell.index)
+
+
+class TestWriteShapePlanner(unittest.TestCase):
+    def test_default_matrix_is_60_cells_in_documented_order(self):
+        cells = matrix.plan_write_shape()
+        self.assertEqual(len(cells), 60)
+        self.assertEqual([c.index for c in cells], list(range(1, 61)))
+        first = cells[0]
+        self.assertEqual((first.query.opcode, first.selector,
+                          first.padding_label, first.read_len),
+                         (0xA0, 0x40, "0", 7))
+        self.assertEqual(cells[1].read_len, 64)
+        self.assertEqual(cells[12].selector, 0x41)       # bit 0 set
+        self.assertEqual(cells[12].padding_label, "0")
+        self.assertEqual(cells[11].padding_label, "phase")
+        self.assertEqual(cells[-1].query.opcode, 0xC1)
+        self.assertEqual(cells[-1].selector, 0x03)
+        self.assertEqual(cells[-1].read_len, 64)
+        # every query appears with both selector variants
+        self.assertEqual({c.query.opcode for c in cells}, {0xA0, 0xA1, 0xC1})
+        self.assertEqual({c.selector_variant for c in cells},
+                         {"read", "read-bit0"})
+        self.assertEqual({c.padding_label for c in cells},
+                         {"0", "1", "2", "3", "4", "phase"})
+        # the phase padding is the phase byte preceded by two zeros
+        phase = [c for c in cells if c.padding_label == "phase"][0]
+        self.assertEqual(phase.padding, b"\x00\x00\x00")
+
+    def test_phase_padding_carries_the_command_phase(self):
+        query = matrix.MatrixQuery("fw", 0xA0, 7, 64, "x", phase=0x05)
+        cells = matrix.plan_write_shape(queries=(query,))
+        phase = [c for c in cells if c.padding_label == "phase"][0]
+        self.assertEqual(phase.padding, b"\x00\x00\x05")
+
+    def test_planner_rejects_bad_inputs(self):
+        with self.assertRaises(ValueError):
+            matrix.plan_write_shape(selectors=())
+        with self.assertRaises(ValueError):
+            matrix.plan_write_shape(paddings=())
+        with self.assertRaises(ValueError):
+            matrix.plan_write_shape(selectors=(("bogus", 0),))
+        with self.assertRaises(matrix.MatrixRefused):
+            matrix.plan_write_shape(queries=(
+                matrix.MatrixQuery("enrol", 0xB0, 7, 64),))
+        with self.assertRaises(matrix.MatrixRefused):
+            matrix.plan_write_shape(queries=(
+                matrix.MatrixQuery("jtag-alias", 0x02, 7, 64),))
+
+    def test_experiment_is_limited_to_a0_a1_c1(self):
+        query = matrix.MatrixQuery("uid", 0xC0, 16, 64)
+        with self.assertRaises(matrix.MatrixRefused):
+            matrix.plan_write_shape(queries=(query,))
+
+
+class TestWriteShapeValidator(unittest.TestCase):
+    def test_valid_aa_frame_at_offset_zero(self):
+        frame = protocol.build_frame(0xA0, 0, 0, VALID_FW)
+        check = matrix.analyze_shape_answer(0xA0, frame)
+        self.assertTrue(check.valid)
+        self.assertEqual((check.framing, check.aa_offset, check.crc),
+                         ("frame", 0, "ok"))
+        self.assertEqual(check.payload, VALID_FW)
+
+    def test_valid_aa_frame_at_a_non_zero_offset(self):
+        frame = protocol.build_frame(0xA1, 0, 0, VALID_SCHEME)
+        check = matrix.analyze_shape_answer(0xA1, b"\x00\x00" + frame)
+        self.assertTrue(check.valid)
+        self.assertEqual(check.aa_offset, 2)
+        self.assertEqual(check.crc, "ok")
+
+    def test_valid_bare_fw_layout_at_offset_zero(self):
+        check = matrix.analyze_shape_answer(0xA0, VALID_FW + b"\x00" * 57)
+        self.assertTrue(check.valid)
+        self.assertEqual((check.framing, check.candidate_offset), ("bare", 0))
+        self.assertEqual(check.fields["project"], 2)
+
+    def test_valid_bare_layout_at_a_non_zero_offset_is_shifted(self):
+        data = b"\x00\x00" + VALID_FW + b"\x00" * 55
+        check = matrix.analyze_shape_answer(0xA0, data)
+        self.assertFalse(check.valid)
+        self.assertEqual(check.verdict, matrix.SHIFTED)
+        self.assertEqual(check.candidate_offset, 2)
+        self.assertEqual(check.candidate_offsets[0], 2)
+
+    def test_valid_sensor_info_layout(self):
+        check = matrix.analyze_shape_answer(0xC1, VALID_INFO + b"\x00" * 55)
+        self.assertTrue(check.valid)
+        self.assertEqual((check.fields["width"], check.fields["height"]),
+                         (0x40, 0x40))
+
+    def test_observed_shifted_scheme_pattern_reports_an_offset(self):
+        # The 2026-11-09 hardware answer: 00 00 ff 7f 50 03 ...
+        data = bytes.fromhex("00 00 ff 7f 50 03 00 00") + b"\x00" * 56
+        check = matrix.analyze_shape_answer(0xA1, data)
+        self.assertFalse(check.valid)
+        self.assertEqual(check.verdict, matrix.SHIFTED)
+        self.assertIn(4, check.candidate_offsets)
+
+    def test_zeros_ff_short_and_empty_are_not_valid(self):
+        for payload, verdict in (
+                (b"\x00" * 64, matrix.ZEROS),
+                (b"\xff" * 64, matrix.ALL_FF),
+                (b"\x01\x02", matrix.SHORT),
+                (b"", matrix.EMPTY)):
+            with self.subTest(verdict=verdict):
+                check = matrix.analyze_shape_answer(0xA0, payload)
+                self.assertEqual(check.verdict, verdict)
+                self.assertFalse(check.valid)
+
+    def test_crc_mismatch_is_its_own_verdict(self):
+        frame = bytearray(protocol.build_frame(0xA0, 0, 0, VALID_FW))
+        frame[-1] ^= 0xFF
+        check = matrix.analyze_shape_answer(0xA0, bytes(frame))
+        self.assertEqual(check.verdict, matrix.CRC_MISMATCH)
+        self.assertEqual(check.crc, "crc")
+        self.assertFalse(check.valid)
+
+    def test_allowlist_refusal(self):
+        with self.assertRaises(matrix.MatrixRefused):
+            matrix.analyze_shape_answer(0xB0, b"\x00" * 64)
+        with self.assertRaises(matrix.MatrixRefused):
+            matrix.analyze_shape_answer(0xC0, b"\x00" * 64)
+
+
+class TestWriteShapeRunner(unittest.TestCase):
+    def run_fake(self, answers, cells=None):
+        cells = tuple(cells or matrix.plan_write_shape())
+        closed = []
+
+        def connect(cell):
+            return ShapeFakeSession(cell, answers, closed)
+
+        report = matrix.run_write_shape(cells, connect=connect)
+        return report, closed
+
+    def test_all_cells_failing_still_produce_a_full_table(self):
+        report, closed = self.run_fake({})
+        self.assertEqual(report.outcome, "no-valid-answer")
+        self.assertEqual(report.attempted if hasattr(report, "attempted")
+                         else len(report.attempts), 60)
+        self.assertEqual(len(report.cells), 60)
+        self.assertEqual(report.winning, None)
+        self.assertEqual(len(closed), 60)
+        table = report.render_table()
+        self.assertEqual(len(table), 61)
+        self.assertIn("cand", table[0])
+        data = report.to_dict()
+        self.assertEqual((data["planned"], data["attempted"]), (60, 60))
+        self.assertIsNone(data["winning"])
+        self.assertEqual(len(data["shift_summary"]), 10)  # 3 ops x 2 selectors x lens
+
+    def test_stops_at_the_first_valid_cell(self):
+        cells = matrix.plan_write_shape()
+        answers = {3: VALID_FW}
+        report, closed = self.run_fake(answers, cells)
+        self.assertEqual(report.outcome, "valid-answer")
+        self.assertIsNotNone(report.winning)
+        self.assertEqual(report.winning.cell.index, 3)
+        self.assertEqual(len(report.attempts), 3)
+        self.assertEqual(closed, [1, 2, 3])
+        self.assertIn("VALID write shape at cell 3/60", report.verdict)
+
+    def test_shifted_only_outcome_reports_the_offsets(self):
+        cells = matrix.plan_write_shape(
+            queries=(matrix.MatrixQuery("scheme", 0xA1, 64, 64),))
+        shifted = bytes.fromhex("00 00 ff 7f 50 03 00 00") + b"\x00" * 56
+        report, _closed = self.run_fake(
+            {index: shifted for index in range(1, len(cells) + 1)}, cells)
+        self.assertEqual(report.outcome, "shifted-only")
+        self.assertIn("candidate offsets by padding", report.verdict)
+        self.assertTrue(all(a.check.candidate_offset is not None
+                            for a in report.attempts))
+        row = report.to_dict()["cells"][0]
+        self.assertEqual(row["candidate_offsets"][0], 4)
+        self.assertFalse(row["valid"])
+
+    def test_json_shape_is_stable_and_complete(self):
+        import json
+        report, _closed = self.run_fake({})
+        text = json.dumps(report.to_dict(), sort_keys=True)
+        data = json.loads(text)
+        self.assertEqual(data["schema"], matrix.WRITE_SHAPE_SCHEMA)
+        self.assertEqual(data["tool"], "oxp3-fp-probe --try-write-shape")
+        first = data["cells"][0]
+        for key in ("selector", "padding", "read_len", "aa_offset", "crc",
+                    "candidate_offset", "verdict", "valid"):
+            self.assertIn(key, first)
+
+
+class TestProbeWriteShapeIntegration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.probe = support.load_probe()
+
+    def run_probe(self, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = self.probe.main(argv)
+        return rc, out.getvalue()
+
+    def test_probe_write_shape_dry_run_plans_60_cells_and_does_no_io(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "write-shape.json")
+            rc, text = self.run_probe([
+                "--try-write-shape", "--dry-run", "--spidev", "/dev/spidev0.0",
+                "--gpio", "18", "--gpio-chip", "gpiochip1",
+                "--reset-gpio", "16", "--allow-reset", "--allow-writes",
+                "--reset-polarity", "active-high", "--settle-ms", "10",
+                "--irq-edge", "rising", "--write-shape-json", path])
+            self.assertEqual(rc, 0)
+            self.assertIn("write-shape: 60 cells", text)
+            self.assertIn("selector=0x41", text)
+            self.assertIn("padding=phase", text)
+            self.assertFalse(os.path.exists(path),
+                             "a dry run must not write the write-shape JSON")
+
+    def test_probe_refuses_command_names_in_write_shape_mode(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main(["--try-write-shape", "fw"])
+        self.assertEqual(rc, 2)
+
+    def test_probe_refuses_write_shape_without_allow_reset(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main([
+                "--try-write-shape", "--spidev", "/dev/spidev0.0",
+                "--gpio", "18", "--reset-gpio", "16", "--allow-writes"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--allow-reset", out.getvalue())
+
+    def test_probe_write_shape_writes_the_table_even_when_every_cell_fails(self):
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            spidev = os.path.join(tmp, "spidev0.0")
+            open(spidev, "w").close()
+            path = os.path.join(tmp, "write-shape.json")
+            rc, text = self.run_probe([
+                "--try-write-shape", "--spidev", spidev,
+                "--gpio", "18", "--gpio-chip", os.path.join(tmp, "gpiochip1"),
+                "--reset-gpio", "16", "--allow-reset", "--allow-writes",
+                "--reset-polarity", "active-high", "--settle-ms", "10",
+                "--irq-edge", "rising", "--write-shape-json", path])
+            self.assertEqual(rc, 1)
+            self.assertTrue(os.path.exists(path))
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.assertEqual((data["planned"], data["attempted"]), (60, 60))
+            self.assertEqual(data["outcome"], "no-valid-answer")
+            self.assertIn("write-shape", text)
+
+
 if __name__ == "__main__":
     unittest.main()

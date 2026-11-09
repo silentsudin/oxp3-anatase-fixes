@@ -460,6 +460,107 @@ else
     fail "summary.json stays valid JSON with the matrix embedded"
 fi
 
+# ---------------------------------------------------------------- 14. --try-write-shape
+# Same shape as the matrix scenario: the probe runs against the fixture's fake
+# spidev node and a nonexistent GPIO chip, so every cell fails closed; what is
+# asserted is that the pinned electrical flags reach the probe and that the
+# write-shape table becomes part of the transcript.
+fixture "$TMP/shape" clean
+mkdir -p "$TMP/session-shape"
+printf 'y\ny\nprobe\n' | "$S" --root "$TMP/shape" --out "$TMP/session-shape" \
+    --try-write-shape --irq-pin 18 --reset-pin 16 \
+    --gpio-chip "$TMP/shape/dev/gpiochip1" --allow-reset \
+    --irq-edge rising --reset-polarity active-high --settle-ms 10 \
+    >"$TMP/shape.out" 2>&1
+shape_rc=$?
+show_log "$TMP/shape.out"
+if [ "$shape_rc" -eq 1 ]; then
+    pass "--try-write-shape runs to a verdict (exit 1 = no valid shape)"
+else
+    fail "--try-write-shape runs to a verdict (exit $shape_rc)"
+fi
+unbound "$TMP/shape" && pass "--try-write-shape restored the previous binding" \
+    || fail "--try-write-shape restored the previous binding"
+contains "$TMP/session-shape/commands.txt" '--try-write-shape' \
+    && pass "the session passes --try-write-shape to the probe" \
+    || fail "the session passes --try-write-shape to the probe"
+contains "$TMP/session-shape/commands.txt" '--write-shape-json' \
+    && pass "the session passes an explicit --write-shape-json path" \
+    || fail "the session passes an explicit --write-shape-json path"
+contains "$TMP/session-shape/commands.txt" '--reset-polarity active-high' \
+    && pass "the settled reset polarity reaches the probe" \
+    || fail "the settled reset polarity reaches the probe"
+contains "$TMP/session-shape/commands.txt" '--settle-ms 10' \
+    && pass "the settled delay reaches the probe" \
+    || fail "the settled delay reaches the probe"
+contains "$TMP/session-shape/commands.txt" '--irq-edge rising' \
+    && pass "the IRQ edge reaches the probe" \
+    || fail "the IRQ edge reaches the probe"
+if [ -s "$TMP/session-shape/write-shape.json" ]; then
+    pass "the write-shape table lands in the transcript (write-shape.json)"
+else
+    fail "the write-shape table lands in the transcript (write-shape.json)"
+fi
+if python3 - "$TMP/session-shape/write-shape.json" <<'PYSHAPE'
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["planned"] == 60, data["planned"]
+assert len(data["cells"]) == 60, len(data["cells"])
+assert data["outcome"] == "no-valid-answer", data["outcome"]
+first = data["cells"][0]
+assert first["command"] == "fw", first["command"]
+assert first["selector"] == "0x40", first["selector"]
+assert first["padding"] == "0"
+assert first["read_len"] == 7, first["read_len"]
+assert "write-shape cells failed" in data["verdict"], data["verdict"]
+assert data["shift_summary"], "shift_summary missing"
+PYSHAPE
+then
+    pass "write-shape.json has 60 cells and the documented shape"
+else
+    fail "write-shape.json has 60 cells and the documented shape"
+fi
+contains "$TMP/session-shape/probe-readonly.txt" 'write-shape: 60 cells' \
+    && pass "the compact write-shape table is in the probe transcript" \
+    || fail "the compact write-shape table is in the probe transcript"
+contains "$TMP/session-shape/probe-readonly.txt" 'cand' \
+    && pass "the compact table reports the payload candidate offset" \
+    || fail "the compact table reports the payload candidate offset"
+contains "$TMP/session-shape/summary.json" '"write_shape"' \
+    && pass "summary.json records the write-shape table" \
+    || fail "summary.json records the write-shape table"
+contains "$TMP/session-shape/summary.json" '"outcome": "no-valid-answer"' \
+    && pass "summary.json records the write-shape outcome" \
+    || fail "summary.json records the write-shape outcome"
+contains "$TMP/session-shape/summary.json" '"write-shape:0xA0/0xA1/0xC1"' \
+    && pass "summary.json names the write-shape read set" \
+    || fail "summary.json names the write-shape read set"
+if python3 -m json.tool "$TMP/session-shape/summary.json" >/dev/null 2>&1; then
+    pass "summary.json stays valid JSON with write_shape embedded"
+else
+    fail "summary.json stays valid JSON with write_shape embedded"
+fi
+# A dry run with different pinned settings must show them without touching the
+# device or writing a table.
+"$S" --dry-run --root "$TMP/shape" --try-write-shape --irq-pin 18 \
+    --reset-pin 16 --gpio-chip gpiochip1 --allow-reset \
+    --irq-edge falling --reset-polarity active-low --settle-ms 25 \
+    >"$TMP/shape-plan.txt" 2>&1
+if [ $? -eq 0 ] && contains "$TMP/shape-plan.txt" '--reset-polarity active-low --settle-ms 25' \
+   && contains "$TMP/shape-plan.txt" '--try-write-shape' \
+   && contains "$TMP/shape-plan.txt" '60 cells (selector bit0'; then
+    pass "a write-shape dry run shows the pinned settings and all cells"
+else
+    fail "a write-shape dry run shows the pinned settings and all cells"
+fi
+if [ -e "$TMP/shape/write-shape.json" ]; then
+    fail "a write-shape dry run wrote no table"
+else
+    pass "a write-shape dry run wrote no table"
+fi
+
 printf -- '------------------------------------------------------------------------\n'
 if [ "$FAILED" -eq 0 ]; then
     printf 'fingerprint-session: %d checks passed\n' "$COUNT"
