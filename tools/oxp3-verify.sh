@@ -2940,12 +2940,16 @@ check_display() {
             if [ -z "$out" ] || [ -z "$hdr" ]; then
                 # Gamescope's argv can be gamescope-wl / gamescope --...; match the
                 # command line, not just the exact comm name.
-                if pgrep -f '[g]amescope' >/dev/null 2>&1; then
+                # These checks read the Plasma/KWin output state through
+                # kscreen-doctor. Without a KWin compositor (Gamemode, tty, a
+                # remote context) kscreen-doctor exists but prints nothing, so the
+                # honest answer is "not applicable here", not UNKNOWN.
+                if ! pgrep -f '[k]win_wayland' >/dev/null 2>&1; then
                     record dsp.hdr display "HDR / WCG state" SKIP \
-                        "inside Gamemode (gamescope is running): desktop HDR is a Plasma feature; see dsp.gamemodehdr" \
+                        "no Plasma compositor in this context (Gamemode/tty): desktop HDR is a KWin feature; see dsp.gamemodehdr" \
                         "" "check HDR in the desktop session, or dsp.gamemodehdr for Gamemode"
                     record dsp.icc display "ICC profile" SKIP \
-                        "inside Gamemode (gamescope is running): desktop ICC is a Plasma feature" \
+                        "no Plasma compositor in this context (Gamemode/tty): desktop ICC is a KWin feature" \
                         "" "check the ICC profile in the desktop session"
                 else
                 record dsp.hdr display "HDR / WCG state" UNKNOWN "could not parse kscreen-doctor output" "$(tail_flat "$RUN_OUT" 1)" "kscreen-doctor -o"
