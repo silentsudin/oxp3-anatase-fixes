@@ -2,9 +2,34 @@
 # Turn the OneXPlayer 3 speaker EQ on: install the filter-chain drop-in, restart the
 # user PipeWire/WirePlumber services once, wait for the sink and make it the default.
 # No root.  Reversible with eq-off.sh.
+#
+#   eq-on.sh            louder default profile (-4 dB headroom, +3.7 dB clipping
+#                       risk at full scale because no limiter exists)
+#   eq-on.sh --safe     -8 dB headroom: cannot clip at 0 dBFS
+#   eq-on.sh --loud     the default, for symmetry
+#   eq-on.sh --help
+#
+# Both profiles use the same installer and the same revert path (eq-off.sh, plus
+# install-user.sh --undo / gain-stage.sh undo for the gain staging).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-"$here/install-user.sh"
+
+usage() {
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+profile=loud
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        --safe) profile=safe ;;
+        --loud) profile=loud ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "eq-on.sh: unknown argument: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+"$here/install-user.sh" "--$profile"
 systemctl --user restart pipewire wireplumber
 
 for _ in $(seq 1 40); do
@@ -27,6 +52,10 @@ if [ "$cur" != "oxp3_speaker_eq.sink" ]; then
   echo "warning: default sink is '${cur:-?}', not the EQ sink" >&2
   echo "  set it manually: pw-metadata -n default 0 default.audio.sink '{\"name\":\"oxp3_speaker_eq.sink\"}'" >&2
 else
-  echo "speaker EQ on (default sink = oxp3_speaker_eq.sink)"
+  echo "speaker EQ on (profile: $profile, default sink = oxp3_speaker_eq.sink)"
+fi
+if [ "$profile" = loud ]; then
+  echo "note: loud profile active; no limiter is installed on this PipeWire build." >&2
+  echo "      Full-scale content near 142 Hz can clip - use --safe for the no-clip chain." >&2
 fi
 pactl list sinks short | grep -E 'oxp3_speaker_eq|HiFi__Speaker__sink' || true

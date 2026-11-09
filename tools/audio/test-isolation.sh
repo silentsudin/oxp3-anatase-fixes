@@ -368,9 +368,10 @@ if "limiter" in eq:
     for key in ("1khz", "142hz"):
         h = eq["limiter"][key]
         print("%-6s 0 dBFS in -> RMS %+.2f dBFS, peak %+.2f dBFS "
-              "(model %+.2f, peak diff %+.2f), clipped %d, tail %+.1f dBFS"
+              "(model %+.2f, peak diff %+.2f), clipped %d, tail %+.1f dBFS%s"
               % (key, h["steady_out_dbfs"], h["peak_dbfs"], h["model_dbfs"],
-                 h["peak_minus_model_db"], h["clipped_samples"], h["tail_dbfs"]))
+                 h["peak_minus_model_db"], h["clipped_samples"], h["tail_dbfs"],
+                 "  clipped as expected: loud profile" if h["clip_expected"] else ""))
     v = eq["limiter"]["vendor_limiter_model"]
     print("vendor limiter model (offline): %.2f dB attenuation, residual gain reduction %.2f dB after release"
           % (v["attenuation_db"], v["residual_gain_reduction_db"]))

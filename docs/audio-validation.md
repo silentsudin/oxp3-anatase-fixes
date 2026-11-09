@@ -130,39 +130,40 @@ and once direct (reference). 2^19-point FFT of each recording; the ratio is
 over the same bins for measurement and model.
 
 ```
+loud profile (-4 dB):
         Hz   measured      model     diff
-        50     -9.60     -9.51    -0.08
-        63     -9.72     -9.71    -0.00
-        79     -9.11     -9.08    -0.03
-       100     -6.65     -6.57    -0.07
-       126     -1.88     -1.79    -0.09
-       159     -1.43     -1.50    +0.06
-       200     -4.43     -4.46    +0.04
-       252     -5.31     -5.31    +0.00
-       317     -5.05     -5.04    -0.01
-       400     -4.85     -4.85    +0.00
-       504     -5.37     -5.39    +0.02
-       635     -6.23     -6.25    +0.02
-       800     -6.93     -6.94    +0.01
-      1008     -7.39     -7.39    +0.01
-      1270     -7.69     -7.70    +0.00
-      1600     -7.92     -7.92    +0.00
-      2016     -8.15     -8.15    +0.00
-      2540     -8.47     -8.48    +0.01
-      3200     -9.14     -9.16    +0.02
-      4032    -10.66    -10.70    +0.04
-      5080    -12.28    -12.31    +0.03
-      6400    -14.59    -14.63    +0.04
-      8063    -12.40    -12.29    -0.11
-     10159     -7.56     -7.54    -0.02
-     12800     -7.99     -8.00    +0.00
-     16127     -7.88     -7.50    -0.38
+        50     -5.60     -5.51    -0.08
+        63     -5.72     -5.71    -0.00
+        79     -5.11     -5.08    -0.03
+       100     -2.65     -2.57    -0.07
+       126     +2.12     +2.21    -0.09
+       159     +2.57     +2.50    +0.06
+       200     -0.43     -0.46    +0.04
+       252     -1.31     -1.31    +0.00
+       317     -1.05     -1.04    -0.01
+       400     -0.85     -0.85    +0.00
+       504     -1.37     -1.39    +0.02
+       635     -2.23     -2.25    +0.02
+       800     -2.93     -2.94    +0.01
+      1008     -3.39     -3.39    +0.01
+      1270     -3.69     -3.70    +0.00
+      1600     -3.92     -3.92    +0.00
+      2016     -4.15     -4.15    +0.00
+      2540     -4.47     -4.48    +0.01
+      3200     -5.14     -5.16    +0.02
+      4032     -6.66     -6.70    +0.04
+      5080     -8.28     -8.31    +0.03
+      6400    -10.60    -10.63    +0.04
+      8063     -8.41     -8.29    -0.11
+     10159     -3.58     -3.55    -0.02
+     12800     -4.05     -4.05    +0.00
+     16127     -4.02     -3.83    -0.19
 bands 20   mean|err| 0.029 dB   max|err| 0.111 dB @ 8063 Hz
 ```
 
 * The **0.03 dB** figure in `docs/hw/audio-harman-apo.md` is reproduced on a
   real graph: mean 0.029 dB over the pass band 100 Hz - 10 kHz, max 0.111 dB.
-* The only larger deviation is the top 1/3-octave (16.1 kHz): -0.38 dB. It is
+* The only larger deviation is the top 1/3-octave (16.1 kHz): -0.19 dB. It is
   outside the pass band and is expected - the sweep is fading out, the biquads
   are close to Nyquist, and the analytic model evaluates the low shelf at
   exactly 20 kHz. It is reported, not hidden.
@@ -176,22 +177,38 @@ bands 20   mean|err| 0.029 dB   max|err| 0.111 dB @ 8063 Hz
 ### 6.1 Limiter: what PipeWire can and cannot do
 
 `module-filter-chain` has **no dynamics builtin**. The labels shipped in
-`libspa-filter-graph-plugin-builtin.so` on this build are
-`bq_allpass bq_bandpass bq_highpass bq_highshelf bq_lowpass bq_lowshelf
-bq_notch bq_peaking bq_raw copy dcblock delay gain invert mixer` (checked with
-`strings`); there is no compressor/limiter and no LADSPA/LV2 limiter is
-installed. The shipped chain therefore replaces the vendor limiter with the
-documented **static -8 dB headroom**, and that is what is measured - not
-claimed as a limiter:
+`libspa-filter-graph-plugin-builtin.so` on this build are the `bq_*` family plus
+`clamp copy dcblock delay gain invert linear max min mixer mult noisegate null
+param_eq recip sine sqrt zeroramp` (checked with `strings`); `noisegate` is a
+gate, not a limiter, and there is no LADSPA or LV2 directory on the machine
+(`/usr/lib64/ladspa` and `/usr/lib64/lv2` do not exist). The chain therefore
+replaces the vendor limiter with **static headroom**, and the hot-tone check is
+profile-aware:
+
+* the **safe** profile (-8 dB) keeps the old guarantee: a 0 dBFS tone is
+  attenuated to -7.38 dBFS at 1 kHz and **-0.26 dBFS at 142 Hz** (stage 1 peaks
+  at +7.74 dB), zero clipped samples;
+* the **loud** default (-4 dB) is +4 dB louder and *must* clip at full scale:
+  its dense peak is +3.74 dBFS at 142 Hz. The check requires the capture to sit
+  at the hard ceiling with clipped samples instead of pretending the chain is
+  protected - the explicit trade-off in
+  [`docs/hw/audio-harman-apo.md`](hw/audio-harman-apo.md) section 5.1.
+
+The full suite's current run (loud default) measures:
 
 ```
-1khz   0 dBFS in -> RMS -10.39 dBFS, peak -7.38 dBFS (model -7.38, peak diff +0.00), clipped 0, tail -180.0 dBFS
-142hz  0 dBFS in -> RMS -3.28 dBFS, peak -0.26 dBFS (model -0.26, peak diff +0.00), clipped 0, tail -180.0 dBFS
+loud profile (-4 dB), 0 dBFS in:
+1khz   RMS -6.39 dBFS, peak -3.38 dBFS (model -3.38, peak diff +0.00), clipped 0, tail -180.0 dBFS
+142hz  RMS -1.49 dBFS, peak +0.00 dBFS (model +3.74, peak diff -3.74), clipped 52393, tail -180.0 dBFS
 ```
 
-* A 0 dBFS tone is attenuated by the chain gain: -7.38 dB at 1 kHz and, the
-  worst case, **-0.26 dB at 142 Hz** (where stage 1 peaks at +7.74 dB) - still
-  below full scale, zero clipped samples. That is the whole safety argument.
+The 142 Hz row is the trade-off made visible: the model says +3.74 dBFS, the
+16-bit capture is hard-clipped at 0 dBFS with 52393 clipped samples. The
+harness passes because it *expects* that for a profile whose model peak is
+above full scale. The safe profile's earlier measured row (-8 dB) is
+-7.38 dBFS at 1 kHz and -0.26 dBFS at 142 Hz with zero clipped samples;
+reproduce it with `tools/audio/install-user.sh --safe` before running the suite.
+
 * Recovery is instantaneous because there is no detector: after the tone the
   output is digital silence (`-180 dBFS`) with no pumping or release tail.
 * The vendor limiter itself can only be **modelled** offline. The same 0 dBFS

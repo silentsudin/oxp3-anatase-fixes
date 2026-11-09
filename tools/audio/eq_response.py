@@ -41,14 +41,37 @@ STAGE2 = [
     (15000.0, -3.0, 0.7),
 ]
 # The vendor preset runs a limiter after the EQ (threshold 0.607 = -4.3 dBFS).
-# A filter-chain cannot do dynamics, so the default chain replaces it with static
-# headroom: -8.0 dB == -(the +7.74 dB peak of stage 1), so the chain never clips.
-# Raise it towards 0 dB (or use the EasyEffects preset, which has a real limiter).
-PREGain_DB = -8.0
-# filter-chain has no plain gain node on this build, so the headroom is a low
-# shelf parked at 20 kHz: flat -8 dB across the audio band, approaching 0 dB at
-# Nyquist (24 kHz; -7.5 dB at 16 kHz).  Measured against the real graph in
-# docs/audio-validation.md.
+# A filter-chain cannot do dynamics (the builtin labels are only bq_*, copy,
+# dcblock, delay, gain, invert, mixer, noisegate and other stateless maths; the
+# noisegate is a gate, not a limiter), so static headroom replaces it.  Two
+# profiles are selectable:
+#
+#   loud  -4.0 dB  installed default.  +7.74 dB stage-1 peak minus 4 dB means a
+#                  0 dBFS 142 Hz tone still peaks at +3.74 dBFS, i.e. it clips;
+#                  that is the deliberate trade-off for the missing limiter.
+#   safe  -8.0 dB  == -(the +7.74 dB peak of stage 1), so the chain cannot clip
+#                  at full scale.  tools/audio/eq-on.sh --safe selects it.
+#
+# The gains are the single source of truth: install-user.sh asks this file for
+# the headroom of the profile it installs, so the generated chain cannot drift
+# from the model.  If a real limiter is wanted, use EasyEffects' Limiter with
+# the vendor numbers (see docs/hw/audio-harman-apo.md).
+PROFILES = {
+    "loud": -4.0,
+    "safe": -8.0,
+}
+DEFAULT_PROFILE = "loud"
+PREGain_DB = PROFILES[DEFAULT_PROFILE]
+
+
+def headroom_db(profile=DEFAULT_PROFILE):
+    """Static headroom (dB) of a named profile; raises KeyError if unknown."""
+    return PROFILES[profile]
+# The headroom is a low shelf parked at 20 kHz: flat across the audio band and
+# approaching 0 dB at Nyquist (24 kHz).  This build also has a plain `gain`
+# builtin, but the shipped chain, this model and the isolation measurements are
+# all parameterised around the shelf, so it stays (changing it would invalidate
+# the 0.03 dB model-vs-graph proof in docs/audio-validation.md).
 HEADROOM_FREQ = 20000.0
 HEADROOM_Q = 0.7
 
@@ -105,22 +128,45 @@ def curve(freqs, bands=BANDS, pre=PREGain_DB, fs=FS):
     return [sum(mag_db(c, f, fs) for c in cs) for f in freqs]
 
 
+def curve_extremes(bands=BANDS, pre=PREGain_DB, fs=FS):
+    """Dense (peak, trough, peak_hz) of the chain over 10 Hz .. 20 kHz.
+
+    A log grid is used rather than the 1/3-octave table because the worst case
+    sits between table points (142 Hz).  This is the number the level report
+    uses for the clipping margin, so it must not under-report the peak.
+    """
+    n = 4000
+    freqs = [10.0 * (2000.0 ** (i / float(n))) for i in range(n + 1)]
+    vals = curve(freqs, bands=bands, pre=pre, fs=fs)
+    peak = max(vals)
+    return peak, min(vals), freqs[vals.index(peak)]
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="Biquad model of the recovered OneXPlayer 3 speaker chain.")
     ap.add_argument("--csv")
-    ap.add_argument("--conf", action="store_true")
+    ap.add_argument("--conf", action="store_true",
+                    help="emit the PipeWire filter.graph nodes for the profile")
+    ap.add_argument("--json", action="store_true",
+                    help="machine-readable summary (profile, headroom, extremes)")
+    ap.add_argument("--print-headroom", action="store_true",
+                    help="print only the selected profile's static headroom in dB")
+    ap.add_argument("--profile", choices=sorted(PROFILES), default=DEFAULT_PROFILE,
+                    help="headroom profile (default: %s)" % DEFAULT_PROFILE)
     ap.add_argument("--no-pregain", action="store_true")
     ap.add_argument("--stage2", action="store_true",
                     help="add the optional all-cut resonance-control block")
     ap.add_argument("--bands", help="freq:gain:q,freq:gain:q,... override")
     args = ap.parse_args()
-    pre = 0.0 if args.no_pregain else PREGain_DB
+    pre = 0.0 if args.no_pregain else PROFILES[args.profile]
     bands = BANDS + STAGE2 if args.stage2 else BANDS
     if args.bands:
         bands = [tuple(float(x) for x in t.split(":")) for t in args.bands.split(",")]
 
-    if args.stage2:
-        pre = -5.0   # combined peak of stage 1 + 2 is +4.82 dB
+    if args.print_headroom:
+        print("%g" % pre)
+        return
     if args.conf:
         nodes = []
         names = []
@@ -157,9 +203,27 @@ def main():
             while f <= 24000.0:
                 fh.write("%.4f,%.4f\n" % (f, curve([f], bands=bands, pre=pre)[0]))
                 f *= 1.01
-    print("chain: %d peaking bands, pre-gain %+.1f dB" % (len(bands), pre))
+    dense_peak, dense_trough, peak_hz = curve_extremes(bands=bands, pre=pre)
+    if args.json:
+        import json as _json
+        print(_json.dumps({
+            "profile": args.profile,
+            "headroom_db": pre,
+            "bands": len(bands),
+            "table_max_db": round(peak, 3),
+            "table_min_db": round(trough, 3),
+            "peak_db": round(dense_peak, 3),
+            "trough_db": round(dense_trough, 3),
+            "peak_hz": round(peak_hz, 1),
+            "clip_margin_db": round(-dense_peak, 3),
+        }, indent=2, sort_keys=True))
+        return
+    print("chain: %d peaking bands, profile %s, pre-gain %+.1f dB"
+          % (len(bands), args.profile if not args.no_pregain else "none", pre))
     print("max %+.1f dB   min %+.1f dB   (sanity: no runaway boost above ~+10 dB)"
           % (peak, trough))
+    print("dense peak %+.2f dB @ %.0f Hz -> clipping margin %+.2f dB at 0 dBFS"
+          % (dense_peak, peak_hz, -dense_peak))
     print("\n%8s %8s" % ("Hz", "dB"))
     for f, v in zip(freqs, vals):
         print("%8.0f %+8.1f" % (f, v))

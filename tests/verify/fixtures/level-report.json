@@ -1,0 +1,32 @@
+{
+  "schema": "oxp3-level-report/1",
+  "card": 0,
+  "control": "Speaker",
+  "controls": [
+    {
+      "name": "Speaker",
+      "max": 87,
+      "values": [87, 87],
+      "value": 87,
+      "balanced": true,
+      "percent": 100,
+      "db": 0.0,
+      "at_max": true
+    }
+  ],
+  "alsa_db": 0.0,
+  "at_max": true,
+  "sink": {"name": "oxp3_speaker_eq.sink", "percent": 100, "db": 0.0, "muted": false},
+  "eq": {
+    "installed": true,
+    "profile": "loud",
+    "headroom_db": -4.0,
+    "peak_db": 3.743,
+    "trough_db": -10.97,
+    "peak_hz": 142.2,
+    "clip_margin_db": -3.743
+  },
+  "net_db": -4.0,
+  "net_vs_old_db": 7.75,
+  "old_default_net_db": -11.75
+}

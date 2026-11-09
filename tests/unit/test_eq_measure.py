@@ -185,12 +185,17 @@ class BandTest(unittest.TestCase):
                                10.0 * math.log10(acc / (k1 - k0)), places=9)
 
     def test_model_flat_shelf_reaches_zero_at_nyquist(self):
-        # The -8 dB headroom is a low shelf at 20 kHz: it is -8 dB in the
-        # audio band and approaches 0 dB at Nyquist, which is why the 16 kHz
-        # band is still near -7.5 dB while the shelf alone is not flat there.
+        # The headroom is a low shelf at 20 kHz: flat in the audio band and
+        # approaching 0 dB at Nyquist.  The safe (-8 dB) profile is the old
+        # chain; the loud (-4 dB) default is 4 dB louder and clips at full
+        # scale in the bass (level_report reports that margin).
         self.assertAlmostEqual(eq.eq_response.curve([24000.0])[0], 0.0,
                                places=6)
-        self.assertLess(eq.eq_response.curve([1000.0])[0], -7.0)
+        safe = eq.eq_response.curve([1000.0], pre=eq.eq_response.PROFILES["safe"])[0]
+        loud = eq.eq_response.curve([1000.0], pre=eq.eq_response.PROFILES["loud"])[0]
+        self.assertLess(safe, -7.0)
+        self.assertAlmostEqual(loud - safe, 4.0, places=3)
+        self.assertGreater(loud, -4.0)
 
     def test_summarise(self):
         rows = [{"freq_hz": f, "diff_db": d, "measured_db": 0.0, "model_db": 0.0}

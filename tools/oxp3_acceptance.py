@@ -233,7 +233,7 @@ ITEM_SPECS = (
     },
     {
         "id": "audio",
-        "title": "Speaker audio (Harman APO)",
+        "title": "Speaker audio (Harman APO) and gain staging",
         "components": ["audio"],
         "install_steps": [],
         "required_checks": [
@@ -243,21 +243,27 @@ ITEM_SPECS = (
         "optional_suites": ["audio-eq-isolation"],
         "offline_files": [
             "tests/unit/test_eq_measure.py",
+            "tests/unit/test_level.py",
+            "tests/unit/test_audio_install.py",
             "docs/audio-validation.md",
             "tools/audio/test-isolation.sh",
+            "tools/audio/level-report.py",
+            "tools/audio/gain-stage.sh",
         ],
         "manual": [
             {
                 "id": "audio.listen",
                 "phase": "acceptance",
                 "step": "listen to a known track on the internal speakers once with the "
-                        "EQ sink loaded (and toggle eq-off.sh to hear the difference)",
+                        "EQ sink loaded (and toggle eq-off.sh to hear the difference); "
+                        "aud.level proves the ALSA gain staging without listening",
                 "command": "tools/audio/eq-on.sh && tools/audio/eq-off.sh",
                 "satisfied_by_signoff": True,
             },
         ],
-        "done_when": "the EQ sink is the default and loaded, the model matches, and one "
-                     "owner listening check is recorded (the model cannot hear the drivers).",
+        "done_when": "the EQ sink is the default and loaded, the model matches, aud.level "
+                     "shows the ALSA control at maximum, and one owner listening check is "
+                     "recorded (the model cannot hear the drivers).",
     },
     {
         "id": "decky",

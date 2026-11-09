@@ -3,8 +3,10 @@
 Status: tuning recovered from the vendor package, reimplemented as a user-scope
 PipeWire filter-chain, and measured end-to-end in an isolated PipeWire graph:
 0.029 dB mean / 0.111 dB max against the model, plus limiter-replacement and
-crossover checks. Nothing on the host was changed (no root, no config in
-`~/.config`); see [`docs/audio-validation.md`](../audio-validation.md).
+crossover checks. The installer adds two headroom profiles (loud default and
+`--safe`), raises the ALSA speaker volume to maximum with a reversible boot unit
+and resume hook, and needs no root - it writes only `~/.config` and `~/.local`.
+See [`docs/audio-validation.md`](../audio-validation.md) and section 5.1 below.
 
 Target: ONEXPLAYER 3 (`ONE_NETBOOK-ONEXPLAYER3`), Anatase `20261026.3`, kernel
 `7.2.7-an28.fc45.x86_64`, PipeWire 1.6.9, Realtek ALC245 behind Intel SOF
@@ -41,11 +43,15 @@ is brighter/harsher and has no speaker protection.
    release 0.360 s** (factory: 1.0 / 0.060 s / 0.500 s), i.e. the vendor deliberately
    trades 4.3 dB of headroom for protection of the small drivers.
 5. [`tools/audio/oxp3-speaker-eq.conf`](../../tools/audio/oxp3-speaker-eq.conf)
-   reproduces stage 1 as eight `bq_peaking` filters plus a -8 dB headroom stage
-   (the peak boost of stage 1 is +7.74 dB @ 142 Hz). Measured in a real,
-   hardware-free PipeWire 1.6.9 graph it matches the model to **0.029 dB mean /
-   0.111 dB max** (20 bands, 100 Hz - 10 kHz); stage 2 is included commented out
-   because its role is not proven (see open points). See
+   reproduces stage 1 as eight `bq_peaking` filters plus a static headroom stage
+   (the peak boost of stage 1 is +7.74 dB @ 142 Hz). The installed default is the
+   **loud** profile (-4 dB headroom): together with the ALSA speaker control raised
+   from 82 to 87/87 it is **+7.75 dB** louder than the old -8 dB/82-of-87 chain.
+   `eq-on.sh --safe` selects the **safe** profile (-8 dB, no clipping at full
+   scale). Measured in a real, hardware-free PipeWire 1.6.9 graph the chain
+   matches the model to **0.029 dB mean / 0.111 dB max** (20 bands,
+   100 Hz - 10 kHz); stage 2 is included commented out because its role is not
+   proven (see open points). See
    [`docs/audio-validation.md`](../audio-validation.md) for the reproducible
    end-to-end run.
 
@@ -201,30 +207,52 @@ creates a sink `oxp3_speaker_eq.sink` and a passive output stream pinned to the
 hardware speaker sink:
 
 ```
-headroom (-8 dB low shelf @ 20 kHz) -> b1 80 Hz -3 Q0.7 -> b2 140 Hz +6 Q2.0
-  -> b3 140 Hz +3 Q1.5 -> b4 400 Hz +3 Q0.9 -> b5 4500 Hz -2 Q2.0
-  -> b6 6500 Hz -4 Q2.0 -> b7 7500 Hz -4 Q2.0 -> b8 10000 Hz +3 Q3.0
+headroom (-4 dB low shelf @ 20 kHz, --safe: -8 dB) -> b1 80 Hz -3 Q0.7
+  -> b2 140 Hz +6 Q2.0 -> b3 140 Hz +3 Q1.5 -> b4 400 Hz +3 Q0.9
+  -> b5 4500 Hz -2 Q2.0 -> b6 6500 Hz -4 Q2.0 -> b7 7500 Hz -4 Q2.0
+  -> b8 10000 Hz +3 Q3.0
 ```
 
-Why the odd headroom node: filter-chain has no plain gain element (`label = gain`
-does not exist on this build - it fails with `cannot create label gain`; a newer
-build adds one but the shelf is kept for compatibility), so a low shelf parked at
-20 kHz acts as -8 dB across the audio band and approaches 0 dB at Nyquist (24 kHz).
--8 dB is the stage-1 peak (+7.74 dB), so the chain cannot clip even at 0 dBFS -
-measured: a 0 dBFS tone leaves -7.38 dBFS at 1 kHz and -0.26 dBFS at the 142 Hz
-worst case (no clipped samples). If you want the vendor's loudness instead of headroom,
-use the EasyEffects route below, which has a real limiter.
+Why the odd headroom node: a low shelf parked at 20 kHz acts as a flat gain
+across the audio band and approaches 0 dB at Nyquist (24 kHz). A plain `gain`
+builtin also exists on this build, but the chain, the model and the 0.03 dB
+isolation proof are all parameterised around the shelf, so it is kept. The Gain
+is the profile: -4 dB for the installed
+**loud** default, -8 dB for `--safe`. `install-user.sh` asks
+`tools/audio/eq_response.py --print-headroom` for the number, so the generated
+chain and the model cannot drift apart.
+
+The trade-off is explicit. There is **no limiter** on this build (see 5.1), so the
+static headroom is the only protection:
+
+| profile | headroom | dense peak of the chain | a 0 dBFS tone at 142 Hz | 1 kHz | can clip? |
+|---|---|---|---|---|---|
+| loud (default) | -4 dB | **+3.74 dB** @ 142.2 Hz | +3.74 dBFS -> clips by 3.74 dB | -3.38 dBFS | **yes, by design** |
+| safe | -8 dB | -0.26 dB @ 142.2 Hz | -0.26 dBFS | -7.38 dBFS | no |
+
+The safe profile is exactly stage 1's +7.74 dB peak, which is why it cannot clip
+even at 0 dBFS (measured: -7.38 dBFS at 1 kHz, -0.26 dBFS at 142 Hz, no clipped
+samples). The loud profile buys +4 dB of level at the cost of hard clipping when
+full-scale content hits the bass boost. If the vendor's limiter is required, use
+the EasyEffects route below - it is the only way to get real dynamics here
+without installing a LADSPA/LV2 limiter.
 
 Stage 2 is present but commented out: uncomment `s1..s9` and add the links
-`b8:Out -> s1:In ... s9:Out` if you want the full vendor preset (then -5 dB headroom
-is enough).
+`b8:Out -> s1:In ... s9:Out` if you want the full vendor preset. Stage 1+2 peak
+at +4.82 dB, so the headroom must be -5 dB (that is what
+`eq_response.py --stage2` emits); the default -4 dB loud profile is not safe
+with stage 2 enabled.
 
 Install / switch (user scope, no root, no host changes):
 
 ```bash
-tools/audio/install-user.sh      # writes ~/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf
-tools/audio/eq-on.sh             # + restart pipewire/wireplumber, waits for the sink, makes it default
-tools/audio/eq-off.sh            # removes the drop-in, restores the hardware speaker as default
+tools/audio/install-user.sh          # loud default (-4 dB) + ALSA gain + boot unit
+tools/audio/install-user.sh --safe   # same, safe -8 dB profile
+tools/audio/eq-on.sh                 # + restart pipewire/wireplumber, wait for the sink, make it default
+tools/audio/eq-on.sh --safe          # louder default is --loud; --safe is the no-clip chain
+tools/audio/eq-off.sh                # removes the drop-in, restores the hardware speaker as default
+tools/audio/gain-stage.sh undo       # put the saved ALSA speaker values back
+tools/audio/install-user.sh --undo   # remove unit/applier and restore/remove the drop-in
 ```
 
 Verify:
@@ -232,8 +260,12 @@ Verify:
 ```bash
 pactl list sinks short | grep oxp3_speaker_eq        # sink exists and is default
 wpctl status | sed -n '/Filters:/,/Streams:/p'      # filter-chain with 2 nodes
-tools/audio/eq_response.py                          # model: 8 bands, max -1.6 dB, min -15.0 dB
+tools/audio/eq_response.py                          # model: loud profile, peak +3.74 dB @ 142 Hz
+tools/audio/eq_response.py --json --profile safe    # the safe profile's margin
+tools/audio/level-report.py                         # ALSA dB, EQ headroom, net gain vs old
+tools/audio/gain-stage.sh report                    # same report through the applier
 tools/audio/measure-speaker.py --gen /tmp/tones.wav # test signal (22 tones, 125 Hz..16 kHz)
+tools/oxp3-verify.sh --json | grep aud.level        # read-only verifier check
 ```
 
 If you would rather keep a dynamic limiter, use EasyEffects instead of the
@@ -241,6 +273,62 @@ filter-chain: one *Equalizer* (IIR) with the eight stage-1 bands above, then a
 *Limiter* with **threshold -4.3 dB, attack 200 ms, release 360 ms, lookahead 5 ms**
 (the vendor's numbers). That route is not shipped as a preset file because the
 EasyEffects preset schema is version-specific.
+
+## 5.1 Loudness, gain staging and the level report
+
+Two independent stages were leaving level on the table:
+
+1. **ALSA** - the ALC245 speaker control (called `Speaker` on this codec; `Front`
+   or `Mono` on other UCM variants) sits at 82/87 = **-3.75 dB** (0.75 dB/step).
+   UCM picks that; it is not a hardware limit. `tools/audio/gain-stage.sh apply`
+   sets every present control to its own maximum (87), saves the previous values
+   once in `~/.local/state/oxp3/audio-gain/controls.tsv`, and is idempotent.
+   `install-user.sh` installs that script as `~/.local/libexec/oxp3-speaker-gain`
+   and enables the user oneshot `oxp3-speaker-gain.service` (login); the existing
+   post-resume hook [`files/oxp3-audio-route`](../../files/oxp3-audio-route) calls
+   the same applier, because resume can reset the codec volume. `gain-stage.sh
+   undo` restores the saved values; `install-user.sh --undo` removes the unit and
+   applier and restores the drop-in. The card profile and UCM are not touched.
+2. **EQ headroom** - from -8 dB to -4 dB (the loud profile).
+
+Net static gain versus a flat (bypassed) chain = ALSA attenuation + EQ headroom:
+
+| chain | ALSA | headroom | net | vs old |
+|---|---|---|---|---|
+| old default | -3.75 dB (82/87) | -8.0 dB | -11.75 dB | - |
+| **loud (new default)** | 0.00 dB (87/87) | -4.0 dB | **-4.00 dB** | **+7.75 dB** |
+| safe | 0.00 dB (87/87) | -8.0 dB | -8.00 dB | +3.75 dB |
+
+### Which limiter is actually used: none
+
+The filter-chain builtins shipped on this host are `bq_*`, `copy`, `dcblock`,
+`delay`, `gain`, `invert`, `mixer`, `noisegate`, `param_eq` and other stateless
+maths (checked in `libspa-filter-graph-plugin-builtin.so`); `noisegate` is a gate,
+not a limiter, and there is no LADSPA or LV2 directory on the machine at all
+(`/usr/lib64/ladspa` and `/usr/lib64/lv2` do not exist). A soft-knee clipper
+would need a waveshaper or an envelope follower, which these nodes cannot
+express; the stateless `clamp` would only add hard distortion without reducing
+driver power. So the loud profile is deliberately unprotected - it clips when
+content reaches full scale into the boosted bass - and the safe profile is the
+no-clip choice. EasyEffects' Limiter (above) is the only real limiter route here.
+
+`tools/audio/level-report.py` reports the whole chain without playing audio:
+
+```console
+$ tools/audio/level-report.py
+OneXPlayer 3 speaker level report (read-only)
+  ALSA card 0:
+    Speaker  87/87  100%   +0.00 dB  (at maximum)
+  PipeWire sink oxp3_speaker_eq.sink: 100% 0.0 dB, unmuted
+  EQ: profile loud, headroom -4.0 dB, peak +3.74 dB @ 142 Hz
+  net gain vs flat:            -4.00 dB
+  net gain vs the old default: +7.75 dB  (old -11.75 dB)
+  clipping margin at 0 dBFS:   -3.74 dB  CLIPS (documented loud-profile trade-off)
+  ALSA control at maximum:     yes
+```
+
+The verifier's `aud.level` check runs the same report read-only and PASSes only
+when the ALSA control is at maximum; it prints the net headroom and the profile.
 
 ## 6. Validation
 
@@ -273,14 +361,17 @@ Two independent checks, both reproducible:
    the raw daemon log and the re-run commands are in
    [`docs/audio-validation.md`](../audio-validation.md).
 
-3. **Limiter replacement and crossover** - the chain's protection is the static
-   -8 dB headroom (filter-chain has no dynamics builtin): hot 0 dBFS tones are
-   measured at -7.38 dBFS (1 kHz) and -0.26 dBFS (142 Hz) with zero clipped
-   samples, recovering instantly (no detector, no pumping). The vendor limiter's
-   threshold/attack/release are validated only as an offline model (1.90 dB
-   attenuation, -0.08 dB residual after release). An LR4 10.12 kHz crossover
-   built from `bq_lowpass`/`bq_highpass` is real-graph verified: -6.0/-5.8 dB at
-   the corner, each branch passing its side, and a 0.00 dB flat sum. Details in
+3. **Limiter replacement and crossover** - there is no dynamics builtin, so the
+   static headroom is the protection. On the **safe** profile (-8 dB) hot 0 dBFS
+   tones measure -7.38 dBFS (1 kHz) and -0.26 dBFS (142 Hz) with zero clipped
+   samples, recovering instantly (no detector, no pumping). On the **loud**
+   default (-4 dB), the 1 kHz tone is -3.38 dBFS and the 142 Hz tone hard-clips
+   at 0 dBFS (52393 clipped samples in the isolated run) - the documented
+   trade-off, not a hidden failure. The vendor limiter's threshold/attack/release
+   are validated only as an offline model (1.90 dB attenuation, -0.08 dB residual
+   after release). An LR4 10.12 kHz crossover built from
+   `bq_lowpass`/`bq_highpass` is real-graph verified: -6.0/-5.8 dB at the
+   corner, each branch passing its side, and a 0.00 dB flat sum. Details in
    [`docs/audio-validation.md`](../audio-validation.md).
 
 **Acoustic measurement of the real speakers** (what the user should do, since a
@@ -312,21 +403,32 @@ compare the *difference*, which cancels mic and room colour.
 * **Narrow cuts** at 4.5-7.5 kHz (Q 2-7) tame cone/port resonances and the "harsh"
   band of a tiny full-range driver; the +3 dB at 400 Hz and 10 kHz is the voicing
   that makes the result still sound forward.
-* Our static -8 dB headroom replaces the limiter's protection with a fixed margin - it
-  is conservative but cannot pump, and it cannot protect the driver from a DC/low
-  frequency transient the way the vendor's time constants would.
+* Our static headroom replaces the limiter's protection with a fixed margin. The
+  safe profile (-8 dB) keeps the "cannot clip" property; the loud default (-4 dB)
+  removes half of that margin to get level, so a 0 dBFS bass tone reaches the DAC
+  at up to +3.74 dB above full scale and clips. Neither profile pumps, and neither
+  rides gain, so neither can protect the driver from a DC/low-frequency transient
+  the way the vendor's time constants would. That is the explicit trade-off in
+  section 5.1; use EasyEffects if a real limiter is required.
 
 ## 8. Rollback
 
 Nothing outside `~/.config` is touched, so:
 
 ```bash
-tools/audio/eq-off.sh                       # normal rollback
+tools/audio/eq-off.sh                # EQ off; gain staging intentionally untouched
+tools/audio/gain-stage.sh undo       # restore the saved ALSA speaker values
+tools/audio/install-user.sh --undo   # remove unit + applier, restore/remove the drop-in
+tools/audio/eq-on.sh --safe          # keep the EQ but switch to the no-clip profile
 # or manually:
 rm -f ~/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf
 systemctl --user restart pipewire wireplumber
 pactl set-default-sink alsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Speaker__sink
 ```
+
+`install-user.sh --undo` puts back a drop-in that existed before the first install
+(kept in `~/.local/state/oxp3/audio/51-oxp3-speaker-eq.conf.bak`) and removes one
+we created.
 
 The Windows side is not modified at all; `GA18v3.reg` was only read.
 

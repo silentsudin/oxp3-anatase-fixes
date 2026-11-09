@@ -286,7 +286,8 @@ suite_unit_verify() {
     mkdir -p "$tmp" || exit 1
     local f b n=0 bad=0
     for f in "$REPO"/files/*.service "$REPO"/tools/oxp3-voltap/*.service \
-             "$REPO"/tools/oxp3-homebtn.service "$REPO"/tools/oxp3-rgbd.service; do
+             "$REPO"/tools/oxp3-homebtn.service "$REPO"/tools/oxp3-rgbd.service \
+             "$REPO"/tools/audio/*.service; do
         [ -f "$f" ] || continue
         b=$(basename -- "$f")
         case $b in *@.service) b=${b%@.service}@test.service ;; esac
@@ -298,7 +299,8 @@ suite_unit_verify() {
         n=$((n + 1))
         b=$(basename -- "$f")
         case $b in
-            oxp3-audio-route.service|oxp3-homebtn.service|oxp3-rgbd.service)
+            oxp3-audio-route.service|oxp3-homebtn.service|oxp3-rgbd.service|\
+            oxp3-speaker-gain.service)
                 systemd-analyze --user verify "$f" \
                     || { bad=$((bad + 1)); printf 'FAIL user unit %s\n' "$b"; } ;;
             *)

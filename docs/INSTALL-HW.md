@@ -250,7 +250,7 @@ Start with the whole-system checks; then the per-component rows.
 | Body RGB zones | `sudo tools/oxp3-hw-install.sh --rgb` |
 | Daemon lifecycle (suspend/hotplug) | `sudo tools/oxp3-hw-install.sh --all` |
 | Suspend and wake policy | `sudo tools/oxp3-hw-install.sh --sleep` |
-| Speaker tuning (Harman APO) | `tools/oxp3-hw-install.sh --audio --audio-activate` |
+| Speaker tuning (Harman APO) and gain staging | `tools/oxp3-hw-install.sh --audio --audio-activate` |
 | Internal microphone (ALC245 digital mic) | `sudo tools/audio/internal-mic.sh install` |
 | Bluetooth firmware | `sudo tools/oxp3-hw-install.sh --bluetooth` |
 | Power envelope (PL1/PL2/PL4) | `sudo tools/oxp3-hw-install.sh --power --power-profile balanced` |
@@ -304,12 +304,13 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Suspend and wake policy | awaiting-install | `sleep.nvme` | nvme_core.default_ps_max_latency_us > 0 and force_apst != Y, so APST is not disabled | no |
 | Suspend and wake policy | awaiting-install | `sleep.measure` | PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h | no |
 | Suspend and wake policy | awaiting-install | `sleep.suspend` | one real s2idle cycle (rtcwake) with suspend_stats/success incremented; needs --full --with-changes and OXP3_ALLOW_SUSPEND=1 | yes |
-| Speaker tuning (Harman APO) | working | `aud.scripts` | eq-on.sh and eq-off.sh are executable | no |
-| Speaker tuning (Harman APO) | working | `aud.server` | an audio session answers pactl info | no |
-| Speaker tuning (Harman APO) | working | `aud.eq` | oxp3_speaker_eq.sink is loaded | no |
-| Speaker tuning (Harman APO) | working | `aud.dummy` | the default sink is real, not auto_null | no |
-| Speaker tuning (Harman APO) | working | `aud.model` | the 8-band model table (max -1.6 dB, min -15.0 dB) | no |
-| Speaker tuning (Harman APO) | working | `aud.activate` | eq-on.sh activates the sink | no |
+| Speaker tuning (Harman APO) and gain staging | working | `aud.scripts` | eq-on.sh and eq-off.sh are executable | no |
+| Speaker tuning (Harman APO) and gain staging | working | `aud.server` | an audio session answers pactl info | no |
+| Speaker tuning (Harman APO) and gain staging | working | `aud.eq` | oxp3_speaker_eq.sink is loaded | no |
+| Speaker tuning (Harman APO) and gain staging | working | `aud.dummy` | the default sink is real, not auto_null | no |
+| Speaker tuning (Harman APO) and gain staging | working | `aud.model` | the 8-band model table (loud profile, pre-gain -4 dB) | no |
+| Speaker tuning (Harman APO) and gain staging | working | `aud.level` | the ALSA speaker control is at maximum and the report gives the net headroom | no |
+| Speaker tuning (Harman APO) and gain staging | working | `aud.activate` | eq-on.sh activates the sink | no |
 | Internal microphone (ALC245 digital mic) | partial | `aud.mic` | the ALC245 pin 0x12 path is exposed as an always-available capture source (SKIP while the opt-in profile is not installed) | no |
 | Bluetooth firmware | awaiting-install | `bt.files` | both ibt-00a0-0291 iml/pci files in updates/intel | no |
 | Bluetooth firmware | awaiting-install | `bt.dracut` | /etc/dracut.conf.d/60-oxp3-bt-firmware.conf present | no |

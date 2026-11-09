@@ -510,11 +510,11 @@ components:
       evidence: "trigger audit: journalctl -b all -k shows 9x 'PM: suspend entry (s2idle)' (Oct 12-19) with the Oct 16 login1.Suspend call from Steam via xdg-dbus-proxy; systemd-analyze cat-config systemd/logind.conf = [Login] only (poweroff default); systemd-inhibit shows PowerDevil block on handle-*; pkcheck login1.suspend exit 0; hhd 4.1.12 plugins/powerbutton/base.py:30,89-106,311-338,341-371 quoted in docs/hw/sleep-power.md 2.5"
 
   - id: audio
-    title: Speaker tuning (Harman APO)
+    title: Speaker tuning (Harman APO) and gain staging
     state: working
     group: hardware
     headline: false
-    summary: "The Harman speaker APO recovered as a PipeWire filter-chain sink: 8 bands, -8 dB pre-gain, 0.03 dB model error."
+    summary: "The Harman speaker APO recovered as a PipeWire filter-chain sink (8 bands, -4 dB loud default / -8 dB safe), plus the ALSA speaker volume raised to maximum: +7.75 dB over the old chain, with the missing-limiter clipping trade-off documented."
     implementation:
       - tools/audio
       - files/52-oxp3-speakers.conf
@@ -523,10 +523,11 @@ components:
     doc: docs/hw/audio-harman-apo.md
     root_required: "no"
     install:
-      summary: "a PipeWire drop-in in ~/.config, no root"
+      summary: "a PipeWire drop-in in ~/.config plus a user boot unit, no root"
       entrypoint: "tools/oxp3-hw-install.sh --audio --audio-activate"
       steps:
-        - "tools/audio/eq-on.sh makes the filter sink the default and restarts the user PipeWire"
+        - "tools/audio/eq-on.sh installs the loud profile, raises the ALSA speaker control and makes the filter sink the default"
+        - "tools/audio/eq-on.sh --safe selects the -8 dB no-clip profile instead"
     verify:
       - id: aud.scripts
         expect: "eq-on.sh and eq-off.sh are executable"
@@ -537,15 +538,18 @@ components:
       - id: aud.dummy
         expect: "the default sink is real, not auto_null"
       - id: aud.model
-        expect: "the 8-band model table (max -1.6 dB, min -15.0 dB)"
+        expect: "the 8-band model table (loud profile, pre-gain -4 dB)"
+      - id: aud.level
+        expect: "the ALSA speaker control is at maximum and the report gives the net headroom"
       - id: aud.activate
         expect: "eq-on.sh activates the sink"
     dependencies: []
     caveats:
       - "keep experiments in an isolated PIPEWIRE_RUNTIME_DIR; a throwaway instance can wedge the SOF card"
+      - "no limiter exists on this PipeWire build: the loud profile clips a 0 dBFS 142 Hz tone by ~3.7 dB; eq-on.sh --safe keeps the -8 dB no-clip headroom"
     last_validated:
       date: 2026-11-09
-      evidence: "docs/QA.md row 50 (8 bands, max -1.6 dB, min -15.0 dB); model reproduction in docs/hw/audio-harman-apo.md"
+      evidence: "docs/QA.md row 45 (historical -8 dB safe run: 8 bands, -1.6/-15.0 dB); loud/safe profiles, gain staging and the aud.level report measured on 2026-11-09 in docs/hw/audio-harman-apo.md"
 
   - id: audio-mic
     title: Internal microphone (ALC245 digital mic)

@@ -473,6 +473,44 @@ parse_audio_sinks() { # stdin: pactl list short sinks
     END { printf "SINKS=%d\nREAL=%d\nDUMMY=%d\n", n + 0, real + 0, dummy + 0 }'
 }
 
+parse_level_report() { # stdin: tools/audio/level-report.py --json
+    local code
+    code=$(cat <<'PY'
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(3)
+controls = d.get("controls") or []
+c = controls[0] if controls else {}
+eq = d.get("eq") or {}
+sink = d.get("sink") or {}
+
+def flag(v):
+    return "yes" if v else "no"
+
+def num(v, fmt):
+    return "" if v is None or isinstance(v, bool) else fmt % v
+
+print("CONTROL=%s" % (d.get("control") or ""))
+print("VALUE=%s" % ("" if c.get("value") is None else c["value"]))
+print("MAX=%s" % ("" if c.get("max") is None else c["max"]))
+print("PERCENT=%s" % ("" if c.get("percent") is None else c["percent"]))
+print("ALSA_DB=%s" % num(d.get("alsa_db"), "%.2f"))
+print("AT_MAX=%s" % flag(d.get("at_max")))
+print("PROFILE=%s" % (eq.get("profile") or ""))
+print("EQ_INSTALLED=%s" % flag(eq.get("installed")))
+print("HEADROOM_DB=%s" % num(eq.get("headroom_db"), "%.1f"))
+print("NET_DB=%s" % num(d.get("net_db"), "%.2f"))
+print("NET_VS_OLD_DB=%s" % num(d.get("net_vs_old_db"), "%.2f"))
+print("CLIP_MARGIN_DB=%s" % num(eq.get("clip_margin_db"), "%.2f"))
+print("SINK_PCT=%s" % ("" if sink.get("percent") is None else sink["percent"]))
+print("SINK_MUTED=%s" % flag(sink.get("muted")))
+PY
+)
+    python3 -c "$code"
+}
+
 parse_preflight_summary() { # stdin: tools/oxp3-preflight.sh --json
     local code
     code=$(cat <<'PY'
@@ -2021,11 +2059,15 @@ check_sleep() {
     else
         aspm_sel=$(aspm_selected <"$aspm_file")
         if [ ! -e "$lp" ] && [ ! -e /etc/systemd/system/oxp3-lowpower.service ]; then
-            record sleep.aspm sleep "PCIe ASPM powersave" SKIP "low-power policy not installed" "pcie_aspm policy: $aspm_sel" "sudo tools/oxp3-hw-install.sh --sleep"
+            record sleep.aspm sleep "PCIe ASPM policy" SKIP "low-power policy not installed" "pcie_aspm policy: $aspm_sel" "sudo tools/oxp3-hw-install.sh --sleep"
         elif [ "$aspm_sel" = powersave ]; then
-            record sleep.aspm sleep "PCIe ASPM powersave" PASS "pcie_aspm.policy: $aspm_sel" "" ""
+            record sleep.aspm sleep "PCIe ASPM policy" PASS "pcie_aspm.policy: powersave (opt-in, owner asked for it)" "" ""
+        elif [ -z "$aspm_sel" ] || [ "$aspm_sel" = default ]; then
+            # ASPM is opt-in: powersave measured 0% S0ix and a worse sleep-only rate
+            # on this platform, so leaving the firmware/ACPI default is the healthy state.
+            record sleep.aspm sleep "PCIe ASPM policy" PASS "pcie_aspm.policy: ${aspm_sel:-default} (firmware default; ASPM opt-in not enabled - powersave measured 0% S0ix here)" "" ""
         else
-            record sleep.aspm sleep "PCIe ASPM powersave" FAIL "pcie_aspm.policy is $aspm_sel, not powersave" "$(read1 "$aspm_file")" "sudo systemctl restart oxp3-lowpower ; journalctl -u oxp3-lowpower -b ; docs/hw/sleep-power.md R6"
+            record sleep.aspm sleep "PCIe ASPM policy" FAIL "pcie_aspm.policy is $aspm_sel" "$(read1 "$aspm_file")" "set it back to default: echo default | sudo tee /sys/module/pcie_aspm/parameters/policy ; docs/hw/sleep-power.md R6"
         fi
     fi
 
@@ -2691,6 +2733,50 @@ check_audio() {
         record aud.mic audio "internal microphone exposed" SKIP "mic_diag.py or python3 missing" "$micdiag" ""
     fi
 
+    # aud.level: read-only gain staging + headroom report.  It needs amixer, not
+    # a PipeWire session, so it is checked before the pactl early return.
+    local lvl=$REPO/tools/audio/level-report.py
+    if [ -x "$lvl" ] && have python3; then
+        run_tool level-report 30 "$lvl" --json
+        if json_ok "$RUN_OUT"; then
+            local lv lcontrol lat lprof lnet lvsold lclip lhead lsink
+            lv=$(parse_level_report <"$RUN_OUT")
+            lcontrol=$(kv "$lv" CONTROL)
+            lat=$(kv "$lv" AT_MAX)
+            lprof=$(kv "$lv" PROFILE)
+            lnet=$(kv "$lv" NET_DB)
+            lvsold=$(kv "$lv" NET_VS_OLD_DB)
+            lclip=$(kv "$lv" CLIP_MARGIN_DB)
+            lhead=$(kv "$lv" HEADROOM_DB)
+            lsink=$(kv "$lv" SINK_PCT)
+            local lvsold_signed=$lvsold
+            case $lvsold in ''|-*) ;; *) lvsold_signed="+$lvsold" ;; esac
+            if [ -z "$lcontrol" ]; then
+                record aud.level audio "ALSA speaker gain at maximum" SKIP \
+                    "no Front/Speaker/Mono playback control on the SOF card" \
+                    "amixer -c0 scontrols" \
+                    "tools/audio/gain-stage.sh report ; docs/hw/audio-harman-apo.md"
+            elif [ "$lat" = yes ]; then
+                record aud.level audio "ALSA speaker gain at maximum" PASS \
+                    "$lcontrol at max; profile ${lprof:-?}, net ${lnet:-?} dB vs flat (${lvsold_signed:-?} dB vs old); clip margin ${lclip:-?} dB" \
+                    "headroom=${lhead:-?} dB, sink=${lsink:-?}%" \
+                    "$(case ${lclip:-0} in -*) echo 'loud profile clips above full scale; tools/audio/eq-on.sh --safe keeps -8 dB' ;; *) echo '' ;; esac)"
+            else
+                record aud.level audio "ALSA speaker gain at maximum" FAIL \
+                    "$lcontrol is $(kv "$lv" VALUE)/$(kv "$lv" MAX) ($(kv "$lv" ALSA_DB) dB): 3.75 dB left below maximum" \
+                    "net ${lnet:-?} dB vs flat (${lvsold_signed:-?} dB vs old)" \
+                    "tools/audio/gain-stage.sh apply ; docs/hw/audio-harman-apo.md"
+            fi
+        else
+            record aud.level audio "ALSA speaker gain at maximum" UNKNOWN \
+                "level-report.py produced no JSON (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" \
+                "tools/audio/level-report.py --json"
+        fi
+    else
+        record aud.level audio "ALSA speaker gain at maximum" SKIP \
+            "level-report.py or python3 missing" "$lvl" "tools/audio/gain-stage.sh report"
+    fi
+
     if ! have pactl; then
         record aud.server audio "PipeWire session" SKIP "pactl missing" "" "install pipewire-utils; docs/hw/audio-harman-apo.md"
         record aud.eq audio "speaker EQ loaded" SKIP "pactl missing" "" "tools/audio/eq-on.sh"
@@ -2739,7 +2825,7 @@ check_audio() {
     if [ -x "$model" ] && have python3; then
         run_tool eq-model 30 "$model"
         if [ "$RUN_RC" -eq 0 ] && grep -q 'max' "$RUN_OUT" 2>/dev/null; then
-            record aud.model audio "EQ model table" PASS "8-band model reproduces (pre-gain -8 dB)" "$(grep -m 1 -i 'max' "$RUN_OUT")" ""
+            record aud.model audio "EQ model table" PASS "8-band model reproduces (default loud profile, pre-gain -4 dB)" "$(grep -m 1 -i 'max' "$RUN_OUT")" ""
         else
             record aud.model audio "EQ model table" FAIL "eq_response.py failed (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "tools/audio/eq_response.py ; docs/hw/audio-harman-apo.md"
         fi
@@ -2837,7 +2923,7 @@ check_graphics() {
         return 0
     fi
 
-    simple_ind gfx.mesa mesa.host graphics "host Mesa driver" "ec418f04e589965a" "rebuild/install Mesa: ./oxp3-fixes-fast.sh build install ; docs/WORKING-BUILD-2026-11-08.md"
+    simple_ind gfx.mesa mesa.host graphics "host Mesa driver" "ec418f04e589965a" "restore the recorded build: sudo tools/oxp3-mesa-restore.sh restore ; or rebuild: ./oxp3-fixes-fast.sh build install ; docs/WORKING-BUILD-2026-11-08.md"
     simple_ind gfx.xmx.driver xmx.driver graphics "XMX driver" "4b1d55ea" "rebuild the XMX driver: tools/build-xmx-driver.sh ; docs/xess-xmx.md"
     simple_ind gfx.xmx.helper xmx.helper graphics "nodgrf helper" "" "tools/xmx-cm-compile-nodgrf.sh must be in the game's VK_DRIVER_FILES env ; docs/xess-xmx.md"
     simple_ind gfx.xmx.igc xmx.igc graphics "IGC ocloc present" "" "install the XMX release tree (tools/xmx-enable.sh) ; docs/xess-xmx.md"
@@ -2870,7 +2956,7 @@ check_graphics() {
         if [ "$RUN_RC" -eq 0 ]; then
             record gfx.working graphics "recorded working build" PASS "$(last_line "$RUN_OUT")" "$(grep -c '^OK' "$RUN_OUT" 2>/dev/null) OK line(s)" ""
         else
-            record gfx.working graphics "recorded working build" FAIL "state diverges from the recorded working build" "$(grep -m 3 -E '^(MISMATCH|FAIL|BAD)' "$RUN_OUT" 2>/dev/null | tr '\n' ' ')" "tools/check-working.sh ; docs/WORKING-BUILD-2026-11-08.md"
+            record gfx.working graphics "recorded working build" FAIL "state diverges from the recorded working build" "$(grep -m 3 -E '^(MISMATCH|FAIL|BAD)' "$RUN_OUT" 2>/dev/null | tr '\n' ' ')" "tools/check-working.sh ; sudo tools/oxp3-mesa-restore.sh restore ; docs/WORKING-BUILD-2026-11-08.md"
         fi
     else
         record gfx.working graphics "recorded working build" SKIP "tool missing" "$cw" ""
@@ -3456,6 +3542,31 @@ run_selftest() {
     t_eq "preflight/blockers" 2 "$(kv "$out" FAIL)"
     t_eq "preflight/would-skip" "volume, sleep" "$(kv "$out" SKIPPED)"
 
+    # level report (aud.level): gain staging, headroom and the net-vs-old figure
+    out=$(parse_level_report <"$fx/level-report.json")
+    t_eq "level/control" Speaker "$(kv "$out" CONTROL)"
+    t_eq "level/value" 87 "$(kv "$out" VALUE)"
+    t_eq "level/max" 87 "$(kv "$out" MAX)"
+    t_eq "level/alsa-db" 0.00 "$(kv "$out" ALSA_DB)"
+    t_eq "level/at-max" yes "$(kv "$out" AT_MAX)"
+    t_eq "level/profile" loud "$(kv "$out" PROFILE)"
+    t_eq "level/headroom" -4.0 "$(kv "$out" HEADROOM_DB)"
+    t_eq "level/net" -4.00 "$(kv "$out" NET_DB)"
+    t_eq "level/net-vs-old" 7.75 "$(kv "$out" NET_VS_OLD_DB)"
+    t_eq "level/clip-margin" -3.74 "$(kv "$out" CLIP_MARGIN_DB)"
+    t_eq "level/sink" 100 "$(kv "$out" SINK_PCT)"
+    t_eq "level/muted" no "$(kv "$out" SINK_MUTED)"
+    out=$(parse_level_report <"$fx/level-report-low.json")
+    t_eq "level/low-control" Front "$(kv "$out" CONTROL)"
+    t_eq "level/low-value" 82 "$(kv "$out" VALUE)"
+    t_eq "level/low-alsa-db" -3.75 "$(kv "$out" ALSA_DB)"
+    t_eq "level/low-at-max" no "$(kv "$out" AT_MAX)"
+    t_eq "level/low-profile" safe "$(kv "$out" PROFILE)"
+    t_eq "level/low-headroom" -8.0 "$(kv "$out" HEADROOM_DB)"
+    t_eq "level/low-net" -7.75 "$(kv "$out" NET_DB)"
+    t_eq "level/low-net-vs-old" 4.00 "$(kv "$out" NET_VS_OLD_DB)"
+    t_eq "level/low-clip-margin" 0.26 "$(kv "$out" CLIP_MARGIN_DB)"
+
     # exit-code mapping
     t_eq "exit/fail" 1 "$(exit_code 10 1 2 0)"
     t_eq "exit/skips-only" 2 "$(exit_code 0 0 3 1)"
@@ -3476,7 +3587,7 @@ run_selftest() {
     if [ "$count" -ge 65 ]; then ST_PASS=$((ST_PASS + 1)); else ST_FAIL=$((ST_FAIL + 1)); printf 'FAIL inventory: only %s distinct declared checks\n' "$count"; fi
     local expected
     expected=$(printf '%s\n' \
-        aud.activate aud.dummy aud.eq aud.mic aud.model aud.scripts aud.server \
+        aud.activate aud.dummy aud.eq aud.level aud.mic aud.model aud.scripts aud.server \
         bat.behaviour bat.limit bat.threshold \
         bt.controller bt.diag bt.dracut bt.files bt.journal \
         decky.backend decky.dir decky.loaded decky.status \

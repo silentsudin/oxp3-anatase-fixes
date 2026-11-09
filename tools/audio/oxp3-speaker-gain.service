@@ -1,0 +1,16 @@
+[Unit]
+Description=OneXPlayer 3: raise the ALSA speaker volume control to maximum
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/hw/audio-harman-apo.md
+# The codec/amp exposes the speaker volume as "Front" (UCM), "Speaker" (this
+# ALC245) or "Mono"; the script raises whichever is present to its maximum and
+# exits 0 when none is (a card that is not ready must not fail the session).
+# The same script is called again by the post-resume hook (files/oxp3-audio-route),
+# because resume can reset the codec volume.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/libexec/oxp3-speaker-gain apply
+
+[Install]
+WantedBy=default.target

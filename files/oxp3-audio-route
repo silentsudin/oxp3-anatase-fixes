@@ -76,3 +76,12 @@ for d in 3 7 20; do
     sleep "$d"
     check
 done
+
+# Resume can reset the codec speaker volume to the UCM default (82/87), which is
+# 3.75 dB below full scale.  install-user.sh installs the applier in the user's
+# ~/.local; this hook is the post-resume half of that boot unit.  Idempotent and
+# silent when the user never installed the gain staging.
+gain=$HOME/.local/libexec/oxp3-speaker-gain
+if [[ -x $gain ]]; then
+    "$gain" apply >/dev/null 2>&1 || log "speaker gain apply failed (not fatal)"
+fi

@@ -279,7 +279,7 @@ The contract and the manual suspend/hotplug procedures are in
 | `bat.threshold` | the charge limit is reachable (reports the value) | readable `BAT*/charge_control_end_threshold` (writes need root) |
 | `bat.behaviour` | charge-inhibit ("bypass") is reachable (reports the state) | readable `BAT*/charge_behaviour` |
 
-### audio (6 + `aud.activate` with `--with-changes`)
+### audio (7 + `aud.activate` with `--with-changes`)
 
 | id | proves | how |
 |---|---|---|
@@ -287,7 +287,8 @@ The contract and the manual suspend/hotplug procedures are in
 | `aud.server` | an audio session exists | `pactl info` |
 | `aud.eq` | the filter-chain sink is loaded | drop-in installed **and** `oxp3_speaker_eq.sink` in `pactl list short sinks`; `SKIP` when the drop-in is not installed |
 | `aud.dummy` | no "Dummy Output" fallback | default sink is a real one; `UNKNOWN` when only `auto_null` exists (no seat here, or the card is wedged — the hint lists the checks) |
-| `aud.model` | the recovered 8-band model is intact | `tools/audio/eq_response.py` |
+| `aud.model` | the recovered 8-band model is intact | `tools/audio/eq_response.py` (default loud profile, pre-gain -4 dB) |
+| `aud.level` | the ALSA speaker control is at maximum, and the report gives the net headroom | `tools/audio/level-report.py --json` (read-only): `Front`/`Speaker`/`Mono` raw value + dB, PipeWire sink volume, EQ headroom, net gain vs the old chain, clipping margin; `FAIL` when the control is below maximum, `SKIP` when no speaker control exists |
 | `aud.mic` | the internal ALC245 digital microphone is *exposed* as an always-available capture source | `tools/audio/mic_diag.py` (read-only): codec pin 0x12 routed to the capture ADC and a UCM device with the fixed `Internal Mic Phantom Jack`; `SKIP` while the opt-in profile is not installed, `FAIL` when it is installed but still gated. See [hw/audio-microphone.md](hw/audio-microphone.md) |
 | `aud.graph` (repo-test only) | the shipped filter chain **parses, loads into a real private PipeWire graph and measures against the model**; hot-tone and crossover checks | `tools/audio/test-isolation.sh`, suite `audio-eq-isolation`; see [audio-validation.md](audio-validation.md) |
 | `aud.activate` (persistent) | `eq-on.sh` really activates the sink | runs it, then checks the sink appears; one of the two persistent changes the harness can make |
@@ -373,7 +374,7 @@ manifest and backup images. A `FAIL` is actionable (`adopt`), not a hardware def
 | 5 power envelope / fan | `pwr.zones`, `pwr.pl1`, `pwr.profile`, `pwr.fan`, `pwr.rapl` |
 | 5 adaptive TDP (opt-in) | `pwr.adaptive` |
 | 6 battery care | `bat.threshold`, `bat.behaviour` |
-| 7 speaker EQ | `aud.scripts`, `aud.server`, `aud.eq`, `aud.dummy`, `aud.model`, (`aud.activate`), (`aud.graph` in `repo-test`) |
+| 7 speaker EQ + gain staging | `aud.scripts`, `aud.server`, `aud.eq`, `aud.dummy`, `aud.model`, `aud.level`, (`aud.activate`), (`aud.graph` in `repo-test`) |
 | 7b internal microphone (opt-in UCM profile) | `aud.mic` |
 | 8 display HDR / ICC / vibrance | `dsp.hdr`, `dsp.icc`, `dsp.panel`, `dsp.vibrance` |
 | 9 Mesa / XMX / sched_ext / xe | `gfx.mesa`, `gfx.xmx.driver`, `gfx.xmx.helper`, `gfx.xmx.igc`, `gfx.xmx.kernels`, `gfx.xmx.icd`, `gfx.xmx.trace`, `gfx.xe`, `gfx.working`, `sched.state`, `sched.scx`, `sched.unit` |

@@ -487,6 +487,8 @@ def limiter_checks(node, work):
             "input_dbfs": 0.0,
             "steady_out_dbfs": dbfs(steady),
             "model_dbfs": model,
+            "expected_peak_dbfs": model,
+            "clip_expected": model > 0.0,
             "diff_db": dbfs(steady) - model,
             "peak_dbfs": dbfs(peak),
             "clipped_samples": clipped,
@@ -540,11 +542,22 @@ def eq_mode(args):
         hot = lim["1khz"]
         vendor = lim["vendor_limiter_model"]
         hot142 = lim["142hz"]
-        lim_ok = (hot["peak_minus_model_db"] <= 0.5
-                  and hot["clipped_samples"] == 0
-                  and hot["tail_dbfs"] <= LIMITER_MAX_SILENCE_DBFS
-                  and hot142["peak_dbfs"] <= 0.0
-                  and hot142["clipped_samples"] == 0
+        def hot_ok(h):
+            """Linearity below full scale, or an honest hard clip above it.
+
+            The loud profile is +3.74 dB at 142 Hz, so a 0 dBFS tone there must
+            clip: the check then requires the 16-bit capture to sit at the hard
+            ceiling instead of pretending the chain is protected.  A safe-profile
+            graph (model peak below 0 dBFS) must show no clipped samples.
+            """
+            if h["tail_dbfs"] > LIMITER_MAX_SILENCE_DBFS:
+                return False
+            if h["clip_expected"]:
+                return h["clipped_samples"] > 0 and h["peak_dbfs"] <= 0.05
+            return (h["clipped_samples"] == 0 and h["peak_dbfs"] <= 0.0
+                    and abs(h["peak_minus_model_db"]) <= 0.5)
+
+        lim_ok = (hot_ok(hot) and hot_ok(hot142)
                   and vendor["attenuation_db"] >= 1.0
                   and abs(vendor["residual_gain_reduction_db"]) <= 0.5)
         result["limiter_pass"] = lim_ok

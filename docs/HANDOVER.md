@@ -91,9 +91,9 @@ Counted from the `state:` field of each component in `docs/hw/components.yaml`.
 
 | volatile fact | value | how this number was obtained |
 |---|---|---|
-| checks declared by `tools/oxp3-verify.sh` | **88** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
+| checks declared by `tools/oxp3-verify.sh` | **89** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
 | suites in `tools/repo-test.sh` | **34** (**32** in `--fast`, **34** in `--full`) | parsed from the `def_suite` registrations and their mode column |
-| tests in `tests/unit` | **956** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
+| tests in `tests/unit` | **990** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
 <!-- END GENERATED: handover-state -->
 
 The full matrix with summaries, implementation paths, install entrypoints, verify ids and caveats is
@@ -149,7 +149,7 @@ behaves. Both are needed; neither substitutes for the other.
 | suspend / wake policy | [`hw/sleep-power.md` §2.3-2.6](hw/sleep-power.md): 9 real s2idle entries, HHD 4.1.12 line quotes, logind/polkit state, inhibitor semantics, suspend-counter ABI (`max_hw_sleep` is a ceiling, not a duration) | `sleep.*` checks; `sleep.stats` reports the counter tuple and says `UNKNOWN` - never `PASS`/`FAIL` - when `success=0` meets a hardware-sleep number |
 | Bluetooth | [`hw/bluetooth.md`](hw/bluetooth.md): PCIe `8086:e476`, boot-log timing, SHA-256 of both blobs, `MODULE_FIRMWARE` absence | `bt.*` checks (5), `oxp3-bt-firmware.sh --check` |
 | power envelope / fan / battery | [`hw/power-fan.md`](hw/power-fan.md), [`hw/battery-tdp.md`](hw/battery-tdp.md): vendor `perf_conf.ini` table, `PerfMode.exe` Ghidra, EC findings | `pwr.*`, `fan.*`, `bat.*` checks; `tests/unit/test_powerctl.py`, `test_adaptivetdp.py` |
-| speaker EQ | [`hw/audio-harman-apo.md`](hw/audio-harman-apo.md): recovered 8-band model (0.03 dB error) | `eq-model` suite, `aud.model`, `aud.eq` |
+| speaker EQ + gain staging | [`hw/audio-harman-apo.md`](hw/audio-harman-apo.md): recovered 8-band model (0.03 dB error), loud/safe headroom profiles, ALSA gain raised to maximum (+7.75 dB net) | `eq-model` suite, `aud.model`, `aud.level`, `aud.eq` |
 | display HDR / ICC / vibrance | [`hw/hdr-vibrance.md`](hw/hdr-vibrance.md): EDID/PQ/BT.2020, gamescope flags | `dsp.*`; `tests/unit/test_edid.py`, `test_icc.py`; `gamewrap` suite |
 | SAGV | [`hw/sagv.md`](hw/sagv.md): MCHBAR pair `0x5DA0/0x5DA4=0x80000122`, busy bit, `enable_sagv` semantics | `tools/oxp3-sagv.sh status`/`probe` (probe exits 3 by design) |
 | camera / IMU | [`hw/camera-imu.md`](hw/camera-imu.md): PCI/USB/ACPI inventory (`_STA=0` everywhere for camera), IIO 100 Hz BMI260 | `imu.selftest`, `imu.iio`; camera = the `grep …/OVTI*/status` command row |

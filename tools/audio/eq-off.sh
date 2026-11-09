@@ -5,6 +5,11 @@
 set -euo pipefail
 confdir=${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d
 rm -f "$confdir/51-oxp3-speaker-eq.conf"
+# The ALSA gain staging is a separate, independently reversible change; it is
+# deliberately not touched here.  To put the mixer back as well:
+#   tools/audio/gain-stage.sh undo
+# To remove the boot unit and the applier too:
+#   tools/audio/install-user.sh --undo
 systemctl --user restart pipewire wireplumber
 
 for _ in $(seq 1 40); do
