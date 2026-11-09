@@ -9,3 +9,6 @@ vkd3d-proton.cache
 
 # python bytecode from the tooling helpers
 __pycache__/
+
+# C test/build output of the fingerprint protocol library
+tools/fingerprint/build/

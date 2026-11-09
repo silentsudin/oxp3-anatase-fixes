@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "name": "cmd_truncated_then_ok",
+  "kind": "command",
+  "description": "half a frame (length field but no body) then a complete answer",
+  "request": {
+    "op": "QUERY_SENSOR_INFO",
+    "phase": 0,
+    "arg": 0,
+    "data_hex": ""
+  },
+  "reads": [
+    {
+      "hex": "aa34000000000000000000000000000000000000004cc20000"
+    },
+    {
+      "hex": "aa34000000000000000000000000000000000000004cc2000000000900000001000200d000500003000000000000000000000000009c7df6ae0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "expect": {
+    "outcome": "success",
+    "attempts": 2,
+    "payload_hex": "01000200d000500003"
+  }
+}

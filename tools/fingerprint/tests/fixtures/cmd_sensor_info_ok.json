@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "name": "cmd_sensor_info_ok",
+  "kind": "command",
+  "description": "CMD_QUERY_SENSOR_INFO answer behind bus noise",
+  "request": {
+    "op": "QUERY_SENSOR_INFO",
+    "phase": 0,
+    "arg": 0,
+    "data_hex": ""
+  },
+  "reads": [
+    {
+      "hex": "ffffffffffffffff00000000aa34000000000000000000000000000000000000004cc2000000000900000001000200d000500003000000000000000000000000009c7df6ae",
+      "note": "preamble junk, then the answer"
+    },
+    {
+      "hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "note": "trailing padding only"
+    }
+  ],
+  "expect": {
+    "outcome": "success",
+    "attempts": 1,
+    "payload_hex": "01000200d000500003"
+  }
+}

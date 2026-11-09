@@ -39,36 +39,67 @@ exception.
 
 ## Build
 
-Node 22 + pnpm (the versions on the target host). Dependencies are the standard
-Decky ones (`@decky/ui`, `@decky/api`, `@decky/rollup`); there are no extra
-runtime dependencies and the plugin makes no network requests.
+Verified on the target host: node **v22.23.1**, npm **10.9.8**, python 3.15,
+npm registry reachable. Decky-side packages: `@decky/rollup` 1.0.2, rollup
+4.68.0, typescript 5.9.3, `@decky/api` 1.1.3 (bundled), `@decky/ui` 4.16.5
+(types only; the loader provides the runtime `DFL`). React 18.3.1 is a dev
+dependency solely for the headless smoke test.
 
 ```sh
 cd tools/decky-oxp3-status
-pnpm install        # needs network or a warm pnpm store
-pnpm build          # rollup -> dist/index.js
-pnpm typecheck      # tsc --noEmit (optional)
+./build.sh                 # npm ci, typecheck, rollup, smoke, selftest, zip
+./build.sh --offline       # same with `npm ci --offline` (warm npm cache)
+./build.sh --no-install    # rebuild from existing node_modules
 ```
 
-`pnpm build` produces `dist/index.js`, which is what Decky Loader loads. The
-build output is **not committed** (it is generated from `src/`).
+`build.sh` produces `build/oxp3-status-1.0.0.zip` and prints its size and
+sha256. The zip is deterministic (fixed entry timestamps, sorted entries), so
+the hash is reproducible from the same sources; it is intentionally not
+hard-coded here because this README is itself inside the archive. Individual
+steps: `npm run typecheck`, `npm run build`
+(rollup → `dist/index.js`), `npm run smoke` (imports and renders the real
+bundle with stubbed loader globals), `npm run selftest`, `npm run package`.
+
+`dist/` and `build/` are generated and not committed. There is no vendored
+`@decky/*` runtime in this repo.
+
+### Offline caveat
+
+The npm registry is reachable from this machine, so no shim or vendor copy is
+needed. With no network, `./build.sh --offline` installs the exact locked
+versions from the local npm cache; a cold cache cannot work because
+third-party `@decky/*` code is deliberately not committed. Build once on a
+connected machine (or copy `~/.npm` over) and then use `--offline`. The bundle
+keeps `react`, `react-dom` and `@decky/ui` as loader globals; only the
+BSD-licensed `@decky/api` client is inlined, exactly as the official template
+does.
 
 ## Install
 
-```sh
-# copy the whole directory (plugin.json + main.py + dist/) onto the host
-cp -r tools/decky-oxp3-status ~/homebrew/plugins/oxp3-status
+Preferred: Decky → Settings → General → **Install Plugin from File** → select
+`build/oxp3-status-1.0.0.zip`. The zip root is the plugin root:
 
-# reload the loader (privileged; the loader runs as root)
+```
+plugin.json          manifest, api_version 1
+main.py              backend imported by the loader
+dist/index.js        frontend bundle (ESM, loader globals)
+dist/index.js.map    source map
+README.md            these notes
+```
+
+Manual install (privileged steps are listed, not run, by this repo's rules):
+
+```sh
+rm -rf ~/homebrew/plugins/oxp3-status
+cp -r tools/decky-oxp3-status ~/homebrew/plugins/oxp3-status
 sudo systemctl restart plugin_loader.service
 ```
 
-Decky then shows **OXP3 Status** in the Quick Access Menu (plugin manager).
-Without sudo, Decky's *Settings → Developer → Reload plugins* re-reads the
-plugin list, but a changed `main.py` needs the service restart because the
-backend module is already imported.
-
-Uninstall: remove `~/homebrew/plugins/oxp3-status` and restart the loader.
+Only `plugin.json`, `main.py` and `dist/` are needed at runtime. Without sudo,
+Decky's *Settings → Developer → Reload plugins* re-reads the directory, but a
+changed `main.py` needs the service restart because the module is already
+imported in the loader process. Uninstall: remove
+`~/homebrew/plugins/oxp3-status` and restart the loader.
 
 ## Headless CLI (same checks)
 
@@ -77,46 +108,49 @@ tools/oxp3-status.sh              # coloured, human readable
 tools/oxp3-status.sh --json       # full report for scripts
 tools/oxp3-status.sh --strict     # exit 2 if anything is warn/unknown
 tools/oxp3-status.sh --watch 5    # refresh in a terminal
+tools/oxp3-status.sh --selftest   # synthetic /sys, /proc, HOME; no hardware
 ```
 
 Exit codes: `0` no failures, `1` at least one `fail`, `2` `--strict` and
-warn/unknown present, `3` backend could not start.
+warn/unknown present, `3` backend could not start. Secret/socket environment
+variables are scrubbed from the report's `game.env` (allowlisted XMX/Steam/VK
+keys only, `env_omitted` counts the rest); the backend still uses the full
+environment internally.
 
 ## Validation
 
 ```sh
-# backend logic, no Steam UI needed
 python3 -m py_compile main.py
-python3 main.py --text
-python3 main.py --json | python3 -m json.tool >/dev/null
-
-# plugin manifests
+python3 main.py --selftest          # 60 checks, synthetic fixtures, exit 0
+./build.sh                          # typecheck + build + smoke + selftest + zip
 python3 -m json.tool plugin.json >/dev/null
-python3 -m json.tool package.json >/dev/null
-python3 -m json.tool tsconfig.json >/dev/null
-
-# wrapper
 sh -n ../oxp3-status.sh
 ```
 
-On the machine this plugin was written for, the report currently shows the XMX
-stack, host driver, patched `xe`, RAPL/PL1 and the Flatpak runtime override as
-`ok`; the scheduler group is `warn` because `oxp3-gaming-sched.service` is not
-installed/active yet, and the `igdext_trace.log` row is `warn` because tracing
-is off in a normal run. See `docs/decky-plugin.md` for the full indicator list
-and the Gamemode/sandbox caveats.
+Last recorded run on this host: `--selftest` 60/60, `npm run smoke` ok,
+`--json` valid, `--strict` exit 2, `overall=warn` with
+`23 ok / 5 warn / 0 fail / 0 unknown`. The five warnings are the machine's
+honest state: `sched_ext` disabled / no `scx_cosmos` / `oxp3-gaming-sched.service`
+not installed, `igdext_trace.log` absent (tracing off), and the Steam Flatpak
+override still pointing at `cm-compile.sh` instead of the 128-GRF helper.
+See `docs/decky-plugin.md` for the full indicator list and the
+Gamemode/sandbox caveats.
 
 ## Files
 
 | path | purpose |
 |---|---|
 | `plugin.json` | Decky manifest (`api_version` 1) |
-| `package.json` | build metadata and dependencies |
+| `package.json` / `package-lock.json` | build metadata and locked deps |
 | `tsconfig.json` | strict TypeScript config |
 | `rollup.config.js` | `@decky/rollup` build |
 | `src/index.tsx` | QAM panel: polling, grouping, detail expansion |
-| `main.py` | backend: all checks + `Plugin.get_status()` + CLI |
+| `main.py` | backend: all checks, `Plugin.get_status()`, CLI, `--selftest` |
+| `build.sh` | install → typecheck → build → smoke → selftest → zip |
+| `package.py` | deterministic zip writer, validates the artifact layout |
+| `test/smoke.mjs` | imports/renders `dist/index.js` with loader globals |
 | `README.md` | this file |
 
 Our own code only; no vendor binaries, decompiled listings or firmware are
-included.
+included. Fixture files used by `--selftest` are generated at runtime in a
+temporary directory.

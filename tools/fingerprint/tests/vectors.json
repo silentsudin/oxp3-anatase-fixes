@@ -1,0 +1,122 @@
+[
+  {
+    "name": "fw_query_empty",
+    "opcode": 161,
+    "phase": 0,
+    "status": 0,
+    "arg": 0,
+    "data_hex": "",
+    "frame_hex": "aa24000000000000000000000000000000000000004ca10000000000000000000000000000e400d896",
+    "frame_len": 41,
+    "length_field": 36,
+    "crc": 2530738404
+  },
+  {
+    "name": "sensor_info_arg",
+    "opcode": 194,
+    "phase": 0,
+    "status": 0,
+    "arg": 4660,
+    "data_hex": "",
+    "frame_hex": "aa24000000000000000000000000000000000000004cc200003412000000000000000000000f5f2e24",
+    "frame_len": 41,
+    "length_field": 36,
+    "crc": 607018767
+  },
+  {
+    "name": "getimg_aligned6",
+    "opcode": 181,
+    "phase": 1,
+    "status": 0,
+    "arg": 1,
+    "data_hex": "010203040506",
+    "frame_hex": "aa24000000000000000000000000000000000000004cb5010001000600000001020304050611f14663",
+    "frame_len": 41,
+    "length_field": 36,
+    "crc": 1665593617
+  },
+  {
+    "name": "getimg_pad7",
+    "opcode": 181,
+    "phase": 1,
+    "status": 0,
+    "arg": 2,
+    "data_hex": "01020304050607",
+    "frame_hex": "aa34000000000000000000000000000000000000004cb50100020007000000010203040506070000000000000000000000000000002299d66d",
+    "frame_len": 57,
+    "length_field": 52,
+    "crc": 1842780450
+  },
+  {
+    "name": "enroll_data16",
+    "opcode": 177,
+    "phase": 0,
+    "status": 0,
+    "arg": 0,
+    "data_hex": "000102030405060708090a0b0c0d0e0f",
+    "frame_hex": "aa34000000000000000000000000000000000000004cb10000000010000000000102030405060708090a0b0c0d0e0f000000000000333876a4",
+    "frame_len": 57,
+    "length_field": 52,
+    "crc": 2759211059
+  },
+  {
+    "name": "enroll_phase2_data17",
+    "opcode": 177,
+    "phase": 2,
+    "status": 0,
+    "arg": 4660,
+    "data_hex": "000102030405060708090a0b0c0d0e0f10",
+    "frame_hex": "aa34000000000000000000000000000000000000004cb10200341211000000000102030405060708090a0b0c0d0e0f100000000000fc412790",
+    "frame_len": 57,
+    "length_field": 52,
+    "crc": 2418491900
+  },
+  {
+    "name": "getimg_data32",
+    "opcode": 181,
+    "phase": 1,
+    "status": 0,
+    "arg": 0,
+    "data_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "frame_hex": "aa44000000000000000000000000000000000000004cb50100000020000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000000000064b918cb",
+    "frame_len": 73,
+    "length_field": 68,
+    "crc": 3407395172
+  },
+  {
+    "name": "image_header_reply",
+    "opcode": 181,
+    "phase": 0,
+    "status": 0,
+    "arg": 0,
+    "data_hex": "0040000000e0000000",
+    "frame_hex": "aa34000000000000000000000000000000000000004cb500000000090000000040000000e00000000000000000000000000000000005aab80e",
+    "frame_len": 57,
+    "length_field": 52,
+    "crc": 246983173
+  },
+  {
+    "name": "status_reply_data9",
+    "opcode": 194,
+    "phase": 0,
+    "status": 5,
+    "arg": 0,
+    "data_hex": "000102d00050000300",
+    "frame_hex": "aa34000000000000000000000000000000000000004cc20005000009000000000102d0005000030000000000000000000000000000f39f2103",
+    "frame_len": 57,
+    "length_field": 52,
+    "crc": 52535283
+  },
+  {
+    "name": "bulk255",
+    "opcode": 181,
+    "phase": 1,
+    "status": 0,
+    "arg": 0,
+    "data_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe",
+    "frame_hex": "aa24010000000000000000000000000000000000004cb501000000ff000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe00000000000000088a4f49",
+    "frame_len": 297,
+    "length_field": 292,
+    "crc": 1229949448
+  }
+]

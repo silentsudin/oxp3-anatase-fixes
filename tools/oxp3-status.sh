@@ -11,9 +11,12 @@
 #   tools/oxp3-status.sh --strict        exit 2 when anything is warn/unknown
 #   tools/oxp3-status.sh --watch 5       refresh every 5 s (Ctrl-C to stop)
 #   tools/oxp3-status.sh --home /var/home/holzr   inspect another user's files
+#   tools/oxp3-status.sh --selftest      run every check against synthetic
+#                                        /sys, /proc and HOME fixtures
 #
 # Exit codes: 0 = no failures, 1 = at least one fail, 2 = --strict and something
-# is warn/unknown, 3 = the backend could not be started.
+# is warn/unknown, 3 = the backend could not be started (or --selftest found a
+# broken check).
 set -u
 
 # Resolve the repository root even when this script is invoked through a

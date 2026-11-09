@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ import pwd
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -65,6 +67,112 @@ CYBERPUNK_RESULT_GLOB = (
 )
 
 STATE_RANK = {"ok": 0, "na": 0, "unknown": 1, "warn": 2, "fail": 3}
+
+
+def _env_path(name: str, default: str) -> str:
+    """Directory override used by --selftest (and nothing else) so the checks
+    can run against a synthetic /sys, /proc or /etc tree. Unset == real root."""
+    value = os.environ.get(name, "").strip()
+    return value.rstrip("/") if value else default
+
+
+SYS_ROOT = _env_path("OXP3_SYS_ROOT", "/sys")
+PROC_ROOT = _env_path("OXP3_PROC_ROOT", "/proc")
+ETC_ROOT = _env_path("OXP3_ETC_ROOT", "/etc")
+RUN_ROOT = _env_path("OXP3_RUN_ROOT", "/run")
+# The host driver is a fixture in --selftest; a real run always uses HOST_DRIVER.
+DRIVER_PATH = os.environ.get("OXP3_HOST_DRIVER", "").strip() or HOST_DRIVER
+RUNTIME_OVERRIDES_PATH = _env_path("OXP3_RUNTIME_OVERRIDES", RUNTIME_OVERRIDES)
+
+
+def _sys(rel: str) -> str:
+    return SYS_ROOT + rel
+
+
+def _proc_entry(pid: Any, leaf: str = "") -> str:
+    base = "%s/%s" % (PROC_ROOT, pid)
+    return base + ("/" + leaf if leaf else "")
+
+
+def _cap_output(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+# Environment keys worth showing in a report. Everything else is client/secret
+# material (tokens, sockets, DBus addresses, SSH agent paths) and is dropped
+# before the report leaves this process.
+_ENV_REPORT_ALLOW_PREFIXES = (
+    "Steam",
+    "ANV_",
+    "XMX_",
+    "VK_",
+    "VKD3D_",
+    "INTC_",
+    "IGC",
+    "MESA_",
+    "PROTON",
+    "DXVK_",
+    "WINE",
+    "GAMEID",
+    "UMU_",
+    "ENABLE_",
+)
+_ENV_SECRET_RE = re.compile(
+    r"(TOKEN|SECRET|PASSWORD|PASSWD|PASS$|APIKEY|API_KEY|AUTH|COOKIE|SESSION|CREDENTIAL|LICENSE_KEY)",
+    re.IGNORECASE,
+)
+_ENV_MAX_ENTRIES = 64
+_ENV_VALUE_MAX = 256
+
+
+def sanitize_env(env: Dict[str, str]) -> Tuple[Dict[str, str], int]:
+    """Return a report-safe environment view and the number of dropped keys.
+
+    The backend still uses the complete environment internally (the XMX checks
+    read variables from it); only the serialised report is filtered, so a
+    clipboard/json dump cannot leak session or socket material.
+    """
+    out: Dict[str, str] = {}
+    dropped = 0
+    for key in sorted(env):
+        value = env[key]
+        if not key.startswith(_ENV_REPORT_ALLOW_PREFIXES):
+            dropped += 1
+            continue
+        if _ENV_SECRET_RE.search(key):
+            out[key] = "<redacted>"
+            continue
+        if len(out) >= _ENV_MAX_ENTRIES:
+            dropped += 1
+            continue
+        out[key] = _cap_output(value, _ENV_VALUE_MAX)
+    return out, dropped
+
+
+def sanitize_cmdline(cmdline: str) -> str:
+    """Strip suspected secrets from a process command line for the report."""
+    parts = cmdline.split()
+    clean: List[str] = []
+    for part in parts:
+        if "=" in part:
+            key, _value = part.split("=", 1)
+            if _ENV_SECRET_RE.search(key.lstrip("-")):
+                clean.append("%s=<redacted>" % key)
+                continue
+        clean.append(part)
+    return _cap_output(" ".join(clean), 512)
+
+
+def sanitize_game(game: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not game:
+        return None
+    copy = dict(game)
+    env, dropped = sanitize_env(game.get("env") or {})
+    copy["env"] = env
+    copy["env_omitted"] = dropped
+    if "cmdline" in copy and isinstance(copy["cmdline"], str):
+        copy["cmdline"] = sanitize_cmdline(copy["cmdline"])
+    return copy
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +252,10 @@ def sha256_hex(path: Any) -> Optional[str]:
     except OSError:
         return None
     value = digest.hexdigest()
+    # Bounded: --watch runs for hours and every distinct (path, mtime, size)
+    # must not grow the process without limit.
+    if len(_hash_cache) >= 64:
+        _hash_cache.clear()
     _hash_cache[key] = value
     return value
 
@@ -515,23 +627,23 @@ def build_env_sources(
 # Process/game detection
 # ---------------------------------------------------------------------------
 def _pid_alive(pid: int) -> bool:
-    return os.path.isdir("/proc/%d" % pid)
+    return os.path.isdir(_proc_entry(pid))
 
 
 def _proc_cmdline(pid: int) -> List[str]:
-    data = _read_bytes("/proc/%d/cmdline" % pid, 65536)
+    data = _read_bytes(_proc_entry(pid, "cmdline"), 65536)
     if not data:
         return []
     return [part.decode("utf-8", "replace") for part in data.split(b"\0") if part]
 
 
 def _proc_comm(pid: int) -> str:
-    text = _read_text("/proc/%d/comm" % pid, 64)
+    text = _read_text(_proc_entry(pid, "comm"), 64)
     return text.strip() if text else ""
 
 
 def _proc_environ(pid: int) -> Dict[str, str]:
-    data = _read_bytes("/proc/%d/environ" % pid, 2 * 1024 * 1024)
+    data = _read_bytes(_proc_entry(pid, "environ"), 2 * 1024 * 1024)
     if not data:
         return {}
     out: Dict[str, str] = {}
@@ -577,13 +689,13 @@ def detect_game(home: Path) -> Optional[Dict[str, Any]]:
 
     best: Optional[Tuple[int, int, List[str], str]] = None
     try:
-        pids = [name for name in os.listdir("/proc") if name.isdigit()]
+        pids = [name for name in os.listdir(PROC_ROOT) if name.isdigit()]
     except OSError:
         return None
     for name in pids:
         pid = int(name)
         try:
-            if os.stat("/proc/%d" % pid).st_uid != target_uid:
+            if os.stat(_proc_entry(pid)).st_uid != target_uid:
                 continue
         except OSError:
             continue
@@ -833,10 +945,11 @@ def _unit_indicator(key: str, label: str, unit: str, optional: bool = False) -> 
 
 def _sched_indicators() -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
-    state_text = _read_text(SCHED_EXT_STATE, 64)
+    state_path = _sys("/kernel/sched_ext/state")
+    state_text = _read_text(state_path, 64)
     if state_text is None:
         items.append(
-            ind("sched.state", "sched_ext state", "unknown", "unreadable", None, SCHED_EXT_STATE)
+            ind("sched.state", "sched_ext state", "unknown", "unreadable", None, state_path)
         )
     else:
         state = state_text.strip() or "unknown"
@@ -847,13 +960,13 @@ def _sched_indicators() -> List[Dict[str, Any]]:
                 "ok" if state == "enabled" else "warn",
                 state,
                 "EEVDF is the kernel fallback when nothing is loaded." if state != "enabled" else None,
-                SCHED_EXT_STATE,
+                state_path,
             )
         )
 
     running: List[int] = []
     try:
-        pids = [name for name in os.listdir("/proc") if name.isdigit()]
+        pids = [name for name in os.listdir(PROC_ROOT) if name.isdigit()]
     except OSError:
         pids = []
     for name in pids:
@@ -873,7 +986,7 @@ def _sched_indicators() -> List[Dict[str, Any]]:
                 "ok",
                 "pid %s" % ", ".join(str(p) for p in running[:3]),
                 "scx_cosmos -c 0 -p 0 is the shipped gaming profile.",
-                "/proc",
+                PROC_ROOT,
             )
         )
     else:
@@ -884,7 +997,7 @@ def _sched_indicators() -> List[Dict[str, Any]]:
                 "warn",
                 "not running",
                 "Without a loaded scheduler the kernel uses EEVDF.",
-                "/proc",
+                PROC_ROOT,
             )
         )
     items.append(_unit_indicator("sched.unit", "oxp3-gaming-sched.service", SCHED_UNIT))
@@ -896,13 +1009,15 @@ def _mesa_indicators(
 ) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
 
-    host_prefix = sha256_prefix(HOST_DRIVER)
+    host_prefix = sha256_prefix(DRIVER_PATH)
     host_ok = host_prefix == HOST_DRIVER_PREFIX
+    # A readable but different build is a degraded host (warn); a missing or
+    # unreadable driver is the failure the docs describe.
     items.append(
         ind(
             "mesa.host",
             "host libvulkan_intel.so",
-            "ok" if host_ok else ("fail" if host_prefix else "unknown"),
+            "ok" if host_ok else ("warn" if host_prefix else "fail"),
             ("%s (match)" % host_prefix)
             if host_ok
             else ("%s (expected %s)" % (host_prefix, HOST_DRIVER_PREFIX))
@@ -910,11 +1025,11 @@ def _mesa_indicators(
             else "missing/unreadable",
             "path: %s\nsize: %s\nfull sha256: %s"
             % (
-                HOST_DRIVER,
-                _stat_size(HOST_DRIVER),
-                sha256_hex(HOST_DRIVER) or "unknown",
+                DRIVER_PATH,
+                _stat_size(DRIVER_PATH),
+                sha256_hex(DRIVER_PATH) or "unknown",
             ),
-            HOST_DRIVER,
+            DRIVER_PATH,
         )
     )
 
@@ -1374,7 +1489,7 @@ def _fix_indicators(
     items.append(_unit_indicator("rapl.service", "RAPL powercap service", RAPL_UNIT))
     rapl_values: Dict[str, float] = {}
     for name in ("package-0", "core", "uncore"):
-        value = _read_float("/run/rapl-power/%s" % name)
+        value = _read_float(RUN_ROOT + "/rapl-power/%s" % name)
         if value is not None:
             rapl_values[name] = value
     if rapl_values:
@@ -1385,7 +1500,7 @@ def _fix_indicators(
                 "ok",
                 ", ".join("%s %.1f W" % (k, v) for k, v in sorted(rapl_values.items())),
                 "1 s averages published unprivileged by rapl-power.",
-                "/run/rapl-power",
+                RUN_ROOT + "/rapl-power",
             )
         )
     else:
@@ -1396,7 +1511,7 @@ def _fix_indicators(
                 "unknown",
                 "no /run/rapl-power values",
                 "rapl-power.service publishes these for MangoHud and this plugin.",
-                "/run/rapl-power",
+                RUN_ROOT + "/rapl-power",
             )
         )
 
@@ -1414,8 +1529,8 @@ def _fix_indicators(
         )
     )
 
-    pl1_msr = _read_int("/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw")
-    pl1_mmio = _read_int("/sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw")
+    pl1_msr = _read_int(_sys("/class/powercap/intel-rapl:0/constraint_0_power_limit_uw"))
+    pl1_mmio = _read_int(_sys("/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw"))
     values = [v for v in (pl1_msr, pl1_mmio) if v is not None]
     if not values:
         items.append(
@@ -1439,8 +1554,8 @@ def _fix_indicators(
             )
         )
 
-    profile = (_read_text("/sys/firmware/acpi/platform_profile", 64) or "").strip()
-    choices = (_read_text("/sys/firmware/acpi/platform_profile_choices", 128) or "").strip()
+    profile = (_read_text(_sys("/firmware/acpi/platform_profile"), 64) or "").strip()
+    choices = (_read_text(_sys("/firmware/acpi/platform_profile_choices"), 128) or "").strip()
     if not profile:
         items.append(
             ind("power.profile", "platform_profile", "unknown", "unreadable", None, "ACPI")
@@ -1453,7 +1568,7 @@ def _fix_indicators(
                 "ok" if profile == "balanced" else "warn",
                 profile,
                 "The recorded working build uses balanced; choices: %s" % (choices or "unknown"),
-                "/sys/firmware/acpi/platform_profile",
+                _sys("/firmware/acpi/platform_profile"),
             )
         )
 
@@ -1494,7 +1609,7 @@ def _fix_indicators(
             )
         )
 
-    overrides = Path(RUNTIME_OVERRIDES)
+    overrides = Path(RUNTIME_OVERRIDES_PATH)
     runtime_driver = overrides / "lib64/libvulkan_intel.so"
     if runtime_driver.is_file():
         prefix = sha256_prefix(runtime_driver)
@@ -1549,7 +1664,7 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
     kernel = os.uname().release
     os_name = ""
     try:
-        text = (Path("/etc/os-release").read_text(encoding="utf-8", errors="replace"))
+        text = (Path(ETC_ROOT + "/os-release").read_text(encoding="utf-8", errors="replace"))
         for line in text.splitlines():
             if line.startswith("PRETTY_NAME="):
                 os_name = line.split("=", 1)[1].strip().strip('"')
@@ -1566,7 +1681,7 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
         )
     )
 
-    policies = sorted(Path("/sys/devices/system/cpu/cpufreq").glob("policy*"))
+    policies = sorted(Path(_sys("/devices/system/cpu/cpufreq")).glob("policy*"))
     governors: Dict[str, int] = {}
     epps: Dict[str, int] = {}
     detail_lines = []
@@ -1579,7 +1694,7 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
             detail_lines.append("%s: governor=%s epp=%s" % (policy.name, gov, epp))
     if not policies:
         items.append(
-            ind("sys.cpu", "CPU governor / EPP", "unknown", "cpufreq not available", None, "/sys")
+            ind("sys.cpu", "CPU governor / EPP", "unknown", "cpufreq not available", None, SYS_ROOT)
         )
     else:
         expected = (
@@ -1597,13 +1712,13 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
                 summary,
                 "Recorded good config: powersave + balance_power (per-cluster EPP measured worse).\n"
                 + "\n".join(detail_lines),
-                "/sys/devices/system/cpu/cpufreq",
+                _sys("/devices/system/cpu/cpufreq"),
             )
         )
 
     pci_id = ""
     driver = ""
-    for render in sorted(Path("/sys/class/drm").glob("renderD*")):
+    for render in sorted(Path(_sys("/class/drm")).glob("renderD*")):
         uevent = _read_text(render / "device/uevent", 4096) or ""
         if "DRIVER=" in uevent:
             for line in uevent.splitlines():
@@ -1612,7 +1727,7 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
                 if line.startswith("DRIVER="):
                     driver = line.split("=", 1)[1].strip()
             break
-    version = mesa_version(HOST_DRIVER)
+    version = mesa_version(DRIVER_PATH)
     rpm_version = None
     rpm = _run(["rpm", "-q", "--qf", "%{VERSION}", "mesa-vulkan-drivers"], timeout=2.0)
     if rpm and rpm[0] == 0 and rpm[1].strip():
@@ -1627,17 +1742,17 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
                 "host driver reports Mesa %s; rpm mesa-vulkan-drivers=%s "
                 "(the runtime/host override is why these differ)"
                 % (version or "unknown", rpm_version or "unknown"),
-                HOST_DRIVER,
+                DRIVER_PATH,
             )
         )
     else:
         items.append(
-            ind("sys.gpu", "GPU / Mesa", "unknown", "no DRM render node", None, "/sys/class/drm")
+            ind("sys.gpu", "GPU / Mesa", "unknown", "no DRM render node", None, _sys("/class/drm"))
         )
 
     temps: List[Tuple[str, float]] = []
     try:
-        hwmons = sorted(Path("/sys/class/hwmon").glob("hwmon*"))
+        hwmons = sorted(Path(_sys("/class/hwmon")).glob("hwmon*"))
     except OSError:
         hwmons = []
     for hwmon in hwmons:
@@ -1653,7 +1768,7 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
             temps.append(("%s %s" % (name, label), value / 1000.0))
     zones = []
     try:
-        for zone in sorted(Path("/sys/class/thermal").glob("thermal_zone*")):
+        for zone in sorted(Path(_sys("/class/thermal")).glob("thermal_zone*")):
             ztype = (_read_text(zone / "type", 64) or "").strip()
             value = _read_int(zone / "temp")
             if value is not None and ztype in ("x86_pkg_temp", "TCPU"):
@@ -1668,7 +1783,7 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
     max_temp = max([v for _, v in temps + zones], default=None)
     if max_temp is None:
         items.append(
-            ind("sys.thermal", "temperature", "unknown", "no sensors readable", None, "/sys/class/hwmon")
+            ind("sys.thermal", "temperature", "unknown", "no sensors readable", None, _sys("/class/hwmon"))
         )
     else:
         state = "ok" if max_temp < 90 else ("warn" if max_temp < 100 else "fail")
@@ -1679,14 +1794,14 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
                 state,
                 "CPU package %.0f°C, max %.0f°C" % (package, max_temp) if package else "max %.0f°C" % max_temp,
                 "\n".join("%s: %.1f°C" % (label, value) for label, value in temps[:12]),
-                "/sys/class/hwmon",
+                _sys("/class/hwmon"),
             )
         )
 
     battery = None
     try:
         battery = next(
-            (p for p in sorted(Path("/sys/class/power_supply").glob("BAT*"))), None
+            (p for p in sorted(Path(_sys("/class/power_supply")).glob("BAT*"))), None
         )
     except OSError:
         battery = None
@@ -1715,7 +1830,7 @@ def _system_indicators(home: Path) -> List[Dict[str, Any]]:
         )
     else:
         items.append(
-            ind("sys.battery", "battery", "unknown", "no battery", None, "/sys/class/power_supply")
+            ind("sys.battery", "battery", "unknown", "no battery", None, _sys("/class/power_supply"))
         )
     return items
 
@@ -1809,7 +1924,7 @@ def collect_status(home_override: Optional[str] = None) -> Dict[str, Any]:
             "kernel": os.uname().release,
             "hostname": os.uname().nodename,
         },
-        "game": game,
+        "game": sanitize_game(game),
         "env_sources": [
             {"name": src["name"], "live": src["live"], "keys": len(src["env"])}
             for src in sources
@@ -1876,6 +1991,449 @@ class Plugin:
 # ---------------------------------------------------------------------------
 # Headless CLI
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# --selftest: every check against synthetic /sys, /proc, /run and HOME trees.
+# No hardware, no systemd, no privileges: the fixture scripts are ours.
+# ---------------------------------------------------------------------------
+_FIXTURE_GAME_PID = 4242
+_FIXTURE_SCX_PID = 4343
+_FIXTURE_GLOBALS = (
+    "SYS_ROOT",
+    "PROC_ROOT",
+    "ETC_ROOT",
+    "RUN_ROOT",
+    "DRIVER_PATH",
+    "RUNTIME_OVERRIDES_PATH",
+)
+
+
+def _fixture_write(path: Path, data: str, mode: Optional[int] = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(data, encoding="utf-8")
+    if mode is not None:
+        os.chmod(path, mode)
+
+
+class _World:
+    """A fabricated machine: sysfs/procfs/run plus one user home."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        sched: str = "enabled",
+        title: str = "Cyberpunk 2077",
+        xmx: bool = True,
+        trace: bool = True,
+        benchmark: bool = True,
+        corrupt: bool = False,
+    ) -> None:
+        self.root = root
+        self.home = root / "home"
+        self.sys = root / "sys"
+        self.proc = root / "proc"
+        self.etc = root / "etc"
+        self.run = root / "run"
+        self.bin = root / "bin"
+        self.sched = sched
+        self.title = title
+        self.xmx = xmx
+        self.trace = trace
+        self.benchmark = benchmark
+        self.corrupt = corrupt
+        self.prefix = self.home / "Games/Heroic/Prefixes" / title
+
+    # -- files ---------------------------------------------------------
+    def build(self) -> "_World":
+        home = self.home
+        home.mkdir(parents=True, exist_ok=True)
+        (self.root / "flatpak-runtime/lib64").mkdir(parents=True)
+        (self.home / "usr/lib64").mkdir(parents=True)
+        (home / "usr/lib64/libvulkan_intel.so").write_bytes(
+            b"\x7fELF\x00fixture host driver Mesa 25.2.2 (ours, synthetic)"
+        )
+        (self.root / "flatpak-runtime/lib64/libvulkan_intel.so").write_bytes(
+            b"\x7fELF\x00fixture runtime driver (ours, synthetic)"
+        )
+        self._home_files()
+        self._proc()
+        self._sys()
+        self._etc_run()
+        self._bin_scripts()
+        return self
+
+    def _home_files(self) -> None:
+        home = self.home
+        xmx_driver = home / XMX_DRIVER_REL
+        xmx_driver.parent.mkdir(parents=True, exist_ok=True)
+        xmx_driver.write_bytes(b"\x7fELF\x00fixture XMX driver (ours, synthetic)")
+        icd = home / XMX_ICD_REL
+        library = str(xmx_driver) if self.xmx else "/nonexistent/libvulkan_intel.so"
+        payload = json.dumps({"ICD": {"library_path": library}})
+        _fixture_write(icd, payload if not self.corrupt else "{not json")
+        if self.xmx:
+            helper = home / ".cache/xess-xmx/tools/xmx-cm-compile-nodgrf.sh"
+            _fixture_write(helper, "#!/bin/sh\nexit 0\n", 0o755)
+            (home / "igc/neo/bin").mkdir(parents=True, exist_ok=True)
+            (home / "igc/neo/bin/ocloc").write_text("#!/bin/sh\nexit 0\n")
+            os.chmod(home / "igc/neo/bin/ocloc", 0o755)
+            (home / "shim").mkdir(parents=True, exist_ok=True)
+            (home / "shim/igdext64.dll").write_bytes(b"fixture placeholder, not a vendor DLL")
+            (home / XMX_KERNEL_CACHE_REL).mkdir(parents=True, exist_ok=True)
+            (home / XMX_KERNEL_CACHE_REL / "fixture.cmk").write_bytes(b"fixture cm kernel")
+            _fixture_write(home / XMX_COMPILE_LOG_REL, "compiled 1 kernel\n")
+            _fixture_write(
+                home / XMX_ENV_REL,
+                'export ANV_CM_HELPER="$HOME/.cache/xess-xmx/tools/xmx-cm-compile-nodgrf.sh"\n',
+            )
+        if self.xmx:
+            override_env = (
+                "[Environment]\nANV_CM_HELPER=%s\nVKD3D_DISABLE_EXTENSIONS=%s\n"
+                % (
+                    home / ".cache/xess-xmx/tools/xmx-cm-compile-nodgrf.sh",
+                    "VK_EXT_descriptor_buffer",
+                )
+            )
+        else:
+            override_env = "[Environment]\n"
+        _fixture_write(home / STEAM_OVERRIDE_REL, override_env)
+        self.prefix.mkdir(parents=True, exist_ok=True)
+        (self.prefix / "pfx").mkdir(exist_ok=True)
+        (self.prefix / "drive_c").mkdir(exist_ok=True)
+        if self.trace:
+            (self.prefix / "drive_c/igdext_trace.log").write_text("fixture trace\n")
+        if self.benchmark:
+            summary = (
+                self.prefix
+                / "drive_c/users/holzr/Documents/CD Projekt Red/Cyberpunk 2077/"
+                "benchmarkResults/run1/summary.json"
+            )
+            data = {
+                "Data": {
+                    "XeSSEnabled": True,
+                    "upscalingType": 1,
+                    "averageFps": 58.25,
+                    "minFps": 44.0,
+                    "maxFps": 77.5,
+                    "renderWidth": 1920,
+                    "renderHeight": 1080,
+                    "presetName": "Ray Tracing: Ultra",
+                    "gpuName": "Intel Arc B390",
+                }
+            }
+            _fixture_write(summary, json.dumps(data) if not self.corrupt else "{not json")
+        heroic_dir = home / HEROIC_CONFIG_REL
+        cfg = {
+            "1423049311": {
+                "useGameMode": False,
+                "winePrefix": str(self.prefix),
+                "wrapperOptions": [],
+                "envVars": (
+                    {
+                        "VK_DRIVER_FILES": str(home / XMX_ICD_REL),
+                        "VKD3D_DISABLE_EXTENSIONS": "VK_EXT_descriptor_buffer",
+                    }
+                    if self.xmx
+                    else {}
+                ),
+            }
+        }
+        _fixture_write(heroic_dir / "fixture.json", json.dumps(cfg))
+
+    def _environ(self) -> bytes:
+        home = self.home
+        appid = "1423049311" if self.title == "Cyberpunk 2077" else "620"
+        pairs = [
+            ("SteamAppId", appid),
+            ("SteamGameId", appid),
+            ("STEAM_COMPAT_DATA_PATH", str(self.prefix)),
+            ("GITHUB_TOKEN", "ghp_fixture_secret_do_not_print"),
+            ("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus"),
+            ("SSH_AUTH_SOCK", "/tmp/ssh-fixture/agent"),
+        ]
+        if self.xmx:
+            pairs.extend(
+                [
+                    ("VK_DRIVER_FILES", str(home / XMX_ICD_REL)),
+                    (
+                        "ANV_CM_HELPER",
+                        str(home / ".cache/xess-xmx/tools/xmx-cm-compile-nodgrf.sh"),
+                    ),
+                    ("XMX_IGC_DIR", str(home / "igc")),
+                    (
+                        "INTC_ALT_DRIVER_EXTENSIONS_PATH",
+                        str(home / "shim"),
+                    ),
+                    ("VKD3D_DISABLE_EXTENSIONS", "VK_EXT_descriptor_buffer"),
+                ]
+            )
+        return b"\0".join(
+            ("%s=%s" % (key, value)).encode("utf-8") for key, value in pairs
+        ) + b"\0"
+
+    def _proc(self) -> None:
+        home = self.home
+        exe_name = "Cyberpunk2077.exe" if self.title == "Cyberpunk 2077" else "portal2.exe"
+        exe = str(home / "Games" / "steamapps/common" / self.title / exe_name)
+        game = self.proc / str(_FIXTURE_GAME_PID)
+        game.mkdir(parents=True, exist_ok=True)
+        (game / "comm").write_text("wine64\n")
+        (game / "cmdline").write_bytes(
+            ("%s\0--api_token=fixture-supersecret\0" % exe).encode("utf-8")
+        )
+        (game / "environ").write_bytes(self._environ())
+        scx = self.proc / str(_FIXTURE_SCX_PID)
+        scx.mkdir(parents=True, exist_ok=True)
+        (scx / "comm").write_text("scx_cosmos\n")
+        (scx / "cmdline").write_bytes(b"scx_cosmos\0-c\00\0-p\00\0")
+        (scx / "environ").write_bytes(b"")
+
+    def _sys(self) -> None:
+        _fixture_write(self.sys / "kernel/sched_ext/state", self.sched + "\n")
+        _fixture_write(self.sys / "class/powercap/intel-rapl:0/constraint_0_power_limit_uw", "35000000\n")
+        _fixture_write(
+            self.sys / "class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw",
+            "35000000\n",
+        )
+        _fixture_write(self.sys / "firmware/acpi/platform_profile", "balanced\n")
+        _fixture_write(
+            self.sys / "firmware/acpi/platform_profile_choices", "low-power balanced performance\n"
+        )
+        for index in range(2):
+            policy = self.sys / ("devices/system/cpu/cpufreq/policy%d" % index)
+            _fixture_write(policy / "scaling_governor", "powersave\n")
+            _fixture_write(policy / "energy_performance_preference", "balance_power\n")
+        _fixture_write(
+            self.sys / "class/drm/renderD128/device/uevent",
+            "DRIVER=xe\nPCI_CLASS=30000\nPCI_ID=8086:B080\n",
+        )
+        _fixture_write(self.sys / "class/hwmon/hwmon0/name", "coretemp\n")
+        _fixture_write(self.sys / "class/hwmon/hwmon0/temp1_label", "Package id 0\n")
+        _fixture_write(self.sys / "class/hwmon/hwmon0/temp1_input", "55000\n")
+        _fixture_write(self.sys / "class/thermal/thermal_zone0/type", "x86_pkg_temp\n")
+        _fixture_write(self.sys / "class/thermal/thermal_zone0/temp", "60000\n")
+        _fixture_write(self.sys / "class/power_supply/BAT0/capacity", "88\n")
+        _fixture_write(self.sys / "class/power_supply/BAT0/status", "Discharging\n")
+        _fixture_write(self.sys / "class/power_supply/BAT0/power_now", "12000000\n")
+
+    def _etc_run(self) -> None:
+        _fixture_write(self.etc / "os-release", 'PRETTY_NAME="Anatase fixture"\n')
+        for name in ("package-0", "core", "uncore"):
+            _fixture_write(self.run / ("rapl-power/%s" % name), "12.5\n")
+
+    def _bin_scripts(self) -> None:
+        self.bin.mkdir(parents=True, exist_ok=True)
+        sched_active = "active" if self.sched == "enabled" else "inactive"
+        systemctl = (
+            "#!/bin/sh\nunit=''\nfor a in \"$@\"; do unit=\"$a\"; done\n"
+            "case \"$unit\" in\n"
+            "  oxp3-gaming-sched.service) echo LoadState=loaded; "
+            "echo ActiveState=%s; echo UnitFileState=enabled;;\n"
+            "  rapl-power.service|oxp3-rapl-pp1.service) echo LoadState=loaded; "
+            "echo ActiveState=active; echo UnitFileState=enabled;;\n"
+            "  *) echo LoadState=not-found; echo ActiveState=inactive; echo UnitFileState=;;\n"
+            "esac\n" % sched_active
+        )
+        modinfo = (
+            "#!/bin/sh\n"
+            "echo /lib/modules/7.2.7-an28.fc45.x86_64/updates/drivers/gpu/drm/xe/xe.ko\n"
+        )
+        rpm = "#!/bin/sh\necho 25.2.2\n"
+        for name, body in (("systemctl", systemctl), ("modinfo", modinfo), ("rpm", rpm)):
+            _fixture_write(self.bin / name, body, 0o755)
+
+
+@contextlib.contextmanager
+def _fixture_globals(world: "_World"):
+    saved = {name: globals()[name] for name in _FIXTURE_GLOBALS}
+    saved_path = os.environ.get("PATH", "")
+    globals().update(
+        {
+            "SYS_ROOT": str(world.sys),
+            "PROC_ROOT": str(world.proc),
+            "ETC_ROOT": str(world.etc),
+            "RUN_ROOT": str(world.run),
+            "DRIVER_PATH": str(world.home / "usr/lib64/libvulkan_intel.so"),
+            "RUNTIME_OVERRIDES_PATH": str(world.root / "flatpak-runtime"),
+        }
+    )
+    os.environ["PATH"] = str(world.bin) + ":" + saved_path
+    _hash_cache.clear()
+    _version_cache.clear()
+    try:
+        yield
+    finally:
+        globals().update(saved)
+        os.environ["PATH"] = saved_path
+        _hash_cache.clear()
+        _version_cache.clear()
+
+
+class _Checks:
+    def __init__(self) -> None:
+        self.failures: List[str] = []
+        self.total = 0
+
+    def check(self, name: str, ok: bool, detail: str = "") -> None:
+        self.total += 1
+        if not ok:
+            self.failures.append("%s%s" % (name, (": " + detail) if detail else ""))
+
+    def eq(self, name: str, actual: Any, expected: Any) -> None:
+        self.check(name, actual == expected, "got %r, want %r" % (actual, expected))
+
+
+def _indicator_map(report: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return {item["id"]: item for grp in report["groups"] for item in grp["indicators"]}
+
+
+def run_selftest() -> int:
+    """Exercise every probe against synthetic fixtures. Returns 0/1."""
+    checks = _Checks()
+
+    with tempfile.TemporaryDirectory(prefix="oxp3-selftest-") as tmp:
+        root = Path(tmp)
+        healthy = _World(root / "healthy", sched="enabled").build()
+        with _fixture_globals(healthy):
+            report = collect_status(str(healthy.home))
+        states = _indicator_map(report)
+        dumped = json.dumps(report)
+
+        checks.eq("healthy: schema", report["schema"], 1)
+        checks.eq("healthy: game name", (report.get("game") or {}).get("name"), "Cyberpunk 2077")
+        checks.eq("healthy: game appid", (report.get("game") or {}).get("appid"), "1423049311")
+        checks.eq("healthy: sched state", states["sched.state"]["state"], "ok")
+        checks.eq("healthy: scx process", states["sched.scx_cosmos"]["state"], "ok")
+        checks.eq("healthy: sched unit", states["sched.unit"]["state"], "ok")
+        checks.eq("healthy: xe module", states["xe.module"]["state"], "ok")
+        checks.eq("healthy: pl1", states["power.pl1"]["state"], "ok")
+        checks.eq("healthy: platform profile", states["power.profile"]["state"], "ok")
+        checks.eq("healthy: cpufreq", states["sys.cpu"]["state"], "ok")
+        checks.eq("healthy: gpu", states["sys.gpu"]["state"], "ok")
+        checks.eq("healthy: thermal", states["sys.thermal"]["state"], "ok")
+        checks.eq("healthy: battery", states["sys.battery"]["state"], "ok")
+        checks.eq("healthy: rapl values", states["rapl.values"]["state"], "ok")
+        checks.eq("healthy: xmx icd", states["xmx.icd"]["state"], "ok")
+        checks.eq("healthy: xmx helper", states["xmx.helper"]["state"], "ok")
+        checks.eq("healthy: xmx igc", states["xmx.igc"]["state"], "ok")
+        checks.eq("healthy: xmx shim", states["xmx.shim"]["state"], "ok")
+        checks.eq("healthy: xmx vkd3d", states["xmx.vkd3d"]["state"], "ok")
+        checks.eq("healthy: xmx kernels", states["xmx.kernels"]["state"], "ok")
+        checks.eq("healthy: xmx trace", states["xmx.trace"]["state"], "ok")
+        checks.eq("healthy: xmx benchmark", states["xmx.benchmark"]["state"], "ok")
+        checks.eq("healthy: flatpak steam env", states["flatpak.steam_env"]["state"], "ok")
+        checks.eq("healthy: heroic gamemode", states["heroic.gamemode"]["state"], "ok")
+        # Cryptographic prefixes cannot be forged: synthetic drivers must be
+        # reported as a mismatch, never as the recorded build.
+        checks.eq("healthy: host driver mismatch", states["mesa.host"]["state"], "warn")
+        checks.eq("healthy: xmx driver mismatch", states["xmx.driver"]["state"], "warn")
+        checks.eq("healthy: runtime driver mismatch", states["flatpak.runtime"]["state"], "warn")
+        checks.check(
+            "healthy: no fail verdict on a complete fixture",
+            not any(item["state"] == "fail" for item in states.values()),
+            ", ".join(key for key, item in states.items() if item["state"] == "fail"),
+        )
+        checks.eq("healthy: overall", report["overall"], "warn")
+        checks.eq(
+            "healthy: counts sum",
+            sum(report["counts"].values()),
+            sum(len(grp["indicators"]) for grp in report["groups"]),
+        )
+
+        game = report.get("game") or {}
+        env = game.get("env") or {}
+        checks.check("leak: secret token not in report", "ghp_fixture_secret_do_not_print" not in dumped)
+        checks.check("leak: DBus address not in report", "DBUS_SESSION_BUS_ADDRESS" not in env)
+        checks.check("leak: ssh agent not in report", "SSH_AUTH_SOCK" not in env)
+        checks.check("leak: cmdline token redacted", "fixture-supersecret" not in dumped)
+        checks.check("leak: report env filtered", int(game.get("env_omitted") or 0) >= 3)
+        checks.check("report env keeps XMX keys", "ANV_CM_HELPER" in env)
+        checks.check("report is JSON-serialisable", '"schema": 1' in json.dumps(report))
+
+        # -- degraded: non-XeSS title, sched_ext disabled ------------------
+        degraded = _World(
+            root / "degraded",
+            sched="disabled",
+            title="Portal 2",
+            xmx=False,
+            trace=False,
+        ).build()
+        with _fixture_globals(degraded):
+            drep = collect_status(str(degraded.home))
+        dstates = _indicator_map(drep)
+        checks.eq("degraded: sched state", dstates["sched.state"]["state"], "warn")
+        checks.eq("degraded: xmx helper na", dstates["xmx.helper"]["state"], "na")
+        checks.eq("degraded: xmx trace na", dstates["xmx.trace"]["state"], "na")
+        checks.eq("degraded: xmx benchmark na", dstates["xmx.benchmark"]["state"], "na")
+        checks.eq("degraded: game name", (drep.get("game") or {}).get("name"), "portal2")
+        checks.eq("degraded: overall", drep["overall"], "warn")
+
+        # -- corrupt inputs must not raise -------------------------------
+        corrupt = _World(root / "corrupt", corrupt=True).build()
+        with _fixture_globals(corrupt):
+            try:
+                crep = collect_status(str(corrupt.home))
+                checks.check("corrupt: report still produced", isinstance(crep.get("groups"), list))
+                checks.eq(
+                    "corrupt: counts sum",
+                    sum(crep["counts"].values()),
+                    sum(len(grp["indicators"]) for grp in crep["groups"]),
+                )
+            except Exception as exc:  # pragma: no cover - selftest failure path
+                checks.check("corrupt: no exception", False, repr(exc))
+
+        # -- empty home, no fixture files at all --------------------------
+        empty_home = root / "empty-home"
+        empty_home.mkdir()
+        with _fixture_globals(healthy):
+            erep = collect_status(str(empty_home))
+        checks.check("empty home: report produced", isinstance(erep.get("groups"), list))
+        checks.eq("empty home: schema", erep["schema"], 1)
+        checks.eq(
+            "empty home: counts sum",
+            sum(erep["counts"].values()),
+            sum(len(grp["indicators"]) for grp in erep["groups"]),
+        )
+        text = render_text(erep, color=False)
+        checks.check("text render: has header", "OXP3 status" in text)
+
+    # -- exit codes ------------------------------------------------------
+    checks.eq("exit: ok", _exit_code({"counts": {"ok": 3}}, strict=False), 0)
+    checks.eq("exit: fail", _exit_code({"counts": {"fail": 1}}, strict=False), 1)
+    checks.eq("exit: strict warn", _exit_code({"counts": {"warn": 1}}, strict=True), 2)
+    checks.eq("exit: strict unknown", _exit_code({"counts": {"unknown": 1}}, strict=True), 2)
+    checks.eq("exit: strict na", _exit_code({"counts": {"na": 2}}, strict=True), 0)
+    checks.eq("exit: lenient warn", _exit_code({"counts": {"warn": 2}}, strict=False), 0)
+
+    # -- sanitizer unit checks ------------------------------------------
+    env, dropped = sanitize_env(
+        {
+            "SteamAppId": "1",
+            "ANV_CM_HELPER": "/x",
+            "GITHUB_TOKEN": "secret",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1/bus",
+            "VK_SESSION_TOKEN": "secret2",
+        }
+    )
+    checks.eq("sanitize: allowlist keeps Steam env", env.get("SteamAppId"), "1")
+    checks.check("sanitize: drops unrelated env", "DBUS_SESSION_BUS_ADDRESS" not in env)
+    checks.check("sanitize: redacts allowlisted secret keys", env.get("VK_SESSION_TOKEN") == "<redacted>")
+    checks.eq("sanitize: counted drops", dropped, 2)
+    checks.eq(
+        "sanitize: cmdline", sanitize_cmdline("game.exe --api_token=abc --normal=1"),
+        "game.exe --api_token=<redacted> --normal=1",
+    )
+
+    if checks.failures:
+        print("selftest: %d check(s), %d FAILED" % (checks.total, len(checks.failures)))
+        for failure in checks.failures:
+            print("  FAIL  %s" % failure)
+        return 1
+    print("selftest: %d checks passed (synthetic /sys, /proc, /run, HOME)" % checks.total)
+    return 0
+
+
 _GLYPHS = {"ok": "OK  ", "warn": "WARN", "fail": "FAIL", "unknown": "?   ", "na": "----"}
 _COLORS = {
     "ok": "\033[32m",
@@ -1961,15 +2519,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
     parser.add_argument("--home", metavar="PATH", help="desktop user's home to inspect")
     parser.add_argument("--version", action="store_true", help="print the version and exit")
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="run every check against a synthetic /sys, /proc and HOME fixture (no hardware)",
+    )
     args = parser.parse_args(argv)
 
     if args.version:
         print(VERSION)
         return 0
 
+    if args.selftest:
+        return run_selftest()
+
     color = sys.stdout.isatty() and not args.no_color and not args.json
     while True:
-        report = collect_status(args.home)
+        try:
+            report = collect_status(args.home)
+        except KeyboardInterrupt:
+            return 130
+        except Exception as exc:  # last-resort guard: a CLI must not traceback
+            print("oxp3-status: internal error: %s" % exc, file=sys.stderr)
+            return 3
         if args.json:
             print(json.dumps(report, indent=2, sort_keys=False))
         else:

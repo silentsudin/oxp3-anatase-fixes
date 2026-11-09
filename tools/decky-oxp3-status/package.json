@@ -7,7 +7,10 @@
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c -w",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "node test/smoke.mjs",
+    "selftest": "python3 main.py --selftest",
+    "package": "python3 package.py"
   },
   "keywords": [
     "decky",
@@ -27,6 +30,8 @@
     "@decky/rollup": "^1.0.1",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "rollup": "^4.22.5",
     "tslib": "^2.7.0",
     "typescript": "^5.6.2"

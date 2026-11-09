@@ -1,8 +1,11 @@
 # ONEXPLAYER 3 fingerprint reader: what it is, and why Linux cannot use it yet
 
 Status: hardware identified, Windows protocol recovered far enough to build a
-frame-accurate probe, **no Linux support exists and none is close** - a new
-libfprint SPI driver is the only path. The remaining unknowns are listed in
+frame-accurate probe, **no Linux support exists yet** - a new libfprint SPI
+driver is the only path. The protocol now also exists as a tested userspace
+library (`tools/fingerprint/fpbf63112/`) and a driver that compiles against
+libfprint 1.94's internal driver API, but **nothing has run against the sensor**
+(see `tools/fingerprint/README.md`). The remaining unknowns are listed in
 [Open points](#open-points); two of them need root on this unit.
 Owner: silentsudin. Host: Anatase 20261026.3, kernel 7.2.7-an28.fc45,
 libfprint 1.94.100, fprintd 1.94.5.
@@ -190,12 +193,17 @@ driver cannot start.
 | file | what it is |
 |---|---|
 | `tools/fingerprint/oxp3-fp-probe.py` | read-only userspace handshake: binds to `spidev`, builds the exact 41-byte query frame, sends the read-only opcodes (`fw`, `scheme`, `uid`, `info`, `count`), hexdumps the answer, refuses destructive opcodes. Stdlib only. |
-| `tools/fingerprint/libfprint-bf63112.c` | **template only** (not built, not compiled): driver skeleton with the CRC/frame helpers, FpDevice glue, and the enrol/identify sequences documented in place |
+| `tools/fingerprint/fpbf63112/` | protocol library (stdlib only): frame build/parse, CRC-32, offset arithmetic, command table, GET_IMG reassembly, retry state machine |
+| `tools/fingerprint/tests/` | 85 unittest tests incl. fuzz/property round-trips and synthetic device transcripts; shared frame vectors for the C implementation |
+| `tools/fingerprint/bf63112_proto.h/.c` | dependency-free C11 protocol core shared with the driver |
+| `tools/fingerprint/libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; enrol/verify/identify refuse with `NOT_SUPPORTED` until the payloads are decoded. Syntax-checked (`-Wall -Wextra -Werror`) against libfprint v1.94.9 headers; see `tools/fingerprint/README.md` |
+| `tools/fingerprint/README.md` | proven vs inferred vs unknown, test commands, privileged probe steps, upstreaming path |
 | `docs/hw/fingerprint.md` | this document |
 
-The probe is self-checked (`py_compile`, frame/CRC round-trip) but has **not**
-run against the sensor: it needs root to bind `spidev`, which this session did
-not have. Treat its first run as a bring-up experiment.
+The Python suite, the C tests and both driver syntax checks pass offline (see
+`tools/fingerprint/README.md`), but the probe has **not** run against the
+sensor: it needs root to bind `spidev`, which this session did not have. Treat
+its first run as a bring-up experiment.
 
 ## Bringing it up by hand (privileged steps, exact commands)
 
@@ -293,5 +301,9 @@ its previous state.
 5. **`BF63112:01` on SPI2** - present in ACPI, no controller instanced. Either
    an unpopulated second source or a phantom node; harmless, but a driver
    should match `BF63112:00`-style enumeration rather than assume one device.
-6. **The probe has never run** - written and self-checked here, first execution
-   is the bring-up itself; expect to tune `--speed`/`--mode`/`--wait-ms`.
+6. **The probe has never run** - written and self-checked here (and now
+   parity-tested against the protocol library), first execution is the bring-up
+   itself; expect to tune `--speed`/`--mode`/`--wait-ms`.
+7. **The driver has never talked to the sensor either** - it compiles against
+   libfprint 1.94, but its answer parsing, retry timing and the sensor-info
+   field offsets all need one run on real hardware to confirm.

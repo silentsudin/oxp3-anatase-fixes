@@ -1,0 +1,298 @@
+# BF63112 fingerprint: protocol library, tests, and a compile-ready libfprint driver
+
+The ONEXPLAYER 3 fingerprint reader is a Betterlife BF63112 module on the Intel LPSS SPI bus
+(`ACPI\BF63112`, `spi-BF63112:00`) with no Linux driver. This directory now holds the recovered
+protocol as a tested userspace library, synthetic device transcripts, and a driver that compiles
+against libfprint's real internal driver API. It has **never run against the sensor** - every claim
+below is marked proven / inferred / unknown.
+
+See [`docs/hw/fingerprint.md`](../../docs/hw/fingerprint.md) for the hardware evidence and
+[`docs/hw/README.md`](../../docs/hw/README.md) for the overall hardware status.
+
+## Layout
+
+| path | what it is |
+|---|---|
+| `fpbf63112/protocol.py` | Python protocol library (stdlib only): frame build/parse, CRC-32, length/offset arithmetic, chunk sums, command table, image reassembly, retry state machine |
+| `tests/` | unittest suite (85 tests), synthetic fixtures, generated frame vectors, replay helpers |
+| `tests/fixtures/*.json` | small device transcripts: clean answers, noise, truncation, bad CRC, wrong opcode, retry exhaustion, GET_IMG good/partial/bad-sum/retried/oversized |
+| `tests/vectors.json`, `tests/vectors.h` | one set of frame vectors shared by the Python and C implementations |
+| `tests/generate_fixtures.py` | regenerates all fixtures/vectors (checked in; a test fails if they drift) |
+| `bf63112_proto.h/.c` | dependency-free C11 protocol core (no allocation, `<stdint.h>` only) used by the driver and its tests |
+| `tests/test_proto.c` | C tests against the same vectors + rejection/scan/image paths |
+| `libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; enrol/verify refuse with `NOT_SUPPORTED` |
+| `stub/` | **offline syntax-check shim only** - fake `fpi-*.h` + minimal GLib declarations, clearly marked "not libfprint"; never installed or linked |
+| `Makefile` | `py-test`, `proto-test`, `syntax`, `syntax-real` targets |
+| `tests/run-c-tests.sh`, `tests/check-libfprint.sh` | run the C targets here without a host compiler (ephemeral podman) |
+| `oxp3-fp-probe.py` | the standalone `sudo` bring-up probe (unchanged; parity-tested against the library) |
+
+## What is proven, inferred, and unknown
+
+**Proven** (matches `BetterlifeFingerprintDevice.dll` 9.39.15.26 byte for byte; recovered from the
+Windows UMDF driver, no vendor code in this repo):
+
+* Host frame: `AA | L:u32 LE | 16x0 | 4C op phase 00 arg:u16 len:u32 data | pad16 | CRC-32`,
+  `L = 20 + align16(10 + data_len)`, CRC-32/ISO-HDLC over everything before it including `0xAA`.
+  A data-less query is 41 bytes with `L = 36`.
+* The opcode table `0xA1`-`0xFF` (names and roles in `fpbf63112.protocol.COMMANDS`).
+* `CMD_GET_IMG_DATA` (`0xB5`): phase 0 returns 9 bytes `status, u32 total, u32 byte_sum`;
+  phase 1 streams 8-bit pixels; acceptance needs `total == width*height` and an **8-bit running
+  sum**; the Windows driver asks for at most `0x1FCC` (8140) bytes per transfer and re-sends on
+  answer timeout (1000/5000 ms per attempt).
+* The device is SPI-mode udev hardware (`spidev`), not USB; no driver is bound today.
+
+**Inferred** (implemented conservatively, must be confirmed on hardware):
+
+* Answer framing is the mirror of the request: `AA | L | 16-byte device header | 4C op phase
+  status | ...`. The 16-byte answer header is undecoded. Both plausible body starts are exposed
+  (`Frame.body_from_status`, `Frame.body_from_arg`) rather than picking one silently.
+* `CMD_QUERY_SENSOR_INFO` payload: `a:u16, b:u16, width:u16, height:u16, flags:u8` (from the
+  Windows handler's reads); `CMD_QUERY_FIRMWARE_VER`: `mode, project, variant, 4 version bytes`.
+* Answers may or may not echo `opcode`/`phase`; the library checks the opcode and leaves the phase
+  check optional (`Transaction(check_phase=...)`).
+* Whether GET_IMG chunks carry a *per-chunk* 8-bit sum: `docs/hw/fingerprint.md` says there is only
+  the global sum, the recovered notes mention a per-chunk check. `ImageAssembler.add(..., chunk_sum=)`
+  supports either once hardware answers; nothing assumes it.
+
+**Unknown / out of scope**
+
+* SM3 session / `CMD_QUERY_ROOT_KEY` (`0xB0`) - whether a plain-spoken driver is accepted at all;
+  `CMD_FW_WORK_MODE_SWITCH` (`0xFF`) semantics.
+* Enrol/identify payloads (`0xB1`, `0xB2`): template handle, score, press counter, phase timing.
+* SPI clock, mode, bit width and the reset/IRQ GPIOs - they live in `\_SB.PC00.SPI1.FPRT._CRS`
+  and are root-only on this host.
+* Whether the second ACPI node (`BF63112:01` on SPI2) is real.
+* Anything about hardware behaviour: **no code here has talked to the sensor.**
+
+## Run the tests
+
+The host has Python 3 but no C compiler and no `make`, so:
+
+```sh
+# Python protocol + transcript + fuzz tests (this is the full behavioural suite)
+python3 -m unittest discover -s tools/fingerprint/tests -v
+#   -> Ran 85 tests ... OK
+
+# C protocol tests (same vectors, independent implementation)
+tools/fingerprint/tests/run-c-tests.sh
+#   -> ok: 324 checks, 10 vectors
+
+# Driver against the real libfprint 1.94.9 headers (fetches nothing into the repo;
+# needs a source checkout and podman or local glib2/gusb devel):
+git clone --depth 1 --branch v1.94.9 \
+  https://gitlab.freedesktop.org/libfprint/libfprint.git /tmp/libfprint-1.94.9
+LIBFPRINT_SRC=/tmp/libfprint-1.94.9 tools/fingerprint/tests/check-libfprint.sh
+#   -> exit 0, -fsyntax-only with -Wall -Wextra -Werror
+
+# Driver against the offline shim headers (no libfprint/GLib at all):
+podman run --rm -v "$PWD":/w:z -w /w/tools/fingerprint \
+  localhost/oxp3-fixes-build:f45 make syntax
+```
+
+Locally (a machine with gcc + make): `make -C tools/fingerprint check` runs Python, C and the shim
+syntax check. `make syntax-real LIBFPRINT_SRC=...` is the authoritative API check.
+
+Test coverage, in words:
+
+* **Frames**: documented lengths (41/57/73...), per-length formula check, field round-trip, padding,
+  header junk scanning, resynchronisation after a bad CRC.
+* **Rejection**: every truncation, every single-byte mutation, trailing bytes, bad L, unaligned
+  block, bad magic, `data_len` past the block, CRC mismatch (with values).
+* **Fuzz/property**: 400 random valid frames round-trip (`build -> parse -> build` identical),
+  truncated prefixes never parse, random buffers never crash the scanner.
+* **Image**: header round-trip, chunk accounting, overrun/oversize/empty, incomplete image, global
+  and optional per-chunk sum.
+* **Session**: resend budget, exhaustion, hint-free phase matching, mismatch rejection, invariants
+  over random event sequences.
+* **Transcripts**: each fixture has a hand-written expected outcome, replayed through the same
+  transaction/assembler code a driver uses.
+* **Cross-language**: `vectors.h` is generated from the Python implementation; `test_proto.c`
+  rebuilds every frame from its inputs and compares bytes, then parses them.
+* **Probe parity**: the `sudo` probe's frame builder/parser/command table are asserted equal to the
+  library so the two cannot drift.
+
+Regenerate fixtures/vectors after a protocol change (tests fail until you do):
+
+```sh
+python3 tools/fingerprint/tests/generate_fixtures.py
+```
+
+## Using the library
+
+```python
+import sys; sys.path.insert(0, "tools/fingerprint")
+from fpbf63112 import protocol as P
+
+frame = P.build_frame(P.Command.QUERY_SENSOR_INFO)   # 41-byte read-only query
+frames, errors = P.scan_frames(spi_readback)          # junk/padding tolerant
+tx = P.Transaction(P.Command.QUERY_SENSOR_INFO)       # resend-on-timeout state machine
+```
+
+Everything is stdlib-only; there is no hardware access in the library, which is why the tests can
+run anywhere. `P.DESTRUCTIVE_COMMANDS` is the set a tool must never send by accident.
+
+## The libfprint driver
+
+`libfprint-bf63112.c` targets **libfprint 1.94.x internal driver API** (verified against the
+`v1.94.9` source tree with GLib 2.90.1 and GUsb 0.4.9). It is an in-tree-style driver: the
+`fpi-*` headers are private to libfprint and are not installed by distributions, so it must be built
+inside a libfprint checkout (or against one with `LIBFPRINT_SRC`).
+
+On the ONEXPLAYER 3 host itself this was checked: `/usr/include/libfprint-2` does not exist,
+`pkg-config --modversion libfprint-2` fails, and no libfprint source tree is present - only the
+runtime `libfprint-2.so.2` (package `libfprint-1.94.100-1.fc45`, `fprintd` 1.94.5). Hence the two
+check paths: the offline `stub/` shim, and `syntax-real` against a fetched v1.94.9 tree.
+
+What it implements:
+
+* `open`: opens the spidev node libfprint provides for the udev match, queries sensor geometry
+  (`0xC2`) and firmware version (`0xA1`), then completes.
+* `close`, `suspend` (`0xC0 SLEEP`), `resume` (re-query sensor info).
+* A generic request state machine: build frame, write+read one `FpiSpiTransfer`, scan for the
+  answer, re-send up to 3 times on timeout/bad frame (the Windows driver's resend behaviour,
+  polling instead of the not-yet-available IRQ GPIO).
+* `enroll`/`verify`/`identify` complete with `FP_DEVICE_ERROR_NOT_SUPPORTED` and a message naming
+  the undecoded piece. They do **not** send `0xB1`/`0xB2`/`0xB3`, so templates enrolled from
+  Windows cannot be touched.
+
+Exact libfprint API surface used (adapt these first if the version changes):
+`FpDeviceClass` (`id`, `full_name`, `type = FP_DEVICE_TYPE_UDEV`, `id_table`, `scan_type`,
+`open/close/enroll/verify/identify/suspend/resume`), `FpIdEntry` (`udev_types =
+FPI_DEVICE_UDEV_SUBTYPE_SPIDEV`, `spi_acpi_id = "BF63112"`), `fpi_device_class_auto_initialize_features`,
+`fpi_device_get_udev_data`, `fpi_device_get_cancellable`, `fpi_spi_transfer_new/write_full/read_full/
+submit`, `FpiSpiTransfer.{ssm,buffer_wr,buffer_rd,length_wr,length_rd}`, `fpi_ssm_new_full`/`fpi_ssm_*`,
+`fpi_device_{open,close,enroll,verify,identify,suspend,resume}_complete`,
+`fpi_device_error_new_msg`, `fp_dbg/fp_info/fp_warn`, `G_DECLARE_FINAL_TYPE`/`G_DEFINE_TYPE`.
+
+What a maintainer must adapt to turn this into an upstreamable driver:
+
+1. **Build system**: libfprint 1.94.9 lists drivers in `libfprint/meson.build` (source path) and
+   `meson.build` / `tests/meson.build` (driver name, `udev` backend). Add `bf63112` in all three
+   places; the udev rule is generated from the id table, so `70-libfprint-2.rules` then binds
+   spidev for `acpi:BF63112:`. No USB ids exist for this device.
+2. **SPI parameters**: the driver inherits whatever `spidev` was configured with. Until the ACPI
+   `_CRS`/`_DSD` values are read (see below), a wrong mode/clock yields `0xFF` bytes forever. A
+   finished driver should parse/require the controller default or expose a module parameter.
+3. **IRQ**: the module raises a GPIO when an answer is ready; `pxa2xx-spi` does not expose it, so a
+   real driver should request the `GpioInt` from `_CRS` (or use `fpi_device_add_timeout` polling as
+   this one does - correctness still unproven without hardware).
+4. **SM3/session**: confirm whether `0xB0`/`0xFF` must precede normal commands. If yes, implement
+   the handshake before enabling enroll/verify.
+5. **Enrol/verify payloads**: decode `0xB1`/`0xB2` (handle, score, press counter) and store only the
+   opaque handle in the print (`fpi_print_set_type (print, FPI_PRINT_RAW)`,
+   `fpi_print_set_device_stored (print, TRUE)`); templates stay on the module.
+6. **spidev bufsiz**: default 4096. Queries fit; GET_IMG chunks (up to 8140 B + frame overhead)
+   would need `/sys/module/spidev/parameters/bufsiz` raised and a larger read buffer. The shipped
+   driver never uses GET_IMG.
+7. **`fpi_device_get_udev_data` / `spi_acpi_id`** are 1.94-era APIs; if they move, the udev binding
+   changes with them.
+
+## Privileged bring-up (commands only; nothing here was run)
+
+The sensor has no driver and no `/dev/spidev*`. Steps 1-2 are read-only; step 3 is the only state
+change and is reversible. **Do not** run anything that writes firmware, JTAG or removes templates.
+
+1. Read the ACPI resources (the numbers a driver needs):
+
+   ```sh
+   sudo cat /sys/firmware/acpi/tables/DSDT > /tmp/dsdt.aml
+   sudo dnf install acpica-tools          # or run iasl in a toolbox
+   iasl -d /tmp/dsdt.aml
+   grep -n -A 40 'FPRT' /tmp/dsdt.dsl
+   ```
+
+   Look for `SpiSerialBus (..., ConnectionSpeed, SpiMode, SpiBitWidth, ...)` and the
+   `GpioInt`/`GpioIo` entries (`PinIndex`, `GpioIo` numbers). `ACPI\BF63112:00` may also carry a
+   `_DSD` with `spi-max-frequency`. The kernel exposes none of this without root, which is why it
+   is step 1.
+
+2. Confirm the controller sees the device (already true on this unit):
+
+   ```sh
+   ls /sys/bus/spi/devices/                  # -> spi-BF63112:00
+   cat /sys/bus/spi/devices/spi-BF63112:00/uevent
+   ```
+
+3. Bind `spidev` so userspace can reach it (reversible, takes the device from any future driver):
+
+   ```sh
+   sudo modprobe spidev
+   echo spidev | sudo tee /sys/bus/spi/devices/spi-BF63112:00/driver_override
+   echo spi-BF63112:00 | sudo tee /sys/bus/spi/drivers/spidev/bind
+   ls -l /dev/spidev*                        # typically /dev/spidev0.0
+   ```
+
+   Only if you plan to use GET_IMG diagnostic chunks (not needed for the probe) raise the spidev
+   transfer ceiling, either at load time or at runtime:
+
+   ```sh
+   sudo modprobe spidev bufsiz=8192
+   echo 8192 | sudo tee /sys/module/spidev/parameters/bufsiz
+   ```
+
+4. Run the **read-only** probe (add `--speed`/`--mode` from step 1; `--raw-info` to dump frames):
+
+   ```sh
+   sudo python3 tools/fingerprint/oxp3-fp-probe.py info
+   sudo python3 tools/fingerprint/oxp3-fp-probe.py fw scheme uid count
+   sudo python3 tools/fingerprint/oxp3-fp-probe.py --speed 1000000 --mode 0 --raw-info info
+   ```
+
+   The probe only sends `0xA1`, `0xA2`, `0xB4`, `0xC1`, `0xC2` and refuses the destructive opcodes
+   by name. A healthy answer starts with `0xAA` and reports sensor width x height. All `0xFF`/no
+   answer almost always means wrong SPI mode or too high a clock. If
+   `/sys/bus/spi/devices/spi-BF63112:00/statistics/bytes_tx` exists, it tells you whether the
+   transfer happened at all even when the answer is garbage.
+
+### Rollback
+
+```sh
+echo spi-BF63112:00 | sudo tee /sys/bus/spi/drivers/spidev/unbind
+sudo rm -f /sys/bus/spi/devices/spi-BF63112:00/driver_override
+sudo modprobe -r spidev
+```
+
+Nothing else is modified: no packages, no config, no firmware, no boot parameters, no reboot.
+
+## Safety
+
+* **No firmware writes, no JTAG, no MCU restore.** `0xD1` (UPDATE_FIRMWARE), `0xD0`
+  (RESTORE_MCU), `0xC3` (JTAG) are refused by both the probe and the Python/C command tables.
+* **No template deletion.** `0xB1`/`0xB3` are not wired up; fingers enrolled in Windows stay
+  untouched. The driver's enrol/verify paths refuse before sending anything.
+* **No firmware/vendor binaries in this repo.** Fixtures and vectors are synthetic, generated from
+  the frame rules; no vendor DLL, blob or decompiled listing is stored.
+* **SPI is low risk by nature**: the frame has a CRC, wrong parameters give garbage reads, and the
+  module is platform-powered. Binding spidev still takes the device from any future in-tree driver -
+  do it on a machine you are experimenting on, not one you depend on for login.
+* The tests and the driver compile but require no hardware; running them changes nothing.
+
+## Path to upstreaming
+
+1. Land the protocol library + tests (this directory) upstream-agnostic; they document the wire
+   format better than any commit message.
+2. Get the ACPI `_CRS` values (clock/mode/bit width/GPIOs) with root and put them in the commit
+   message and the driver's defaults.
+3. Confirm the read-only query answers on hardware, then the answer framing (open point 2 in
+   `docs/hw/fingerprint.md`). Adjust `parse_sensor_info` field offsets if needed.
+4. Decode `0xB1`/`0xB2` payloads (with the module's own templates, on a scratch unit), implement
+   enrol/verify/identify, and store only handles.
+5. Decide the GPIO strategy: request the `_CRS` IRQ instead of polling.
+6. Submit to libfprint as `drivers/bf63112.c` + meson entries + the generated udev rule; add a
+   `tests/` device description like `tests/elanspi/device-spi` if emulation is possible.
+7. Only then discuss the SM3/session layer - a first driver should avoid it entirely and rely on
+   module-side templates.
+
+## Open points (explicit)
+
+1. Nothing in this directory has run against the sensor; the probe's first run is still the first
+   execution.
+2. SPI clock/mode/bit width and the reset/IRQ GPIOs are unread (root-only `_CRS`).
+3. Device-to-host answer framing: the 16-byte answer header and the exact body start are inferred.
+4. Sensor-info/firmware payload field layouts are inferred from handler reads, not verified.
+5. Whether answers echo phase/opcode is unverified (library defaults to opcode-only).
+6. Enrol/identify payloads, template handle/score format, SM3 session necessity: unknown.
+7. Whether GET_IMG has per-chunk checks besides the global 8-bit sum: conflicting notes.
+8. `BF63112:01` on SPI2: harmless phantom or second source; untested.
+9. The driver's retry timing (3 x 40 ms poll) is a guess; the Windows values are 1000/5000 ms per
+   attempt with GPIO-triggered completion.

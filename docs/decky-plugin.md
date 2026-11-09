@@ -164,22 +164,84 @@ Heroic `winePrefix` entries, `~/Games/Heroic/Prefixes/*`, and
 
 ## Build and install
 
-Host toolchain: node 22, pnpm 10 (both present on the target machine).
+The build was verified on the target host. Toolchain and package versions
+actually used:
+
+| component | version |
+|---|---|
+| node / npm | v22.23.1 / 10.9.8 (npm registry reachable: HTTP 200) |
+| @decky/rollup | 1.0.2 |
+| rollup / typescript | 4.68.0 / 5.9.3 |
+| @decky/api | 1.1.3 (bundled into `dist/index.js`, as the template does) |
+| @decky/ui | 4.16.5 (types only; the loader supplies the runtime `DFL`) |
+| react / @types/react | 18.3.1 (dev only, for the headless smoke test) / 18.3.3 |
+
+One command builds, verifies and packages:
 
 ```sh
 cd tools/decky-oxp3-status
-pnpm install
-pnpm build                 # -> dist/index.js
-pnpm typecheck             # optional, tsc --noEmit
+./build.sh                 # npm ci + typecheck + rollup + smoke + selftest + zip
+./build.sh --offline       # same with `npm ci --offline` (warm npm cache)
+./build.sh --no-install    # reuse node_modules
 ```
 
-Install (privileged steps are listed, not run, by this repo's rules):
+`build.sh` writes `build/oxp3-status-<version>.zip` and prints its size and
+sha256. The current artifact is **33,843 bytes**, sha256
+`896ccee7d3c4220fd9b85c459a0a79666424f69b042f7434175198b1bda70eaa`
+(deterministic: fixed zip timestamps, sorted entries; rebuilding from the same
+`src/` reproduces the same hash). The individual steps are also available as
+`npm run typecheck`, `npm run build`, `npm run smoke`, `npm run selftest` and
+`npm run package`.
+
+The zip contains exactly the plugin root, which is the layout Decky Loader's
+*Install Plugin from File* expects:
+
+| entry | purpose |
+|---|---|
+| `plugin.json` | manifest, `api_version: 1` |
+| `main.py` | backend; the loader imports `Plugin` from it |
+| `dist/index.js` | rollup bundle loaded by the frontend (ESM, loader globals) |
+| `dist/index.js.map` | source map for debugging the panel |
+| `README.md` | operator notes |
+
+Install from the zip (privileged steps are listed, not run, by this repo's
+rules):
+
+1. Decky → Settings → General → *Install Plugin from File* → pick
+   `build/oxp3-status-1.0.0.zip`; the loader unpacks it to
+   `~/homebrew/plugins/OXP3 Status` (or `oxp3-status`) and reloads.
+2. Or install by hand:
 
 ```sh
 rm -rf ~/homebrew/plugins/oxp3-status
 cp -r tools/decky-oxp3-status ~/homebrew/plugins/oxp3-status
 sudo systemctl restart plugin_loader.service
 ```
+
+When copying the directory by hand, `node_modules/`, `build/` and the test
+harness are not needed; `plugin.json`, `main.py` and `dist/` are.
+
+`@decky/rollup` rewrites the `@decky/ui` imports of `src/index.tsx` to the
+loader-provided `DFL`/`SP_REACT`/`SP_JSX` globals (the same shape every
+installed plugin ships) and inlines `@decky/api`; the panel uses
+`definePlugin`, `PanelSection`, `PanelSectionRow`, `Field`, `ButtonItem`,
+`Focusable`, `staticClasses`, `call` and `toaster`.
+
+### Offline caveat
+
+The registry is reachable from this host, so the normal path (`npm ci`) needs
+no shim or vendor copy: `dist/index.js` contains only our TSX plus the
+BSD-licensed `@decky/api` client that the template always bundles, and it
+imports `react`/`react-dom`/`@decky/ui` from the loader globals. If the registry
+is unreachable, `./build.sh --offline` installs from the local npm cache; that
+only works on a host whose cache already has the exact `package-lock.json`
+tarballs. There is deliberately no vendored `@decky/*` runtime in this repo
+(third-party code is not committed): a cold cache on an air-gapped host needs
+the npm cache copied over, or a one-time `npm ci` on a connected machine. If a
+build is ever produced with hand-written API shims instead, the adaptation is
+two lines in `src/index.tsx`: import `call`/`toaster` from the shim module and
+keep the loader's `window.__DECKY_SECRET_INTERNALS...deckyLoaderAPIInit`
+handshake object name — but that path is not used or needed here.
 
 The loader on the validated machine is Decky `v3.3.0`
 (`/var/home/holzr/homebrew/services/.loader.version`), manifest
@@ -196,11 +258,16 @@ the module is already imported in the loader process.
 ## Validation
 
 ```sh
-# backend
+# backend + synthetic fixture suite (no hardware, no root)
 python3 -m py_compile tools/decky-oxp3-status/main.py
+tools/oxp3-status.sh --selftest      # 60 checks against a temp /sys,/proc,HOME
 tools/oxp3-status.sh                 # human readable
 tools/oxp3-status.sh --json | python3 -m json.tool >/dev/null
 tools/oxp3-status.sh --strict        # exit code 2 while anything is warn
+
+# frontend: build, then import and render the real bundle with stubbed
+# loader globals (react is a dev dependency only for this check)
+cd tools/decky-oxp3-status && npm run smoke
 
 # manifests / wrapper
 python3 -m json.tool tools/decky-oxp3-status/plugin.json >/dev/null
@@ -211,6 +278,30 @@ sh -n tools/oxp3-status.sh
 # after installing: the loader logs the plugin load/failure
 sudo journalctl -u plugin_loader.service -b --no-pager | grep -i -E "oxp3|error"
 ```
+
+The last recorded run: `--selftest` 60/60 checks, `--json` valid JSON,
+`--strict` exit 2, `overall=warn`, `23 ok / 5 warn / 0 fail / 0 unknown`,
+`smoke` loaded and rendered `dist/index.js` with the api handshake, and the
+zip hash above was reproduced by both the online and `--offline` builds.
+
+### `--selftest`
+
+`main.py --selftest` (also exposed by `oxp3-status.sh --selftest`) builds a
+throw-away machine under a temporary directory and runs every check against it:
+synthetic `/sys` (sched_ext state, RAPL/PL1, platform_profile, cpufreq, DRM,
+hwmon/thermal, battery), synthetic `/proc` (`wine64` running a Cyberpunk exe,
+plus a `scx_cosmos` process), synthetic `/etc` and `/run`, fake
+`systemctl`/`modinfo`/`rpm` scripts, and a fixture HOME with the XMX driver,
+ICD, helper, IGC, shim, kernel cache, trace log, benchmark summary, Heroic
+config and Flatpak override. It asserts the exact verdict per indicator,
+redaction of client/secret environment variables, `na` for a non-XeSS title,
+survival of corrupt JSON inputs and the CLI exit codes. The roots can also be
+pointed at a fixture by hand with `OXP3_SYS_ROOT`, `OXP3_PROC_ROOT`,
+`OXP3_ETC_ROOT`, `OXP3_RUN_ROOT`, `OXP3_HOST_DRIVER` and
+`OXP3_RUNTIME_OVERRIDES` (read at import time; `--selftest` sets them
+in-process). Recorded driver prefixes are cryptographic hashes, so the fixture
+deliberately reports synthetic drivers as `warn` mismatches rather than
+pretending they match the recorded builds.
 
 Sanity checks of the panel itself, once installed: open QAM in Game Mode, the
 panel should show the game name, `overall`, then the five groups; *Refresh now*
@@ -248,12 +339,15 @@ absent (tracing off), and the Steam Flatpak override still uses
 
 ## Open points
 
-- `dist/index.js` is not committed and cannot be built in this environment
-  (no network and no pnpm store for `@decky/*`). `pnpm install && pnpm build`
-  must be run once on a machine with network access; the README says so.
-  Consequently `tsc --noEmit`/rollup were not executed here — the Python
-  backend, manifests and wrapper were validated, the TSX was reviewed against
-  the loader's real component/prop usage found in installed plugins.
+- `dist/index.js` and `build/*.zip` are generated and not committed (the zip
+  bundles the BSD-licensed `@decky/api` client). The build was verified on the
+  target host with node 22/npm 10 and a reachable registry; on a host with a
+  cold npm cache and no network the artifact must be built elsewhere or the
+  cache copied (see *Offline caveat*).
+- `@decky/ui` is a types-only package: the loader supplies the runtime `DFL`
+  object, so a newer/older `@decky/ui` on a build host changes type checking,
+  not the installed plugin. The panel only uses components present in Decky
+  v3.3.0.
 - The plugin is not published to the Decky store; `plugin.json`'s `publish`
   block is informational (tags + description, no image URL).
 - Heroic parsing covers `envVars`, `enviromentOptions` and wrappers; Lutris,
