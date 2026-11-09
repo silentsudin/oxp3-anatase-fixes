@@ -2917,8 +2917,17 @@ check_display() {
             depth=$(printf '%s\n' "$kv" | sed -n 's/^DEPTH=//p')
             vrr=$(printf '%s\n' "$kv" | sed -n 's/^VRR=//p')
             if [ -z "$out" ] || [ -z "$hdr" ]; then
+                if pgrep -x gamescope >/dev/null 2>&1; then
+                    record dsp.hdr display "HDR / WCG state" SKIP \
+                        "inside Gamemode (gamescope is running): desktop HDR is a Plasma feature; see dsp.gamemodehdr" \
+                        "" "check HDR in the desktop session, or dsp.gamemodehdr for Gamemode"
+                    record dsp.icc display "ICC profile" SKIP \
+                        "inside Gamemode (gamescope is running): desktop ICC is a Plasma feature" \
+                        "" "check the ICC profile in the desktop session"
+                else
                 record dsp.hdr display "HDR / WCG state" UNKNOWN "could not parse kscreen-doctor output" "$(tail_flat "$RUN_OUT" 1)" "kscreen-doctor -o"
                 record dsp.icc display "ICC profile" UNKNOWN "could not parse kscreen-doctor output" "" "kscreen-doctor -o"
+                fi
             else
                 record dsp.hdr display "HDR / WCG state" PASS "HDR=$hdr, WCG=$wcg" "output=$out, ${depth}-bit, vrr=$vrr" ""
                 if [ -z "$icc" ] || [ "$icc" = none ]; then

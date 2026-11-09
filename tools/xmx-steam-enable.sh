@@ -28,7 +28,7 @@ root=$lib/common/$install
 prefix=$lib/compatdata/$appid/pfx/drive_c
 xess_dir=$(find "$root" -maxdepth 12 -iname 'libxess.dll' -printf '%h\n' 2>/dev/null | head -1)
 [ -n "$xess_dir" ] || { echo "not an XeSS game: no libxess.dll under $root" >&2; exit 1; }
-envs="VK_DRIVER_FILES=$HOME/.config/xess-xmx/icd-xmx.json XMX_IGC_DIR=$HOME/.local/share/xess-xmx/igc ANV_CM_HELPER=$repo/tools/xmx-cm-compile-nodgrf.sh VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer INTC_ALT_DRIVER_EXTENSIONS_PATH=$HOME/.local/share/xess-xmx"
+envs="VK_DRIVER_FILES=$HOME/.config/xess-xmx/icd-xmx.json VK_ICD_FILENAMES=$HOME/.config/xess-xmx/icd-xmx.json ANV_CM_KERNEL_DIR=$HOME/.cache/xess-xmx/kernels XMX_IGC_DIR=$HOME/.local/share/xess-xmx/igc ANV_CM_HELPER=$repo/tools/xmx-cm-compile-nodgrf.sh VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer INTC_ALT_DRIVER_EXTENSIONS_PATH=$HOME/.local/share/xess-xmx"
 echo "appid $appid  install $root"
 echo "  xess dir: $xess_dir"
 echo "  prefix:   $prefix"

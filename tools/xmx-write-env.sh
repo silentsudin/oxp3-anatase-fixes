@@ -32,6 +32,8 @@ export VK_DRIVER_FILES=$icd
 export VK_ICD_FILENAMES=$icd
 export ANV_CM_KERNEL_DIR=$kernels
 export ANV_CM_HELPER=$helper
+export XMX_IGC_DIR=$pkg/igc
+export INTC_ALT_DRIVER_EXTENSIONS_PATH=$pkg
 export VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer
 export force_vk_vendor=0
 ENV
