@@ -228,7 +228,7 @@ class InstallerTest(unittest.TestCase):
         self.assertIn("[Service]", text)
         self.assertIn("[Install]", text)
         self.assertIn("Type=oneshot", text)
-        self.assertIn("RemainAfterExit=yes", text)
+        self.assertIn("RemainAfterExit=no", text)
         self.assertIn("ExecStart=%h/.local/libexec/oxp3-speaker-gain apply", text)
         self.assertIn("WantedBy=default.target", text)
 

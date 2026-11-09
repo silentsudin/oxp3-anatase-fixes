@@ -2173,10 +2173,18 @@ check_sleep() {
             "stop or reconfigure the service holding it; docs/hw/sleep-power.md 2.5"
         ;;
     fail-incomplete)
+        if [ "${EUID:-$(id -u)}" -ne 0 ] && [ ! -r "$(dirname "$pol")" ] && [ -z "${pk:-}" ]; then
+            record sleep.trigger sleep "suspend request has a path" UNKNOWN \
+                "logind drop-in present; the polkit rule is not readable without root and pkcheck has no session agent here" \
+                "drop-in=$drop rule=$pol pkcheck=${pk:-none}" \
+                "run tools/oxp3-verify.sh from a terminal in the desktop session, or as root, to confirm the polkit rule"
+            :
+        else
         record sleep.trigger sleep "suspend request has a path" FAIL \
             "trigger policy is incomplete (logind drop-in=$drop_ok polkit rule=$pol_ok)" \
             "missing: $([ "$drop_ok" -eq 0 ] && printf '%s ' "$drop")$([ "$pol_ok" -eq 0 ] && printf '%s' "$pol")" \
             "sudo tools/oxp3-hw-install.sh --sleep"
+        fi
         ;;
     skip-unreadable)
         record sleep.trigger sleep "suspend request has a path" SKIP \
@@ -2945,12 +2953,30 @@ check_graphics() {
         return 0
     fi
 
+    local xess_game=0 game_exe="" game_dir=""
+    if [ -n "${STATUS_JSON:-}" ] && have python3; then
+        game_exe=$(printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: raise SystemExit
+print(((d.get("game") or {}).get("exe") or ""))' 2>/dev/null)
+    fi
+    if [ -n "$game_exe" ] && [ -d "$(dirname "$game_exe")" ]; then
+        game_dir=$(dirname "$game_exe")
+        find "$game_dir" -maxdepth 4 -iname 'libxess*.dll' -print -quit 2>/dev/null | grep -q . && xess_game=1
+    fi
+
     simple_ind gfx.mesa mesa.host graphics "host Mesa driver" "ec418f04e589965a" "restore the recorded build: sudo tools/oxp3-mesa-restore.sh restore ; or rebuild: ./oxp3-fixes-fast.sh build install ; docs/WORKING-BUILD-2026-11-08.md"
     simple_ind gfx.xmx.driver xmx.driver graphics "XMX driver" "4b1d55ea" "rebuild the XMX driver: tools/build-xmx-driver.sh ; docs/xess-xmx.md"
-    simple_ind gfx.xmx.helper xmx.helper graphics "nodgrf helper" "" "tools/xmx-cm-compile-nodgrf.sh must be in the game's VK_DRIVER_FILES env ; docs/xess-xmx.md"
-    simple_ind gfx.xmx.igc xmx.igc graphics "IGC ocloc present" "" "install the XMX release tree (tools/xmx-enable.sh) ; docs/xess-xmx.md"
+    if [ -n "$game_exe" ] && [ "$xess_game" -eq 0 ]; then
+        record gfx.xmx.helper graphics "nodgrf helper" SKIP "the running game does not ship XeSS, so per-game XMX is not applicable" "game: $game_exe" "XMX only applies when a game loads libxess; docs/xess-xmx.md"
+        record gfx.xmx.igc graphics "IGC ocloc present" SKIP "the running game does not ship XeSS, so per-game XMX is not applicable" "game: $game_exe" "docs/xess-xmx.md"
+        record gfx.xmx.icd graphics "per-game XMX env" SKIP "the running game does not ship XeSS, so per-game XMX is not applicable" "game: $game_exe" "docs/xess-xmx.md"
+    else
+        simple_ind gfx.xmx.helper xmx.helper graphics "nodgrf helper" "" "launch the game through tools/xmx-run.sh (or the Heroic XMX env) so ANV_CM_HELPER points at tools/xmx-cm-compile-nodgrf.sh ; docs/xess-xmx.md"
+        simple_ind gfx.xmx.igc xmx.igc graphics "IGC ocloc present" "" "launch with the XMX stack: tools/xmx-run.sh sets XMX_IGC_DIR ; docs/xess-xmx.md"
+        simple_ind gfx.xmx.icd xmx.icd graphics "per-game XMX env" "" "launch with tools/xmx-run.sh or the xmx-enable.sh launch option ; docs/xess-xmx.md"
+    fi
     simple_ind gfx.xmx.kernels xmx.kernels graphics "kernel cache populated" "" "compile a kernel: tools/xmx-cm-compile-nodgrf.sh ; docs/xess-xmx.md"
-    simple_ind gfx.xmx.icd xmx.icd graphics "per-game XMX env" "" "set VK_DRIVER_FILES/icd-xmx.json for the game ; docs/xess-xmx.md"
 
     local ts tv
     ts=$(ind_state xmx.trace) || ts=""

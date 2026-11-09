@@ -166,19 +166,7 @@ echo "installed $libexec/oxp3-speaker-gain and $unitdir/oxp3-speaker-gain.servic
 if command -v systemctl >/dev/null 2>&1; then
     if systemctl --user daemon-reload >/dev/null 2>&1 &&
        systemctl --user enable oxp3-speaker-gain.service
-    cat > "$unitdir/oxp3-speaker-gain.timer" <<'TIMER'
-[Unit]
-Description=OneXPlayer 3: keep the speaker gain at maximum across UCM resets
-
-[Timer]
-OnStartupSec=20s
-OnUnitInactiveSec=60s
-AccuracySec=10s
-
-[Install]
-WantedBy=timers.target
-TIMER
-    systemctl --user enable --now oxp3-speaker-gain.timer >/dev/null 2>&1; then
+    systemctl --user enable oxp3-speaker-gain.service >/dev/null 2>&1; then
         echo "enabled oxp3-speaker-gain.service (runs at login; the resume hook repeats it)"
     else
         echo "warning: could not enable oxp3-speaker-gain.service (no user bus?);" >&2
