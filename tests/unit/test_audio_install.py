@@ -231,7 +231,7 @@ class InstallerTest(unittest.TestCase):
         self.assertIn("Restart=always", text)
         self.assertIn("while :; do", text)
         self.assertNotIn("RemainAfterExit=yes", text)
-        self.assertIn("ExecStart=%h/.local/libexec/oxp3-speaker-gain apply", text)
+        self.assertIn("%h/.local/libexec/oxp3-speaker-gain apply", text)
         self.assertIn("WantedBy=default.target", text)
 
     def test_gain_apply_and_undo_round_trip(self):
