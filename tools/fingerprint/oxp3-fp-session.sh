@@ -858,10 +858,13 @@ write_attr() { # path value description
     # gives EACCES, and the shell reports that redirection error even though the
     # write succeeded.  Only read back attributes that are readable, and let the
     # caller verify the resulting state for the write-only ones.
+    # -r is useless here: root passes an access(2) check on a 0200 sysfs file,
+    # while the kernel still refuses the read. Attempt the read instead.
     local readable=0
-    [ -r "$path" ] && readable=1
-    if [ "$readable" = 1 ]; then
-        before=$( { tr -d '\n' <"$path"; } 2>/dev/null || true)
+    if before=$( { tr -d '\n' <"$path"; } 2>/dev/null ); then
+        readable=1
+    else
+        before=""
     fi
     if ! { printf '%s\n' "$value" >"$path"; } 2>/dev/null; then
         journal mutation failed "$desc (write)"
