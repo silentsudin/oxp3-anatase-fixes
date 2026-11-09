@@ -353,8 +353,16 @@ Default mode, no root, in an SSH/desktop session on `anatase-oxp3`, kernel
 checks, adding one `PASS` and one `SKIP` here.)
 
 The exact pass/skip split moves with what is installed at the moment (optional pieces
-were being installed while this run was taken); the three failures and the ten new
-rows' outcomes are stable.
+were being installed while this run was taken); the Bluetooth failures and the ten
+new rows' outcomes are stable.
+
+*Audit update (2026-11-09 06:00 UTC, HEAD `cfad8fb`):* the default now reports
+**72 checks: 41 pass, 4 fail, 27 skip, exit 1**. The two extra rows are `preflight.verdict`
+and `inst.backups`; `inst.backups` is the fourth failure — eighteen in-place host edits
+(launcher, Heroic GamesConfig, XMX files) have no rollback record yet, so `restore`
+cannot reconstruct them. That is the documented state until `tools/oxp3-rollback.sh adopt`
+runs once ([ROLLBACK.md](ROLLBACK.md)); it is not a hardware defect. See
+[`state/audit-2026-11-09.txt`](state/audit-2026-11-09.txt).
 
 The ten deferred-risk rows measured on this host: `hid.node`, `led.sides`,
 `rgbd.timing`, `imu.iio`, `pwr.ac` (`on_ac=true`), `pwr.order` (both domains are a

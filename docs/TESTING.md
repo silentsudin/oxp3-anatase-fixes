@@ -38,16 +38,16 @@ failing command and its log path.
 Recorded on this host (2026-11-09, no root):
 
 ```
-== 31 suite(s): 25 pass, 0 fail, 6 skip -> exit 0      # --fast
-== 31 suite(s): 29 pass, 0 fail, 2 skip -> exit 0      # --full (expected; see §9)
+== 32 suite(s): 26 pass, 0 fail, 6 skip -> exit 0      # --fast
+== 32 suite(s): 30 pass, 0 fail, 2 skip -> exit 0      # --full (expected; see §9)
 ```
 
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 26 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 31 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 27 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 32 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
 `--full` still never installs host packages. The one network-dependent suite
 (`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
@@ -75,6 +75,7 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `shell-syntax` | fast | fast | 60 s | `bash`, `sh`, `git` | – |
 | `python-compile` | fast | fast | 120 s | `python3`, `git` | bytecode to `<log>/pycache` |
 | `fp-python` | fast | fast | 120 s | `python3` | – |
+| `fp-crypto` | fast | fast | 120 s | `python3` | – |
 | `fp-fixtures` | fast | fast | 120 s | `python3` | – (regenerated and compared in memory) |
 | `fp-c-tests` | full | fast | 300 s | host `cc`+`make`, or local `localhost/oxp3-fixes-build:f45` | `tools/fingerprint/build/` |
 | `fp-syntax` | full | fast | 180 s | same C toolchain | `tools/fingerprint/build/` |
@@ -97,8 +98,9 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `unit` | fast | fast | 120 s | `python3` | – (synthetic sysfs/config fixtures in `$TMPDIR`) |
 | `gamewrap` | fast | fast | 120 s | `python3` | – (synthetic HOME/config/panel state; stub commands) |
 | `eq-model` | fast | fast | 60 s | `python3` | – |
-| `firstrun` | fast | fast | 120 s | `python3`, `bash` | – (self-test in `$TMPDIR`; the dry run writes nothing) |
+| `firstrun` | fast | medium | 120 s | `python3`, `bash` | – (self-test in `$TMPDIR`; the dry run writes nothing) |
 | `wizard` | fast | fast | 300 s | `python3`, `bash` | – (scripted stdin, `--simulate`, private state dir) |
+| `triage` | fast | fast | 120 s | `python3` | – (rule selftest + 8 fixture bundles) |
 | `preflight` | fast | fast | 120 s | `python3`, `bash` | – (fixtures in memory; the live `--json` is read-only) |
 | `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check) |
 | `rollback` | fast | fast | 120 s | `bash`, `python3` | – (`--root` prefix + private state dir in `$TMPDIR`) |
@@ -119,7 +121,7 @@ Areas and what is actually proven:
   shebang (`bash` first, then `sh`, so `#!/usr/bin/env sh` is covered).
 * **Python** — `py_compile` on every tracked `.py` plus the extensionless
   `tools/oxp3-voltap/oxp3-voltap`; bytecode goes to the log dir, never the
-  checkout. Then the 85-test fingerprint protocol suite and the fixture/vector
+  checkout. Then the 172-test fingerprint protocol suite and the fixture/vector
   drift check (the latter imports the generator and compares in memory, so the
   checked-in fixtures are not rewritten).
 * **fingerprint C** — the independent C implementation is compiled with
@@ -132,7 +134,7 @@ Areas and what is actually proven:
   the CLI's `--json` output must parse as JSON. The Decky CLI's live exit code
   (0/1/2) is reported but not asserted: it is a status verdict about the host,
   not a repository test. `make decky` runs the full offline build directly.
-* **`oxp3-verify`** — the parser self-test (150 assertions over synthetic
+* **`oxp3-verify`** — the parser self-test (157 assertions over synthetic
   fixtures) through both documented entrypoints (`--selftest` and
   `tests/verify/run.sh`).
 * **rollback** — `tests/rollback/run.sh`: installs into a `--root` prefix, adopts the
@@ -154,7 +156,7 @@ Areas and what is actually proven:
   HDR gating on the panel state, vibrance backend choice, MangoHud env-only
   behaviour, gamescope wrapping/inside-session handling, argv/JSON safety and
   the parsed-not-sourced XMX env file. The `unit` suite runs the same file.
-* **unit** — the stdlib `unittest` suite in `tests/unit/` (470 tests, ~1.3 s):
+* **unit** — the stdlib `unittest` suite in `tests/unit/` (634 tests, ~3.0 s):
   HID/LED frame encoders, rgbd TOML config and frame planning, powerctl
   parsers/write ordering/readback and exit codes, adaptivetdp policy and
   hysteresis, the voltap tap state machine, IMU helpers, EDID/ICC parsers and
@@ -177,8 +179,8 @@ Measured per suite in the recorded `--fast` run (wall clock, this host):
 
 | tier | definition | suites here |
 |---|---|---|
-| fast | < 5 s | all fast-mode suites; largest are `python-compile` ≈ 2.9 s (26 Python processes) and `unit-verify` ≈ 1.3 s (17 units); the total `--fast` run is ≈ 6 s |
-| medium | 5–60 s | none observed on this host; a cold `npm ci` or a first container `dnf install` would land here |
+| fast | < 5 s | the per-suite largest are `python-compile` ≈ 2.9 s (26 Python processes), `unit` ≈ 3.0 s and `unit-verify` ≈ 1.3 s (17 units); the total `--fast` run is ≈ 36 s, including the one medium suite |
+| medium | 5–60 s | `firstrun` ≈ 15 s (it runs `oxp3-verify` twice; timeout stays 120 s); a cold `npm ci` or a first container `dnf install` would also land here |
 | slow / network | > 60 s or requires the network | `fp-libfprint` only (skipped by default; with `OXP3_REPO_TEST_NETWORK=1` the container fallback installs `glib2-devel libgusb-devel` first) |
 
 The tier is documentation in `--list`; the timeout is what actually bounds a
@@ -338,10 +340,10 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 | run | result |
 |---|---|
-| `tools/repo-test.sh --fast` | 31 rows: **25 pass, 0 fail, 6 skip**, exit 0, ≈ 40 s (the `firstrun` suite runs the verifier twice, hence the jump) |
-| `tools/repo-test.sh --full` | 31 rows expected: **29 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
-| `tools/repo-test.sh --list` | 31 suites; 26 run in `--fast`, 31 in `--full` |
-| `python3 -m unittest discover -s tests/unit -q` | `Ran 535 tests ... OK (skipped=1)`, ≈ 1.3 s |
+| `tools/repo-test.sh --fast` | 32 rows: **26 pass, 0 fail, 6 skip**, exit 0, ≈ 36 s (the `firstrun` suite runs the verifier twice, hence the jump) |
+| `tools/repo-test.sh --full` | 32 rows expected: **30 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
+| `tools/repo-test.sh --list` | 32 suites; 27 run in `--fast`, 32 in `--full` |
+| `python3 -m unittest discover -s tests/unit -q` | `Ran 634 tests ... OK (skipped=1)`, ≈ 3.0 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
 | deliberately broken copy in `/tmp`, `--only fp-python` | 1 fail, exit 1, failing command + log path printed |
 | root container `--fast` | 15 pass / 0 fail / 10 skip, exit 0 |
@@ -352,9 +354,9 @@ are enumerated in the table on every run, not implied.
 
 *Added after this snapshot:* the `gamewrap`, `gen-docs`, `firstrun` and `wizard`
 suites (later rounds add more; the table above is authoritative). A
-fresh `--fast` on 2026-11-09 reported **31 suites: 25 pass, 0 fail, 6 skip**, and
-`--list` reports 26 suites run in `--fast`, 31 in `--full` (the `unit` row has
-since grown to 535 cases, see [UNIT-TESTS.md](UNIT-TESTS.md)). The `firstrun`
+fresh `--fast` on 2026-11-09 reported **32 suites: 26 pass, 0 fail, 6 skip**, and
+`--list` reports 27 suites run in `--fast`, 32 in `--full` (the `unit` row has
+since grown to 634 cases, see [UNIT-TESTS.md](UNIT-TESTS.md)). The `firstrun`
 suite is the one to watch when timing: it exercises the collector's self-test,
 the live `--check-only --json` and a `--dry-run`, which runs `oxp3-verify` twice.
 
@@ -394,3 +396,27 @@ the live `--check-only --json` and a `--dry-run`, which runs `oxp3-verify` twice
   coreutils; a busybox CI image would need them added.
 * **Logs accumulate.** There is no automatic rotation; the path is printed on
   every run, and `summary.txt` makes old runs easy to diff.
+
+## 11. Read-only probes added to the standard vocabulary (audit round)
+
+`tests/unit/test_cli_contracts.py` is now part of the `unit` suite. It runs the
+shipped `build.sh --help` and the installer's argument parser, and executes the
+real `ensure_status_json()` from `tools/oxp3-verify.sh` against stubbed status
+outputs (exit 1 with JSON is a verdict; a cached empty report is unavailable).
+It pins the three defects fixed by the 2026-11-09 audit, so a future refactor
+cannot silently reintroduce them.
+
+These read-only probes are worth keeping in the vocabulary even though they stay
+outside `repo-test.sh` (they depend on this unit's hardware or on a built tree):
+
+```sh
+tools/oxp3-flatpak-xmx.sh status --json      # sandbox-visible shim/ICD state
+tools/oxp3-voltap/oxp3-voltap check          # which input device the daemon would grab
+tools/display/oxp3-icc.py --out /tmp/p.icc && tools/display/oxp3-icc.py --check /tmp/p.icc
+tools/fingerprint/oxp3-fp-probe.py --crypto-selftest   # SM2/SM3/SM4 vectors, no device
+tools/oxp3-rollback.sh verify --json         # unbacked in-place edits, read-only
+```
+
+The audit matrix in `docs/state/audit-2026-11-09.txt` records the exact modes,
+exit codes and verdicts for every entry point; use it as the checklist when a
+tool changes its CLI or its state reporting.

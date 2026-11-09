@@ -1,0 +1,346 @@
+AUDIT - every entry point / daemon on this live host in read-only or dry-run mode
+====================================================================================
+Date    : 2026-11-09 06:04 UTC
+Host    : Anatase 20261026.3, kernel 7.2.7-an28.fc45.x86_64, user holzr (uid 1000, no root)
+Repo    : /var/home/holzr/git/linux_scratch/oxp3-anatase-fixes
+HEAD    : cfad8fb ("fingerprint: stdlib SM2/SM3/SM4 session layer proven; transport verdict SPI-only")
+Scope   : tools/*.sh, tools/*.py, tools/*/*.sh with a main, Makefile targets, repo-test,
+          oxp3-fixes*.sh, state-snapshot.sh, tests/*/run.sh, Decky build/backend.
+Rules   : no sudo, no reboot, no host configuration change, no vendor command to hardware.
+          Non-dry installers, launch commands, suspend paths and hardware writers were excluded
+          (listed at the bottom). Every run had a 60 s timeout; none was hit.
+Method  : each tool in its safest documented mode (--help, --status, --check, --dry-run,
+          --selftest, --json, --list-rules, --check-only, --non-interactive), plus the
+          cross-check of all five state reporters on the same live host.
+Artifact: this file is the run matrix; docs/QA.md summarises it; the fixes are in the
+          tools and tests named below.
+
+Column meanings
+  rc       process exit code
+  verdict  PASS / EXPECTED (documented non-zero) / FIXED during the audit /
+           SKIP (environment) / EXCLUDED (not run: write, root or hardware path)
+  doc      whether the invocation and its exit code are documented in docs/ or a --help header
+
+
+
+
+## Repository entry points
+--------------------------
+oxp3-fixes.sh                                  --help                                     2  PASS (usage)         doc=yes      header printed; unknown/help is exit 2 by design; nothing written
+oxp3-fixes-fast.sh                             --help                                     2  PASS (usage)         doc=yes      same; slow/fast installers share tools/lib/install-common.sh
+state-snapshot.sh                              (no args)                                  0  PASS                 doc=yes      82 lines, no stderr; hardcodes /var/home/holzr and thermal_zone5 (portability caveat)
+Makefile (make help)                           -                                        127  SKIP (no make)       doc=yes      host has no make/gcc/cc; verified in localhost/oxp3-fixes-build:f45 instead
+Makefile (make -n test/units/decky/verify/preflight/install-dry-run/unit/clean) -n                                         0  PASS (container)     doc=yes      all targets expand; make help matches the recipes
+tools/repo-test.sh                             --list                                     0  PASS                 doc=yes      32 suites; 27 run in --fast, 32 in --full
+tools/repo-test.sh                             --fast --json                              0  PASS                 doc=yes      32 suites: 26 pass, 0 fail, 6 skip
+tools/repo-test.sh                             --fast                                     0  PASS                 doc=yes      35.8 s wall
+tools/repo-test.sh                             --full --json                              0  PASS                 doc=yes      32 suites: 30 pass, 0 fail, 2 skip (shellcheck, fp-libfprint); ~42 s sum
+
+
+## State / verdict tools (the cross-check set)
+----------------------------------------------
+tools/oxp3-status.sh                           --json                                     0  PASS                 doc=yes      schema 1, overall=warn, ok=23 warn=5 fail=0 unknown=0; valid JSON
+tools/oxp3-status.sh                           --selftest                                 0  PASS                 doc=yes      90 checks (QA.md's earlier snapshot says 60; decky-plugin.md already says 90)
+tools/oxp3-status.sh                           --strict                                   2  EXPECTED             doc=yes      exit 2 while any warn/unknown exists (5 warns)
+tools/oxp3-status.sh                           --help                                     0  PASS                 doc=yes      argparse usage
+tools/oxp3-status.sh                           --bogus                                    2  PASS (usage)         doc=yes      argparse error
+tools/decky-oxp3-status/main.py                --help                                     0  PASS                 doc=yes      usage
+tools/decky-oxp3-status/main.py                --selftest                                 0  PASS                 doc=yes      90 checks; backend == oxp3-status
+tools/decky-oxp3-status/main.py                --json                                     0  PASS                 doc=yes      same schema as oxp3-status.sh --json
+tools/decky-oxp3-status/build.sh               --help                                     0  PASS (FIXED)         doc=yes      was: relative $0 after cd -> sed error, empty help, exit 0; fixed + test
+tools/oxp3-verify.sh                           --help                                     0  PASS                 doc=yes      full header
+tools/oxp3-verify.sh                           --selftest                                 0  PASS                 doc=yes      157 checks, 0 failed
+tools/oxp3-verify.sh                           --json                                     1  EXPECTED             doc=yes      72 checks: 41 pass, 4 fail, 27 skip; fails bt.journal bt.controller bt.diag inst.backups
+tools/oxp3-verify.sh                           --with-changes                             3  EXPECTED             doc=yes      refuses without --full before touching state
+tools/oxp3-verify.sh                           --bogus                                    3  EXPECTED (usage)     doc=yes      unknown option -> exit 3 (documented usage code)
+tools/oxp3-preflight.sh                        --json                                     0  PASS                 doc=yes      schema 1, safe=true, 71 checks: 66 ok, 5 warn, 0 fail
+tools/oxp3-preflight.sh                        --selftest                                 0  PASS                 doc=yes      32 checks / 7 fixtures
+tools/oxp3-preflight.sh                        --strict                                   1  EXPECTED             doc=yes      exit 1 while 5 warnings remain
+tools/oxp3-preflight.sh                        --quiet                                    0  PASS                 doc=yes      problems + verdict only
+tools/oxp3_preflight.py                        --json / --selftest                         0  PASS                 doc=yes      direct backend engine: same output as the shell wrapper
+tools/oxp3-triage.py                           --selftest                                 0  PASS                 doc=yes      273 checks, 0 failed
+tools/oxp3-triage.py                           --list-rules                               0  PASS                 doc=yes      65-line rule catalogue
+tools/oxp3-triage.py                           <bundle> --json                            1  EXPECTED             doc=yes      12 findings, F1 critical bt.initramfs-stale; exit 1 on critical
+tools/oxp3-firstrun.sh                         --json                                     0  PASS                 doc=yes      checklist: ok=6 pending=1 partial=2 todo=9 unknown=1
+tools/oxp3-firstrun.sh                         --selftest                                 0  PASS                 doc=yes      88 checks
+tools/oxp3-firstrun.sh                         --collect --dry-run                        0  PASS                 doc=yes      planned only; confirmed no directory created
+tools/oxp3-firstrun.sh                         --collect                                  0  PASS                 doc=yes      bundle written to /tmp only (22 files); triage consumed it
+tools/oxp3_firstrun.py                         --json / --selftest                         0  PASS                 doc=yes      direct backend engine: same output as the shell wrapper
+tools/oxp3-wizard.sh                           --help                                     0  PASS                 doc=yes      usage
+tools/oxp3-wizard.sh                           --selftest                                 0  PASS                 doc=yes      59 checks
+tools/oxp3-wizard.sh                           --non-interactive                          0  PASS                 doc=yes      plan only; reports that no file/command was run
+tools/oxp3-wizard.sh                           --bogus                                    2  PASS (usage)         doc=yes      unknown argument
+tests/verify/run.sh                            (no args)                                  0  PASS                 doc=yes      157 checks through the fixture runner
+tests/preflight/run.sh                         (no args)                                  0  PASS                 doc=yes      32 checks / 7 fixtures
+tests/rollback/run.sh                          (no args)                                  0  PASS                 doc=yes      0 assertions failed
+tests/wizard/run.sh                            (no args)                                  0  PASS                 doc=yes      39 checks, 0 failed
+
+
+## Installers and host-state tools
+----------------------------------
+tools/oxp3-hw-install.sh                       --help                                     0  PASS                 doc=yes      usage
+tools/oxp3-hw-install.sh                       --status                                   0  PASS                 doc=yes      libexec 0/5, units -, BT 2/2 fw, no dracut, hci0 yes
+tools/oxp3-hw-install.sh                       --dry-run --all                            0  PASS                 doc=yes      prints every command; no write
+tools/oxp3-hw-install.sh                       --uninstall --dry-run --all                0  PASS                 doc=yes      plan only
+tools/oxp3-hw-install.sh                       --bogus                                    2  PASS (FIXED)         doc=yes      was exit 1 against its own '2 = usage' contract; fixed + test
+tools/oxp3-hw-install.sh                       --root PREFIX (sleep leds rgb imu audio)   0  PASS                 doc=yes      15 files under /tmp prefix; second run byte-identical; uninstall rc 0
+tools/oxp3-hw-install.sh                       --root /missing --status                   1  EXPECTED             doc=yes      clear '--root directory does not exist'; 1 = error (2 = usage)
+tools/oxp3-bt-firmware.sh                      --check                                    1  EXPECTED             doc=yes      files 2/2 pinned-hash OK; this boot logged -ENOENT -> exit 1
+tools/oxp3-bt-firmware.sh                      --help                                     0  PASS                 doc=yes      usage
+tools/oxp3-bt-firmware.sh                      --check --json                             2  PASS (usage)         doc=yes      no --json option is documented; unknown argument -> 2
+tools/oxp3-rollback.sh                         --help/status/list                         0  PASS                 doc=yes      0 records, 0 backup dirs; status is read-only
+tools/oxp3-rollback.sh                         verify                                     1  EXPECTED             doc=yes      18 UNBACKED known edits; ROLLBACK.md: fails until 'adopt' runs once
+tools/oxp3-rollback.sh                         restore --dry-run                          0  PASS                 doc=yes      0 changed / 0 failed; no write
+tools/oxp3-rollback.sh                         status --json                              0  PASS                 doc=yes      valid JSON
+tools/oxp3-rollback.sh                         verify --json                              1  EXPECTED             doc=yes      valid JSON with 18 unbacked paths, ok=false
+tools/apply-license.py                         --help                                     0  PASS                 doc=yes      usage
+tools/apply-license.py                         --check --spdx MIT --except fp             1  EXPECTED             doc=yes      no LICENSE/SPDX yet; documented owner decision, no write
+tools/gen-docs.py                              --check                                    0  PASS                 doc=yes      all three blocks in sync (before the components.yaml count fix)
+tools/gen-docs.py                              --check / --write                        1/0  PASS                 doc=yes      stale after expect fix; --write updated only the install-verify block
+tools/provenance-audit.py                      (no args)                                  0  PASS                 doc=yes      no vendor code/binaries; category table printed
+
+
+## Power, fan, sleep, audio, display, daemons
+---------------------------------------------
+tools/oxp3-powerctl.py                         --help / status --json                     0  PASS                 doc=yes      both RAPL zones + limits; valid JSON
+tools/oxp3-powerctl.py                         battery status                             0  PASS                 doc=yes      limit 80, behaviour auto; cycle_count=0 warning is a known EC gap
+tools/oxp3-powerctl.py                         profile performance --dry-run              0  PASS                 doc=yes      ceiling-first write order, no write
+tools/oxp3-powerctl.py                         fan curve --once --dry-run                 0  PASS                 doc=yes      one decision at 65 C, no write
+tools/oxp3-adaptivetdp.py                      --once --dry-run --json                    0  PASS                 doc=yes      one decision; non-root /var/log warning is non-fatal
+tools/oxp3-sagv.sh                             status                                     0  PASS                 doc=yes      v30, enable_sagv 0400, no point interface, RAPL domains
+tools/oxp3-sagv.sh                             probe                                      3  EXPECTED             doc=yes      3 = unavailable/refused (nothing writable)
+tools/oxp3-sagv.sh                             --help                                     4  EXPECTED (usage)     doc=yes      4 = usage by design (tests pin it); non-conventional but documented
+tools/oxp3-sagv.sh                             measure --seconds 1                        3  PASS (usage)         doc=yes      rejects < 5 s
+tools/oxp3-sagv.sh                             status --json                              0  PASS (ignored)       doc=no       --json is not offered and is silently ignored; prints the human table
+tools/sleep-power-measure.sh                   audit                                      0  PASS                 doc=yes      [s2idle] deep, no attempt this boot, wake table
+tools/sleep-power-measure.sh                   snapshot                                   0  PASS                 doc=yes      battery/suspend/temp one-liner
+tools/sleep-power-measure.sh                   --help                                     3  EXPECTED (usage)     doc=yes      3 = usage by design (header); non-conventional but documented
+tools/oxp3-rgbd.py                             --help / --check / --once --dry-run        0  PASS                 doc=yes      5 zones/10 frames from the example config; dry run writes nothing
+tools/oxp3-led.py                              selftest                                   0  PASS                 doc=yes      9/9 encoder frames
+tools/oxp3_hid.py                              (no args = selftest)                       0  PASS                 doc=yes      9/9 frames
+tools/oxp3-imu.py                              selftest                                   0  PASS                 doc=yes      16 OK, RESULT: PASS
+tools/oxp3-homebtn.py                          --help                                     0  PASS                 doc=yes      usage; the daemon itself needs the vendor HID node
+tools/oxp3-gamewrap.sh                         --status / --help                          0  PASS                 doc=yes      one decision object per feature
+tools/oxp3-flatpak-xmx.sh                      status --json                              0  PASS                 doc=yes      valid JSON: package/igc/kernels found, flatpak icd/env absent
+tools/oxp3-flatpak-xmx.sh                      --dry-run (no command)                     2  PASS (usage)         doc=yes      usage: a command is required
+tools/oxp3-flatpak-xmx.sh                      --bogus                                    1  PASS (undocumented code) doc=no       unknown argument exits 1; no exit-code contract in its header
+tools/display/display-mode.sh                  status                                     0  PASS                 doc=yes      1920x1200@144, HDR off, WCG off, 10-bit, VRR Never
+tools/display/vibrance.sh                      status                                     0  PASS                 doc=yes      shader present; vkBasalt absent
+tools/display/oxp3-edid.py                     --json                                     0  PASS                 doc=yes      384-byte EDID, checksum OK, SDC 0x4301
+tools/display/oxp3-icc.py                      --out /tmp && --check                      0  PASS                 doc=yes      658-byte profile generated and parses as structurally valid
+tools/audio/eq_response.py                     (no args)                                  0  PASS                 doc=yes      8 bands, pre-gain -8.0 dB
+tools/audio/apo_extract.py                     --help                                     0  PASS                 doc=yes      requires --reg; not run (no Windows APO payload)
+tools/audio/measure-speaker.py                 --help                                     0  PASS                 doc=yes      playback paths (--run) not exercised
+tools/check-working.sh                         (no args)                                  0  PASS                 doc=yes      7/7 OK; state matches the recorded working build
+tools/cpu-sched-test.sh                        (no args)                                  2  PASS (usage)         doc=yes      needs a tag; prints the tag list
+tools/oxp3-voltap/oxp3-voltap                  --help / check                             0  PASS                 doc=yes      hhd-virtual topology, predicted exit 0
+tools/oxp3-voltap/oxp3-voltap                  status                                     2  EXPECTED             doc=yes      2 = no status file (daemon not running)
+tools/oxp3-voltap/oxp3-voltap                  selftest                                   1  EXPECTED             doc=yes      needs root (/dev/uinput); documented; not run privileged
+tools/oxp3-voltap/install.sh                   (no args)                                  1  PASS (usage)         doc=yes      usage; installer not run
+tools/ghidra-pod.sh                            (no args)                                  1  PASS (usage)         doc=yes      requires <name> <binary> [regex]; not run (needs a binary)
+
+
+## Fingerprint subtree (NOTE: edited concurrently by another agent during this audit)
+-------------------------------------------------------------------------------------
+tools/fingerprint/oxp3-fp-probe.py             --help                                     0  PASS                 doc=yes      usage rendered; argparse tail was moving during the audit
+tools/fingerprint/oxp3-fp-probe.py             --crypto-selftest                          0  PASS                 doc=yes      SM2/SM3/SM4 published vectors pass; benchmark printed
+tools/fingerprint/usb_probe.py                 --help                                     0  PASS                 doc=yes      usage
+tools/fingerprint/usb_probe.py                 --json                                     2  EXPECTED             doc=yes      2 = no 347D USB device (this unit is SPI)
+tools/fingerprint/tests/run-c-tests.sh         (no args)                                  0  PASS                 doc=yes      no host cc -> podman; 324 checks / 10 vectors; session-syntax OK
+python3 -m unittest discover -s tools/fingerprint/tests (no args)                                  0  PASS                 doc=yes      172 tests OK (was 85 in the older docs)
+tools/fingerprint/tests/check-libfprint.sh     (not run)                                  -  SKIP (NETWORK)       doc=yes      needs /tmp/libfprint-1.94.9 + GLib/GUsb; repo-test gates it behind OXP3_REPO_TEST_NETWORK=1
+tools/fingerprint/tests/generate_fixtures.py   (not run)                                  -  EXCLUDED (writes repo) doc=yes      the suite compares fixtures in memory instead
+tools/fingerprint/oxp3-fp-probe.py             --dry-run                                  2  CONCURRENT WIP       doc=partial  working tree promises --transport/--dry-run/--allow-writes that argparse does not accept yet; not counted against HEAD cfad8fb
+
+
+## Deliberately not executed (write / hardware / launch paths)
+--------------------------------------------------------------
+oxp3-fixes.sh build|install                                                               -  EXCLUDED             doc=yes      writes /usr overlay, packages, initramfs; needs root
+oxp3-fixes-fast.sh build|install                                                          -  EXCLUDED             doc=yes      same
+tools/oxp3-hw-install.sh <components>                                                     -  EXCLUDED             doc=yes      non-dry install writes host units/rules
+tools/oxp3-power-install.sh install                                                       -  EXCLUDED             doc=yes      root unit install
+tools/oxp3-rollback.sh adopt                                                              -  EXCLUDED             doc=yes      writes the undo state directory (host state)
+tools/audio/install-user.sh / eq-on.sh / eq-off.sh                                            -  EXCLUDED             doc=yes      write/reset user PipeWire config
+tools/audio/measure-speaker.py --run                                                      -  EXCLUDED             doc=yes      plays audio through the speakers
+tools/display/display-mode.sh hdr|wcg|icc|reset                                            -  EXCLUDED             doc=yes      changes compositor/panel state
+tools/display/vibrance.sh install|test|set|uninstall                                            -  EXCLUDED             doc=yes      writes shader/config, compiles in gamescope
+tools/oxp3-flatpak-xmx.sh install|remove                                                  -  EXCLUDED             doc=yes      copies DLLs into a Proton prefix
+tools/oxp3-bt-firmware.sh --dry-run|install                                               -  EXCLUDED             doc=yes      --dry-run downloads firmware to verify hashes (network); install writes dracut/initramfs
+tools/oxp3-led.py <write> / oxp3_hid writes / homebtn run / rgbd --once (real)                                            -  EXCLUDED             doc=yes      sends vendor HID frames to hardware
+tools/oxp3-verify.sh --full / --with-changes                                              -  EXCLUDED             doc=yes      --full writes one RGB frame and measures; --with-changes edits audio/fan state
+tools/sleep-power-measure.sh suspend                                                      -  EXCLUDED             doc=yes      suspends the machine
+tools/cp2077-direct.sh / heroic-launch.sh / xmx-run.sh                                            -  EXCLUDED             doc=yes      launch a game
+tools/build-xmx-driver.sh / xmx-cm-compile-nodgrf.sh / xmx-enable.sh enable                                            -  EXCLUDED             doc=yes      build/compile/write XMX state
+tools/ghidra-pod.sh <name> <binary>                                                       -  EXCLUDED             doc=yes      runs an isolated Ghidra container (no target selected for this audit)
+tests/fixtures/firstrun/build-fixtures.py                                                 -  EXCLUDED             doc=yes      rewrites tracked fixtures
+
+Not standalone entry points (covered by the suites, not run individually):
+  tools/lib/install-common.sh, tools/lib/oxp3_gamewrap.py, tools/oxp3_lifecycle.py
+      sourced/imported libraries, no main
+  tools/decky-oxp3-status/package.py, tools/fingerprint/tests/generate_fixtures.py
+      build helpers invoked by build.sh / the fixture-drift suite
+  tools/fingerprint/fpbf63112/*.py, tools/fingerprint/tests/test_*.py, tests/unit/test_*.py
+      protocol modules and unittest modules; exercised by the `fp-python` and `unit` suites
+
+## Cross-check: do the five state reporters agree on the same fact?
+
+All verdicts below are from the same live host, within four minutes of each other.
+"status" = oxp3-status.sh --json == the Decky backend (same process); "verify" =
+oxp3-verify.sh --json; "preflight" = oxp3-preflight.sh --json; "firstrun" = the
+checklist step; "triage" = the rule verdict derived from a firstrun bundle.
+
+fact                    status              verify              preflight           firstrun            triage              agreement
+----------------------  ------------------  ------------------  ------------------  ------------------  ------------------  --------------------------------
+kernel                  7.2.7-an28.fc45     7.2.7-an28.fc45     7.2.7-an28.fc45     7.2.7-an28.fc45     7.2.7-an28.fc45     AGREE
+Mesa driver prefix      ec418f04e589965a    ec418f04e589965a    -                   ec418f04e589965a    ec418f04e589965a    AGREE
+XMX driver prefix       4b1d55ea9483417f    4b1d55ea (prefix)   -                   4b1d55ea9483417f    4b1d55ea9483417f    AGREE
+hardware helpers        0/5 (not a group)   not installed       state.* "not inst."  0/5 helpers         not-installed       AGREE
+volume / LED / RGB      absent              SKIP not installed  OK "not installed"  todo 0/2 rules      not-installed       AGREE
+IMU                     absent              PASS                OK installed        ok                  ok                  AGREE
+speaker EQ              absent              PASS                OK installed        ok                  ok                  AGREE
+Decky plugin            absent              SKIP not installed  -                   todo                not-installed       AGREE
+Bluetooth fw files      2/2 (status line)   bt.files PASS       2/3 artefacts       2/2 fw              broken              AGREE (all say: files present, install incomplete)
+Bluetooth functional    absent              3 FAIL              WARN half-install   partial "hci0 yes"  critical F1         AGREE on the fix; firstrun is coarser (does not read the journal)
+scheduler (sched_ext)   warn (disabled)     SKIP opt-in         dev.sched-ext OK    -                   not-installed       AGREE on the fact; severity differs by design
+power profile            balanced (live)    pwr.profile SKIP    OK not installed    todo "not saved"    partial             AGREE (live vs saved profile are different facts)
+undo backups            absent              FAIL inst.backups   -                   -                   -                   single reporter; documented until 'adopt'
+overall exit            0 (warn)            1 (4 fail)          0 (safe)            0 (9 todo)          1 (critical)        different questions, not contradictions
+
+Conclusion. On this host the reporters agree on every fact they share. Three
+semantic traps remain and are DOCUMENTED rather than "fixed", because changing
+them would change the design:
+  * preflight "OK" means "no half-install", not "component present" (its summary
+    line says "not installed (0/N artefacts)"); the state rows are install
+    consistency, not health.
+  * the gaming scheduler is opt-in: status warns because a feature is absent,
+    verify/triage SKIP because nothing claims it should be installed.
+  * firstrun's Bluetooth step reports firmware presence + dracut, not the
+    journal/controller verdict; triage adds that from the collected bundle.
+
+The one genuine verdict bug was inside verify, not between the reporters:
+verify consumes oxp3-status --json, and its cache/exit-code handling turned a
+real status FAIL into SKIP/UNKNOWN (see defect 3 below).
+
+## Defects found and fixed
+
+1. tools/decky-oxp3-status/build.sh --help was broken.
+   It ran `cd "$here"` and then `sed ... "$0"`; with a relative invocation $0 no
+   longer resolved, so it printed `sed: can't read ...`, no help, and still exited
+   0 (the pipeline exit status hid it). Fix: read "$here/${0##*/}" and stop the
+   header range at line 11 (it also printed `set -eu`). Regression test:
+   tests/unit/test_cli_contracts.py::DeckyBuildHelpTest.
+
+2. tools/oxp3-hw-install.sh rejected an unknown option with exit 1, while its own
+   header (and docs) say 2 = usage, 1 = runtime error. Fix: print and exit 2.
+   Regression test: InstallerUsageTest.
+
+3. tools/oxp3-verify.sh ensure_status_json() had two wrong-verdict bugs:
+     a) the cache guard `[ "$STATUS_READY" -eq 1 ] && { [ -n "$STATUS_JSON" ]; return 0; }`
+        returns 0 even when STATUS_JSON is empty, so every later caller believed
+        the report was available;
+     b) it accepted only exit 0. oxp3-status exits 1 when any indicator is "fail",
+        which is a valid report, so the JSON was thrown away exactly when it
+        mattered and decky.status/gfx.*/pwr.rapl degraded to SKIP/UNKNOWN.
+   Demonstrated in a temp copy with a status backend forced to overall=fail:
+     before: pwr.rapl skip "status backend unavailable"; gfx.mesa unknown
+             "indicator missing"; decky.status unknown "no overall field"
+     after : pwr.rapl pass; gfx.mesa pass; decky.status fail overall=fail
+   Fix: explicit cache branch returning 1 on empty, and accept rc 0|1 (still
+   rejects 2 = --strict and 3 = backend start failure). Live run is otherwise
+   unchanged (same 72 checks / 41 pass / 4 fail / 27 skip). Regression tests:
+   VerifyStatusConsumerTest (behavioural, runs the real function body against
+   stubbed outputs).
+
+4. Stale documentation numbers corrected (behaviour had moved on):
+     docs/hw/components.yaml  fingerprint expect "Ran 85 tests" -> 172, then
+                              tools/gen-docs.py --write regenerated
+                              docs/INSTALL-HW.md (only that row changed)
+     tools/repo-test.sh --list "95 checks" -> 157; firstrun tier fast -> medium
+                              (it takes ~15 s, outside the documented <5 s tier)
+     docs/TESTING.md           31 suites/25 pass -> 32/26 (fast) and 32/30 (full),
+                               added the fp-crypto and triage rows, 85 -> 172
+                               fingerprint tests, 150 -> 157 verify assertions,
+                               470 -> 634 unit tests, "≈6 s" -> "≈36 s" and the
+                               firstrun timing moved to the medium tier
+     docs/UNIT-TESTS.md        613 -> 634 tests, 31-suite block -> 32
+     docs/VALIDATION.md        "three failures are stable" -> audit note with the
+                               current 72 checks / 4 fails (inst.backups added)
+
+## Documented non-zero exits that are NOT defects
+
+  oxp3-status --strict 2 (warns)          oxp3-triage <bundle> 1 (critical finding)
+  oxp3-verify --json 1 (4 fails)          oxp3-verify --with-changes 3 (needs --full)
+  oxp3-preflight --strict 1 (5 warns)     oxp3-bt-firmware --check 1 (stale initramfs)
+  oxp3-rollback verify 1 (unbacked)       apply-license --check 1 (licence decision)
+  oxp3-verify --help/--bogus: 0/3         oxp3-sagv --help 4, sleep --help 3 (documented usage codes)
+  oxp3-voltap status 2 (no daemon)        oxp3-voltap selftest 1 (needs root)
+  usb_probe 2 (no 347D device)            hw-install --root /missing 1 (runtime error, 2 = usage)
+  fixes*.sh --help 2, cpu-sched-test 2, vol-tap install.sh 1 (usage)
+
+## Timing (this host, no root)
+
+  tools/repo-test.sh --fast          35.8 s   32 suites: 26 pass, 0 fail, 6 skip
+  tools/repo-test.sh --full          ~42 s    32 suites: 30 pass, 0 fail, 2 skip
+  firstrun suite (inside --fast)      14.5 s  runs oxp3-verify twice
+  oxp3-verify default                 ~4 s
+  oxp3-firstrun --collect             ~3 s    (22-file bundle in /tmp)
+  every other single tool             < 2 s
+  longest individual check            1.5 s  python-compile (26 interpreter starts)
+  hangs > 60 s, tracebacks, crashes   0      (all 100+ invocations)
+
+## Residual notes / not changed here
+
+  * The fingerprint subtree (tools/fingerprint/**, docs/hw/fingerprint*.md) was
+    being edited concurrently by another agent during this audit. The matrix
+    rows for oxp3-fp-probe.py reflect the tree while it was moving: the working
+    copy promises --transport/--dry-run/--allow-writes in its docstring while
+    argparse still offers the older --dev/--raw-info flags. This was NOT counted
+    against HEAD cfad8fb and was NOT touched by this audit.
+  * tools/oxp3-flatpak-xmx.sh has no exit-code contract in its header; an unknown
+    argument exits 1. No doc contradicts it, so it is reported, not changed.
+  * tools/oxp3-sagv.sh silently ignores trailing arguments (e.g. `status --json`
+    prints the human table). Not documented as supported, so not changed.
+  * The Makefile targets cannot run on the host (no make); they were verified in
+    localhost/oxp3-fixes-build:f45 (make help + make -n for every target, rc 0).
+    docs/TESTING.md already tells the reader to use tools/repo-test.sh directly.
+  * preflight's 5 warnings (core.root, dir.logind-conf-d, dev.spidev,
+    state.bluetooth, state.bt-initramfs) are the same set the docs list; the
+    installer re-runs the check as root.
+  * Three commands a user must know: preflight (can I install?), verify (is it
+    working?), firstrun/triage (what is left?). See docs/QA.md for the
+    simplification proposals.
+
+## Files touched by this audit
+
+  tools/decky-oxp3-status/build.sh       --help path/range
+  tools/oxp3-hw-install.sh               unknown option -> exit 2
+  tools/oxp3-verify.sh                   ensure_status_json cache + rc 0|1
+  tools/repo-test.sh                     --list count, firstrun tier
+  tests/unit/test_cli_contracts.py       new: 7 offline regression tests
+  docs/hw/components.yaml                fingerprint expect/evidence
+  docs/INSTALL-HW.md                     regenerated install-verify block
+  docs/TESTING.md                        counts, inventory rows, tiers
+  docs/UNIT-TESTS.md                     counts
+  docs/VALIDATION.md                     current failure note
+  docs/HANDOVER.md                       dated audit note + count corrections
+  docs/hw/REGISTRY.md                    fingerprint suite count
+  docs/upstream/README.md                fingerprint suite count
+  docs/QA.md                             audit summary (this round)
+  docs/state/audit-2026-11-09.txt        this matrix
+
+## Live state captured at audit time (read-only)
+
+kernel          : 7.2.7-an28.fc45.x86_64
+status          : schema 1, overall=warn, counts ok=23 warn=5 fail=0 unknown=0
+status warns    : xmx.trace, sched.state, sched.scx_cosmos, sched.unit, flatpak.steam_env
+verify          : 72 checks: 41 pass, 4 fail, 27 skip; fails bt.journal bt.controller bt.diag inst.backups
+preflight       : safe=True, 71 checks: 66 ok, 5 warn, 0 fail
+preflight warn  : core.root dir.logind-conf-d dev.spidev state.bluetooth state.bt-initramfs
+firstrun        : ok=6, pending=1, partial=2, todo=9, unknown=1
+triage (bundle) : 12 findings: F1 critical bt.initramfs-stale, F2 high sleep.trigger-uninstalled
+components      : libexec 0/5, udev 0/2, sleep units 0/3, BT fw 2/2 + no dracut + hci0 without
+                  firmware, IMU blacklist yes, speaker EQ yes, RGB/homebtn/vol/Decky not installed
+power           : PL1 35 W, PL2 37 W, PL4 122 W; platform profile balanced; battery 80% charging
+bluetooth       : hci0 present, btmgmt lists 0 controllers (firmware load failed this boot)
+scheduler       : sched_ext state=disabled, scx_cosmos not running, oxp3-gaming-sched not installed
+driver hashes   : host Mesa ec418f04e589965a, XMX 4b1d55ea9483417f, runtime 4d043cc2

@@ -872,7 +872,7 @@ while (( $# )); do
         --bt-no-reload) BT_ARGS+=(--no-reload) ;;
         --bt-from) [[ $# -ge 2 ]] || die "--bt-from needs a path"; BT_ARGS+=(--from "$2"); shift ;;
         -h|--help) usage; exit 0 ;;
-        *) die "unknown option: $1 (try --help)" ;;
+        *) printf 'error: unknown option: %s (try --help)\n' "$1" >&2; exit 2 ;;
     esac
     shift
 done

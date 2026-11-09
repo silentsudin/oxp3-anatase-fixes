@@ -21,7 +21,7 @@ for arg in "$@"; do
         --offline) offline=1 ;;
         --no-install) install=0 ;;
         -h|--help)
-            sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,11p' "$here/${0##*/}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)

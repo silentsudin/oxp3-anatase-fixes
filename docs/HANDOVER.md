@@ -6,6 +6,14 @@ guide and a status snapshot, not a new source of truth: **component state lives 
 traceable to a repo file or to a read-only command whose output is quoted. Nothing privileged was
 executed for this document.
 
+> **Audit update, 2026-11-09 06:00 UTC (HEAD `cfad8fb`).** The live numbers below have
+> moved again: `repo-test.sh --fast` is **32 suites: 26 pass, 0 fail, 6 skip** (~36 s) and
+> `--full` **32: 30 pass, 2 skip**; the unit suite is **634 tests**, the fingerprint suite
+> **172**, `oxp3-verify` reports **72 checks: 41 pass, 4 fail, 27 skip** (the fourth failure
+> is `inst.backups`, documented until `oxp3-rollback.sh adopt`), and `oxp3-status --selftest`
+> is 90 checks. The matrix is [`state/audit-2026-11-09.txt`](state/audit-2026-11-09.txt);
+> where this page and that file disagree, the audit file is newer.
+
 ## 0. Start here, in this order
 
 | # | read | why |
@@ -118,7 +126,7 @@ behaves. Both are needed; neither substitutes for the other.
 | display HDR / ICC / vibrance | [`hw/hdr-vibrance.md`](hw/hdr-vibrance.md): EDID/PQ/BT.2020, gamescope flags | `dsp.*`; `tests/unit/test_edid.py`, `test_icc.py`; `gamewrap` suite |
 | SAGV | [`hw/sagv.md`](hw/sagv.md): MCHBAR pair `0x5DA0/0x5DA4=0x80000122`, busy bit, `enable_sagv` semantics | `tools/oxp3-sagv.sh status`/`probe` (probe exits 3 by design) |
 | camera / IMU | [`hw/camera-imu.md`](hw/camera-imu.md): PCI/USB/ACPI inventory (`_STA=0` everywhere for camera), IIO 100 Hz BMI260 | `imu.selftest`, `imu.iio`; camera = the `grep …/OVTI*/status` command row |
-| fingerprint | [`hw/fingerprint.md`](hw/fingerprint.md) + [`tools/fingerprint/README.md`](../tools/fingerprint/README.md): BF63112 SPI frame/CRC/image/retry | 85 Python tests, 324 C checks / 10 vectors, libfprint v1.94.9 syntax check; **no hardware transcript** |
+| fingerprint | [`hw/fingerprint.md`](hw/fingerprint.md) + [`tools/fingerprint/README.md`](../tools/fingerprint/README.md): BF63112 SPI frame/CRC/image/retry | 172 Python tests (at the audit; 85 when this page was written), 324 C checks / 10 vectors, libfprint v1.94.9 syntax check; **no hardware transcript** |
 | XeSS XMX | [`xess-xmx.md`](xess-xmx.md): CM patch series, IGC 2.10.10, binary comparison, `-doubleGRF` root cause | `gfx.xmx.*` (driver prefix `4b1d55ea` matches the live `~/.cache/oxp3-fixes/xmx-driver` build; `trace` SKIPs by design) |
 | Mesa / gamescope / kernel / firmware / MangoHud | [`WORKING-BUILD-2026-11-08.md`](WORKING-BUILD-2026-11-08.md), [`BEST-CONFIG.md`](BEST-CONFIG.md), [`xess-xmx.md`](xess-xmx.md), `patches/**` | `gfx.mesa`, `gfx.working` (`tools/check-working.sh` 7/7), `gfx.xe`, `inst.paths` |
 | sched_ext | [`cpu-sched.md`](cpu-sched.md) + [`cpu-sched-results.csv`](cpu-sched-results.csv) (round-3 numbers) | `sched.*` (unit not installed here, so `SKIP`/warn) |
@@ -201,7 +209,7 @@ sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes   # sleep.s
 sudo tools/sleep-power-measure.sh suspend -w 600                       # bag-drain %/h; run on battery
 sudo tools/oxp3-voltap/oxp3-voltap selftest                            # a hold = one step, not a ramp
 # fingerprint probe: read-only queries, manual only, needs spidev bound + root; steps in docs/hw/fingerprint.md
-python3 -m unittest discover -s tools/fingerprint/tests                # offline, already green (85 tests)
+python3 -m unittest discover -s tools/fingerprint/tests                # offline, already green (172 tests at the audit)
 tools/fingerprint/tests/run-c-tests.sh                                 # 324 checks / 10 vectors (podman fallback)
 ```
 

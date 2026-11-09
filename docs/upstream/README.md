@@ -25,7 +25,7 @@ All three are **drafts**, not patches:
   0x80000122`, busy bit 31 ≤ 10 ms, `+0x5918`), the vendor profile values (Quiet 3 / Balanced 0 /
   Performance 4; AutoSAGV 80/90 % at 10 s), and the 7.2.7 source showing `qclk_gv_index = 0` with
   the firmware-choice comment and the dead `icl_pcode_restrict_qgv_points()` path for ≥ 14.
-* **C** is backed by a recovered frame/CRC/image/retry protocol, 85 Python tests, 324 C checks on
+* **C** is backed by a recovered frame/CRC/image/retry protocol, 172 Python tests (audit count), 324 C checks on
   10 shared vectors, and a driver that syntax-checks against libfprint v1.94.9 headers (all
   re-verified on 2026-11-09). It is explicitly not hardware-validated.
 

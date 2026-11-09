@@ -678,7 +678,7 @@ def_suite decky-cli fast fast 120 0 \
     "Decky CLI --json emits valid JSON (live exit code not asserted)" \
     "python3 tools/decky-oxp3-status/main.py --json --no-color"
 def_suite verify-selftest fast fast 120 0 \
-    "oxp3-verify parser unit tests against synthetic fixtures (95 checks)" \
+    "oxp3-verify parser unit tests against synthetic fixtures (157 checks)" \
     "tools/oxp3-verify.sh --selftest"
 def_suite verify-fixtures fast fast 120 0 \
     "the tests/verify/run.sh fixture runner (same selftest entrypoint)" \
@@ -722,7 +722,7 @@ def_suite gamewrap fast fast 120 0 \
 def_suite eq-model fast fast 60 0 \
     "speaker EQ biquad model table" \
     "python3 tools/audio/eq_response.py"
-def_suite firstrun fast fast 120 0 \
+def_suite firstrun fast medium 120 0 \
     "first-run collector: offline selftest, checklist JSON, dry-run writes nothing" \
     "tools/oxp3-firstrun.sh --selftest && ... --check-only --json && ... --dry-run"
 def_suite wizard fast fast 300 0 \

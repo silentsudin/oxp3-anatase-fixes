@@ -35,7 +35,65 @@ No `sudo`, no reboot, no host configuration change, no privileged write was perf
 Bluetooth diagnosis, `--strict` with warnings); the exit code was the documented, correct one.
 The one pending item is the licence-header/top-level-licence gap (check 23): the repair is written,
 validated and waiting for the owner's licence choice, so it is no longer a FAIL. No functional test
-failed.
+failed. *(The audit round below re-measured the tree at a later revision; where its counts differ from
+the table, the audit figures are newer.)*
+
+## Audit round — every entry point in read-only mode (2026-11-09, 06:00 UTC)
+
+Baseline **HEAD `cfad8fb`**; no `sudo`, no reboot, no host configuration change. 100+ safe
+invocations across every executable entry point, Makefile target (in the build container — the host
+has no `make`), daemon and state reporter. **No crash, traceback or hang > 60 s.** Full matrix with
+per-tool exit codes, documented/undocumented flags and notes:
+[`state/audit-2026-11-09.txt`](state/audit-2026-11-09.txt).
+
+| reporter | live verdict | exit | agrees with the others? |
+|---|---|---|---|
+| `oxp3-status.sh --json` / Decky backend | schema 1, `overall=warn`, ok=23 warn=5 fail=0 | 0 | yes — same JSON, `--selftest` 90 |
+| `oxp3-verify.sh --json` | 72 checks: 41 pass, 4 fail, 27 skip | 1 | yes — 3 Bluetooth fails + `inst.backups` (documented until `adopt`) |
+| `oxp3-preflight.sh --json` | schema 1, `safe=true`, 66 ok / 5 warn / 0 fail | 0 | yes — "OK" means *no half-install*, not "installed" |
+| `oxp3-firstrun.sh --json` | ok=6 pending=1 partial=2 todo=9 unknown=1 | 0 | yes — coarser; Bluetooth step does not read the journal |
+| `oxp3-triage.py <bundle>` | 12 findings, F1 critical `bt.initramfs-stale` | 1 | yes — same Bluetooth verdict verify reaches |
+
+The five reporters agree on every shared fact (kernel, Mesa/XMX prefixes, installed components,
+Bluetooth, scheduler, battery). The one wrong-verdict bug was *inside* verify: it consumed
+`oxp3-status --json` with a cache guard that returned success on an empty report and accepted only
+exit 0, so a real status `fail` degraded `decky.status`/`gfx.*`/`pwr.rapl` to SKIP/UNKNOWN. Both
+paths are fixed and covered by behavioural tests.
+
+### Defects fixed in this round
+
+1. `tools/decky-oxp3-status/build.sh --help`: relative `$0` after `cd` made sed fail — empty help,
+   error on stderr, exit 0. Fixed; test added.
+2. `tools/oxp3-hw-install.sh --unknown`: exited 1 although its header says 2 = usage. Fixed; test added.
+3. `tools/oxp3-verify.sh` status consumer: cache/exit-code bugs above, demonstrated with a forced
+   `overall=fail` backend (before: SKIP/UNKNOWN; after: FAIL/PASS). Fixed; 5 behavioural tests added.
+4. Stale docs that contradicted behaviour: 31→32 suites, 85→172 fingerprint tests, 150→157 verify
+   assertions, 470→634 unit tests, the `--list` "95 checks" string, the `firstrun` timing tier, and
+   `components.yaml`'s fingerprint expect (regenerated `INSTALL-HW.md`). `gen-docs --check` is clean.
+
+### Health of the repository as a whole
+
+* **First thing a user hits:** `README.md` sends them to `docs/HANDOVER.md`, whose counts are from an
+  older revision (85 fingerprint tests, 26 suites, revision `250dcfe`). The generated component tables
+  and `docs/TESTING.md` are current; HANDOVER is the remaining stale landing page.
+* **Slow:** `tools/repo-test.sh --fast` is 36 s and `--full` ~42 s (fine); the dominant fast-mode
+  suite is `firstrun` (15 s, runs verify twice). No individual tool is slow; `--full` still needs a
+  warm npm cache and the podman image.
+* **Noisy:** the default `oxp3-verify` prints 72 rows, preflight 71, and status 28 indicators. The
+  signal (4 fails / 5 warns) is buried; triage is the only tool that ranks it.
+* **Should be one command but is three:** install readiness, live health and the remaining checklist
+  are `preflight`, `verify` and `firstrun`/`triage`. `repo-test` covers only the offline layer.
+
+### Proposed simplifications (not implemented)
+
+1. **One `health` subcommand** in `tools/oxp3-verify.sh` (or a wrapper) that runs preflight + verify +
+   the firstrun checklist and prints only the non-PASS rows plus a single verdict. Removes the
+   "three commands" problem without changing any probe.
+2. **Make HANDOVER generated or dated-checked.** Its state table duplicates `components.yaml`; add it
+   to `gen-docs.py` (or make `repo-test` fail when its counts are older than HEAD's latest audit).
+3. **A CLI-contract suite in `repo-test.sh`** that runs every `--help`/`--selftest` with a short
+   timeout (the audit did this by hand). It would have caught the `build.sh --help` bug and the
+   `--list` drift automatically.
 
 ## Checks
 

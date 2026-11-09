@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
-"""oxp3-fp-probe - Betterlife BF63112 (ONEXPLAYER 3) SPI fingerprint probe.
+"""oxp3-fp-probe - Betterlife BF63112 (ONEXPLAYER 3) fingerprint probe.
 
 Read-only bring-up tool for the fingerprint sensor that Anatase/Linux currently
-does not drive.  It speaks the frame format recovered from the Windows UMDF
-driver `BetterlifeFingerprintDevice.dll` (v9.39.15.26) - see
-docs/hw/fingerprint.md for the evidence and the byte-by-byte derivation.
+does not drive.  It has two transports:
 
-It NEVER enrols, deletes, resets, JTAGs or reflashes anything: the command set
-exposed here is limited to the read-only queries (firmware version, module
-scheme, module UID, sensor info, fingerprint count).  --op lets you send an
-arbitrary single opcode if you extend it yourself; the destructive opcodes are
-listed in the doc so you know what to avoid.
+``--transport spi`` (default) - the one this unit actually uses.  It speaks the
+SPB/SPI wire format recovered from ``BetterlifeFingerprintDevice.dll``
+(``FUN_180017020`` read / ``FUN_180017404`` write): a one-byte selector
+``(opcode & 0x3f) << 1`` (bit 7 set for host->device writes), then a fixed-size
+read (two-entry sequence) or the payload (single write).  See
+``fpbf63112/spi.py`` and docs/hw/fingerprint-transport.md.
+
+``--transport frame`` - the older experiment that puts the USB branch's 0xAA /
+CRC-32 frame on the SPI wire.  Kept only to test the "is the USB frame behind
+the selector?" question; it is not the SPI protocol.
+
+Safety: every command needs ``--allow-writes`` and a read-only opcode on the
+allowlist.  Enrol/identify/remove/JTAG/restore/firmware-update are refused
+unconditionally.  ``--dry-run`` prints the exact bytes and never opens a device.
+``acpi_info`` parses an extracted ``_CRS`` resource template (the only root
+step), and prints the exact commands to obtain it.
 
 Requires: python3 (stdlib only, no python3-spidev) plus an spidev-bound node.
 The sensor has no in-tree driver, so bind spidev by hand:
@@ -20,18 +29,19 @@ The sensor has no in-tree driver, so bind spidev by hand:
     echo spi-BF63112:00 | sudo tee /sys/bus/spi/drivers/spidev/bind
     ls -l /dev/spidev0.0          # created by the bind
 
-Then (needs read access to /dev/spidev0.0 - root, or a udev rule of your own):
+Then:
 
-    sudo ./oxp3-fp-probe.py info          # sensor geometry + flags
-    sudo ./oxp3-fp-probe.py fw            # firmware version / module project
-    sudo ./oxp3-fp-probe.py uid scheme count
-    sudo ./oxp3-fp-probe.py --raw-info info
+    sudo ./oxp3-fp-probe.py --dry-run fw info   # exact bytes, no hardware
+    sudo ./oxp3-fp-probe.py --spidev /dev/spidev0.0 --allow-writes fw info
+    sudo ./oxp3-fp-probe.py --spidev /dev/spidev0.0 --gpio 42 \
+         --allow-writes fw                      # wait for the IRQ line too
+    sudo ./oxp3-fp-probe.py acpi_info --crs /tmp/fprt-crs.bin
 
 Undo:  echo spi-BF63112:00 | sudo tee /sys/bus/spi/drivers/spidev/unbind
 
 This is our own code and it is UNTESTED on hardware (see "Open points" in the
-doc): the frame builder matches the driver byte for byte, the response parser is
-partly inferred because only part of the device->host framing was recovered.
+doc): the selector and transfer shapes match the driver byte for byte, but the
+SPI command opcodes are data-driven inside the driver and are not yet known.
 """
 
 import argparse

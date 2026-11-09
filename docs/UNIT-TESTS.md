@@ -13,9 +13,9 @@ package installation**, and it writes only to a private temporary directory
 Recorded on this host (Python 3.15, no root):
 
 ```
-python3 -m unittest discover -s tests/unit -q     -> Ran 613 tests ... OK (skipped=1), ~3.0 s
-tools/repo-test.sh --fast  -> 31 suites: 25 pass, 0 fail, 6 skip, exit 0
-tools/repo-test.sh --full  -> 31 suites: 29 pass, 0 fail, 2 skip, exit 0 (expected)
+python3 -m unittest discover -s tests/unit -q     -> Ran 634 tests ... OK (skipped=1), ~3.0 s
+tools/repo-test.sh --fast  -> 32 suites: 26 pass, 0 fail, 6 skip, exit 0
+tools/repo-test.sh --full  -> 32 suites: 30 pass, 0 fail, 2 skip, exit 0 (expected)
 ```
 
 ## 1. How to run it
@@ -201,11 +201,10 @@ the risk describes; report it with the journal lines.
 * `Makefile`: `make unit` (and `make help` lists it); `make test` includes it
   through `repo-test.sh --fast`.
 * `make unit` was verified in the local build container
-  (`localhost/oxp3-fixes-build:f45`, the host has no `make`): `Ran 302 tests …
-  OK (skipped=2)`. The difference from 535 is the container's missing
-  `python3-evdev`: `test_voltap` then skips at import with that reason (one
-  module-level skip instead of 17 tests). Install `python3-evdev` in a CI image
-  to run them.
+  (`localhost/oxp3-fixes-build:f45`, the host has no `make`). Its count is
+  lower than the host's 634 because `python3-evdev` is missing there:
+  `test_voltap` then skips at import with that reason (one module-level skip
+  instead of 17 tests). Install `python3-evdev` in a CI image to run them.
 * `tests/unit` is untracked in this round (the working tree is left for review);
   `git add tests/unit docs/UNIT-TESTS.md` is deliberate step when committing.
   Until then the `python-compile` suite does not see the new files, but the

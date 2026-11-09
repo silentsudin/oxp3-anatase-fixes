@@ -925,13 +925,22 @@ record() { # ID GROUP "TITLE" STATE "SUMMARY" "DETAIL" "HINT"
 total_checks() { printf '%s' "${#IDS[@]}"; }
 
 ensure_status_json() {
-    [ "$STATUS_READY" -eq 1 ] && { [ -n "$STATUS_JSON" ]; return 0; }
+    if [ "$STATUS_READY" -eq 1 ]; then
+        # A first attempt that cached "unavailable" must stay unavailable; the old
+        # `[ -n "$STATUS_JSON" ]; return 0` returned success with an empty report.
+        [ -n "$STATUS_JSON" ] || return 1
+        return 0
+    fi
     STATUS_READY=1
     local tool=$REPO/tools/oxp3-status.sh
     [ -x "$tool" ] || return 1
     have python3 || return 1
     run_tool status-json 90 "$tool" --json
-    if [ "$RUN_RC" -eq 0 ] && json_ok "$RUN_OUT"; then
+    # Exit 1 is a verdict (an indicator is fail), not a backend failure: the JSON is
+    # still complete and the dependent checks must report the fail, not degrade to
+    # SKIP/UNKNOWN. 2 = --strict, 3 = backend could not start.
+    case $RUN_RC in 0|1) ;; *) STATUS_JSON=""; return 1 ;; esac
+    if json_ok "$RUN_OUT"; then
         STATUS_JSON=$RUN_OUT
         return 0
     fi
