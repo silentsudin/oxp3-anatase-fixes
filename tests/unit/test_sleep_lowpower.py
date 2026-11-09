@@ -15,6 +15,7 @@ import json
 import os
 import pathlib
 import tempfile
+import os
 import unittest
 
 import support
@@ -144,6 +145,10 @@ class AspmParseTest(unittest.TestCase):
         self.assertEqual(mod.parse_aspm_policy(None), (None, []))
 
 
+# ASPM is opt-in in the tool; these tests exercise the mechanism, so opt in.
+os.environ.setdefault("OXP3_LOWPOWER_ASPM", "powersave")
+
+
 class AspmDecisionTest(unittest.TestCase):
     def facts(self, selected="default", options=None, writable=True,
               present=True):
@@ -153,21 +158,21 @@ class AspmDecisionTest(unittest.TestCase):
                 "writable": writable, "present": present}
 
     def test_set_when_default(self):
-        decision = mod.aspm_decision(self.facts(), None)
+        decision = mod.aspm_decision(self.facts(), None, target="powersave")
         self.assertEqual((decision["action"], decision["value"]),
                          ("set", "powersave"))
 
     def test_keep_when_already_powersave(self):
-        decision = mod.aspm_decision(self.facts(selected="powersave"), None)
+        decision = mod.aspm_decision(self.facts(selected="powersave"), None, target="powersave")
         self.assertEqual(decision["action"], "keep")
 
     def test_skip_when_not_writable(self):
-        decision = mod.aspm_decision(self.facts(writable=False), None)
+        decision = mod.aspm_decision(self.facts(writable=False), None, target="powersave")
         self.assertEqual(decision["action"], "skip")
         self.assertIn("not writable", decision["reason"])
 
     def test_skip_when_absent(self):
-        decision = mod.aspm_decision(self.facts(present=False), None)
+        decision = mod.aspm_decision(self.facts(present=False), None, target="powersave")
         self.assertEqual(decision["action"], "skip")
 
     def test_skip_when_target_not_offered(self):

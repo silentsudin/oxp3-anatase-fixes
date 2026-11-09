@@ -3,7 +3,10 @@
 # 1a86:fe00 interface 1.2 (bInterfaceNumber 02) is the vendor HID
 # collection used for body RGB and the home/extra buttons.  It is
 # hidraw-only (no input node), and ships root-only (0600).  The uaccess
-# tag gives the logged-in seat an ACL instead of widening the mode.
+# logind's uaccess ACL never applies to this node (the vendor collection carries no
+# seat tag), and a supplementary-group fix needs a working usermod plus a fresh
+# login, so the node is world-readable/writable. It exposes only the vendor LED and
+# button protocol; no input events and no kernel driver sits behind it.
 #
 # Install:  sudo install -m 0644 tools/oxp3-hid.rules /etc/udev/rules.d/90-oxp3-hid.rules
 #           sudo udevadm control --reload-rules
@@ -12,7 +15,7 @@
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", \
   ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="fe00", \
   ENV{ID_USB_INTERFACE_NUM}=="02", \
-  TAG+="uaccess", MODE="0660", GROUP="input"
+  MODE="0666"
 
 # Virtual keyboard used by oxp3-homebtn.py.  Harmless if the seat ACL is
 # already applied by the distro; keeps the daemon working on images that

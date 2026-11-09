@@ -2222,12 +2222,28 @@ check_bluetooth() {
         record bt.dracut bluetooth "initramfs drop-in" SKIP "no dracut drop-in" "the standalone script writes it; a layered oxp3-firmware rpm can cover the same files" "sudo tools/oxp3-bt-firmware.sh (persist=items) ; or layering oxp3-firmware"
     fi
 
-    local line
+    local line reload_ts failure_ts
     line=$(journalctl -k -b --no-pager 2>/dev/null | grep -m 1 'Failed to load Intel firmware')
     if [ -z "$line" ]; then
         record bt.journal bluetooth "no firmware-load failure this boot" PASS "kernel journal is clean" "" ""
     else
+        # The probe before switch_root cannot see /usr/lib/firmware/updates, so a
+        # failure there is expected; what matters is whether the reload service
+        # fixed it afterwards. Compare the failure time with the last successful
+        # oxp3-bt-reload line (and require the controller to be usable now).
+        failure_ts=$(journalctl -k -b --no-pager -o short-unix 2>/dev/null \
+            | awk '/Failed to load Intel firmware/ {print $1; exit}')
+        reload_ts=$(journalctl -b --no-pager -o short-unix -u oxp3-bt-reload.service 2>/dev/null \
+            | awk '/controller present/ {print $1}' | tail -n1)
+        if [ -n "${reload_ts:-}" ] && [ -n "${failure_ts:-}" ] && \
+           [ "$(printf '%s\n%s\n' "$failure_ts" "$reload_ts" | sort -n | tail -n1)" = "$reload_ts" ] && \
+           btmgmt info >/dev/null 2>&1; then
+            record bt.journal bluetooth "no firmware-load failure this boot" PASS \
+                "the initramfs probe failed as expected, the boot-time reload recovered it and the controller works" \
+                "$line" ""
+        else
         record bt.journal bluetooth "no firmware-load failure this boot" FAIL "kernel logged a firmware load failure" "$line" "sudo modprobe -r btintel_pcie btintel && sudo modprobe btintel_pcie ; if it recurs, run sudo tools/oxp3-bt-firmware.sh (initramfs) and reboot"
+        fi
     fi
 
     if [ ! -e /sys/class/bluetooth/hci0 ]; then

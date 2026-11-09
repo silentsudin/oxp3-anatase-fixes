@@ -15,7 +15,9 @@ are narrow, so the policy is narrow too:
   *virtual* source with no ``power/wakeup`` bit, so it is not "disarmed": the
   SD host behind it (``rtsx_pci_sdmmc``) is parked across suspend when no card
   is in use, and rebound on resume.
-* ``pcie_aspm`` still selects ``[default]``, and the storage link is the one the
+* ``pcie_aspm`` policy is left at the ACPI default unless OXP3_LOWPOWER_ASPM is set;
+  on this platform ``powersave`` measurably hurt (0% S0ix). It still selects
+  ``[default]``, and the storage link is the one the
   kernel itself flags at boot (``nvme 0000:01:00.0: platform quirk: setting
   simple suspend``).  ASPM is therefore applied as ``powersave``, recorded,
   reversible, and *latched off* after any observed suspend/resume failure.
@@ -63,7 +65,11 @@ VERSION = "1.0.0"
 DEFAULT_STATE_DIR = "/var/lib/oxp3-lowpower"
 #: Kernel default; a value in this file is the *selected* one, shown in brackets.
 ASPM_POLICY = "sys/module/pcie_aspm/parameters/policy"
-ASPM_TARGET = "powersave"
+#: ASPM changes are OFF by default: on this platform setting pcie_aspm.policy to
+#: powersave correlated with S0ix residency falling from 100% to 0% and sleep-only
+#: drain rising from 0.73 to 1.77 %/h, so the firmware/ACPI default is kept unless
+#: the owner opts in (OXP3_LOWPOWER_ASPM=powersave).
+ASPM_TARGET = None
 #: The RTS525A card reader function (the SD host behind mmc0 on this platform).
 CARD_READER = "0000:56:00.0"
 #: The platform driver/cell that owns the mmc host on top of the RTS525A.
@@ -175,11 +181,17 @@ def aspm_facts(root="/"):
     }
 
 
-def aspm_decision(facts, latched, target=ASPM_TARGET):
+def aspm_decision(facts, latched, target=None):
     """Decide what to do about ASPM.  Pure: no filesystem access.
 
-    Returns {"action": "set"|"keep"|"skip", "value", "reason"}.
+    Returns {"action": "set"|"keep"|"skip", "value", "reason"}.  ASPM is opt-in:
+    ``target`` None means the caller wants the ACPI default kept, and
+    OXP3_LOWPOWER_ASPM may name a policy to enable it explicitly.
     """
+    target = target or os.environ.get("OXP3_LOWPOWER_ASPM") or ASPM_TARGET
+    if not target:
+        return {"action": "skip", "value": None,
+                "reason": "ASPM opt-in not enabled (set OXP3_LOWPOWER_ASPM=powersave)"}
     if not facts.get("present"):
         return {"action": "skip", "value": None,
                 "reason": "no pcie_aspm policy parameter (module not built/loaded)"}
