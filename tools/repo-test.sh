@@ -870,10 +870,12 @@ suite_sleep_cycles() {
     fi
     grep -q 'nothing was armed, suspended or written' "$dry" \
         || { printf 'FAIL --dry-run does not promise to write nothing\n'; return 1; }
-    grep -q 'rtcwake -m mem -s 60' "$dry" \
-        || { printf 'FAIL --dry-run does not name the rtcwake command\n'; return 1; }
-    grep -q 'rtcwake -m disable' "$dry" \
-        || { printf 'FAIL --dry-run does not name the alarm disarm command\n'; return 1; }
+    grep -q '/sys/class/rtc/.*/wakealarm' "$dry" \
+        || { printf 'FAIL --dry-run does not name the sysfs alarm write\n'; return 1; }
+    grep -q 'systemctl suspend' "$dry" \
+        || { printf 'FAIL --dry-run does not name the logind suspend\n'; return 1; }
+    grep -q 'echo 0 > /sys/class/rtc/.*/wakealarm' "$dry" \
+        || { printf 'FAIL --dry-run does not name the alarm clear\n'; return 1; }
 
     # --no-suspend writes a state report; keep it outside the checkout.
     local state=$LOGDIR/sleep-cycles-state src=0
