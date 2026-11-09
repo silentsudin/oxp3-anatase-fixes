@@ -869,6 +869,16 @@ comp_mango_install() {
         "$PREFIX/etc/systemd/system/oxp3-mangohud-keep.service"
     systemctl daemon-reload
     systemctl enable oxp3-mangohud-keep.service
+    # A default MangoHud config is what turns the patched metrics on; keep any
+    # existing config the owner already has.
+    local home dst
+    home=$(user_home "$TARGET_USER")
+    dst="$PREFIX$home/.config/MangoHud/MangoHud.conf"
+    if [ ! -e "$dst" ]; then
+        as_user_run install -D -m0644 "$repo/files/mangohud/MangoHud.conf" "$dst"
+    else
+        printf '  keeping existing %s\n' "$dst"
+    fi
     if "$PREFIX/usr/local/libexec/oxp3-mangohud-keep"; then
         printf '  patched MangoHud extracted; oxp3-mangohud-keep.service re-applies it on every boot\n'
     else

@@ -31,9 +31,14 @@ if [ -n "$want_runtime" ] && [ -r "$runtime_known" ]; then
     [ "$cur_rt" = "$want_runtime" ] || restore_runtime=1
 fi
 (( restore_host || restore_runtime )) || exit 0
-if ! rpm-ostree status 2>/dev/null | grep -q 'Unlocked: hotfix'; then
+# Probe the filesystem, not "rpm-ostree status": a deployment can still report
+# Unlocked: development while /usr is read-only after a reboot.
+probe=/usr/.oxp3-rw-probe.$$
+if ! install -m 000 /dev/null "$probe" 2>/dev/null; then
     rpm-ostree usroverlay >/dev/null 2>&1 || { log "usroverlay failed"; exit 0; }
+    install -m 000 /dev/null "$probe" 2>/dev/null || { log "/usr still read-only"; exit 0; }
 fi
+rm -f "$probe"
 if (( restore_host )); then
     cp -f -- "$host_known" /usr/lib64/libvulkan_intel.so && log "host Mesa restored"
 fi

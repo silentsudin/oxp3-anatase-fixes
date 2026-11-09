@@ -18,10 +18,14 @@ for d in /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out
 done
 shopt -u nullglob
 (( ${#rpms[@]} )) || { log "no patched RPMS in the cache"; exit 0; }
-unlock=$(rpm-ostree status --booted 2>/dev/null | awk -F': ' '/Unlocked/{print $2}')
-case ${unlock:-none} in
-    none|"") rpm-ostree usroverlay >/dev/null 2>&1 || { log "usroverlay failed"; exit 0; } ;;
-esac
+# Probe the filesystem, not "rpm-ostree status": a deployment can still report
+# Unlocked: development while /usr is read-only after a reboot.
+probe=/usr/.oxp3-rw-probe.$$
+if ! install -m 000 /dev/null "$probe" 2>/dev/null; then
+    rpm-ostree usroverlay >/dev/null 2>&1 || { log "usroverlay failed"; exit 0; }
+    install -m 000 /dev/null "$probe" 2>/dev/null || { log "/usr still read-only"; exit 0; }
+fi
+rm -f "$probe"
 failed=0
 for rpm in "${rpms[@]}"; do
     [ -r "$rpm" ] || continue
