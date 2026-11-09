@@ -62,7 +62,7 @@ noticing a key.
 | hibernation | `/sys/power/disk` = `[disabled]` | secure-boot lockdown (`/sys/kernel/security/lockdown` = `none [integrity] confidentiality`) - hibernate is unavailable, so "sleep then hibernate" cannot be a fallback |
 | suspend counter | `suspend_stats/success` = 0, `fail` = 0, `total_hw_sleep` = 0 | **no suspend has ever completed on this boot** |
 | suspend anomaly | `max_hw_sleep` = 523,986,009,990 ns (~524 s) with success = 0 | internally inconsistent: an attempt would bump `success` or one of the `failed_*` counters. Treat as stale, re-read after the first controlled suspend (open point 2) |
-| history | `journalctl --list-boots` = 60 boots, `journalctl -k \| grep -c "PM: suspend entry"` = **0** | the machine has not suspended once in the retained journal |
+| history | `journalctl --list-boots` = 60 boots; `journalctl -k \| grep -c "PM: suspend entry"` = **0**, but `-k` implies `-b` so that only counts this boot; `journalctl -b all -k \| grep -c "PM: suspend entry"` = **9** (Oct 12-19) | s2idle entry works; nothing in the November boots asks for it (see §2.5) |
 | wake sources | 9 ACPI entries `*enabled`, 7 PCI + 2 USB device wake bits enabled | section 2.3 |
 | inhibitors | 9 (`systemd-inhibit --list`) | one `block`: PowerDevil, `handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch`; the rest are `delay` (hhd for HDMI-CEC, kwin for locking, UPower, NetworkManager, ModemManager, rtkit, deepseek-harness) |
 | KDE power config | `~/.config/powerdevilrc` contains **only** `[AC][SuspendAndShutdown] AutoSuspendAction=0` | no `LidAction`, no `[Battery]` group: the lid action is PowerDevil's implicit default and there is no record of what it is |

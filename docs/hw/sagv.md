@@ -254,7 +254,8 @@ tools/sleep-power-measure.sh run -w 600      # 10 min window, PASS < 1.0 %/h
 ```
 
 SAGV does not apply in s2idle; that measurement is only the sanity check that the idle baseline is not
-polluted by a device that never suspended (see [sleep-power.md](sleep-power.md)).
+polluted by a machine that did not actually suspend (see [sleep-power.md](sleep-power.md) §2.5 for the
+measurement bug that once produced that impression).
 
 ## 6. If this is ever to be fixed (documented only — no patch here)
 

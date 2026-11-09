@@ -13,9 +13,9 @@ package installation**, and it writes only to a private temporary directory
 Recorded on this host (Python 3.15, no root):
 
 ```
-python3 -m unittest discover -s tests/unit -q     -> Ran 470 tests ... OK (skipped=1), ~1.3 s
-tools/repo-test.sh --fast  -> 25 suites: 19 pass, 0 fail, 6 skip, exit 0
-tools/repo-test.sh --full  -> 25 suites: 23 pass, 0 fail, 2 skip, exit 0
+python3 -m unittest discover -s tests/unit -q     -> Ran 535 tests ... OK (skipped=1), ~1.3 s
+tools/repo-test.sh --fast  -> 27 suites: 21 pass, 0 fail, 6 skip, exit 0
+tools/repo-test.sh --full  -> 27 suites: 25 pass, 0 fail, 2 skip, exit 0 (expected)
 ```
 
 ## 1. How to run it
@@ -61,6 +61,7 @@ install-common tests run the shell tools in a stub `PATH` and a private
 | `test_sagv.py` | `tools/oxp3-sagv.sh` | 14 | usage exit 4, `set off/on/point` output and refusals (exit 3), `measure` minimum window, RAPL sample averaging against a fixture dir (stub `sleep`), `status`/`report` read-only exit 0 |
 | `test_install_common.py` | `tools/lib/install-common.sh` | 18 | sourcing has no side effects, the `install_common_guard` contract (API version, every required variable, non-empty arrays, caller `build_mesa`), `ucode_rev`, `xmx_override_file`, `anatase_kver`, `hotfix_active`, `deploy_info`, `mok_cn`/`mok_usage_ok` against generated CA/non-CA certs |
 | `test_sleep_trigger.py` | `files/logind-oxp3.conf`, `files/49-oxp3-suspend.rules`, `tools/oxp3-hw-install.sh`, `tools/oxp3-verify.sh` | 23 | the drop-in parses as one `[Login]` section with the documented `Handle*` values (power/suspend key = suspend, lid = suspend AC+battery, docked = ignore, long-press = poweroff), no key wired to hibernate, no duplicate keys; the polkit rule is one `addRule`, balanced, limited to the four suspend/hibernate actions, guarded on `subject.local && subject.active && isInGroup("wheel")`, and never grants `suspend-ignore-inhibit` (comments stripped first); installer wiring (TRIGGER_FILES table used by both install and uninstall, status lines, no logind restart behind the user's session); verify wiring (`record sleep.trigger`, the three-way `--full`/`--with-changes`/`OXP3_ALLOW_SUSPEND` gate, one and only one suspend call site, every `trigger_verdict` outcome present) |
+| `test_firstrun.py` | `tools/oxp3_firstrun.py` | 65 | redaction rules and their idempotency (identity, MAC → vendor OUI, serial/UUID incl. bare UUIDs, e-mail, PulseAudio cookie, token families, secret assignments), sha256 left intact, per-file line cap, total byte cap (truncate vs. skip, JSON never corrupted), manifest accounting and redaction of the manifest/README themselves, bundle idempotency and `--force` semantics, checklist state transitions against a synthetic system prefix (partial/pending/ok/unknown), degraded collection statuses, and the CLI contract |
 
 Shared fixtures live in `tests/unit/support.py`: module-by-path loader,
 `TmpTree`, and builders for synthetic powercap zones, batteries, AC nodes and
@@ -199,7 +200,7 @@ the risk describes; report it with the journal lines.
   through `repo-test.sh --fast`.
 * `make unit` was verified in the local build container
   (`localhost/oxp3-fixes-build:f45`, the host has no `make`): `Ran 302 tests …
-  OK (skipped=2)`. The difference from 470 is the container's missing
+  OK (skipped=2)`. The difference from 535 is the container's missing
   `python3-evdev`: `test_voltap` then skips at import with that reason (one
   module-level skip instead of 17 tests). Install `python3-evdev` in a CI image
   to run them.

@@ -469,6 +469,27 @@ suite_eq_model() {
     python3 tools/audio/eq_response.py
 }
 
+suite_firstrun() {
+    [ -x "$REPO/tools/oxp3-firstrun.sh" ] || skip "tools/oxp3-firstrun.sh is missing"
+    need python3
+    cd "$REPO" || exit 1
+    # 1. Offline self-test: synthetic fixtures + stub commands, no host access.
+    tools/oxp3-firstrun.sh --selftest
+    # 2. The checklist must be read-only and emit valid JSON.
+    local out=$LOGDIR/firstrun-checklist.json
+    tools/oxp3-firstrun.sh --check-only --json >"$out" \
+        || { printf 'FAIL --check-only --json exited non-zero\n'; exit 1; }
+    python3 -m json.tool "$out" >/dev/null \
+        || { printf 'FAIL --check-only --json did not emit valid JSON\n'; exit 1; }
+    # 3. A dry run plans the bundle and must not create it.
+    local dir=$LOGDIR/firstrun-dry
+    rm -rf -- "$dir"
+    tools/oxp3-firstrun.sh --dry-run --no-journal --no-repo-test --out "$dir" >/dev/null \
+        || { printf 'FAIL --dry-run exited non-zero\n'; exit 1; }
+    [ ! -e "$dir" ] || { printf 'FAIL dry-run wrote %s\n' "$dir"; exit 1; }
+    printf 'selftest ok; checklist JSON ok; dry-run wrote nothing\n'
+}
+
 suite_gen_docs() {
     [ -f "$REPO/tools/gen-docs.py" ] || skip "tools/gen-docs.py is missing"
     [ -f "$REPO/docs/hw/components.yaml" ] || skip "docs/hw/components.yaml is missing"
@@ -571,6 +592,9 @@ def_suite gamewrap fast fast 120 0 \
 def_suite eq-model fast fast 60 0 \
     "speaker EQ biquad model table" \
     "python3 tools/audio/eq_response.py"
+def_suite firstrun fast fast 120 0 \
+    "first-run collector: offline selftest, checklist JSON, dry-run writes nothing" \
+    "tools/oxp3-firstrun.sh --selftest && ... --check-only --json && ... --dry-run"
 def_suite gen-docs fast fast 60 0 \
     "generated component tables match docs/hw/components.yaml" \
     "python3 tools/gen-docs.py --check"

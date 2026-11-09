@@ -20,3 +20,6 @@ node_modules/
 
 # C test/build output of the fingerprint protocol library
 tools/fingerprint/build/
+
+# first-run evidence bundles: machine-local snapshots (journals, hashes), never committed
+docs/state/firstrun-*/

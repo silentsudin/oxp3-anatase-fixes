@@ -5,6 +5,10 @@ Lake, Arc B390, xe) support on [Anatase](https://github.com/anatase-org/anatase)
 update. Everything is rebuilt from Anatase's own packaging and kernel tree plus the patches
 here, so `build` + `install` reapplies it to whatever Anatase ships next.
 
+**New here, or resuming after a break? Read [docs/HANDOVER.md](docs/HANDOVER.md) first** — it is the
+one-page orientation: what is installed, what is validated, what is blocked, the corrections we had
+to make, and the owner's next actions.
+
 <!-- BEGIN GENERATED: readme-summary (source: docs/hw/components.yaml; regenerate: tools/gen-docs.py --write) -->
 | Part | State | Fixes | How it is installed |
 |---|---|---|---|
@@ -155,6 +159,13 @@ sudo tools/oxp3-hw-install.sh --all      # flags and opt-outs: --help; guide: do
 ```
 
 `install` above also calls it for the home-button/LED and power units; `--skip-hw` skips that.
+
+After the post-install reboot, one command prints the ordered install checklist with the live
+state of every step and writes a redacted evidence bundle for hand-back:
+
+```sh
+tools/oxp3-firstrun.sh --collect         # read-only; format/redaction: docs/FIRSTRUN.md
+```
 
 **Install only the Mesa/ANV performance patches** (what the figures above come from):
 

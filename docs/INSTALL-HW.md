@@ -134,6 +134,21 @@ sudo tools/oxp3-hw-install.sh --audio --audio-activate
 sudo tools/oxp3-hw-install.sh --sleep --leds --power --rgb --audio   # idempotent re-assert
 ```
 
+### 2.5 After the reboot: one command for the whole evidence set
+
+```bash
+sudo systemctl restart systemd-logind   # the sleep drop-in is read at logind start
+sudo systemctl reboot                   # Bluetooth initramfs + a clean pre/post comparison
+sudo systemctl suspend                  # once, yourself: the only step that suspends
+tools/oxp3-firstrun.sh --collect         # checklist + redacted evidence bundle
+```
+
+`tools/oxp3-firstrun.sh` prints the ordered checklist with the live state of every step and,
+with `--collect`, writes `docs/state/firstrun-<timestamp>/` (verifier, status, units, udev,
+firmware hashes, power, sleep, audio, display, XMX, Decky, bounded journals) for hand-back. It
+is read-only and never runs the privileged steps above. The bundle format, the redaction rules
+and the reading order are in [FIRSTRUN.md](FIRSTRUN.md).
+
 ## 3. Per-component opt-out
 
 `--all` is just the union of the flags; to opt out, list the components you want instead.

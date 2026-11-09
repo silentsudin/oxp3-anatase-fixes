@@ -35,20 +35,19 @@ one FAIL or timeout) and `2` (usage/configuration error: bad option, no suite
 matched, unwritable log directory, missing `timeout`). The runner prints the
 failing command and its log path.
 
-Recorded on this host (2026-11-09, no root). The counts predate the `gamewrap`
-suite, so today's `--list` has one more fast suite:
+Recorded on this host (2026-11-09, no root):
 
 ```
-== 26 suite(s): 20 pass, 0 fail, 6 skip -> exit 0      # --fast (25/19/6 before gamewrap)
-== 26 suite(s): 24 pass, 0 fail, 2 skip -> exit 0      # --full (25/23/2 before gamewrap)
+== 27 suite(s): 21 pass, 0 fail, 6 skip -> exit 0      # --fast
+== 27 suite(s): 25 pass, 0 fail, 2 skip -> exit 0      # --full (expected; see §9)
 ```
 
 ## 2. Modes
 
 | mode | suites executed | builds | network | writes |
 |---|---|---|---|---|
-| `--fast` (default) | 21 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
-| `--full` | 26 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
+| `--fast` (default) | 22 | none | none | only the log directory (`${XDG_CACHE_HOME:-/tmp}/oxp3-repo-test/...`) and `$TMPDIR` scratch |
+| `--full` | 27 | fingerprint C tests, stub-header driver syntax, Decky typecheck/rollup/smoke, Decky zip | none by default | also ignored build output inside the checkout: `tools/fingerprint/build/`, `tools/decky-oxp3-status/{node_modules,dist,build}/` |
 
 `--full` still never installs host packages. The one network-dependent suite
 (`fp-libfprint`) is gated behind `OXP3_REPO_TEST_NETWORK=1`; without it the
@@ -98,6 +97,7 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `unit` | fast | fast | 120 s | `python3` | – (synthetic sysfs/config fixtures in `$TMPDIR`) |
 | `gamewrap` | fast | fast | 120 s | `python3` | – (synthetic HOME/config/panel state; stub commands) |
 | `eq-model` | fast | fast | 60 s | `python3` | – |
+| `firstrun` | fast | fast | 120 s | `python3`, `bash` | – (self-test in `$TMPDIR`; the dry run writes nothing) |
 | `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check) |
 
 Areas and what is actually proven:
@@ -136,7 +136,7 @@ Areas and what is actually proven:
   HDR gating on the panel state, vibrance backend choice, MangoHud env-only
   behaviour, gamescope wrapping/inside-session handling, argv/JSON safety and
   the parsed-not-sourced XMX env file. The `unit` suite runs the same file.
-* **unit** — the stdlib `unittest` suite in `tests/unit/` (363 tests, ~1.2 s):
+* **unit** — the stdlib `unittest` suite in `tests/unit/` (470 tests, ~1.3 s):
   HID/LED frame encoders, rgbd TOML config and frame planning, powerctl
   parsers/write ordering/readback and exit codes, adaptivetdp policy and
   hysteresis, the voltap tap state machine, IMU helpers, EDID/ICC parsers and
@@ -320,10 +320,10 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 | run | result |
 |---|---|
-| `tools/repo-test.sh --fast` | 25 rows: **19 pass, 0 fail, 6 skip**, exit 0, ≈ 7 s |
-| `tools/repo-test.sh --full` | 25 rows: **23 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
-| `tools/repo-test.sh --list` | 25 suites; 20 run in `--fast`, 25 in `--full` |
-| `python3 -m unittest discover -s tests/unit -q` | `Ran 470 tests ... OK (skipped=1)`, ≈ 1.3 s |
+| `tools/repo-test.sh --fast` | 27 rows: **21 pass, 0 fail, 6 skip**, exit 0, ≈ 26 s (the `firstrun` suite runs the verifier twice, hence the jump) |
+| `tools/repo-test.sh --full` | 27 rows expected: **25 pass, 0 fail, 2 skip**, exit 0 (`shellcheck`, `fp-libfprint` network gate) |
+| `tools/repo-test.sh --list` | 27 suites; 22 run in `--fast`, 27 in `--full` |
+| `python3 -m unittest discover -s tests/unit -q` | `Ran 535 tests ... OK (skipped=1)`, ≈ 1.3 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
 | deliberately broken copy in `/tmp`, `--only fp-python` | 1 fail, exit 1, failing command + log path printed |
 | root container `--fast` | 15 pass / 0 fail / 10 skip, exit 0 |
@@ -331,6 +331,13 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 
 The six fast-mode skips are the five full-only suites plus `shellcheck`; they
 are enumerated in the table on every run, not implied.
+
+*Added after this snapshot:* the `gamewrap`, `gen-docs` and `firstrun` suites. A
+fresh `--fast` on 2026-11-09 reported **27 suites: 21 pass, 0 fail, 6 skip**, and
+`--list` reports 22 suites run in `--fast`, 27 in `--full` (the `unit` row has
+since grown to 535 cases, see [UNIT-TESTS.md](UNIT-TESTS.md)). The `firstrun`
+suite is the one to watch when timing: it exercises the collector's self-test,
+the live `--check-only --json` and a `--dry-run`, which runs `oxp3-verify` twice.
 
 ## 10. Open points
 

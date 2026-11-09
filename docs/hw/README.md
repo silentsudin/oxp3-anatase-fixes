@@ -4,6 +4,8 @@ Status of every hardware gap we have investigated. Each topic's document holds t
 the Windows driver stack in `/var/home/holzr/Downloads/oxp3`), the implementation and the validation steps.
 Nothing vendor-proprietary is in this repo: only our own code and our own documentation.
 
+Project-level orientation, install status, corrections and the owner's next actions: [`../HANDOVER.md`](../HANDOVER.md).
+
 The matrix below is generated from [`components.yaml`](components.yaml); see [`REGISTRY.md`](REGISTRY.md) for the
 schema, the state vocabulary and the rule that generated blocks are never hand-edited. The same data file renders the
 install/verify matrix in [`../INSTALL-HW.md`](../INSTALL-HW.md) and the summary in [`../../README.md`](../../README.md).
