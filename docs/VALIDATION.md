@@ -74,16 +74,18 @@ scheduler or adaptive TDP, and a plain game launch leaves no igdext trace.
 
 ## 3. Check inventory — what each check proves
 
-Default mode runs **64 checks**; `--full` adds 4 (**68**); `--with-changes` adds
-`aud.activate` and `fan.savemode` (**70**). The ids are stable (they are the `state`
+Default mode runs **69 checks**; `--full` adds 4 (**73**); `--with-changes` adds
+`aud.activate` and `fan.savemode` (**75**). The ids are stable (they are the `state`
 keys in `--json`).
 
-### volume (4; `vol.hold` only in `--full`)
+### volume (6; `vol.hold` only in `--full`)
 
 | id | proves | how |
 |---|---|---|
 | `vol.unit` | `oxp3-voltap` is running | `systemctl show` LoadState/ActiveState; `SKIP` when not installed (e.g. the hhd-patch path) |
 | `vol.grab` | the daemon holds the rocker device (EVIOCGRAB) | this boot's journal contains `grabbed /dev/input/eventN` (the "for probing" line does not count) |
+| `vol.topology` | which device the daemon would grab and why (hhd virtual first, physical fallback only when free) | `oxp3-voltap check --kv`: role/selection/holder fields from `/proc/bus/input/devices` + `/sys/class/input`; `PASS` for a hhd-virtual or free at-kbd choice, `FAIL` on a conflict prediction |
+| `vol.holder` | the physical AT keyboard is held only by hhd (or nobody) | `/proc/*/fdinfo` `grab: 1` + `fd` symlink; `SKIP` without root, `UNKNOWN` for a non-hhd holder |
 | `vol.hwdb` | the kernel releases the rocker key at press time, so a hold cannot ramp | `/etc/udev/hwdb.d/84-oxp3-volume-keys*.hwdb` exists, has a `KEYBOARD_KEY_*=<key>` force-release entry, and `/etc/udev/hwdb.bin` is newer than it (compiled) |
 | `vol.hold` (root) | a hold yields exactly one step, not a ramp | `tools/oxp3-voltap/oxp3-voltap selftest`: creates the uinput device and emits taps through the real state machine |
 
@@ -101,6 +103,17 @@ keys in `--json`).
 | `rgbd.unit` | the RGB keeper holds our state | user unit active and `~/.config/oxp3-rgb.toml` present |
 | `rgbd.check` | the config parses and encodes | `oxp3-rgbd.py --check --config <cfg>` (dry run: no frames written) |
 | `led.write` (invasive) | a write frame is actually accepted by the device | `oxp3-led.py solid 0000ff --sides 6`, then re-applies `~/.config/oxp3-rgb.toml` when present, otherwise turns zone 06 off again |
+
+### daemon lifecycle (3; `life.sim` only in `--full`)
+
+The contract and the manual suspend/hotplug procedures are in
+[DAEMONS.md](DAEMONS.md).
+
+| id | proves | how |
+|---|---|---|
+| `life.fd` | each inspectable active daemon currently holds a live device fd | `/proc/<MainPID>/fd` symlinks: `hidraw` for `oxp3-homebtn`, `event`+`uinput` for `oxp3-voltap`; `SKIP` when only the root daemon is active and this user cannot read its fds; `oxp3-rgbd` opens per apply and is reported, not failed |
+| `life.reconnect` | no device loss this boot was left unrecovered | this boot's journal, per daemon: every `device lost:` must be followed by `listening on`/`grabbed`/`applied` (the `watchdog:` heartbeat is excluded); `SKIP` with no lifecycle journal |
+| `life.sim` (gated) | the reconnect/backoff/suspend logic survives its simulation | `python3 -m unittest discover -s tests/unit -p 'test_*lifecycle.py' -q`; only with `--full` (it runs the offline suites) |
 
 ### IMU (1)
 
@@ -217,9 +230,10 @@ remains a manual step (see §9).
 
 | fix (INSTALL-HW.md §) | checks |
 |---|---|
-| 1 volume rocker | `vol.unit`, `vol.grab`, `vol.hwdb`, (`vol.hold`) |
+| 1 volume rocker | `vol.unit`, `vol.grab`, `vol.topology`, `vol.holder`, `vol.hwdb`, (`vol.hold`) |
 | 2 LEDs / home button | `hid.rule`, `led.status`, `led.zones`, `hid.access`, `homebtn.unit`, `homebtn.mapping`, `homebtn.press`, (`led.write`) |
 | 2 RGB keeper | `rgbd.unit`, `rgbd.check` |
+| daemon lifecycle (DAEMONS.md) | `life.fd`, `life.reconnect`, (`life.sim`) |
 | 3 sleep / wake policy | `sleep.mem`, `sleep.stats`, `sleep.units`, `sleep.wakeup`, `sleep.audit`, (`sleep.measure`), (`sleep.suspend`) |
 | 4 Bluetooth firmware | `bt.files`, `bt.dracut`, `bt.journal`, `bt.controller`, `bt.diag` |
 | 5 power envelope / fan | `pwr.zones`, `pwr.pl1`, `pwr.profile`, `pwr.fan`, `pwr.rapl` |
@@ -243,18 +257,25 @@ oxp3-verify 1.0.0  mode=default  kernel=7.2.7-an28.fc45.x86_64  root=no
 
 [PASS ] volume     ...
 ...
-== summary: 64 checks: 56 pass, 0 fail, 8 skip, 0 unknown -> exit 0
+== summary: 67 checks: 56 pass, 0 fail, 11 skip, 0 unknown -> exit 0
 ```
 
-* 8 `SKIP` rows are the documented opt-ins: `vol.*` (3, only when the hhd volume
-  patch is used instead of the standalone daemon), `pwr.adaptive` (1), `gfx.xmx.trace`
-  (1), `sched.*` (3).
+(Recorded before `vol.topology`/`vol.holder`: the current harness adds two
+rows, normally +1 `PASS` and +1 `SKIP` without root, so 69 checks on this
+machine. The pass/skip split above is otherwise unchanged.)
+
+* 12 `SKIP` rows are the documented opt-ins/root-only rows: `vol.unit`, `vol.grab`,
+  `vol.hwdb` (3, only when the hhd volume patch is used instead of the standalone
+  daemon), `vol.holder` (1, needs root to read other users' `/proc/*/fdinfo`),
+  `pwr.adaptive` (1), `gfx.xmx.trace` (1), `sched.*` (3), and `life.*` (3, only when
+  the daemons are installed; `life.sim` additionally needs `--full`). `vol.topology`
+  is the one volume row that `PASS`es without root on this host.
 * Without the Decky plugin, `decky.dir`/`decky.backend` also `SKIP`: 45 pass / 10 skip.
-* `--full` on the same machine: `68 checks: 60 pass, 0 fail, 8 skip` (adds
-  `vol.hold`, `led.write`, `sleep.measure`, `sleep.suspend`). Run it on battery;
-  `sleep.measure` is `SKIP` on AC by design.
-* `--full --with-changes`: `70 checks` — the two extra rows are `aud.activate` and
-  `fan.savemode`, the only checks that may change persistent state.
+* `--full` on the same machine: `73 checks` (adds `vol.hold`, `led.write`,
+  `sleep.measure`, `sleep.suspend`; `life.sim` then runs its offline suite instead of
+  being gated). Run it on battery; `sleep.measure` is `SKIP` on AC by design.
+* `--full --with-changes`: `75 checks` — the two extra rows over `--full` are
+  `aud.activate` and `fan.savemode`, the only checks that may change persistent state.
 
 Representative passing lines:
 
@@ -298,9 +319,12 @@ Default mode, no root, in an SSH/desktop session on `anatase-oxp3`, kernel
 `7.2.7-an28.fc45.x86_64`:
 
 ```
-== summary: 64 checks: 39 pass, 3 fail, 22 skip, 0 unknown -> exit 1
+== summary: 67 checks: 39 pass, 3 fail, 25 skip, 0 unknown -> exit 1
    failing: bt.journal bt.controller bt.diag
 ```
+
+(Recorded before `vol.topology`/`vol.holder`; the current default is 69
+checks, adding one `PASS` and one `SKIP` here.)
 
 The exact pass/skip split moves with what is installed at the moment (optional pieces
 were being installed while this run was taken); the three failures and the ten new
@@ -330,10 +354,11 @@ This is the honest state of this machine, not a harness problem:
   zones/PL1/fan/RAPL/ordering, adaptive AC detection, battery limit/behaviour/default,
   audio server/model/scripts, display HDR/ICC/EDID/vibrance, Mesa/XMX/xe/working-build,
   HID node/empty-sides, rgbd timing, install-common helpers, status overview.
-* `--full` here (non-root, 1 s measurement) = 68 checks: adds `vol.hold` SKIP
+* `--full` here (non-root, 1 s measurement) = 73 checks: adds `vol.hold` SKIP
   (`needs root`), `led.write` SKIP (hidraw 0600), `sleep.measure` SKIP (on AC),
-  `sleep.suspend` SKIP (`needs root`); still exit 1 for the same three Bluetooth rows.
-  `--full --with-changes` = 70 checks and additionally SKIPs `fan.savemode` (`needs
+  `sleep.suspend` SKIP (`needs root`); `life.sim` runs the offline suite and PASSes.
+  Still exit 1 for the same three Bluetooth rows.
+  `--full --with-changes` = 75 checks and additionally SKIPs `fan.savemode` (`needs
   root`); `aud.activate` was attempted as the documented opt-in.
   The root-only paths (`vol.hold`, `sleep.suspend`) were **not** executed here: this
   repository's rules forbid `sudo`, so they are device-side acceptance steps.
@@ -342,7 +367,11 @@ Verbatim evidence (never overwritten, regenerate when the machine changes):
 
 * [`docs/state/verify-default-2026-11-09.txt`](state/verify-default-2026-11-09.txt) — 108 lines, the run above.
 * [`docs/state/verify-default-2026-11-09.json`](state/verify-default-2026-11-09.json) — `--json`, 55 checks (pre-deferred-risk inventory), schema 1, exit 1.
-* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 95).
+* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 104).
+
+The snapshots above predate the three `life.*` rows: a host without the daemons now
+reports 69 (default), 73 (`--full`) and 75 (`--full --with-changes`) checks, with the
+three lifecycle rows as `SKIP` (`life.sim` is gated until `--full`).
 
 ## 8. Offline validation performed (no root, no host change)
 
@@ -354,7 +383,7 @@ Verbatim evidence (never overwritten, regenerate when the machine changes):
   and verdicts, dry-run frame counts, adaptive decision/AC verdict, per-domain limit
   ordering, curve summary, battery-limit dry run, install-common helper output, IIO
   primary/fallback map, rgbd timing -- the exit-code mapping, and a fixed inventory
-  check that the 70 declared check ids are exactly the documented set (no typos, no
+  check that the 75 declared check ids are exactly the documented set (no typos, no
   drops). New fixtures live under `tests/verify/fixtures/` (`hidraw/`, `iio/`,
   `adaptive-*.json`, `hid-verdict-*.txt`, `led-dry-*.txt`, `battery-limit-dry.json`,
   `powerctl-profile-*.json`, `curve-dup.json`, `rgbd-check-nojournal.txt`,

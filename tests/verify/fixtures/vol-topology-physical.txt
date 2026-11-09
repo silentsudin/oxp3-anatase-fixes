@@ -1,0 +1,16 @@
+TOPO=physical
+SEL=/dev/input/event4
+SEL_ROLE=at-kbd
+SEL_HELD=-
+SEL_REASON=physical AT keyboard; used only when no hhd virtual device is selectable and nothing else holds it
+SEL_SOURCE=auto
+PREDICTED_EXIT=0
+HHD_RUNNING=0
+HHD_PROCESS=0
+HHD_VIRTUAL_PRESENT=0
+HHD_PID=
+HHD_VIRTUAL=
+ATKBD=/dev/input/event4
+ATKBD_HELD=
+HOLDERS_KNOWN=1
+CANDIDATES=5

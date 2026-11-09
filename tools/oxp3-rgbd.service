@@ -1,5 +1,6 @@
 [Unit]
 Description=OneXPlayer 3 RGB keeper (applies our config over HHD, at boot/resume)
+Documentation=file:///var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/DAEMONS.md
 Documentation=file:///var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/hw/rgb-coverage.md
 # The vendor hidraw node must be usable by this user (tools/oxp3-hid.rules).
 After=graphical-session.target
@@ -7,14 +8,26 @@ PartOf=graphical-session.target
 # Stay inert until the user has written a config (install the example first).
 # ConditionPathExists belongs in [Unit], not [Service] (systemd-analyze verify would ignore it).
 ConditionPathExists=%h/.config/oxp3-rgb.toml
+# Reconnect/backoff and the resume detector are in-process; a restart loop
+# must stay visible instead of being rate-limited into "dead".
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 # Adjust the path if the checkout lives elsewhere.
 ExecStart=%h/git/linux_scratch/oxp3-anatase-fixes/tools/oxp3-rgbd.py
-Restart=on-failure
+# always: the daemon exits 0 only on SIGTERM, but a transient hidraw error
+# during startup must not leave the unit "inactive (dead)" unnoticed.
+Restart=always
 RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=oxp3-rgbd
 
 [Install]
 WantedBy=default.target

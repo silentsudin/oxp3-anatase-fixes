@@ -1,0 +1,4 @@
+grabbed /dev/input/event23 ('Handheld Daemon Volume Keyboard' phys='phys-hhd-vbtn')
+device lost: /dev/input/event23 disappeared
+retrying in 0.5s (attempt 1)
+device lost: configured /dev/input/event23 is not present (identity 0001:0001 name='Handheld Daemon Volume Keyboard')

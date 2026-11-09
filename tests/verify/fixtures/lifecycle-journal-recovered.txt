@@ -1,0 +1,5 @@
+listening on /dev/hidraw4 (identity 1a86:fe00 name='ONEXPLAYER 3')
+device lost: ENODEV (No such device); reopening by identity
+listening on /dev/hidraw9 (identity 1a86:fe00 name='ONEXPLAYER 3')
+reconnect #1 to /dev/hidraw9 (identity 1a86:fe00 name='ONEXPLAYER 3')
+watchdog: listening on /dev/hidraw9 (reconnects=1, losses=1)

@@ -49,6 +49,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import oxp3_hid as hid  # noqa: E402
+import oxp3_lifecycle as life  # noqa: E402
 
 try:
     import tomllib
@@ -197,29 +198,37 @@ def journal_readable(unit: str = "hhd") -> bool:
 # ---------------------------------------------------------------------------
 
 class RgbDaemon:
-    def __init__(self, args):
+    def __init__(self, args, clock=time):
         self.args = args
+        self.clock = clock
         self.config_path = args.config
         self.cfg = None
         self.cfg_mtime = 0.0
         self.lock = threading.Lock()
         self.wake = threading.Event()
         self.stop = threading.Event()
+        # Monotonic: the watchdog/debounce deadlines must not jump with the
+        # RTC across a suspend or an NTP step (CLOCK_REALTIME can).
         self.last_apply = 0.0
         self.last_error = None
         self.dev_present = hid.find_vendor_hidraw() is not None
         self.hhd_journal_ok = False
         self._last_hhd_mode = None
         self._last_sched_log = 0.0
-        self._boot_delta = self._boottime_delta()
+        self.resume = life.ResumeDetector(1.5, clock=clock)
+        self.backoff = life.Backoff()
+        self.retry_due = None
+        self.retry_reason = None
+        self.reconnects = 0
+        self._had_loss = False
+        # Monotonic watchdog interval: a long suspend must not make it fire in
+        # a burst on wake (CLOCK_REALTIME deadlines can).
+        self.watchdog_interval = life.Interval(getattr(args, "watchdog", 0) or 0,
+                                              clock=clock)
+        self._last_health_note = 0.0
+        self.threads = {}
 
     # -- helpers ---------------------------------------------------------
-    @staticmethod
-    def _boottime_delta() -> float:
-        try:
-            return time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
-        except (AttributeError, OSError):
-            return 0.0
 
     def reload_config(self) -> bool:
         try:
@@ -240,11 +249,24 @@ class RgbDaemon:
             return False
 
     def schedule(self, why: str) -> None:
-        now = time.time()
+        now = self.clock.monotonic()
         if now - self._last_sched_log > 1.0:
             log(f"re-apply requested ({why})")
             self._last_sched_log = now
         self.wake.set()
+
+    def _retry_after(self, reason: str, now: float | None = None) -> None:
+        """Record a device failure and when to try again (bounded backoff)."""
+        now = self.clock.monotonic() if now is None else now
+        delay = self.backoff.next_delay()
+        self._had_loss = True
+        self.retry_due = now + delay
+        self.retry_reason = reason
+        # Log the first failure and every change of reason, not every tick.
+        if reason != self.last_error:
+            log(f"device lost: {reason}; retrying in {delay:.1f}s "
+                f"(attempt {self.backoff.attempts})")
+        self.last_error = reason
 
     def apply(self, why: str) -> bool:
         """Apply the config once. Return True when frames reached a device
@@ -254,10 +276,13 @@ class RgbDaemon:
         if cfg is None:
             return False
         frames = build_frames(cfg)
+        now = self.clock.monotonic()
         dev = hid.find_vendor_hidraw()
         if not dev:
-            if self.dev_present or self.last_apply == 0:
-                log("vendor hidraw node not found; will retry when it appears")
+            if self.last_apply == 0:
+                self._retry_after("vendor hidraw node not present", now)
+            elif self.dev_present:
+                self._retry_after("vendor hidraw node disappeared", now)
             self.dev_present = False
             return False
         self.dev_present = True
@@ -265,7 +290,7 @@ class RgbDaemon:
             log(f"dry-run: would apply {len(frames)} frame(s) to {dev} ({why})")
             for f in frames:
                 print(f.hex())
-            self.last_apply = time.time()
+            self._applied(dev, len(frames), why, now)
             return True
         try:
             fd = os.open(dev, os.O_WRONLY | os.O_NONBLOCK)
@@ -275,18 +300,34 @@ class RgbDaemon:
                 log(f"{dev}: permission denied - install tools/oxp3-hid.rules (see docs/hw/rgb-coverage.md)")
                 self.last_error = "permission"
             return False
+        except OSError as e:
+            self._retry_after(f"open {dev}: {life.error_reason(e)}", now)
+            return False
         try:
             hid.send(fd, frames)
-            self.last_apply = time.time()
-            self.last_error = None
-            log(f"applied {len(frames)} frame(s) to {dev} ({why})")
-            return True
         except OSError as e:
-            log(f"write to {dev} failed: {e}")
-            self.last_error = str(e)
+            if life.is_device_error(e):
+                self._retry_after(f"write {dev}: {life.error_reason(e)}", now)
+            else:
+                log(f"write to {dev} failed: {life.error_reason(e)}")
+                self.last_error = life.error_reason(e)
             return False
         finally:
             os.close(fd)
+        self._applied(dev, len(frames), why, now)
+        return True
+
+    def _applied(self, dev: str, nframes: int, why: str, now: float) -> None:
+        self.last_apply = now
+        self.last_error = None
+        self.retry_due = None
+        self.retry_reason = None
+        if self._had_loss:
+            self.reconnects += 1
+            self._had_loss = False
+            log(f"reconnect #{self.reconnects} to {dev} ({why})")
+        self.backoff.reset()
+        log(f"applied {nframes} frame(s) to {dev} ({why})")
 
     # -- watchers --------------------------------------------------------
     def journal_watcher(self) -> None:
@@ -299,7 +340,9 @@ class RgbDaemon:
                                      text=True, bufsize=1)
             except FileNotFoundError:
                 log("journalctl not found; using hhdctl poll fallback")
-                return
+                if self.stop.wait(60):
+                    return
+                continue
             self.hhd_journal_ok = True
             buf = None
             try:
@@ -337,7 +380,8 @@ class RgbDaemon:
             if self.stop.is_set():
                 return
             log("journal watcher ended; restarting in 3 s")
-            time.sleep(3)
+            if self.stop.wait(3):
+                return
 
     def _check_frames(self, text: str) -> None:
         for i in range(0, len(text) - 127, 128):
@@ -355,27 +399,39 @@ class RgbDaemon:
         """Fallback: re-apply when HHD's RGB mode changes."""
         while not self.stop.is_set():
             if self.hhd_journal_ok:
-                time.sleep(2)
+                if self.stop.wait(2):
+                    return
                 continue
             mode = hhd_rgb_mode()
             if mode != self._last_hhd_mode:
                 if self._last_hhd_mode is not None:
                     self.schedule(f"HHD rgb mode changed to {mode!r}")
                 self._last_hhd_mode = mode
-            time.sleep(2)
+            if self.stop.wait(2):
+                return
+
+    def resume_step(self) -> bool:
+        """Sample the clock once; True when a resume was detected."""
+        if not self.resume.poll():
+            return False
+        suspended = self.resume.suspended_for
+        log(f"resume detected: {suspended:.1f}s of suspended time")
+        # HHD usually redraws on wake; give it a moment, then apply.
+        if self.stop.wait(2.0):
+            return True
+        self.schedule("resume detected")
+        return True
 
     def resume_watcher(self) -> None:
-        """CLOCK_BOOTTIME advances across suspend, CLOCK_MONOTONIC does not."""
+        """CLOCK_BOOTTIME advances across suspend, CLOCK_MONOTONIC does not.
+
+        The detector fires once per jump; the baseline is taken on the first
+        sample so a daemon that starts after a resume does not re-apply twice.
+        """
         while not self.stop.is_set():
-            time.sleep(1)
-            delta = self._boottime_delta()
-            if delta - self._boot_delta > 1.5:
-                self._boot_delta = delta
-                # HHD usually redraws on wake; give it a moment, then apply.
-                time.sleep(2)
-                self.schedule("resume detected")
-            else:
-                self._boot_delta = delta
+            if self.stop.wait(1.0):
+                return
+            self.resume_step()
 
     def device_watcher(self) -> None:
         while not self.stop.is_set():
@@ -383,8 +439,53 @@ class RgbDaemon:
             present = dev is not None
             if present != self.dev_present:
                 self.dev_present = present
-                self.schedule("vendor hidraw node appeared" if present else "vendor hidraw node disappeared")
-            time.sleep(1)
+                if present:
+                    log(f"device appeared: {dev}")
+                    self.schedule("vendor hidraw node appeared")
+                else:
+                    log("device lost: vendor hidraw node disappeared")
+                    self.schedule("vendor hidraw node disappeared")
+            if self.stop.wait(1.0):
+                return
+
+    def _supervise(self, name: str, fn, retry_after: float = 2.0) -> None:
+        """Keep one watcher thread alive; a crash is logged, not silent."""
+        self.threads[name] = threading.current_thread()
+        while not self.stop.is_set():
+            try:
+                fn()
+            except Exception as e:
+                log(f"watcher {name} failed: {life.error_reason(e)}; "
+                    f"restarting in {retry_after:.0f}s")
+            if self.stop.is_set():
+                return
+            log(f"watcher {name} ended unexpectedly; restarting in {retry_after:.0f}s")
+            if self.stop.wait(retry_after):
+                return
+
+    def _check_threads(self) -> None:
+        for name, t in list(self.threads.items()):
+            if t.is_alive() or self.stop.is_set():
+                continue
+            log(f"watchdog: watcher thread {name} died; restarting")
+            self.start_thread(name, getattr(self, f"{name}_watcher"))
+
+    def start_thread(self, name: str, fn) -> None:
+        t = threading.Thread(target=self._supervise, args=(name, fn), daemon=True)
+        t.start()
+        self.threads[name] = t
+
+    def _health_note(self, now: float) -> None:
+        watchdog = self.args.watchdog
+        if not watchdog or self.last_apply == 0:
+            return
+        if now - self.last_apply <= max(90.0, 3 * watchdog):
+            return
+        if now - self._last_health_note < 60:
+            return
+        self._last_health_note = now
+        log(f"watchdog: no successful apply for {now - self.last_apply:.0f}s "
+            f"(device {'present' if self.dev_present else 'absent'})")
 
     # -- main ------------------------------------------------------------
     def run_once(self) -> int:
@@ -401,15 +502,11 @@ class RgbDaemon:
         if not use_journal:
             log("hhd journal not used; relying on hhdctl poll + watchdog")
 
-        threads = [
-            threading.Thread(target=self.device_watcher, daemon=True),
-            threading.Thread(target=self.resume_watcher, daemon=True),
-            threading.Thread(target=self.hhd_poll_watcher, daemon=True),
-        ]
+        self.start_thread("device", self.device_watcher)
+        self.start_thread("resume", self.resume_watcher)
+        self.start_thread("hhd_poll", self.hhd_poll_watcher)
         if use_journal:
-            threads.append(threading.Thread(target=self.journal_watcher, daemon=True))
-        for t in threads:
-            t.start()
+            self.start_thread("journal", self.journal_watcher)
 
         # Apply now, then after HHD's own start-up bursts, then on demand.
         self.apply("startup")
@@ -420,28 +517,35 @@ class RgbDaemon:
             prev = delay
             self.apply(f"HHD settle +{delay:.0f}s")
 
-        last_watchdog = time.time()
         last_cfg_check = 0.0
         while not self.stop.is_set():
             woke = self.wake.wait(timeout=0.5)
+            now = self.clock.monotonic()
             if woke:
                 self.wake.clear()
                 # Sliding debounce: wait until the burst is quiet, cap 3 s.
-                deadline = time.time() + 3.0
-                while time.time() < deadline and self.wake.wait(self.args.reapply_delay):
+                # Monotonic: a resume during the burst must not stretch or
+                # collapse this deadline.
+                deadline = now + 3.0
+                while now < deadline and self.wake.wait(self.args.reapply_delay):
                     self.wake.clear()
+                    now = self.clock.monotonic()
                 if not self.stop.is_set():
                     self.apply("after HHD change")
-                last_watchdog = time.time()
+                self.watchdog_interval.reset()
                 continue
-            now = time.time()
+            if self.retry_due is not None and now >= self.retry_due:
+                reason, self.retry_due = self.retry_reason, None
+                self.apply(f"retry after {reason}")
+                now = self.clock.monotonic()
             if now - last_cfg_check > 2:
                 last_cfg_check = now
                 if self.reload_config():
                     self.apply("config changed")
-            if self.args.watchdog and now - last_watchdog > self.args.watchdog:
-                last_watchdog = now
+            if self.watchdog_interval.due(now):
                 self.apply("watchdog")
+            self._check_threads()
+            self._health_note(now)
         log("stopping")
         return 0
 
@@ -454,6 +558,8 @@ class RgbDaemon:
             st = os.stat(dev)
             print(f"permissions   : {oct(st.st_mode & 0o777)} uid={st.st_uid} gid={st.st_gid}")
         print(f"journal       : {'readable' if journal_readable(unit) else 'NOT readable (poll fallback)'}")
+        print(f"resume        : CLOCK_BOOTTIME delta={life.boottime_delta(self.clock):.2f}s "
+              f"(threshold 1.5s); timers on CLOCK_MONOTONIC, watchdog={self.args.watchdog:g}s")
         print(f"hhd rgb mode  : {hhd_rgb_mode()!r}")
         try:
             cfg = load_config(self.config_path)

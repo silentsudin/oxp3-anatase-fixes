@@ -201,6 +201,7 @@ Start with the whole-system checks; then the per-component rows.
 | Volume keys | `sudo tools/oxp3-hw-install.sh --volume` |
 | Home button and top LEDs | `sudo tools/oxp3-hw-install.sh --leds` |
 | Body RGB zones | `sudo tools/oxp3-hw-install.sh --rgb` |
+| Daemon lifecycle (suspend/hotplug) | `sudo tools/oxp3-hw-install.sh --all` |
 | Suspend and wake policy | `sudo tools/oxp3-hw-install.sh --sleep` |
 | Speaker tuning (Harman APO) | `tools/oxp3-hw-install.sh --audio --audio-activate` |
 | Bluetooth firmware | `sudo tools/oxp3-hw-install.sh --bluetooth` |
@@ -220,6 +221,8 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 |---|---|---|---|---|
 | Volume keys | awaiting-install | `vol.unit` | oxp3-voltap is active (running) | no |
 | Volume keys | awaiting-install | `vol.grab` | this boot's journal has grabbed /dev/input/eventN | no |
+| Volume keys | awaiting-install | `vol.topology` | the daemon would grab the hhd virtual volume keyboard, or a free physical fallback, and says why | no |
+| Volume keys | awaiting-install | `vol.holder` | the physical AT keyboard is held only by hhd (or by nobody); SKIP without root | no |
 | Volume keys | awaiting-install | `vol.hwdb` | the force-release entry exists and hwdb.bin is newer | no |
 | Volume keys | awaiting-install | `vol.hold` | a hold yields exactly one step, not a ramp | yes |
 | Home button and top LEDs | awaiting-install | `hid.rule` | /etc/udev/rules.d/90-oxp3-hid.rules present | no |
@@ -235,6 +238,9 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Body RGB zones | awaiting-install | `rgbd.unit` | oxp3-rgbd.service active and ~/.config/oxp3-rgb.toml present | no |
 | Body RGB zones | awaiting-install | `rgbd.check` | PASS config parses (5 zones, N frames) | no |
 | Body RGB zones | awaiting-install | `rgbd.timing` | the hhd journal is readable (the settle/debounce watcher path) and the example config encodes frames | no |
+| Daemon lifecycle (suspend/hotplug) | awaiting-install | `life.fd` | every inspectable active daemon holds its device fd (the root daemon degrades to SKIP) | no |
+| Daemon lifecycle (suspend/hotplug) | awaiting-install | `life.reconnect` | this boot's journal has no device loss without a later successful open | no |
+| Daemon lifecycle (suspend/hotplug) | awaiting-install | `life.sim` | the offline reconnect/backoff/suspend suite passes | no |
 | Suspend and wake policy | awaiting-install | `sleep.mem` | /sys/power/mem_sleep selects [s2idle] | no |
 | Suspend and wake policy | awaiting-install | `sleep.units` | oxp3-sleep-wakeup is active and reports the pre/log units | no |
 | Suspend and wake policy | awaiting-install | `sleep.wakeup` | every listed USB id / PCI address has wakeup disabled | no |

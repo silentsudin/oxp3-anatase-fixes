@@ -58,7 +58,8 @@ cmd_install() {
 
 verify:
   systemctl status oxp3-voltap            # active (running), no grab errors
-  journalctl -u oxp3-voltap -b -f         # 'grabbed /dev/input/eventN (Handheld Daemon Volume Keyboard)'
+  journalctl -u oxp3-voltap -b -f         # 'grabbed /dev/input/eventN (... role=hhd-virtual ...)'
+  oxp3-voltap status                      # JSON-backed choice/reason (no root)
   press volume up 3x: one step each, no ramp; hold it: it steps once per press
   stop it again:  sudo systemctl stop oxp3-voltap && press -> the bug is back
 EOF

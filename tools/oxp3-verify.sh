@@ -317,12 +317,132 @@ parse_vol_journal() { # stdin: journalctl -u oxp3-voltap
         | tail -n 1
 }
 
+parse_voltopology() { # stdin: oxp3-voltap check --kv
+    awk '
+        {
+            i = index($0, "=")
+            if (i) {
+                key = substr($0, 1, i - 1)
+                if (key ~ /^[A-Z_]+$/) value[key] = substr($0, i + 1)
+            }
+        }
+        END {
+            printf "TOPO=%s\nSEL=%s\nSEL_ROLE=%s\nSEL_HELD=%s\n" \
+                   "SEL_REASON=%s\nSEL_SOURCE=%s\nPREDICTED_EXIT=%s\n" \
+                   "HHD_RUNNING=%s\nHHD_PROCESS=%s\nHHD_VIRTUAL_PRESENT=%s\n" \
+                   "HHD_PID=%s\nHHD_VIRTUAL=%s\nATKBD=%s\nATKBD_HELD=%s\n" \
+                   "HOLDERS_KNOWN=%s\nCANDIDATES=%s\n", \
+                value["TOPO"], value["SEL"], value["SEL_ROLE"], \
+                value["SEL_HELD"], value["SEL_REASON"], value["SEL_SOURCE"], \
+                value["PREDICTED_EXIT"], value["HHD_RUNNING"], \
+                value["HHD_PROCESS"], value["HHD_VIRTUAL_PRESENT"], \
+                value["HHD_PID"], value["HHD_VIRTUAL"], value["ATKBD"], \
+                value["ATKBD_HELD"], value["HOLDERS_KNOWN"], \
+                value["CANDIDATES"]
+        }
+    '
+}
+
 parse_homebtn_journal() { # stdin: journalctl --user -u oxp3-homebtn
     awk '
         /listening on \/dev\/hidraw/ { listen = 1 }
         /button 0x[0-9a-fA-F]+ pressed/ { press++ }
         END { printf "LISTEN=%d\nPRESS=%d\n", listen + 0, press + 0 }
     '
+}
+
+parse_lifecycle_journal() { # stdin: this boot's journal text of one daemon
+    awk '
+        # A heartbeat also contains "listening on"; it is neither a reopen nor
+        # a recovery and must not pair with a preceding loss.
+        /watchdog:/ { watchdog++; next }
+        /listening on \/dev\/hidraw/ {
+            open++
+            if (pending) { recovered++; pending = 0 }
+            next
+        }
+        /grabbed \/dev\/input\/event/ {
+            open++
+            if (pending) { recovered++; pending = 0 }
+            next
+        }
+        /applied [0-9]+ frame\(s\) to \/dev\/hidraw/ {
+            open++
+            if (pending) { recovered++; pending = 0 }
+            next
+        }
+        /device lost:/ { lost++; pending = 1; next }
+        /reconnect #[0-9]+/ { recon++; next }
+        /resume detected:/ { resume++ }
+        /uinput: (recreated|unavailable)/ { uinput++ }
+        END {
+            printf "OPEN=%d\nLOST=%d\nRECONNECT=%d\nRECOVERED=%d\nRESUME=%d\nWATCHDOG=%d\nUINPUT=%d\n",
+                open + 0, lost + 0, recon + 0, recovered + 0, resume + 0, watchdog + 0, uinput + 0
+        }
+    '
+}
+
+parse_fd_report() { # stdin: "unit<TAB>pid<TAB>state<TAB>denied<TAB>fds"
+    awk -F'\t' '
+        function needed(u) {
+            if (u == "oxp3-voltap.service") return "input"
+            if (u == "oxp3-homebtn.service") return "hidraw"
+            return ""
+        }
+        {
+            unit = $1; pid = $2; state = $3; denied = $4; fds = $5
+            if (state != "active") next
+            active++
+            detail = detail sprintf("%s pid=%s fds=%s; ", unit, pid, (fds == "" ? "-" : fds))
+            need = needed(unit)
+            if (need == "" && unit == "oxp3-rgbd.service") { perapply++; next }
+            if (denied == "1") { denied_n++; next }
+            checked++
+            found = (need == "input") ? (fds ~ /\/dev\/input\/event/) : (fds ~ /\/dev\/hidraw/)
+            if (found) ok++
+            else missing = missing sprintf("%s(needs %s) ", unit, need)
+        }
+        END {
+            if (active == 0) verdict = "skip"
+            else if (checked == 0 && denied_n == 0) verdict = "skip"
+            else if (checked > 0 && ok == checked) verdict = "pass"
+            else verdict = "fail"
+            printf "ACTIVE=%d\nCHECKED=%d\nDENIED=%d\nPERAPPLY=%d\nOK=%d\nVERDICT=%s\nWHY=%s\nMISSING=%s\n",
+                active + 0, checked + 0, denied_n + 0, perapply + 0, ok + 0, verdict, detail, missing
+        }
+    '
+}
+
+daemon_fd_lines() { # UNIT USER(0|1) -> fd report line
+    local unit=$1 user=$2 st load active file pid=0 fds="" denied=0 l target
+    if [ "$user" = 1 ]; then st=$(unit_state "$unit" --user); else st=$(unit_state "$unit"); fi
+    IFS='|' read -r load active file <<<"$st"
+    if [ "${active:-?}" != active ]; then
+        printf '%s\t-\t%s\t0\t-\n' "$unit" "${active:-?}"
+        return 0
+    fi
+    if [ "$user" = 1 ]; then
+        pid=$(systemctl --user show -p MainPID --value "$unit" 2>/dev/null)
+    else
+        pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null)
+    fi
+    case ${pid:-} in ''|*[!0-9]*) pid=0 ;; esac
+    if [ "$pid" -eq 0 ] || [ ! -d "/proc/$pid/fd" ] || ! ls "/proc/$pid/fd" >/dev/null 2>&1; then
+        denied=1
+    else
+        for l in "/proc/$pid/fd"/*; do
+            target=$(readlink "$l" 2>/dev/null) || continue
+            case $target in
+                /dev/hidraw*|/dev/input/event*|/dev/uinput)
+                    case ",$fds," in
+                        *",$target,"*) ;;
+                        *) fds="${fds:+$fds,}$target" ;;
+                    esac
+                    ;;
+            esac
+        done
+    fi
+    printf '%s\t%s\tactive\t%s\t%s\n' "$unit" "$pid" "$denied" "${fds:--}"
 }
 
 parse_sleep_audit() { # stdin: tools/sleep-power-measure.sh audit
@@ -763,6 +883,77 @@ check_volume() {
         fi
     fi
 
+    # Which device would be grabbed and why (read-only; root only completes the
+    # holder view).  vol.topology is the decision, vol.holder is the EVIOCGRAB
+    # owner of the physical AT keyboard that makes that decision necessary.
+    local vbin topo t_topo t_sel t_role t_selheld t_reason t_source t_pred
+    local t_hhdrunning t_hhdpresent t_hhdpids t_atkbd t_atheld t_known
+    vbin=$REPO/tools/oxp3-voltap/oxp3-voltap
+    if [ ! -x "$vbin" ] || ! have python3; then
+        record vol.topology volume "volume device choice" SKIP "daemon or python3 missing" "$vbin" "install the repo tooling and python3"
+        record vol.holder volume "physical volume device holder" SKIP "daemon or python3 missing" "$vbin" "install the repo tooling and python3"
+    else
+        run_tool voltap-topology 20 "$vbin" check --kv
+        topo=$(parse_voltopology <"$RUN_OUT" 2>/dev/null)
+        t_topo=$(kv "$topo" TOPO); t_sel=$(kv "$topo" SEL)
+        t_role=$(kv "$topo" SEL_ROLE); t_selheld=$(kv "$topo" SEL_HELD)
+        t_reason=$(kv "$topo" SEL_REASON); t_source=$(kv "$topo" SEL_SOURCE)
+        t_pred=$(kv "$topo" PREDICTED_EXIT)
+        t_hhdrunning=$(kv "$topo" HHD_RUNNING)
+        t_hhdpresent=$(kv "$topo" HHD_VIRTUAL_PRESENT)
+        t_hhdpids=$(kv "$topo" HHD_PID)
+        t_atkbd=$(kv "$topo" ATKBD); t_atheld=$(kv "$topo" ATKBD_HELD)
+        t_known=$(kv "$topo" HOLDERS_KNOWN)
+
+        if [ -z "$t_topo" ]; then
+            record vol.topology volume "volume device choice" SKIP "cannot read /proc/bus/input/devices" "$(last_line "$RUN_OUT")" "run $vbin check --kv"
+            record vol.holder volume "physical volume device holder" SKIP "cannot read /proc" "" "run $vbin check --kv"
+        elif [ "$t_pred" = 3 ]; then
+            record vol.topology volume "volume device choice" FAIL "grab would be refused: $t_reason" "selected=${t_sel:--} held=${t_selheld:--}" "sudo $vbin explain ; sudo $vbin diagnose --duration 8"
+            record vol.holder volume "physical volume device holder" FAIL "every volume candidate is held" "$t_reason" "sudo $vbin explain ; sudo $vbin diagnose --duration 8"
+        elif [ -n "$t_sel" ]; then
+            if [ "$t_source" = explicit ]; then
+                record vol.topology volume "volume device choice" PASS "explicit override: would grab $t_sel" "$t_reason" ""
+            elif [ "$t_role" = hhd-virtual ]; then
+                record vol.topology volume "volume device choice" PASS "would grab $t_sel (hhd virtual)" "$t_reason" ""
+            elif [ "$t_role" = at-kbd ]; then
+                if [ "$t_hhdrunning" = 1 ]; then
+                    record vol.topology volume "volume device choice" FAIL "hhd is running but the physical AT keyboard would be grabbed" "$t_reason" "sudo $vbin explain ; journalctl -u hhd -b --no-pager"
+                else
+                    record vol.topology volume "volume device choice" PASS "would grab $t_sel (physical fallback)" "$t_reason; hhd not holding it" ""
+                fi
+            else
+                record vol.topology volume "volume device choice" FAIL "unexpected selected role $t_role" "$t_reason" "sudo $vbin explain"
+            fi
+        elif [ "$t_hhdpresent" = 1 ]; then
+            record vol.topology volume "volume device choice" FAIL "hhd volume keyboard present but nothing would be grabbed" "$t_reason" "sudo $vbin explain"
+        else
+            record vol.topology volume "volume device choice" SKIP "no volume event device on this host" "$t_reason" "sudo $vbin check"
+        fi
+
+        if [ -z "$t_topo" ] || [ "$t_pred" = 3 ]; then
+            : # already recorded above
+        elif [ "$t_known" != 1 ]; then
+            record vol.holder volume "physical volume device holder" SKIP "holder scan needs root (/proc/*/fdinfo)" "ATKBD=${t_atkbd:--} HHD_PID=${t_hhdpids:--}" "sudo $vbin check --kv"
+        elif [ -z "$t_atheld" ] || [ "$t_atheld" = "-" ]; then
+            record vol.holder volume "physical volume device holder" PASS "nothing holds the physical AT keyboard" "ATKBD=${t_atkbd:--}" ""
+        else
+            local hit=0 p
+            local -a held_pids
+            IFS=, read -r -a held_pids <<<"$t_atheld"
+            for p in "${held_pids[@]}"; do
+                case ",$t_hhdpids," in
+                    *",$p,"*) hit=1 ;;
+                esac
+            done
+            if [ "$hit" = 1 ]; then
+                record vol.holder volume "physical volume device holder" PASS "hhd holds the physical AT keyboard" "ATKBD=${t_atkbd:--} held by pid ${t_atheld}" ""
+            else
+                record vol.holder volume "physical volume device holder" UNKNOWN "AT keyboard held by a non-hhd pid" "ATKBD=${t_atkbd:--} held by ${t_atheld}" "sudo $vbin diagnose --duration 8 ; check for a second grabber"
+            fi
+        fi
+    fi
+
     hwdb=""
     for h in /etc/udev/hwdb.d/84-oxp3-volume-keys-taps.hwdb /etc/udev/hwdb.d/84-oxp3-volume-keys.hwdb; do
         [ -f "$h" ] && { hwdb=$h; break; }
@@ -1067,6 +1258,114 @@ check_imu() {
         else
             record imu.iio imu "IIO primary-key selection" UNKNOWN "imu info gave no sysfs path (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 2)" "tools/oxp3-imu.py -j info"
         fi
+    fi
+}
+
+# ------------------------------------------------------------------ 2b. daemons
+# Lifecycle of the three long-running daemons (docs/DAEMONS.md): does each one
+# currently hold a live device fd, and did this boot's journal show a device
+# loss that recovered? Read-only; the root daemon's fds degrade to SKIP.
+check_lifecycle() {
+    local lines fd_kv verdict why missing active checked denied perapply
+    local spec unit user jtext jkv l r o lost=0 recovered=0 open_lines=0
+    local saw_journal=0 pending="" details=""
+
+    lines="$(daemon_fd_lines oxp3-voltap.service 0)
+$(daemon_fd_lines oxp3-homebtn.service 1)
+$(daemon_fd_lines oxp3-rgbd.service 1)"
+    fd_kv=$(printf '%s\n' "$lines" | parse_fd_report)
+    verdict=$(printf '%s\n' "$fd_kv" | sed -n 's/^VERDICT=//p')
+    why=$(printf '%s\n' "$fd_kv" | sed -n 's/^WHY=//p')
+    missing=$(printf '%s\n' "$fd_kv" | sed -n 's/^MISSING=//p')
+    active=$(printf '%s\n' "$fd_kv" | sed -n 's/^ACTIVE=//p')
+    checked=$(printf '%s\n' "$fd_kv" | sed -n 's/^CHECKED=//p')
+    denied=$(printf '%s\n' "$fd_kv" | sed -n 's/^DENIED=//p')
+    perapply=$(printf '%s\n' "$fd_kv" | sed -n 's/^PERAPPLY=//p')
+
+    case ${verdict:-skip} in
+        pass)
+            record life.fd lifecycle "live device fd per daemon" PASS \
+                "every inspectable active daemon holds its device" "$why" "" ;;
+        fail)
+            record life.fd lifecycle "live device fd per daemon" FAIL \
+                "missing device fd: ${missing:-unknown}" "$why" \
+                "journalctl --user -u oxp3-homebtn -u oxp3-rgbd -b ; journalctl -u oxp3-voltap -b ; then restart the unit (docs/DAEMONS.md 5)" ;;
+        *)
+            if [ "${denied:-0}" -gt 0 ] && [ "${checked:-0}" -eq 0 ]; then
+                record life.fd lifecycle "live device fd per daemon" SKIP \
+                    "oxp3-voltap runs as root; /proc/<pid>/fd needs root" "$why" \
+                    "sudo tools/oxp3-verify.sh --full (the check itself is read-only)"
+            elif [ "${active:-0}" -eq 0 ]; then
+                record life.fd lifecycle "live device fd per daemon" SKIP \
+                    "no lifecycle daemon active" "$why" \
+                    "install/enable oxp3-homebtn, oxp3-rgbd or oxp3-voltap (docs/DAEMONS.md)"
+            else
+                record life.fd lifecycle "live device fd per daemon" SKIP \
+                    "only the RGB keeper is active; it opens the node per apply" \
+                    "active=${active:-0} checked=${checked:-0} per-apply=${perapply:-0}" \
+                    "install/enable oxp3-homebtn or oxp3-voltap for a persistent fd"
+            fi
+            ;;
+    esac
+
+    local flags
+    for spec in "oxp3-voltap.service:0" "oxp3-homebtn.service:1" "oxp3-rgbd.service:1"; do
+        unit=${spec%:*}; user=${spec##*:}
+        if [ "$user" = 1 ]; then flags="--user"; else flags=""; fi
+        jtext=$(journal_text "$unit" $flags)
+        [ -n "$jtext" ] || continue
+        saw_journal=1
+        jkv=$(printf '%s\n' "$jtext" | parse_lifecycle_journal)
+        l=$(printf '%s\n' "$jkv" | sed -n 's/^LOST=//p')
+        r=$(printf '%s\n' "$jkv" | sed -n 's/^RECOVERED=//p')
+        o=$(printf '%s\n' "$jkv" | sed -n 's/^OPEN=//p')
+        lost=$((lost + ${l:-0}))
+        recovered=$((recovered + ${r:-0}))
+        open_lines=$((open_lines + ${o:-0}))
+        if [ "${l:-0}" -gt 0 ] && [ "${r:-0}" -eq 0 ]; then
+            pending="$pending $unit"
+        fi
+        details="$details $unit(open=${o:-0},lost=${l:-0})"
+    done
+
+    if [ "$saw_journal" -eq 0 ]; then
+        record life.reconnect lifecycle "device loss recovered" SKIP \
+            "no lifecycle journal in this boot" "" \
+            "start one of the daemons, then: journalctl --user -u oxp3-homebtn -b"
+    elif [ -n "$pending" ]; then
+        record life.reconnect lifecycle "device loss recovered" FAIL \
+            "device lost and never reopened:$pending" \
+            "lost=$lost recovered=$recovered open=$open_lines" \
+            "journalctl --user -u oxp3-homebtn -u oxp3-rgbd -b ; journalctl -u oxp3-voltap -b ; docs/DAEMONS.md 2"
+    elif [ "$lost" -gt 0 ]; then
+        record life.reconnect lifecycle "device loss recovered" PASS \
+            "$lost loss(es) recovered since boot" "open=$open_lines$details" ""
+    else
+        record life.reconnect lifecycle "device loss recovered" PASS \
+            "no device loss this boot" "open=$open_lines$details" ""
+    fi
+
+    if [ "$FULL" -eq 0 ]; then
+        record life.sim lifecycle "reconnect/suspend simulation" SKIP \
+            "gated: only with --full" "" \
+            "sudo tools/oxp3-verify.sh --full   (or: python3 -m unittest discover -s tests/unit -p 'test_*lifecycle.py' -q)"
+        return 0
+    fi
+    if [ ! -d "$REPO/tests/unit" ] || ! have python3; then
+        record life.sim lifecycle "reconnect/suspend simulation" SKIP \
+            "tests/unit or python3 missing" "$REPO/tests/unit" ""
+        return 0
+    fi
+    run_tool life-sim 180 python3 -m unittest discover -s "$REPO/tests/unit" \
+        -p 'test_*lifecycle.py' -q
+    if [ "$RUN_RC" -eq 0 ]; then
+        record life.sim lifecycle "reconnect/suspend simulation" PASS \
+            "offline reconnect/backoff/suspend suite passed" \
+            "$(grep -E '^Ran ' "$RUN_OUT" 2>/dev/null | tail -n 1)" ""
+    else
+        record life.sim lifecycle "reconnect/suspend simulation" FAIL \
+            "lifecycle unit suite failed (rc=$RUN_RC)" "$(tail_flat "$RUN_OUT" 3)" \
+            "python3 -m unittest discover -s tests/unit -p 'test_*lifecycle.py' -v"
     fi
 }
 
@@ -2031,9 +2330,36 @@ run_selftest() {
     # journals
     out=$(journal_fixture "$fx/vol-journal.txt")
     t_eq "vol/grab" /dev/input/event12 "$out"
+    out=$(parse_voltopology <"$fx/vol-topology.txt")
+    t_eq "voltopo/hhd-topo" hhd-virtual "$(kv "$out" TOPO)"
+    t_eq "voltopo/hhd-role" hhd-virtual "$(kv "$out" SEL_ROLE)"
+    t_eq "voltopo/hhd-at-held" 6752 "$(kv "$out" ATKBD_HELD)"
+    t_eq "voltopo/hhd-running" 1 "$(kv "$out" HHD_RUNNING)"
+    t_eq "voltopo/hhd-holders" 1 "$(kv "$out" HOLDERS_KNOWN)"
+    t_eq "voltopo/hhd-exit" 0 "$(kv "$out" PREDICTED_EXIT)"
+    out=$(parse_voltopology <"$fx/vol-topology-physical.txt")
+    t_eq "voltopo/phys-topo" physical "$(kv "$out" TOPO)"
+    t_eq "voltopo/phys-role" at-kbd "$(kv "$out" SEL_ROLE)"
+    t_eq "voltopo/phys-hhd" 0 "$(kv "$out" HHD_RUNNING)"
+    t_eq "voltopo/phys-at-free" "" "$(kv "$out" ATKBD_HELD)"
     out=$(parse_homebtn_journal <"$fx/homebtn-journal.txt")
     t_eq "homebtn/listen" 1 "$(kv "$out" LISTEN)"
     t_eq "homebtn/press" 2 "$(kv "$out" PRESS)"
+
+    # daemon lifecycle (docs/DAEMONS.md): journal recovery + live-fd report
+    out=$(parse_lifecycle_journal <"$fx/lifecycle-journal-recovered.txt")
+    t_eq "life/recovered-open" 2 "$(kv "$out" OPEN)"
+    t_eq "life/recovered-lost" 1 "$(kv "$out" LOST)"
+    t_eq "life/recovered-count" 1 "$(kv "$out" RECOVERED)"
+    out=$(parse_lifecycle_journal <"$fx/lifecycle-journal-stuck.txt")
+    t_eq "life/stuck-lost" 2 "$(kv "$out" LOST)"
+    t_eq "life/stuck-recovered" 0 "$(kv "$out" RECOVERED)"
+    out=$(parse_fd_report <"$fx/fd-report-good.txt")
+    t_eq "life/fd-good" pass "$(kv "$out" VERDICT)"
+    t_eq "life/fd-good-checked" 2 "$(kv "$out" CHECKED)"
+    out=$(parse_fd_report <"$fx/fd-report-bad.txt")
+    t_eq "life/fd-bad" fail "$(kv "$out" VERDICT)"
+    t_contains "life/fd-bad-missing" "oxp3-homebtn.service" "$(kv "$out" MISSING)"
 
     # sleep audit
     out=$(parse_sleep_audit <"$fx/sleep-audit.txt")
@@ -2149,11 +2475,13 @@ run_selftest() {
         imu.iio imu.selftest \
         inst.paths \
         led.sides led.status led.write led.zones \
+        life.fd life.reconnect life.sim \
         pwr.ac pwr.adaptive pwr.fan pwr.order pwr.pl1 pwr.profile pwr.rapl pwr.zones \
         rgbd.check rgbd.timing rgbd.unit \
         sched.scx sched.state sched.unit \
         sleep.audit sleep.measure sleep.mem sleep.stats sleep.suspend sleep.units sleep.wakeup \
-        vol.grab vol.hold vol.hwdb vol.unit | sort | uniq)
+        vol.grab vol.hold vol.hwdb vol.holder vol.topology vol.unit \
+        | sort | uniq)
     t_eq "inventory/declared" "$expected" "$ids"
 
     echo "selftest: $ST_PASS checks passed, $ST_FAIL failed"
@@ -2259,6 +2587,7 @@ fi
 
 check_volume
 check_leds
+check_lifecycle
 check_imu
 check_sleep
 check_bluetooth

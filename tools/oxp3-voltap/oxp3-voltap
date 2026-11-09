@@ -10,21 +10,38 @@ client's own "key is still down" ramp - so one press runs the mixer to 100 %
 or 0 %.  Windows shows the same physical presses as single steps because its
 keyboard class driver never sees a stuck make code.
 
-This daemon takes the device that carries the rocker, grabs it (EVIOCGRAB),
-drops every repeat, duplicate and stuck state, and re-emits exactly one
-down/up pair per physical press through its own uinput device.  It does not
-depend on hhd internals, on the scancode the EC chose, or on any /usr
-patching: it normalises whatever the layer below produces.
+Topology (decided from the devices, not from hardcoded event numbers)
+--------------------------------------------------------------------
+hhd already grabs the physical AT keyboard (EVIOCGRAB, one grab per device) and
+republishes the translated volume keys on its own uinput device
+"Handheld Daemon Volume Keyboard" (phys phys-hhd-vbtn).  A second EVIOCGRAB on
+the AT keyboard fails with EBUSY.  Therefore:
+
+  * prefer the hhd virtual volume keyboard when it exists - it carries the same
+    KEY_VOLUMEUP/DOWN after hhd's translation and can still be grabbed;
+  * fall back to the physical AT keyboard only when no hhd virtual device is
+    selectable and the holder scan shows nothing else holds it;
+  * if every grab is refused, say so once (journal + JSON status + exit code)
+    and keep retrying - never silently sit there.
+
+Candidates are discovered from /proc/bus/input/devices and /sys/class/input, so
+`check`, `explain`, `diagnose` and `status` work without opening /dev/input
+(no root needed just to see which device *would* be used).  Explicit
+VOLTAP_DEVICES / --device overrides the automatic choice.
 
 Modes
 -----
-  probe     read-only evidence: timestamped EV_KEY table + a verdict
   run       daemon: grab, normalise, re-emit (default)
-  check     print candidate devices and what would be grabbed, then exit
-  selftest  create the uinput device and emit two taps (needs root)
+  check     print candidates, holders, decision, and predicted exit code
+  explain   detailed per-candidate suitability explanation (alias --probe)
+  probe     read-only evidence: timestamped EV_KEY table + a verdict (root)
+  diagnose  capture both candidate streams for N seconds, print a grab verdict
+  status    print the daemon's JSON status file
+  selftest  create the uinput device and emit two taps (root)
 
-Needs python3-evdev (already installed on Anatase, hhd depends on it) and root:
-/dev/input/event* is root:input 0660 and /dev/uinput is root:root 0600.
+Needs python3-evdev (already installed on Anatase, hhd depends on it) and root
+for run/probe/diagnose/selftest: /dev/input/event* is root:input 0660 and
+/dev/uinput is root:root 0600.
 
 Author: silentsudin <25103587+silentsudin@users.noreply.github.com>
 Licence: GPL-2.0-or-later - our own code, no vendor code involved.
@@ -33,6 +50,8 @@ Licence: GPL-2.0-or-later - our own code, no vendor code involved.
 from __future__ import annotations
 
 import argparse
+import errno
+import json
 import os
 import re
 import select
@@ -41,9 +60,11 @@ import sys
 import time
 
 try:
-    from evdev import InputDevice, UInput, ecodes, list_devices
+    from evdev import InputDevice, UInput, ecodes
 except ImportError:  # pragma: no cover - dependency is present on Anatase
     sys.exit("oxp3-voltap: python3-evdev is missing (rpm: python3-evdev)")
+
+VERSION = "1.1"
 
 SHIM_NAME = "OXP3 volume tap shim"
 SHIM_PHYS = "phys-oxp3-voltap"
@@ -57,8 +78,29 @@ CODE_NAME = {
     ecodes.KEY_MUTE: "KEY_MUTE",
 }
 
-# Devices that never carry the rocker and must never be grabbed.
-NEVER_GRAB = re.compile(r"^(OXP3 volume tap shim|Handheld Daemon Controller)")
+# Devices that never carry the rocker and must never be grabbed.  Our own shim
+# has the volume keys too, so an auto-selection that can see it would loop.
+NEVER_GRAB = re.compile(
+    r"^(OXP3 volume tap shim|Handheld Daemon Controller)", re.I)
+NEVER_GRAB_PHYS = re.compile(r"^phys-oxp3-voltap$", re.I)
+
+ROLE_HHD = "hhd-virtual"
+ROLE_AT = "at-kbd"
+ROLE_VOLUME = "volume-only"
+ROLE_OTHER = "other"
+ROLE_NEVER = "never"
+
+ROLE_SCORE = {ROLE_HHD: 100, ROLE_AT: 60, ROLE_VOLUME: 40,
+              ROLE_OTHER: 10, ROLE_NEVER: 0}
+
+BUS_I8042 = 0x11
+
+EXIT_OK = 0
+EXIT_USAGE = 1
+EXIT_NO_DEVICE = 2
+EXIT_GRAB_REFUSED = 3
+
+DEFAULT_STATUS_FILE = "/run/oxp3-voltap/status.json"
 
 
 def log(msg: str) -> None:
@@ -69,83 +111,579 @@ def have_root() -> bool:
     return os.geteuid() == 0
 
 
+def _read_text(path: str):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
 # --------------------------------------------------------------------------
-# device inventory
+# discovery: /proc/bus/input/devices + /sys/class/input
 # --------------------------------------------------------------------------
-class Candidate:
-    __slots__ = ("path", "name", "phys", "vid", "pid", "keys", "caps",
-                 "has_volume", "has_rep", "has_rel_abs")
-
-    def __init__(self, dev: InputDevice):
-        self.caps = dev.capabilities(absinfo=False)
-        keys = set(self.caps.get(ecodes.EV_KEY, ()))
-        self.path = dev.path
-        self.name = dev.name or ""
-        self.phys = dev.phys or ""
-        self.vid = dev.info.vendor
-        self.pid = dev.info.product
-        self.keys = keys
-        self.has_volume = any(k in keys for k in VOLUME_CODES)
-        self.has_rep = ecodes.EV_REP in self.caps
-        self.has_rel_abs = bool(self.caps.get(ecodes.EV_REL) or self.caps.get(ecodes.EV_ABS))
-
-    def __str__(self) -> str:
-        return (f"{self.path} name={self.name!r} phys={self.phys!r} "
-                f"id={self.vid:04x}:{self.pid:04x} volume={int(self.has_volume)} "
-                f"rep={int(self.has_rep)} rel/abs={int(self.has_rel_abs)} "
-                f"keys={len(self.keys)}")
-
-
-def _numeric(path: str) -> int:
-    m = re.search(r"(\d+)$", path)
-    return int(m.group(1)) if m else 0
-
-
-def inventory():
-    """Return (candidates, unreadable_count)."""
-    cands, unreadable = [], 0
-    for path in sorted(list_devices(), key=_numeric):
+def parse_bitmap(words) -> int:
+    """Parse a kernel input bitmap ("hexword hexword ...", high word first)."""
+    if not words:
+        return 0
+    value = 0
+    for word in str(words).split():
         try:
-            dev = InputDevice(path)
-        except (PermissionError, OSError):
+            part = int(word, 16)
+        except (TypeError, ValueError):
+            continue
+        value = (value << 64) | part
+    return value
+
+
+def parse_input_devices(text: str):
+    """Parse /proc/bus/input/devices into a list of dicts (pure)."""
+    devices = []
+    cur = None
+    for line in text.splitlines():
+        if not line.strip():
+            if cur is not None:
+                devices.append(cur)
+                cur = None
+            continue
+        if cur is None:
+            cur = {"bits": {}, "handlers": [], "name": "", "phys": "",
+                   "sysfs": "", "uniq": "", "bus": 0, "vendor": 0,
+                   "product": 0, "version": 0}
+        if line.startswith("I: "):
+            for token in line[3:].split():
+                key, sep, value = token.partition("=")
+                if not sep:
+                    continue
+                key = key.lower()
+                try:
+                    cur[key] = int(value, 16)
+                except ValueError:
+                    pass
+        elif line.startswith("N: "):
+            rest = line[3:].strip()
+            if rest.startswith("Name="):
+                rest = rest[5:]
+            if len(rest) >= 2 and rest[0] == '"' and rest[-1] == '"':
+                rest = rest[1:-1]
+            cur["name"] = rest
+        elif line.startswith("P: "):
+            rest = line[3:].strip()
+            if rest.startswith("Phys="):
+                rest = rest[5:]
+            cur["phys"] = rest
+        elif line.startswith("S: "):
+            rest = line[3:].strip()
+            if rest.startswith("Sysfs="):
+                rest = rest[6:]
+            cur["sysfs"] = rest
+        elif line.startswith("U: "):
+            rest = line[3:].strip()
+            if rest.startswith("Uniq="):
+                rest = rest[5:]
+            cur["uniq"] = rest
+        elif line.startswith("H: "):
+            rest = line[3:].strip()
+            if rest.startswith("Handlers="):
+                rest = rest[9:]
+            cur["handlers"] = rest.split()
+        elif line.startswith("B: "):
+            rest = line[3:].strip()
+            key, sep, value = rest.partition("=")
+            if sep:
+                cur["bits"][key.upper()] = value.strip()
+    if cur is not None:
+        devices.append(cur)
+    return devices
+
+
+def read_sysfs_caps(sys_root: str, event: str):
+    """Read capability bitmaps from sysfs; returns {} when not available."""
+    base = os.path.join(sys_root, "class", "input", event, "device",
+                        "capabilities")
+    caps = {}
+    for name in ("ev", "key", "rel", "abs"):
+        text = _read_text(os.path.join(base, name))
+        if text is not None:
+            caps[name.upper()] = parse_bitmap(text)
+    return caps
+
+
+def _sysfs_events(sys_root: str):
+    """Fallback inventory: enumerate /sys/class/input/event* when proc is absent."""
+    out = []
+    base = os.path.join(sys_root, "class", "input")
+    try:
+        names = sorted(os.listdir(base), key=_numeric_event)
+    except OSError:
+        return out
+    for name in names:
+        if not re.fullmatch(r"event\d+", name):
+            continue
+        devdir = os.path.join(base, name, "device")
+        out.append({
+            "event": name,
+            "name": (_read_text(os.path.join(devdir, "name")) or "").strip(),
+            "phys": (_read_text(os.path.join(devdir, "phys")) or "").strip(),
+            "sysfs": "", "uniq": "",
+            "bus": 0, "vendor": 0, "product": 0, "version": 0,
+            "handlers": [name], "bits": {},
+        })
+    return out
+
+
+def _numeric_event(name: str) -> int:
+    match = re.search(r"(\d+)$", name)
+    return int(match.group(1)) if match else 0
+
+
+class DeviceInfo:
+    __slots__ = ("path", "event", "name", "phys", "sysfs", "uniq", "bus",
+                 "vendor", "product", "version", "ev", "keys", "rel", "abs",
+                 "handlers")
+
+    def __init__(self, raw, event, caps):
+        self.event = event
+        self.path = f"/dev/input/{event}"
+        self.name = raw.get("name") or ""
+        self.phys = raw.get("phys") or ""
+        self.sysfs = raw.get("sysfs") or ""
+        self.uniq = raw.get("uniq") or ""
+        self.bus = raw.get("bus") or 0
+        self.vendor = raw.get("vendor") or 0
+        self.product = raw.get("product") or 0
+        self.version = raw.get("version") or 0
+        self.handlers = list(raw.get("handlers") or [])
+        self.ev = caps.get("EV", 0)
+        self.keys = caps.get("KEY", 0)
+        self.rel = caps.get("REL", 0)
+        self.abs = caps.get("ABS", 0)
+
+    @property
+    def has_volume(self) -> bool:
+        return any(self.keys & (1 << code) for code in VOLUME_CODES)
+
+    @property
+    def has_rep(self) -> bool:
+        return bool(self.ev & (1 << ecodes.EV_REP))
+
+    @property
+    def has_rel_abs(self) -> bool:
+        return bool(self.rel or self.abs)
+
+    def to_dict(self):
+        return {"path": self.path, "event": self.event, "name": self.name,
+                "phys": self.phys, "sysfs": self.sysfs,
+                "bus": self.bus, "vendor": self.vendor,
+                "product": self.product, "version": self.version,
+                "has_volume": self.has_volume, "has_rep": self.has_rep,
+                "has_rel_abs": self.has_rel_abs}
+
+
+def discover(proc_input: str = "/proc/bus/input/devices",
+             sys_root: str = "/sys"):
+    """Return DeviceInfo for every event node, preferring sysfs capabilities."""
+    raw_devices = []
+    text = _read_text(proc_input)
+    if text:
+        raw_devices = parse_input_devices(text)
+    if not raw_devices:
+        raw_devices = _sysfs_events(sys_root)
+    out = []
+    for raw in raw_devices:
+        events = raw.get("event") and [raw["event"]] or [
+            tok for tok in raw.get("handlers", [])
+            if re.fullmatch(r"event\d+", tok)]
+        if not events:
+            continue
+        for event in events:
+            caps = {
+                "EV": parse_bitmap(raw.get("bits", {}).get("EV", "")),
+                "KEY": parse_bitmap(raw.get("bits", {}).get("KEY", "")),
+                "REL": parse_bitmap(raw.get("bits", {}).get("REL", "")),
+                "ABS": parse_bitmap(raw.get("bits", {}).get("ABS", "")),
+            }
+            syscaps = read_sysfs_caps(sys_root, event)
+            caps.update(syscaps)
+            out.append(DeviceInfo(raw, event, caps))
+    return out
+
+
+# --------------------------------------------------------------------------
+# holders (/proc/*/fdinfo) and hhd process detection
+# --------------------------------------------------------------------------
+def find_holders(paths, proc_root: str = "/proc"):
+    """Map each event path to the pids that hold an EVIOCGRAB on it.
+
+    A grabbed evdev fd has `grab: 1` in /proc/<pid>/fdinfo/<fd>; the matching
+    /proc/<pid>/fd/<fd> symlink names the device.  Reading another user's
+    fdinfo needs root, so the result carries a `known` flag instead of
+    pretending "no holder" when the scan was incomplete.
+    """
+    result = {p: [] for p in paths}
+    stats = {"known": True, "unreadable": 0, "scanned": 0}
+    if not paths:
+        return result, stats
+    wanted = {os.path.realpath(p): p for p in paths}
+    try:
+        pids = [entry.name for entry in os.scandir(proc_root)
+                if entry.name.isdigit()]
+    except OSError:
+        stats["known"] = False
+        return result, stats
+    for pid in pids:
+        fdinfo = os.path.join(proc_root, pid, "fdinfo")
+        try:
+            names = os.listdir(fdinfo)
+        except PermissionError:
+            stats["unreadable"] += 1
+            continue
+        except OSError:
+            continue
+        stats["scanned"] += 1
+        for name in names:
+            text = _read_text(os.path.join(fdinfo, name))
+            if not text or not re.search(r"^grab:\s*1\s*$", text, re.M):
+                continue
+            try:
+                target = os.readlink(os.path.join(proc_root, pid, "fd", name))
+            except OSError:
+                continue
+            target = target.split(" (deleted)", 1)[0]
+            path = wanted.get(os.path.realpath(target))
+            if path is not None and pid not in result[path]:
+                result[path].append(pid)
+    if stats["unreadable"]:
+        stats["known"] = False
+    return result, stats
+
+
+def detect_hhd(proc_root: str = "/proc"):
+    """Detect a running hhd process; returns {running, pids, unreadable}."""
+    pids = []
+    unreadable = 0
+    try:
+        entries = [e.name for e in os.scandir(proc_root) if e.name.isdigit()]
+    except OSError:
+        return {"running": False, "pids": [], "unreadable": 1}
+    for pid in entries:
+        if pid == str(os.getpid()):
+            continue
+        cmdline = _read_text(os.path.join(proc_root, pid, "cmdline"))
+        if cmdline is None:
             unreadable += 1
             continue
-        try:
-            cands.append(Candidate(dev))
-        finally:
-            dev.close()
-    return cands, unreadable
+        argv = [arg for arg in cmdline.split("\0") if arg]
+        if any(os.path.basename(arg) == "hhd" for arg in argv):
+            pids.append(int(pid))
+    pids.sort()
+    return {"running": bool(pids), "pids": pids, "unreadable": unreadable}
 
 
-def resolve(cfg, verbose=True):
-    """Pick the devices to normalise: explicit paths first, then name/phys match."""
-    cands, _ = inventory()
-    chosen = []
-    explicit = [p for p in cfg.devices if p and p != "auto"]
+# --------------------------------------------------------------------------
+# candidate classification / scoring / selection plan (pure)
+# --------------------------------------------------------------------------
+def _matches(pattern, text) -> bool:
+    if not pattern:
+        return False
+    try:
+        return re.search(pattern, text or "", re.I) is not None
+    except re.error:
+        return str(pattern).lower() in (text or "").lower()
 
-    for path in explicit:
-        for c in cands:
-            if c.path == path or os.path.realpath(c.path) == os.path.realpath(path):
-                chosen.append(c)
-                break
-        else:
-            if verbose:
-                log(f"configured device {path} is not present (yet)")
 
-    if not explicit:
-        for c in cands:
-            if NEVER_GRAB.search(c.name) or not c.has_volume:
+def classify(dev: DeviceInfo, cfg) -> str:
+    if NEVER_GRAB.search(dev.name or "") or NEVER_GRAB_PHYS.search(dev.phys or ""):
+        return ROLE_NEVER
+    if not dev.has_volume:
+        return ROLE_OTHER
+    if _matches(cfg.hhd_name, dev.name) or _matches(cfg.hhd_phys, dev.phys):
+        return ROLE_HHD
+    if _matches(cfg.atkbd_name, dev.name) or _matches(cfg.atkbd_phys, dev.phys):
+        return ROLE_AT
+    if dev.bus == BUS_I8042 and "keyboard" in (dev.name or "").lower():
+        return ROLE_AT
+    if not dev.has_rep and not dev.has_rel_abs:
+        return ROLE_VOLUME
+    return ROLE_OTHER
+
+
+class Candidate:
+    __slots__ = ("dev", "role", "score", "held_by", "decision", "reason",
+                 "selectable", "configured")
+
+    def __init__(self, dev: DeviceInfo, role: str, held_by):
+        self.dev = dev
+        self.role = role
+        self.score = ROLE_SCORE.get(role, 0)
+        self.held_by = list(held_by)
+        self.decision = "not-selected"
+        self.reason = ""
+        self.selectable = False
+        self.configured = False
+
+    @property
+    def path(self) -> str:
+        return self.dev.path
+
+    @property
+    def name(self) -> str:
+        return self.dev.name
+
+    def to_dict(self):
+        return {
+            "path": self.path, "name": self.name, "phys": self.dev.phys,
+            "role": self.role, "score": self.score,
+            "has_volume": self.dev.has_volume, "has_rep": self.dev.has_rep,
+            "has_rel_abs": self.dev.has_rel_abs,
+            "held_by": self.held_by, "decision": self.decision,
+            "reason": self.reason, "selectable": self.selectable,
+            "configured": self.configured,
+        }
+
+
+def _norm(path: str) -> str:
+    return os.path.realpath(path)
+
+
+def _explicit_match(cands, wanted: str):
+    target = _norm(wanted)
+    for cand in cands:
+        if cand.path == wanted or _norm(cand.path) == target:
+            return cand
+    base = os.path.basename(wanted)
+    for cand in cands:
+        if os.path.basename(cand.path) == base:
+            return cand
+    return None
+
+
+def build_plan(devices, cfg, holders, holders_known, hhd):
+    """Decide which device to grab, and explain every candidate.
+
+    Pure: pass discovery results in, get a dict with `candidates` (all,
+    annotated), `ordered` (attempt order), `selected`, `topology` and
+    `predicted_exit`.
+    """
+    cands = []
+    for dev in devices:
+        role = classify(dev, cfg)
+        cand = Candidate(dev, role, holders.get(dev.path, []))
+        if ((cfg.name and _matches(cfg.name, dev.name)) or
+                (cfg.phys and _matches(cfg.phys, dev.phys))):
+            cand.configured = True
+            if role in (ROLE_VOLUME, ROLE_OTHER):
+                cand.score += 20
+        cands.append(cand)
+
+    for cand in cands:
+        if cand.role == ROLE_NEVER:
+            cand.decision = "refused"
+            cand.reason = "our own shim/controller device - grabbing it would loop"
+        elif not cand.dev.has_volume:
+            cand.decision = "not-selected"
+            cand.reason = "does not advertise KEY_VOLUMEUP/DOWN"
+
+    explicit = [p for p in getattr(cfg, "devices", []) if p and p != "auto"]
+    missing = []
+    if explicit:
+        ordered = []
+        for wanted in explicit:
+            cand = _explicit_match(cands, wanted)
+            if cand is None:
+                missing.append(wanted)
                 continue
-            if (cfg.name and re.search(cfg.name, c.name, re.I)) or \
-               (cfg.phys and re.search(cfg.phys, c.phys, re.I)):
-                chosen.append(c)
+            cand.decision = "explicit"
+            cand.reason = "explicit VOLTAP_DEVICES/--device override"
+            if cand.role == ROLE_NEVER:
+                cand.selectable = False
+                cand.decision = "refused"
+                cand.reason = "explicitly configured but this is our own shim"
+            else:
+                cand.selectable = True
+                ordered.append(cand)
+        topology = "explicit" if ordered else "none"
+        selected = ordered[0] if ordered else None
+        if ordered:
+            reason = ordered[0].reason
+        elif missing:
+            reason = "configured device(s) not present: " + ", ".join(missing)
+        else:
+            reason = "explicit device is our own shim and is never grabbed"
+        return {"candidates": cands, "ordered": ordered, "selected": selected,
+                "topology": topology, "missing": missing, "reason": reason,
+                "holders_known": holders_known, "hhd": hhd, "source": "explicit",
+                "predicted_exit": EXIT_OK if ordered else EXIT_NO_DEVICE}
 
-    seen, uniq = set(), []
-    for c in chosen:
-        if c.path not in seen:
-            seen.add(c.path)
-            uniq.append(c)
-    return uniq
+    hhd_cands = [c for c in cands if c.role == ROLE_HHD]
+    at_cands = [c for c in cands if c.role == ROLE_AT]
+    vol_cands = [c for c in cands if c.role == ROLE_VOLUME]
+    configured = [c for c in cands
+                  if c.configured and c.role in (ROLE_VOLUME, ROLE_OTHER)]
+
+    prefer = getattr(cfg, "prefer", "auto")
+    if prefer == "physical":
+        primary, secondary = at_cands, hhd_cands
+    else:
+        primary, secondary = hhd_cands, at_cands
+    extra = [c for c in configured if c not in primary and c not in secondary]
+    groups = [primary, extra, secondary, vol_cands]
+
+    for group in groups:
+        for cand in group:
+            if cand.held_by:
+                cand.decision = "refused-held"
+                cand.reason = ("another process holds an EVIOCGRAB: pid " +
+                               ", ".join(str(p) for p in cand.held_by))
+
+    ordered = []
+    for index, group in enumerate(groups):
+        for cand in group:
+            if cand.selectable:
+                continue
+            if cand.held_by or cand.role in (ROLE_NEVER, ROLE_OTHER):
+                continue
+            if group is vol_cands:
+                cand.decision = "not-selected"
+                cand.reason = ("volume-only device (not the rocker); "
+                               "use --device to grab it explicitly")
+                continue
+            if cand.role == ROLE_AT and not getattr(cfg, "allow_physical", True):
+                cand.decision = "refused"
+                cand.reason = "physical fallback disabled (VOLTAP_ALLOW_PHYSICAL=0)"
+                continue
+            cand.selectable = True
+            ordered.append(cand)
+            if not ordered or ordered[0] is cand:
+                if cand.role == ROLE_HHD:
+                    cand.decision = "preferred"
+                    cand.reason = ("hhd's translated volume keyboard (no EV_REP, "
+                                   "same keys as the physical rocker)")
+                elif cand.role == ROLE_AT:
+                    cand.decision = "fallback"
+                    cand.reason = ("physical AT keyboard; used only when no hhd "
+                                   "virtual device is selectable and nothing "
+                                   "else holds it")
+                else:
+                    cand.decision = "fallback"
+                    cand.reason = "configured name/phys match"
+            else:
+                cand.decision = "fallback"
+                cand.reason = "only attempted if the higher-priority device is refused"
+            if index > 0 and cand.role == ROLE_HHD:
+                cand.decision = "fallback"
+                cand.reason = "only attempted if the physical device is refused"
+
+    selected = ordered[0] if ordered else None
+    topology = "none"
+    if selected is not None:
+        if selected.role == ROLE_HHD:
+            topology = "hhd-virtual"
+        elif selected.role == ROLE_AT:
+            topology = "physical"
+        else:
+            topology = "configured"
+    if not ordered:
+        if hhd_cands or at_cands:
+            reason = ("every volume candidate is held by another process; "
+                      "the grab would fail with EBUSY")
+        else:
+            reason = "no hhd virtual volume keyboard and no physical AT keyboard"
+    else:
+        reason = selected.reason
+    predicted = EXIT_OK if ordered else (
+        EXIT_GRAB_REFUSED if (hhd_cands or at_cands) else EXIT_NO_DEVICE)
+    return {"candidates": cands, "ordered": ordered, "selected": selected,
+            "topology": topology, "missing": [], "reason": reason,
+            "holders_known": holders_known, "hhd": hhd, "source": "auto",
+            "predicted_exit": predicted}
+
+
+# --------------------------------------------------------------------------
+# grab-failure state machine (pure, unit-testable)
+# --------------------------------------------------------------------------
+class GrabResult:
+    __slots__ = ("state", "selected", "refused", "exit_code", "changed")
+
+    def __init__(self, state, selected, refused, exit_code, changed):
+        self.state = state
+        self.selected = selected
+        self.refused = refused
+        self.exit_code = exit_code
+        self.changed = changed
+
+
+class GrabFSM:
+    """One scan of the ordered candidates -> a documented state.
+
+    States: init, grabbed, degraded-empty, degraded-busy, degraded-error.
+    Exit codes: 0 grabbed, 2 nothing to grab, 3 every grab refused.  A retry
+    (after the rescan interval) is just another scan; the daemon keeps the
+    status file in the degraded state and logs the transition once.
+    """
+
+    def __init__(self):
+        self.state = "init"
+        self.selected = None
+        self.refused = []
+        self.exit_code = EXIT_OK
+        self._last_key = None
+
+    def reset(self):
+        self.state = "init"
+        self.selected = None
+        self.refused = []
+        self.exit_code = EXIT_OK
+        self._last_key = None
+
+    def scan(self, ordered, attempt):
+        ordered = list(ordered)
+        refused = []
+        for cand in ordered:
+            kind, detail = attempt(cand)
+            if kind == "ok":
+                self.state = "grabbed"
+                self.selected = cand
+                self.refused = refused
+                self.exit_code = EXIT_OK
+                return self._result()
+            refused.append({"path": cand.path, "kind": kind,
+                            "detail": detail})
+        self.selected = None
+        self.refused = refused
+        if not ordered:
+            self.state = "degraded-empty"
+            self.exit_code = EXIT_NO_DEVICE
+        elif any(item["kind"] == "busy" for item in refused):
+            self.state = "degraded-busy"
+            self.exit_code = EXIT_GRAB_REFUSED
+        else:
+            self.state = "degraded-error"
+            self.exit_code = EXIT_GRAB_REFUSED
+        return self._result()
+
+    def _result(self):
+        key = (self.state,
+               tuple(item["path"] for item in self.refused))
+        changed = key != self._last_key
+        self._last_key = key
+        return GrabResult(self.state, self.selected, list(self.refused),
+                          self.exit_code, changed)
+
+    def describe(self) -> str:
+        if self.state == "grabbed" and self.selected is not None:
+            return f"grabbed {self.selected.path}"
+        if self.state == "degraded-busy":
+            details = "; ".join(
+                f"{item['path']}: {item['detail']}" for item in self.refused)
+            return f"grab refused (EBUSY) on all candidates ({details})"
+        if self.state == "degraded-empty":
+            return "no volume event device candidate"
+        if self.state == "degraded-error":
+            details = "; ".join(
+                f"{item['path']}: {item['detail']}" for item in self.refused)
+            return f"grab failed on all candidates ({details})"
+        return self.state
 
 
 # --------------------------------------------------------------------------
@@ -157,7 +695,10 @@ class Tapper:
     value semantics of the Linux input layer:
       1 = press, 0 = release, 2 = autorepeat generated by somebody downstream
     Rules:
-      * value 2 is never forwarded - that is the thing that runs the mixer away.
+      * value 2 is never forwarded for a volume key - that is the thing that
+        runs the mixer away.  For non-volume keys it is forwarded only when
+        `forward_repeat` is set (the physical AT-keyboard fallback proxies the
+        whole keyboard through the shim, so typing keeps its repeat).
       * a second press for a key that is still down is dropped (EC duplicate).
       * a press within `gap` of the previous tap is dropped (contact bounce).
       * every press gets its release scheduled after `hold`, so a lost release
@@ -169,11 +710,13 @@ class Tapper:
         synthesised ourselves: that would be a second tap for one press.
     """
 
-    def __init__(self, hold=0.030, gap=0.060, max_hold=0.500, orphan_tap=True):
+    def __init__(self, hold=0.030, gap=0.060, max_hold=0.500, orphan_tap=True,
+                 forward_repeat=False):
         self.hold = hold
         self.gap = gap
         self.max_hold = max_hold
         self.orphan_tap = orphan_tap
+        self.forward_repeat = forward_repeat
         self.down = {}          # code -> time the synthetic press went out
         self.last_tap = {}      # code -> time the synthetic release went out
         # Codes whose last release was generated by us (poll/release_all): a
@@ -181,13 +724,16 @@ class Tapper:
         self.synthetic_tail = set()
         self.stats = {"press": 0, "repeat": 0, "duplicate": 0, "bounce": 0,
                       "orphan_release": 0, "orphan_tap": 0, "late_release": 0,
-                      "watchdog": 0, "forwarded": 0}
+                      "watchdog": 0, "forwarded": 0, "repeat_forwarded": 0}
 
     def handle(self, now, code, value, volume):
         if not volume:
             if value in (0, 1):
                 self.stats["forwarded"] += 1
                 return [(code, value)]
+            if value == 2 and self.forward_repeat:
+                self.stats["repeat_forwarded"] += 1
+                return [(code, 2)]
             return []
 
         if value == 2:
@@ -261,45 +807,187 @@ class Tapper:
 
 
 # --------------------------------------------------------------------------
+# rendering: check / explain / kv / json
+# --------------------------------------------------------------------------
+def _held_text(cand):
+    return ",".join(str(pid) for pid in cand.held_by) or "-"
+
+
+def format_check(plan, holders_known) -> str:
+    lines = []
+    hhd = plan.get("hhd") or {}
+    hhd_virtual = next((c.path for c in plan["candidates"]
+                        if c.role == ROLE_HHD), "")
+    at = next((c for c in plan["candidates"] if c.role == ROLE_AT), None)
+    lines.append(f"hhd: {'running' if hhd.get('running') else 'not running'}"
+                 + (f" pid={','.join(str(p) for p in hhd.get('pids', []))}"
+                    if hhd.get("pids") else "")
+                 + f"; virtual volume keyboard={hhd_virtual or '-'}")
+    lines.append(f"holder scan: {'complete' if holders_known else 'incomplete'}"
+                 " (/proc/*/fdinfo of other users needs root)")
+    lines.append(f"{'path':22s} {'role':11s} vol rep rel/abs "
+                 f"{'held-by':10s} {'score':5s} {'decision':13s} name")
+    for cand in plan["candidates"]:
+        lines.append(
+            f"{cand.path:22s} {cand.role:11s} "
+            f"{int(cand.dev.has_volume):3d} {int(cand.dev.has_rep):3d} "
+            f"{int(cand.dev.has_rel_abs):7d} {_held_text(cand):10s} "
+            f"{cand.score:5d} {cand.decision:13s} {cand.name!r}")
+    lines.append("")
+    selected = plan.get("selected")
+    if selected is not None:
+        lines.append(f"topology: {plan['topology']}")
+        lines.append(f"would grab {selected.path} ({selected.name!r}) "
+                     f"role={selected.role}: {selected.reason}")
+        if not holders_known:
+            lines.append("note: holder scan incomplete; the daemon runs as root "
+                         "and the EVIOCGRAB result is authoritative")
+    else:
+        lines.append("topology: none")
+        lines.append(f"would grab nothing: {plan.get('reason', '')}")
+    if plan.get("missing"):
+        lines.append("missing configured device(s): " + ", ".join(plan["missing"]))
+    lines.append(f"predicted run exit: {plan['predicted_exit']} "
+                 f"(0 grabbed, 2 no device, 3 every grab refused)")
+    return "\n".join(lines)
+
+
+def format_explain(plan, holders_known) -> str:
+    lines = [format_check(plan, holders_known), "", "candidate detail:"]
+    for cand in plan["candidates"]:
+        lines.append(f"- {cand.path} role={cand.role} score={cand.score}")
+        lines.append(f"    name={cand.name!r} phys={cand.dev.phys!r} "
+                     f"bus={cand.dev.bus:04x} id={cand.dev.vendor:04x}:"
+                     f"{cand.dev.product:04x}")
+        lines.append(f"    capabilities: volume={int(cand.dev.has_volume)} "
+                     f"EV_REP={int(cand.dev.has_rep)} "
+                     f"REL/ABS={int(cand.dev.has_rel_abs)}")
+        lines.append(f"    held by: {_held_text(cand)}")
+        if cand.role == ROLE_NEVER:
+            lines.append("    unsuitable: our own shim; would recursively "
+                         "normalise itself")
+        elif cand.role == ROLE_OTHER and not cand.dev.has_volume:
+            lines.append("    unsuitable: not a volume key device")
+        elif cand.held_by:
+            lines.append("    unsuitable: EVIOCGRAB would fail with EBUSY "
+                         "(single grab per device)")
+        elif cand.decision == "preferred":
+            lines.append("    suitable: hhd already owns the physical keyboard, "
+                         "this device carries the translated keys")
+        elif cand.decision == "fallback":
+            lines.append("    usable fallback: only grabbed when no higher "
+                         "priority device is selectable")
+        else:
+            lines.append(f"    decision: {cand.decision} ({cand.reason})")
+    return "\n".join(lines)
+
+
+def format_kv(plan, holders_known) -> str:
+    selected = plan.get("selected")
+    hhd = plan.get("hhd") or {}
+    cands = plan["candidates"]
+    hhd_virtual = next((c.path for c in cands if c.role == ROLE_HHD), "")
+    at = next((c for c in cands if c.role == ROLE_AT), None)
+    lines = [
+        f"TOPO={plan['topology']}",
+        f"SEL={selected.path if selected else ''}",
+        f"SEL_ROLE={selected.role if selected else ''}",
+        f"SEL_HELD={_held_text(selected) if selected else ''}",
+        f"SEL_REASON={plan.get('reason', '')}",
+        f"SEL_SOURCE={plan.get('source', 'auto')}",
+        f"PREDICTED_EXIT={plan['predicted_exit']}",
+        f"HHD_RUNNING={1 if hhd.get('running') else 0}",
+        f"HHD_PROCESS={1 if hhd.get('process') else 0}",
+        f"HHD_VIRTUAL_PRESENT={1 if hhd.get('virtual_present') else 0}",
+        f"HHD_PID={','.join(str(p) for p in hhd.get('pids', []))}",
+        f"HHD_VIRTUAL={hhd_virtual}",
+        f"ATKBD={at.path if at else ''}",
+        f"ATKBD_HELD={_held_text(at) if at else ''}",
+        f"HOLDERS_KNOWN={1 if holders_known else 0}",
+        f"CANDIDATES={len(cands)}",
+    ]
+    return "\n".join(lines)
+
+
+def plan_json(plan) -> dict:
+    return {
+        "schema": 1, "tool": "oxp3-voltap", "version": VERSION,
+        "topology": plan["topology"],
+        "selected": plan["selected"].to_dict() if plan["selected"] else None,
+        "ordered": [c.path for c in plan["ordered"]],
+        "reason": plan.get("reason", ""),
+        "source": plan.get("source", "auto"),
+        "predicted_exit": plan["predicted_exit"],
+        "holders_known": plan["holders_known"],
+        "hhd": plan.get("hhd") or {},
+        "missing": plan.get("missing", []),
+        "candidates": [c.to_dict() for c in plan["candidates"]],
+    }
+
+
+def _load_plan(cfg):
+    devices = discover(
+        os.path.join(cfg.proc_root, "bus", "input", "devices"), cfg.sys_root)
+    hhd = detect_hhd(cfg.proc_root)
+    hhd["process"] = bool(hhd.get("running"))
+    paths = [dev.path for dev in devices]
+    holders, hstats = find_holders(paths, cfg.proc_root)
+    plan = build_plan(devices, cfg, holders, hstats["known"], hhd)
+    # A uinput device only lives as long as its creating process, so the hhd
+    # virtual volume keyboard is itself proof that hhd is managing the device.
+    # This also makes the check work for a non-root caller that cannot read
+    # root's /proc/<pid>/cmdline.
+    hhd["virtual_present"] = any(c.role == ROLE_HHD
+                                 for c in plan["candidates"])
+    hhd["running"] = bool(hhd["process"] or hhd["virtual_present"])
+    plan["hhd"] = hhd
+    return plan, devices, holders, hstats
+
+
+# --------------------------------------------------------------------------
 # probe mode: the evidence collector
 # --------------------------------------------------------------------------
 def cmd_probe(cfg) -> int:
     if not have_root():
         log("probe needs root: /dev/input/event* is root:input 0660")
-        return 1
-    cands, unreadable = inventory()
-    if cfg.devices and cfg.devices != ["auto"]:
-        wanted = [os.path.realpath(p) for p in cfg.devices]
-        sel = [c for c in cands if os.path.realpath(c.path) in wanted]
+        return EXIT_USAGE
+    plan, devices, holders, hstats = _load_plan(cfg)
+    print(format_explain(plan, hstats["known"]))
+    print()
+    explicit = [p for p in cfg.devices if p and p != "auto"]
+    if explicit:
+        wanted = {os.path.realpath(p) for p in explicit}
+        sel = [c for c in plan["candidates"]
+               if os.path.realpath(c.path) in wanted]
     else:
-        sel = [c for c in cands
-               if c.has_volume and not NEVER_GRAB.search(c.name) and (
-                   (cfg.name and re.search(cfg.name, c.name, re.I)) or
-                   (cfg.phys and re.search(cfg.phys, c.phys, re.I)))]
+        sel = [c for c in plan["candidates"]
+               if c.dev.has_volume and c.role in
+               (ROLE_HHD, ROLE_AT, ROLE_VOLUME) and not c.held_by]
     if not sel:
-        log(f"no device matched ({unreadable} unreadable); "
-            f"see --print-devices / --device /dev/input/eventN")
-        return 1
+        log(f"no device matched ({hstats['unreadable']} unreadable /proc "
+            f"entries); see check / --device /dev/input/eventN")
+        return EXIT_NO_DEVICE
 
     devs, meta = [], {}
-    for c in sel:
+    for cand in sel:
         try:
-            d = InputDevice(c.path)
-        except OSError as e:
-            log(f"{c.path} ({c.name}) unreadable: {e}")
+            dev = InputDevice(cand.path)
+        except OSError as exc:
+            log(f"{cand.path} ({cand.name}) unreadable: {exc}")
             continue
         if cfg.grab:
             try:
-                d.grab()
-                log(f"grabbed {c.path} for probing (input goes only to us meanwhile)")
-            except OSError as e:
-                log(f"cannot grab {c.path}: {e}; reading it ungrabbed")
+                dev.grab()
+                log(f"grabbed {cand.path} for probing "
+                    f"(input goes only to us meanwhile)")
+            except OSError as exc:
+                log(f"cannot grab {cand.path}: {exc}; reading it ungrabbed")
         else:
-            log(f"reading {c.path} ({c.name}) read-only, no grab")
-        devs.append(d)
-        meta[d.fd] = c
+            log(f"reading {cand.path} ({cand.name}) read-only, no grab")
+        devs.append(dev)
+        meta[dev.fd] = cand
     if not devs:
-        return 1
+        return EXIT_NO_DEVICE
 
     t0 = time.perf_counter()
     last_all = 0.0
@@ -309,59 +997,63 @@ def cmd_probe(cfg) -> int:
     print("# dev\trel_s\tdt_us\thold_ms\tevent\tcode\tvalue")
     try:
         while True:
-            r, _, _ = select.select([d.fd for d in devs], [], [], 0.2)
+            r, _, _ = select.select([dev.fd for dev in devs], [], [], 0.2)
             if cfg.duration and time.perf_counter() - t0 > cfg.duration:
                 break
             for fd in r:
-                d = next(x for x in devs if x.fd == fd)
-                c = meta[fd]
-                for ev in d.read():
+                dev = next(x for x in devs if x.fd == fd)
+                cand = meta[fd]
+                for ev in dev.read():
                     now = time.perf_counter()
                     dt = (now - last_all) * 1e6
                     last_all = now
                     if ev.type != ecodes.EV_KEY:
                         continue
-                    nm = CODE_NAME.get(ev.code) or ecodes.KEY.get(ev.code, str(ev.code))
+                    name = CODE_NAME.get(ev.code) or ecodes.KEY.get(
+                        ev.code, str(ev.code))
                     hold = ""
                     if ev.code in VOLUME_CODES:
-                        k = (c.path, ev.code)
+                        key = (cand.path, ev.code)
                         if ev.value == 1:
                             counts["press"] += 1
-                            open_since[k] = now
+                            open_since[key] = now
                         elif ev.value == 2:
                             counts["repeat"] += 1
-                            if k in open_since:
-                                hold = f"{(now - open_since[k]) * 1e3:.1f}"
+                            if key in open_since:
+                                hold = f"{(now - open_since[key]) * 1e3:.1f}"
                         else:
                             counts["release"] += 1
-                            t = open_since.pop(k, None)
-                            if t is not None:
-                                h = (now - t) * 1e3
-                                max_hold = max(max_hold, h)
-                                hold = f"{h:.1f}"
-                                if h > cfg.stuck_ms:
+                            start = open_since.pop(key, None)
+                            if start is not None:
+                                held = (now - start) * 1e3
+                                max_hold = max(max_hold, held)
+                                hold = f"{held:.1f}"
+                                if held > cfg.stuck_ms:
                                     stuck += 1
-                    print(f"{os.path.basename(c.path)}\t{now - t0:.6f}\t{dt:.0f}\t"
-                          f"{hold}\tEV_KEY\t{nm}\t{ev.value}", flush=True)
+                    print(f"{os.path.basename(cand.path)}\t"
+                          f"{now - t0:.6f}\t{dt:.0f}\t{hold}\tEV_KEY\t"
+                          f"{name}\t{ev.value}", flush=True)
                     if cfg.limit and counts["press"] >= cfg.limit:
                         raise KeyboardInterrupt
     except KeyboardInterrupt:
         pass
     finally:
-        for d in devs:
+        for dev in devs:
             try:
-                d.ungrab()
+                dev.ungrab()
             except OSError:
                 pass
-            d.close()
+            dev.close()
 
     print("\n# --- probe summary ---")
-    for c in sel:
-        print(f"# device {c.path} name={c.name!r} phys={c.phys!r} "
-              f"id={c.vid:04x}:{c.pid:04x} rep={int(c.has_rep)}")
+    for cand in sel:
+        print(f"# device {cand.path} name={cand.name!r} phys={cand.dev.phys!r} "
+              f"id={cand.dev.vendor:04x}:{cand.dev.product:04x} "
+              f"rep={int(cand.dev.has_rep)}")
     print(f"# presses={counts['press']} repeats={counts['repeat']} "
           f"releases={counts['release']}")
-    print(f"# longest press {max_hold:.1f} ms, stuck (>{cfg.stuck_ms:.0f} ms)={stuck}")
+    print(f"# longest press {max_hold:.1f} ms, "
+          f"stuck (>{cfg.stuck_ms:.0f} ms)={stuck}")
     if counts["press"] == 0:
         print("# no volume presses seen: wrong device, or the rocker is elsewhere")
     elif counts["release"] < counts["press"]:
@@ -371,7 +1063,121 @@ def cmd_probe(cfg) -> int:
     else:
         print("# VERDICT complete press/release, no repeats: clean at this layer; "
               "look one layer up (hhd -> uinput -> client)")
-    return 0
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------
+# diagnose: capture the candidate streams and say which one to grab
+# --------------------------------------------------------------------------
+def cmd_diagnose(cfg) -> int:
+    plan, devices, holders, hstats = _load_plan(cfg)
+    print(format_check(plan, hstats["known"]))
+    print()
+    explicit = [p for p in cfg.devices if p and p != "auto"]
+    if explicit:
+        targets = [c for c in plan["candidates"]
+                   if any(_norm(c.path) == _norm(p) for p in explicit)]
+    else:
+        targets = []
+        for role in (ROLE_HHD, ROLE_AT):
+            cand = next((c for c in plan["candidates"] if c.role == role), None)
+            if cand is not None:
+                targets.append(cand)
+    if not targets:
+        log("no volume candidate to capture")
+        return EXIT_NO_DEVICE
+
+    duration = cfg.duration or float(
+        os.environ.get("VOLTAP_DIAGNOSE_S", "5"))
+    devs, meta = {}, {}
+    for cand in targets:
+        try:
+            dev = InputDevice(cand.path)
+        except OSError as exc:
+            log(f"cannot read {cand.path} ({cand.name}): {exc}")
+            continue
+        devs[dev.fd] = dev
+        meta[dev.fd] = cand
+    if not devs:
+        log("cannot read any candidate; diagnose needs root (or the seat ACL)")
+        print(f"# static preference: {plan['topology']} "
+              f"({plan['selected'].path if plan['selected'] else 'none'})")
+        return EXIT_USAGE
+
+    counts = {cand.path: {"press": 0, "repeat": 0, "release": 0}
+              for cand in targets}
+    print(f"# diagnose: capturing {len(devs)} device(s) ungrabbed for "
+          f"{duration:g}s - press the rocker now")
+    t0 = time.perf_counter()
+    try:
+        while time.perf_counter() - t0 < duration:
+            left = duration - (time.perf_counter() - t0)
+            r, _, _ = select.select(list(devs), [], [], max(0.0, min(0.2, left)))
+            for fd in r:
+                dev = devs[fd]
+                cand = meta[fd]
+                for ev in dev.read():
+                    if ev.type != ecodes.EV_KEY or ev.code not in VOLUME_CODES:
+                        continue
+                    name = CODE_NAME.get(ev.code, str(ev.code))
+                    if ev.value == 1:
+                        counts[cand.path]["press"] += 1
+                    elif ev.value == 2:
+                        counts[cand.path]["repeat"] += 1
+                    else:
+                        counts[cand.path]["release"] += 1
+                    print(f"{time.perf_counter() - t0:8.3f} "
+                          f"{os.path.basename(cand.path):10s} "
+                          f"{name:14s} value={ev.value}", flush=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for dev in devs.values():
+            dev.close()
+
+    print("\n# --- diagnose summary ---")
+    for cand in targets:
+        c = counts[cand.path]
+        print(f"# {cand.path} role={cand.role}: presses={c['press']} "
+              f"repeats={c['repeat']} releases={c['release']}")
+    hhd_cand = next((c for c in targets if c.role == ROLE_HHD), None)
+    at_cand = next((c for c in targets if c.role == ROLE_AT), None)
+    hhd_counts = counts[hhd_cand.path] if hhd_cand else {"press": 0, "repeat": 0}
+    at_counts = counts[at_cand.path] if at_cand else {"press": 0, "repeat": 0}
+    hhd_events = sum(hhd_counts.values())
+    at_events = sum(at_counts.values())
+    if hhd_cand is not None and hhd_events:
+        verdict = (f"grab {hhd_cand.path} (hhd-virtual): it carries the "
+                   f"translated volume keys while the physical device stays "
+                   f"hhd's")
+    elif at_cand is not None and at_events:
+        if hhd_cand is not None:
+            why = ("the hhd virtual keyboard produced no volume events; hhd is "
+                   "not translating (stopped, controller_mode disabled, or "
+                   "already dead)")
+        else:
+            why = "no hhd virtual volume keyboard exists"
+        verdict = (f"grab {at_cand.path} (physical fallback): {why}; "
+                   f"nothing else holds it")
+    elif hhd_cand is not None:
+        verdict = (f"no volume events seen; static preference remains "
+                   f"{hhd_cand.path} (hhd-virtual). Press during the window.")
+    elif at_cand is not None:
+        verdict = (f"no volume events seen; static preference remains "
+                   f"{at_cand.path} (physical fallback). Press during the window.")
+    else:
+        verdict = "no candidate device"
+    print(f"# VERDICT {verdict}")
+    if at_counts["repeat"]:
+        print("# NOTE physical value=2 repeats seen: the Tapper drops them for "
+              "volume keys, so the tap suppression applies before hhd or after "
+              "it")
+    elif hhd_counts["repeat"]:
+        print("# NOTE hhd virtual device emitted value=2 repeats: the Tapper "
+              "drops them too, so suppression is unchanged")
+    else:
+        print("# NOTE no value=2 repeats seen on either device in this window")
+    return EXIT_OK
 
 
 # --------------------------------------------------------------------------
@@ -383,30 +1189,57 @@ class Runner:
         self.tapper = Tapper(cfg.hold, cfg.gap, cfg.max_hold, cfg.orphan_tap)
         self.ui = None
         self.ui_caps = frozenset()
+        self.ui_repeat = False
         self.sources = {}
+        self.role_by_path = {}
+        self.fsm = GrabFSM()
         self.last_scan = 0.0
         self.last_stats = time.monotonic()
         self.running = True
-        self.missing = set()
+        self.hhd = {"running": False, "pids": []}
+        self.holders_known = True
+        self.plan = None
+        self._pending = {}
+        self._degraded_since = None
+        self.exit_requested = None
+        self.last_status = 0.0
+        self.reconnects = 0
 
-    def ensure_uinput(self, keys):
+    # -- uinput shim -------------------------------------------------------
+    def ensure_uinput(self, keys, repeat):
         caps = set(keys) | set(VOLUME_CODES)
-        if self.ui is not None and caps <= self.ui_caps:
+        if (self.ui is not None and caps <= self.ui_caps and
+                repeat == self.ui_repeat):
             return
         if self.ui is not None:
-            log("re-creating the shim uinput device (capability set grew)")
+            log("re-creating the shim uinput device (capability set changed)")
             try:
                 self.ui.close()
             except OSError:
                 pass
-        self.ui = UInput(
-            {ecodes.EV_KEY: sorted(caps)},
-            name=SHIM_NAME, phys=SHIM_PHYS, version=0x0001,
-            vendor=SHIM_VID, product=SHIM_PID, bustype=ecodes.BUS_USB,
-        )
+        capdict = {ecodes.EV_KEY: sorted(caps)}
+        if repeat:
+            capdict[ecodes.EV_REP] = []
+        try:
+            self.ui = UInput(
+                capdict, name=SHIM_NAME, phys=SHIM_PHYS, version=0x0001,
+                vendor=SHIM_VID, product=SHIM_PID, bustype=ecodes.BUS_USB)
+        except OSError as exc:
+            if not repeat:
+                raise
+            log(f"uinput rejected EV_REP ({exc}); non-volume key repeat will "
+                f"not be proxied")
+            capdict.pop(ecodes.EV_REP, None)
+            self.ui = UInput(
+                capdict, name=SHIM_NAME, phys=SHIM_PHYS, version=0x0001,
+                vendor=SHIM_VID, product=SHIM_PID, bustype=ecodes.BUS_USB)
+            repeat = False
         self.ui_caps = frozenset(caps)
+        self.ui_repeat = repeat
+        self.tapper.forward_repeat = repeat
         node = getattr(self.ui.device, "path", "?")
-        log(f"created '{SHIM_NAME}' at {node} with {len(caps)} key codes")
+        log(f"created '{SHIM_NAME}' at {node} with {len(caps)} key codes"
+            + (" and EV_REP (physical keyboard fallback)" if repeat else ""))
 
     def emit(self, pairs):
         if not pairs or self.ui is None:
@@ -415,49 +1248,156 @@ class Runner:
             self.ui.write(ecodes.EV_KEY, code, value)
         self.ui.syn()
 
-    def scan(self):
-        cands = resolve(self.cfg, verbose=False)
-        present = {c.path for c in cands}
-        for path in list(self.sources):
-            if path not in present:
-                log(f"{path} disappeared; releasing its keys and dropping it")
-                self.emit(self.tapper.release_all(time.perf_counter()))
+    # -- grab attempt ------------------------------------------------------
+    def _attempt(self, cand):
+        try:
+            dev = InputDevice(cand.path)
+            self._pending[cand.path] = dev
+            dev.grab()
+        except OSError as exc:
+            dev = self._pending.pop(cand.path, None)
+            if dev is not None:
                 try:
-                    self.sources[path].close()
+                    dev.close()
                 except OSError:
                     pass
-                del self.sources[path]
+            kind = "busy" if exc.errno == errno.EBUSY else "error"
+            return kind, str(exc)
+        return "ok", ""
 
-        for c in cands:
-            if c.path in self.sources:
-                continue
-            if c.has_rel_abs and not self.cfg.force:
-                self._report_once(c.path, f"{c.path} ({c.name}) has REL/ABS axes; "
-                                          f"skipping (use --force to grab it anyway)")
-                continue
-            if c.has_rep and not self.cfg.force:
-                self._report_once(c.path, f"{c.path} ({c.name}) is a repeating keyboard; "
-                                          f"grab the hhd volume keyboard instead "
-                                          f"(see docs/hw/volume-buttons.md)")
-                continue
+    def _drop_source(self, path, why):
+        log(f"device lost: {path} {why}; releasing its keys and dropping it; "
+            f"retrying in {self.cfg.rescan:g}s")
+        self.emit(self.tapper.release_all(time.perf_counter()))
+        dev = self.sources.pop(path, None)
+        self.role_by_path.pop(path, None)
+        if dev is not None:
             try:
-                dev = InputDevice(c.path)
-                dev.grab()
-            except OSError as e:
-                self._report_once(c.path, f"grab {c.path} ({c.name}) failed: {e}")
-                continue
-            self.missing.discard(c.path)
-            log(f"grabbed {c.path} ({c.name!r} phys={c.phys!r} "
-                f"id={c.vid:04x}:{c.pid:04x})")
-            self.sources[c.path] = dev
-            self.ensure_uinput(c.keys)
+                dev.close()
+            except OSError:
+                pass
+
+    # -- scan --------------------------------------------------------------
+    def scan(self):
+        # Cheap path first: discovery is two reads; the /proc/*/fdinfo holder
+        # scan is only needed when we have to choose a device to grab.
+        devices = discover(
+            os.path.join(self.cfg.proc_root, "bus", "input", "devices"),
+            self.cfg.sys_root)
+        self.hhd = detect_hhd(self.cfg.proc_root)
+        present = {dev.path for dev in devices}
+        for path in list(self.sources):
+            if path not in present:
+                self._drop_source(path, "disappeared")
+        if self.sources:
+            self.write_status()
+            self.last_scan = time.monotonic()
+            return
+
+        holders, hstats = find_holders(present, self.cfg.proc_root)
+        self.holders_known = hstats["known"]
+        self.plan = build_plan(devices, self.cfg, holders, hstats["known"],
+                               self.hhd)
+        self.hhd["process"] = bool(self.hhd.get("running"))
+        self.hhd["virtual_present"] = any(
+            cand.role == ROLE_HHD for cand in self.plan["candidates"])
+        self.hhd["running"] = bool(self.hhd["process"] or
+                                   self.hhd["virtual_present"])
+        result = self.fsm.scan(self.plan["ordered"], self._attempt)
+        if result.selected is not None:
+            dev = self._pending.pop(result.selected.path, None)
+            if dev is not None:
+                cand = result.selected
+                self.sources[cand.path] = dev
+                self.role_by_path[cand.path] = cand.role
+                self.reconnects += 1
+                prefix = (f"reconnect #{self.reconnects}: "
+                          if self.reconnects > 1 else "")
+                log(f"{prefix}grabbed {cand.path} ({cand.name!r} "
+                    f"phys={cand.dev.phys!r} role={cand.role} id="
+                    f"{cand.dev.vendor:04x}:{cand.dev.product:04x})")
+                repeat = any(role == ROLE_AT
+                             for role in self.role_by_path.values())
+                try:
+                    self.ensure_uinput(_key_codes(cand.dev.keys), repeat)
+                except OSError as exc:
+                    log(f"cannot create the uinput shim ({exc}); releasing "
+                        f"{cand.path} and retrying")
+                    self._drop_source(cand.path, "lost its uinput shim")
+                    self.fsm.state = "degraded-error"
+                    self.fsm.exit_code = EXIT_GRAB_REFUSED
+                    self.fsm.selected = None
+                    self.fsm.refused = [{"path": cand.path, "kind": "uinput",
+                                         "detail": str(exc)}]
+        self._log_transition(result)
+        self.write_status()
         self.last_scan = time.monotonic()
 
-    def _report_once(self, key, msg):
-        if key not in self.missing:
-            self.missing.add(key)
-            log(msg)
+    def _log_transition(self, result):
+        if not result.changed:
+            return
+        if result.state == "grabbed":
+            return
+        if result.state == "degraded-busy":
+            details = "; ".join(
+                f"{item['path']}: {item['detail']}" for item in result.refused)
+            log(f"DEGRADED: every candidate is held or refused (EBUSY): "
+                f"{details}; status=degraded-busy exit={result.exit_code}; "
+                f"retrying in {self.cfg.rescan:g}s")
+        elif result.state == "degraded-empty":
+            log(f"DEGRADED: no volume event device candidate "
+                f"(status=degraded-empty exit={result.exit_code}); "
+                f"retrying in {self.cfg.rescan:g}s")
+        else:
+            details = "; ".join(
+                f"{item['path']}: {item['detail']}" for item in result.refused)
+            log(f"DEGRADED: grab failed: {details} "
+                f"(status=degraded-error exit={result.exit_code}); "
+                f"retrying in {self.cfg.rescan:g}s")
 
+    # -- status file -------------------------------------------------------
+    def status_payload(self):
+        counters = dict(self.tapper.stats)
+        return {
+            "schema": 1, "tool": "oxp3-voltap", "version": VERSION,
+            "time": int(time.time()), "pid": os.getpid(),
+            "state": self.fsm.state, "exit_code": self.fsm.exit_code,
+            "selected": (self.fsm.selected.to_dict()
+                         if self.fsm.selected else None),
+            "refused": self.fsm.refused,
+            "topology": self.plan["topology"] if self.plan else "none",
+            "reason": self.plan.get("reason", "") if self.plan else "",
+            "holders_known": self.holders_known,
+            "hhd": self.hhd,
+            "candidates": ([c.to_dict() for c in self.plan["candidates"]]
+                           if self.plan else []),
+            "counters": counters,
+        }
+
+    def write_status(self):
+        path = self.cfg.status_file
+        if not path:
+            return
+        try:
+            directory = os.path.dirname(path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            tmp = f"{path}.tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self.status_payload(), fh, sort_keys=True)
+                fh.write("\n")
+            os.replace(tmp, path)
+            try:
+                os.chmod(path, 0o644)
+            except OSError:
+                pass
+        except OSError as exc:
+            now = time.monotonic()
+            if now - self.last_status > 60:
+                self.last_status = now
+                log(f"cannot write status file {path}: {exc}")
+
+    # -- main loop ---------------------------------------------------------
     def loop(self):
         self.scan()
         if not self.sources:
@@ -465,34 +1405,30 @@ class Runner:
         while self.running:
             now = time.perf_counter()
             timeout = 0.20
-            dl = self.tapper.next_deadline()
-            if dl is not None:
-                timeout = max(0.0, min(timeout, dl - now))
-            fds = [d.fd for d in self.sources.values()]
-            r = []
+            deadline = self.tapper.next_deadline()
+            if deadline is not None:
+                timeout = max(0.0, min(timeout, deadline - now))
+            fds = [dev.fd for dev in self.sources.values()]
             if fds:
                 try:
-                    r, _, _ = select.select(fds, [], [], timeout)
+                    ready, _, _ = select.select(fds, [], [], timeout)
                 except InterruptedError:
                     continue
             else:
                 time.sleep(min(timeout, 0.1))
+                ready = []
             now = time.perf_counter()
-            for fd in r:
-                path = next((p for p, d in self.sources.items() if d.fd == fd), None)
+            for fd in ready:
+                path = next((p for p, dev in self.sources.items()
+                             if dev.fd == fd), None)
                 if path is None:
                     continue
                 dev = self.sources[path]
                 try:
                     events = list(dev.read())
-                except OSError as e:
-                    log(f"read {path} failed: {e}; rescanning")
-                    try:
-                        dev.close()
-                    except OSError:
-                        pass
-                    self.sources.pop(path, None)
-                    self.emit(self.tapper.release_all(now))
+                except OSError as exc:
+                    log(f"read {path} failed: {exc}; rescanning")
+                    self._drop_source(path, "became unreadable")
                     continue
                 out = []
                 for ev in events:
@@ -505,10 +1441,25 @@ class Runner:
 
             if time.monotonic() - self.last_scan > self.cfg.rescan:
                 self.scan()
-            if self.cfg.stats and time.monotonic() - self.last_stats > self.cfg.stats:
+            if (self.cfg.stats and
+                    time.monotonic() - self.last_stats > self.cfg.stats):
                 self.last_stats = time.monotonic()
-                s = self.tapper.stats
-                log("stats " + " ".join(f"{k}={v}" for k, v in s.items()))
+                stats = self.tapper.stats
+                log("stats " + " ".join(f"{k}={v}"
+                                        for k, v in stats.items()))
+            if self.cfg.degrade_exit_after > 0:
+                if self.fsm.state.startswith("degraded"):
+                    if self._degraded_since is None:
+                        self._degraded_since = time.monotonic()
+                    elif (time.monotonic() - self._degraded_since >=
+                          self.cfg.degrade_exit_after):
+                        log(f"degraded for {self.cfg.degrade_exit_after:g}s; "
+                            f"exiting with {self.fsm.exit_code} "
+                            f"(state={self.fsm.state})")
+                        self.exit_requested = self.fsm.exit_code
+                        break
+                else:
+                    self._degraded_since = None
 
     def close(self):
         try:
@@ -521,74 +1472,130 @@ class Runner:
             except OSError:
                 pass
             dev.close()
+        self.sources.clear()
         if self.ui is not None:
             try:
                 self.ui.close()
             except OSError:
                 pass
+            self.ui = None
+
+
+def _key_codes(bitmap: int):
+    """Expand a KEY bitmap to the list of key codes it contains."""
+    codes = []
+    value = bitmap
+    while value:
+        low = value & -value
+        codes.append(low.bit_length() - 1)
+        value ^= low
+    return codes
 
 
 def cmd_run(cfg) -> int:
     if not have_root():
         log("run needs root: /dev/input/event* and /dev/uinput are root-only")
-        return 1
-    r = Runner(cfg)
+        return EXIT_USAGE
+    runner = Runner(cfg)
 
     def stop(signum, frame):
         log(f"signal {signum}: releasing keys and exiting")
-        r.running = False
+        runner.running = False
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    code = EXIT_OK
     try:
-        r.loop()
+        if cfg.once:
+            runner.scan()
+            code = runner.fsm.exit_code
+            if runner.sources:
+                code = EXIT_OK
+            log(f"single scan: state={runner.fsm.state} "
+                f"exit={code} ({runner.fsm.describe()})")
+        else:
+            runner.loop()
+            code = runner.exit_requested or EXIT_OK
     finally:
-        r.close()
-    s = r.tapper.stats
-    log("exit stats " + " ".join(f"{k}={v}" for k, v in s.items()))
-    return 0
+        runner.close()
+        if not cfg.once:
+            # A one-shot run keeps the state it decided (grabbed/degraded) in
+            # the status file; the long-running daemon reports "stopped".
+            runner.fsm.state = "stopped"
+        runner.write_status()
+    stats = runner.tapper.stats
+    log("exit stats " + " ".join(f"{k}={v}" for k, v in stats.items()))
+    return code
 
 
 # --------------------------------------------------------------------------
-# check / selftest
+# check / explain / status / selftest
 # --------------------------------------------------------------------------
 def cmd_check(cfg) -> int:
-    cands, unreadable = inventory()
-    if not cands:
-        print(f"no readable input devices for uid {os.geteuid()}: "
-              f"/dev/input/event* is root:input 0660, so run this as root "
-              f"({unreadable} nodes were skipped)")
-        return 1
-    print(f"{'path':20s} {'name':34s} {'phys':20s} id       vol rep rel/abs keys")
-    for c in cands:
-        print(f"{c.path:20s} {c.name[:34]:34s} {c.phys[:20]:20s} "
-              f"{c.vid:04x}:{c.pid:04x}  {int(c.has_volume)}   {int(c.has_rep)}   "
-              f"{int(c.has_rel_abs)}      {len(c.keys)}")
-    if unreadable:
-        print(f"({unreadable} further /dev/input/event* nodes are not readable as "
-              f"uid {os.geteuid()}; run as root to see them)")
-    print()
-    sel = resolve(cfg)
-    if not sel:
-        print("resolve: nothing matches the configured name/phys pattern")
-        return 0
-    for c in sel:
-        why = []
-        if c.has_rel_abs:
-            why.append("REL/ABS present (needs --force)")
-        if c.has_rep:
-            why.append("EV_REP present (needs --force)")
-        print(f"would grab {c.path} ({c.name!r}): " +
-              ("; ".join(why) if why else "ok"))
-    return 0
+    plan, devices, holders, hstats = _load_plan(cfg)
+    if not devices:
+        log("no input event devices discovered from "
+            f"{cfg.proc_root}/bus/input/devices or {cfg.sys_root}/class/input")
+    if cfg.format == "json":
+        print(json.dumps(plan_json(plan), indent=2, sort_keys=True))
+    elif cfg.format == "kv":
+        print(format_kv(plan, hstats["known"]))
+    else:
+        print(format_check(plan, hstats["known"]))
+    return plan["predicted_exit"]
+
+
+def cmd_explain(cfg) -> int:
+    plan, devices, holders, hstats = _load_plan(cfg)
+    if cfg.format == "json":
+        print(json.dumps(plan_json(plan), indent=2, sort_keys=True))
+    elif cfg.format == "kv":
+        print(format_kv(plan, hstats["known"]))
+    else:
+        print(format_explain(plan, hstats["known"]))
+    return plan["predicted_exit"]
+
+
+def cmd_status(cfg) -> int:
+    text = _read_text(cfg.status_file)
+    if text is None:
+        print(f"no status file at {cfg.status_file} "
+              f"(is oxp3-voltap running?)")
+        return EXIT_NO_DEVICE
+    if cfg.format == "json":
+        print(text.rstrip())
+        return EXIT_OK
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        log(f"status file {cfg.status_file} is not valid JSON: {exc}")
+        return EXIT_USAGE
+    selected = data.get("selected") or {}
+    print(f"state:    {data.get('state')} (exit {data.get('exit_code')})")
+    print(f"topology: {data.get('topology')}")
+    print(f"selected: {selected.get('path', '-')} "
+          f"({selected.get('name', '')!r} role={selected.get('role', '-')})")
+    print(f"reason:   {data.get('reason', '')}")
+    print(f"hhd:      running={data.get('hhd', {}).get('running')} "
+          f"pids={data.get('hhd', {}).get('pids', [])}")
+    if data.get("refused"):
+        print("refused:  " + "; ".join(
+            f"{item.get('path')}: {item.get('detail', item.get('kind'))}"
+            for item in data["refused"]))
+    if not data.get("holders_known", True):
+        print("holders:  incomplete (the daemon runs as root and sees all)")
+    age = int(time.time()) - int(data.get("time", 0))
+    print(f"updated:  {age}s ago")
+    return EXIT_OK
 
 
 def cmd_selftest(cfg) -> int:
     if not have_root():
         log("selftest needs root (/dev/uinput)")
-        return 1
-    ui = UInput({ecodes.EV_KEY: list(VOLUME_CODES)}, name=SHIM_NAME, phys=SHIM_PHYS,
-                version=1, vendor=SHIM_VID, product=SHIM_PID, bustype=ecodes.BUS_USB)
+        return EXIT_USAGE
+    ui = UInput({ecodes.EV_KEY: list(VOLUME_CODES)}, name=SHIM_NAME,
+                phys=SHIM_PHYS, version=1, vendor=SHIM_VID,
+                product=SHIM_PID, bustype=ecodes.BUS_USB)
     time.sleep(0.4)
     node = getattr(ui.device, "path", "?")
     log(f"created {node}; emitting 2 taps, 300 ms apart")
@@ -601,64 +1608,137 @@ def cmd_selftest(cfg) -> int:
         time.sleep(0.3)
     ui.close()
     log("selftest done")
-    return 0
+    return EXIT_OK
 
 
 # --------------------------------------------------------------------------
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog="oxp3-voltap",
-        description="normalise the ONEXPLAYER 3 volume rocker into discrete taps")
-    p.add_argument("mode", nargs="?", default="run",
-                   choices=("run", "probe", "check", "selftest"))
-    p.add_argument("--device", action="append", default=[],
-                   metavar="PATH", help="explicit /dev/input/eventN (repeatable)")
-    p.add_argument("--name", default=os.environ.get(
-        "VOLTAP_NAME", "Handheld Daemon Volume Keyboard"),
-        help="regex on the device name to auto-select (default: %(default)s)")
-    p.add_argument("--phys", default=os.environ.get("VOLTAP_PHYS", "phys-hhd-vbtn"),
-                   help="regex on the device phys to auto-select")
-    p.add_argument("--hold", type=float,
-                   default=float(os.environ.get("VOLTAP_HOLD_MS", 30)) / 1000,
-                   help="ms the synthetic press is held (default 30)")
-    p.add_argument("--gap", type=float,
-                   default=float(os.environ.get("VOLTAP_GAP_MS", 60)) / 1000,
-                   help="ms after a tap in which a press counts as bounce (default 60)")
-    p.add_argument("--max-hold", type=float,
-                   default=float(os.environ.get("VOLTAP_MAX_HOLD_MS", 500)) / 1000,
-                   help="ms watchdog for a press that never ended")
-    p.add_argument("--rescan", type=float, default=1.0,
-                   help="seconds between device rescans (default 1)")
-    p.add_argument("--stats", type=float, default=float(os.environ.get("VOLTAP_STATS", 0)),
-                   help="print counters every N seconds (0 = off)")
-    p.add_argument("--duration", type=float,
-                   default=float(os.environ.get("VOLTAP_DURATION", 0)),
-                   help="probe: stop after N seconds (0 = until Ctrl-C)")
-    p.add_argument("--limit", type=int, default=0,
-                   help="probe: stop after N presses (0 = no limit)")
-    p.add_argument("--orphan-tap", dest="orphan_tap", action="store_true",
-                   default=os.environ.get("VOLTAP_ORPHAN_TAP", "1") not in ("0", "no", "off"),
-                   help="treat a release without a press as one physical press "
-                        "(default on; --no-orphan-tap disables)")
-    p.add_argument("--no-orphan-tap", dest="orphan_tap", action="store_false",
-                   help="drop releases that have no matching press")
-    p.add_argument("--stuck-ms", type=float, default=400.0,
-                   help="probe: a hold longer than this counts as stuck (default 400)")
-    p.add_argument("--grab", action="store_true",
-                   help="probe: grab the device (input goes only to the probe)")
-    p.add_argument("--force", action="store_true",
-                   help="grab devices with EV_REP or REL/ABS too (those events are dropped)")
-    p.add_argument("--print-devices", action="store_true", help="same as 'check'")
-    p.add_argument("--version", action="version", version="oxp3-voltap 1.0")
-    cfg = p.parse_args(argv)
+        description="normalise the ONEXPLAYER 3 volume rocker into discrete "
+                    "taps")
+    parser.add_argument("mode", nargs="?", default="run",
+                        choices=("run", "probe", "check", "explain",
+                                 "diagnose", "status", "selftest"))
+    parser.add_argument("--device", action="append", default=[],
+                        metavar="PATH",
+                        help="explicit /dev/input/eventN (repeatable; wins "
+                             "over automatic topology discovery)")
+    parser.add_argument("--name", default=os.environ.get("VOLTAP_NAME", ""),
+                        help="extra regex on the device name to prefer")
+    parser.add_argument("--phys", default=os.environ.get("VOLTAP_PHYS", ""),
+                        help="extra regex on the device phys to prefer")
+    parser.add_argument("--prefer", choices=("auto", "hhd-virtual", "physical"),
+                        default=os.environ.get("VOLTAP_PREFER", "auto"),
+                        help="automatic topology preference (default auto: "
+                             "hhd virtual first, physical fallback)")
+    parser.add_argument("--hhd-name",
+                        default=os.environ.get(
+                            "VOLTAP_HHD_NAME",
+                            "Handheld Daemon Volume Keyboard"),
+                        help="regex identifying hhd's virtual volume keyboard")
+    parser.add_argument("--hhd-phys",
+                        default=os.environ.get("VOLTAP_HHD_PHYS", "hhd-vbtn"),
+                        help="regex identifying hhd's virtual volume keyboard "
+                             "by phys")
+    parser.add_argument("--atkbd-name",
+                        default=os.environ.get(
+                            "VOLTAP_ATKBD_NAME",
+                            "AT Translated Set 2 keyboard"),
+                        help="regex identifying the physical AT keyboard")
+    parser.add_argument("--atkbd-phys",
+                        default=os.environ.get("VOLTAP_ATKBD_PHYS",
+                                               "isa0060/serio0"),
+                        help="regex identifying the physical AT keyboard by phys")
+    parser.add_argument("--no-physical", dest="allow_physical",
+                        action="store_false",
+                        default=os.environ.get("VOLTAP_ALLOW_PHYSICAL",
+                                               "1") not in ("0", "no", "off"),
+                        help="never fall back to the physical AT keyboard")
+    parser.add_argument("--hold", type=float,
+                        default=float(os.environ.get("VOLTAP_HOLD_MS", 30)) / 1000,
+                        help="ms the synthetic press is held (default 30)")
+    parser.add_argument("--gap", type=float,
+                        default=float(os.environ.get("VOLTAP_GAP_MS", 60)) / 1000,
+                        help="ms after a tap in which a press counts as bounce "
+                             "(default 60)")
+    parser.add_argument("--max-hold", type=float,
+                        default=float(os.environ.get("VOLTAP_MAX_HOLD_MS",
+                                                     500)) / 1000,
+                        help="ms watchdog for a press that never ended")
+    parser.add_argument("--rescan", type=float,
+                        default=float(os.environ.get("VOLTAP_RESCAN_S", 1.0)),
+                        help="seconds between device rescans (default 1)")
+    parser.add_argument("--stats", type=float,
+                        default=float(os.environ.get("VOLTAP_STATS", 0)),
+                        help="print counters every N seconds (0 = off)")
+    parser.add_argument("--duration", type=float,
+                        default=float(os.environ.get("VOLTAP_DURATION", 0)),
+                        help="probe/diagnose: stop after N seconds "
+                             "(probe 0 = until Ctrl-C; diagnose default 5)")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="probe: stop after N presses (0 = no limit)")
+    parser.add_argument("--orphan-tap", dest="orphan_tap", action="store_true",
+                        default=os.environ.get("VOLTAP_ORPHAN_TAP",
+                                               "1") not in ("0", "no", "off"),
+                        help="treat a release without a press as one physical "
+                             "press (default on; --no-orphan-tap disables)")
+    parser.add_argument("--no-orphan-tap", dest="orphan_tap",
+                        action="store_false",
+                        help="drop releases that have no matching press")
+    parser.add_argument("--stuck-ms", type=float, default=400.0,
+                        help="probe: a hold longer than this counts as stuck "
+                             "(default 400)")
+    parser.add_argument("--grab", action="store_true",
+                        help="probe: grab the device (input goes only to the "
+                             "probe)")
+    parser.add_argument("--once", action="store_true",
+                        help="run: one scan, then exit with the documented "
+                             "code (0 grabbed, 2 no device, 3 refused)")
+    parser.add_argument("--degrade-exit-after", type=float,
+                        default=float(os.environ.get(
+                            "VOLTAP_DEGRADE_EXIT_S", 0)),
+                        help="run: exit with the degraded code after N seconds "
+                             "without a grab (0 = keep retrying forever)")
+    parser.add_argument("--status-file",
+                        default=os.environ.get("VOLTAP_STATUS_FILE",
+                                               DEFAULT_STATUS_FILE),
+                        help="run: JSON status path "
+                             f"(default {DEFAULT_STATUS_FILE})")
+    parser.add_argument("--proc-root",
+                        default=os.environ.get("VOLTAP_PROC_ROOT", "/proc"),
+                        help="procfs root (tests)")
+    parser.add_argument("--sys-root",
+                        default=os.environ.get("VOLTAP_SYS_ROOT", "/sys"),
+                        help="sysfs root (tests)")
+    parser.add_argument("--probe", dest="probe_flag", action="store_true",
+                        help="explain every candidate's suitability and exit "
+                             "(alias for the explain mode)")
+    parser.add_argument("--json", action="store_true",
+                        help="check/explain/status: machine-readable JSON")
+    parser.add_argument("--kv", action="store_true",
+                        help="check/explain: stable KEY=value lines for the "
+                             "verification harness")
+    parser.add_argument("--version", action="version",
+                        version=f"oxp3-voltap {VERSION}")
+    cfg = parser.parse_args(argv)
+
     env_dev = os.environ.get("VOLTAP_DEVICES", "auto").split()
     if env_dev and env_dev != ["auto"] and not cfg.device:
         cfg.device = env_dev
     cfg.devices = cfg.device
-    if cfg.print_devices:
-        return cmd_check(cfg)
-    return {"run": cmd_run, "probe": cmd_probe, "check": cmd_check,
-            "selftest": cmd_selftest}[cfg.mode](cfg)
+    if cfg.json and cfg.kv:
+        parser.error("--json and --kv are mutually exclusive")
+    cfg.format = "json" if cfg.json else ("kv" if cfg.kv else "text")
+
+    if cfg.probe_flag and cfg.mode == "run":
+        cfg.mode = "explain"
+    handlers = {
+        "run": cmd_run, "probe": cmd_probe, "check": cmd_check,
+        "explain": cmd_explain, "diagnose": cmd_diagnose,
+        "status": cmd_status, "selftest": cmd_selftest,
+    }
+    return handlers[cfg.mode](cfg)
 
 
 if __name__ == "__main__":

@@ -281,7 +281,7 @@ components:
     state: awaiting-install
     group: hardware
     headline: false
-    summary: "A hold on the rocker ramps instead of stepping: our EVIOCGRAB daemon plus a force-release hwdb entry, or the hhd patch as the alternative."
+    summary: "A hold on the rocker ramps instead of stepping: our daemon prefers hhd's virtual volume keyboard, falls back to the free physical AT keyboard, degrades observably on EBUSY, and keeps a force-release hwdb as defence in depth."
     implementation:
       - tools/oxp3-voltap
       - files/84-oxp3-volume-keys.hwdb
@@ -299,6 +299,10 @@ components:
         expect: "oxp3-voltap is active (running)"
       - id: vol.grab
         expect: "this boot's journal has grabbed /dev/input/eventN"
+      - id: vol.topology
+        expect: "the daemon would grab the hhd virtual volume keyboard, or a free physical fallback, and says why"
+      - id: vol.holder
+        expect: "the physical AT keyboard is held only by hhd (or by nobody); SKIP without root"
       - id: vol.hwdb
         expect: "the force-release entry exists and hwdb.bin is newer"
       - id: vol.hold
@@ -308,6 +312,7 @@ components:
     caveats:
       - "do not combine with the hhd volume patch from oxp3-fixes.sh install"
       - "the standing alternative is the hhd patch, which is why the doc says pick one"
+      - "device discovery is by name/phys/capabilities plus /proc/*/fdinfo holders, never by eventN; exit 2 = no candidate, 3 = every grab refused"
     last_validated:
       date: 2026-11-09
       evidence: "tools/oxp3-voltap selftest and capture evidence in docs/hw/volume-buttons.md; not installed on the QA host (docs/QA.md row 34)"
@@ -391,6 +396,40 @@ components:
     last_validated:
       date: 2026-11-09
       evidence: "captured frames in docs/hw/rgb-frames-2026-11-09.txt; rgbd --check reports 5 zones / 10 frames (docs/QA.md row 40)"
+
+  - id: daemons
+    title: Daemon lifecycle (suspend/hotplug)
+    state: awaiting-install
+    group: hardware
+    headline: false
+    summary: "oxp3-homebtn, oxp3-rgbd and oxp3-voltap rediscover their device by identity after a resume or hotplug, back off with a logged reason, recreate uinput, and let systemd restart them only as a last resort; the journal and two verify checks prove a live fd and every recovered loss."
+    implementation:
+      - tools/oxp3_lifecycle.py
+      - tools/oxp3-homebtn.py
+      - tools/oxp3-rgbd.py
+      - tools/oxp3-voltap
+    doc: docs/DAEMONS.md
+    root_required: "no"
+    install:
+      summary: "no extra install: the lifecycle code ships with the existing homebtn/rgbd/voltap installs"
+      entrypoint: "sudo tools/oxp3-hw-install.sh --all"
+      steps:
+        - "or use the individual paths: --leds (home button), --rgb (keeper), --volume (rocker)"
+    verify:
+      - id: life.fd
+        expect: "every inspectable active daemon holds its device fd (the root daemon degrades to SKIP)"
+      - id: life.reconnect
+        expect: "this boot's journal has no device loss without a later successful open"
+      - id: life.sim
+        expect: "the offline reconnect/backoff/suspend suite passes"
+    dependencies: []
+    caveats:
+      - "life.sim only runs with --full (it runs the offline test suite)"
+      - "life.fd needs root to inspect /proc/<pid>/fd of the root-run oxp3-voltap"
+      - "systemd Restart=always is the safety net; normal resume/hotplug does not restart the daemon"
+    last_validated:
+      date: 2026-11-09
+      evidence: "tests/unit/test_lifecycle.py, test_homebtn_lifecycle.py and test_rgbd_lifecycle.py (offline, fake fds and clocks); tools/oxp3-verify.sh --selftest asserts the lifecycle parsers"
 
   - id: sleep
     title: Suspend and wake policy

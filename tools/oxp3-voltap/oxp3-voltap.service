@@ -1,19 +1,30 @@
 [Unit]
 Description=OneXPLAYER 3 volume rocker tap normaliser (oxp3-voltap)
+Documentation=file:/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/DAEMONS.md
 Documentation=file:/var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/docs/hw/volume-buttons.md
 # hhd owns the AT keyboard and publishes the volume keys on its own uinput
 # device; we sit on top of that device, so start after hhd when both run.
-After=hhd.service
-ConditionPathExists=/dev/uinput
+After=hhd.service dev-uinput.device
+# No ConditionPathExists=/dev/uinput: a condition failure leaves the unit
+# "inactive (dead)" with no restart, and uinput can appear after boot. The
+# daemon rescans and retries on its configured interval (VOLTAP_RESCAN_S).
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 EnvironmentFile=-/etc/oxp3-voltap.conf
 ExecStart=/usr/local/libexec/oxp3-voltap run
+# always + RestartSec: a clean exit from a transient device error must not be
+# masked, and repeated restarts must stay visible (no start rate limit).
 Restart=always
 RestartSec=2
+TimeoutStopSec=10
 User=root
+# JSON status written by the daemon: the auto-selected device, its holders and
+# any documented degraded state.  RuntimeDirectory is on tmpfs, mode 0755 so
+# `oxp3-voltap status` works without root; the file itself is 0644.
+RuntimeDirectory=oxp3-voltap
+RuntimeDirectoryMode=0755
 # The daemon only needs /dev/input/event* and /dev/uinput.  Root uid opens
 # them through DAC, so all capabilities can go.
 NoNewPrivileges=yes

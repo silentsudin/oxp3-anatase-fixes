@@ -368,6 +368,8 @@ would need a USB capture on Windows.
   so no exclusive-open failure is expected. A suspend/resume or device
   reset re-enumerates `hidrawN`; the daemon re-opens automatically,
   the LED tool must be re-run.
+  The reconnection contract (identity, backoff, journal lines, tests) is in
+  [../DAEMONS.md](../DAEMONS.md).
 * Rollback is in section 5; a Windows boot or a full power cycle clears
   any lighting state left in the MCU.
 

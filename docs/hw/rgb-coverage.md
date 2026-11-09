@@ -277,7 +277,8 @@ disturbance:
    `hhdctl get rgb.handheld.mode.mode` every 2 s and re-applies on change.
 3. **Resume detection** — `CLOCK_BOOTTIME` advances across suspend while
    `CLOCK_MONOTONIC` does not; a jump > 1.5 s means we woke up. No root,
-   no D-Bus policy needed.
+   no D-Bus policy needed. The detector, the monotonic watchdog and the
+   retry/backoff contract are documented in [../DAEMONS.md](../DAEMONS.md).
 4. **Device watcher** — re-applies when `/dev/hidrawN` appears (USB reset,
    suspend with re-enumeration). No exclusive open is used, so HHD and the
    daemon can both hold the node.

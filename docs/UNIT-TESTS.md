@@ -13,7 +13,7 @@ package installation**, and it writes only to a private temporary directory
 Recorded on this host (Python 3.15, no root):
 
 ```
-python3 -m unittest discover -s tests/unit -q     -> Ran 318 tests ... OK (skipped=1), ~0.6 s
+python3 -m unittest discover -s tests/unit -q     -> Ran 447 tests ... OK (skipped=1), ~1.3 s
 tools/repo-test.sh --fast  -> 25 suites: 19 pass, 0 fail, 6 skip, exit 0
 tools/repo-test.sh --full  -> 25 suites: 23 pass, 0 fail, 2 skip, exit 0
 ```
@@ -54,7 +54,7 @@ install-common tests run the shell tools in a stub `PATH` and a private
 | `test_rgbd.py` | `tools/oxp3-rgbd.py` | 23 | TOML schema matrix (effects, levels, `brightness=keep`, presets, defaults), unknown zone/colour/preset errors, zero-padded and hex zone ids, frame planning, `--check` report and exit codes, `--once` device/permission/config failures |
 | `test_powerctl.py` | `tools/oxp3-powerctl.py` | 86 | `parse_tau`, `fmt_w`/`fmt_tau`, `parse_charge_behaviour`, `probe_state` classification, fan curve parsing/interpolation/sorting, RAPL domain discovery and partial limits, write ordering (raise = PL4→PL2→PL1, lower = PL1→PL2→PL4), readback verification and tolerance, battery health/bypass classification, charge-limit and charge-behaviour success/failure/read-only/absent paths, state JSON, snapshot/restore, **exit codes 0/2/3/4** |
 | `test_adaptivetdp.py` | `tools/oxp3-adaptivetdp.py` | 39 | policy ladder and all clamps (soft/hard temperature, battery, floor, ceiling, opt-in), hysteresis dwell/min-interval/immediate/revert, `/proc/stat` delta maths and iowait, GPU/AC/battery sampling, daemon step logging (`change`/`noop`/`error`), restore, dry-run |
-| `test_voltap.py` | `tools/oxp3-voltap/oxp3-voltap` | 17 | the `Tapper` state machine: repeats, duplicates, bounce, watchdog release, orphan-release taps (hhd case), orphan after a normal tap, `--no-orphan-tap`, release-all, per-key state, stats |
+| `test_voltap.py` | `tools/oxp3-voltap/oxp3-voltap` | 49 | the `Tapper` state machine (repeats, duplicate press, bounce, watchdog release, orphan-release taps, `--no-orphan-tap`, release-all, per-key state, stats, EV_REP proxy); `/proc/bus/input/devices` + sysfs discovery and bitmap parsing; holder detection from `/proc/*/fdinfo`; hhd process detection; candidate classification/scoring and topology selection (hhd preferred, free physical fallback, explicit override, never the shim); the `GrabFSM` degraded/reconnect transitions and exit codes |
 | `test_imu.py` | `tools/oxp3-imu.py` | 24 | HHD controller-mode matrix (`motion_exposed`), sysfs readers, IIO discovery by ACPI id/label/fallback, sample decoding, rate maths, `rate`/`watch`/`info` output and exit codes |
 | `test_edid.py` | `tools/display/oxp3-edid.py` | 19 | synthetic EDID base block + CTA-861 extension: manufacturer id, chroma packing, detailed timing/refresh, descriptors, range limits, colourimetry, HDR static metadata, checksums, DisplayID/unknown extensions, gamut class, verdict, CLI exit 1 |
 | `test_icc.py` | `tools/display/oxp3-icc.py` | 22 | `xy_to_xyz`, matrix multiply/inverse, Bradford adaptation D65↔D50, white-normalised sRGB RGB→XYZ matrix, s15Fixed16/u8Fixed8 tag round trips, ICC v2 build→read round trip (header, 9 tags, D50 wtpt, gamma), corrupt-profile rejection, CLI `--check`/`--out`/`--from-edid` errors |
@@ -198,7 +198,7 @@ the risk describes; report it with the journal lines.
   through `repo-test.sh --fast`.
 * `make unit` was verified in the local build container
   (`localhost/oxp3-fixes-build:f45`, the host has no `make`): `Ran 302 tests …
-  OK (skipped=2)`. The difference from 318 is the container's missing
+  OK (skipped=2)`. The difference from 447 is the container's missing
   `python3-evdev`: `test_voltap` then skips at import with that reason (one
   module-level skip instead of 17 tests). Install `python3-evdev` in a CI image
   to run them.
