@@ -333,7 +333,48 @@ def find_crs_candidates(aml: bytes) -> tuple[CrsCandidate, ...]:
             previous = seen.get(digest)
             if previous is None or _rank(candidate) < _rank(previous):
                 seen[digest] = candidate
+    for digest, candidate in _scan_named_buffers(aml, markers, controllers).items():
+        previous = seen.get(digest)
+        if previous is None or _rank(candidate) < _rank(previous):
+            seen[digest] = candidate
     return tuple(sorted(seen.values(), key=_rank))
+
+
+def _scan_named_buffers(aml: bytes, markers, controllers):
+    """Fallback: ``_CRS`` may be a method returning named ResourceTemplates.
+
+    On this firmware ``FPRT._CRS`` is ``Return (ConcatenateResTemplate (SBFB,
+    SBFG))`` and the two templates are ``Name (SBFB, ResourceTemplate ())``
+    entries above the method, so nothing follows the ``_CRS`` nameseg.  Scan
+    every Buffer/ResourceTemplate in the table instead and keep the ones that
+    parse as a SPI connection.
+    """
+    out: dict[bytes, CrsCandidate] = {}
+    position = 0
+    while True:
+        op = aml.find(b"\x11", position)
+        if op < 0:
+            break
+        position = op + 1
+        try:
+            payload, total = _parse_buffer(aml, op)
+        except Exception:
+            continue
+        if not payload or len(payload) < 8:
+            continue
+        marker, distance, controller, controller_distance = _scope_for(
+            op, markers, controllers)
+        if not _validate(payload):
+            continue
+        digest = hashlib.sha256(payload).digest()
+        candidate = CrsCandidate(
+            offset=op, buffer_offset=op, payload=payload,
+            marker=marker, distance=distance, controller=controller,
+            controller_distance=controller_distance)
+        previous = out.get(digest)
+        if previous is None or _rank(candidate) < _rank(previous):
+            out[digest] = candidate
+    return out
 
 
 def _rank(candidate: CrsCandidate) -> tuple[int, int, int, int]:
