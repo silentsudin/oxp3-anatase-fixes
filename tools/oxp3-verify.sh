@@ -1624,6 +1624,8 @@ print(oxp3_hid.find_vendor_hidraw() or "")' "$REPO/tools" 2>/dev/null) || hsel="
     else
         if [ "$u_load" = "?" ] || [ -z "$u_load" ]; then
             record rgbd.unit leds "RGB keeper unit" UNKNOWN "no user systemd instance" "systemctl --user is unavailable in this context" "run inside the logged-in desktop session"
+        elif [ "$u_file" = disabled ] || [ "$u_active" = inactive ]; then
+            record rgbd.unit leds "RGB keeper unit" SKIP "HHD owns the RGB zones (per-zone daemon stopped/disabled by the handback tool)" "UnitFileState=$u_file ActiveState=$u_active" "per-zone custom colours again: tools/oxp3-rgb-handback.sh --undo"
         elif [ "$u_load" = not-found ]; then
             record rgbd.unit leds "RGB keeper unit" SKIP "HHD owns the RGB zones (per-zone daemon not installed)" "config present at $cfg but the unit is not installed; HHD drives left/right stick, G-key, top and connector" "per-zone custom colours: re-run the installer with --rgb-daemon, or tools/oxp3-rgb-handback.sh --undo"
         elif [ "$u_active" = active ]; then

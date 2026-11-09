@@ -74,7 +74,7 @@ ORIG_ARGS=("$@")
 SUDO_SHIM_DIR=""
 
 # fixed component order: root-heavy first, user scope last
-ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio decky)
+ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio sched gfx decky)
 
 say() { printf '\n== %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -86,7 +86,7 @@ usage() {
 
 Options:
   --all                     every component (volume sleep bluetooth power imu leds rgb audio decky)
-  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --decky
+  --volume --leds --sleep --bluetooth --power --rgb --rgb-daemon --imu --audio --sched --gfx --decky
                             select components (repeatable; --all selects every one)
   --volume-daemon           with --volume: install the LEGACY oxp3-voltap daemon
                             (grabs an input device; with hhd running it only
@@ -762,6 +762,43 @@ comp_audio_install() {
     fi
 }
 
+comp_sched_install() {
+    say "gaming CPU scheduler (scx_cosmos, sched_ext)"
+    if ! command -v scx_cosmos >/dev/null 2>&1; then
+        warn "scx_cosmos is not installed; layer it with: sudo rpm-ostree install scx-scheds (then reboot)"
+        return 0
+    fi
+    run install -D -m0644 "$repo/files/oxp3-gaming-sched.service" \
+        "$PREFIX/etc/systemd/system/oxp3-gaming-sched.service"
+    if (( DRY_RUN )); then
+        printf '  [dry-run] systemctl daemon-reload ; systemctl enable --now oxp3-gaming-sched\n'
+        return 0
+    fi
+    systemctl daemon-reload
+    systemctl enable --now oxp3-gaming-sched.service
+    if systemctl is-active --quiet oxp3-gaming-sched.service; then
+        printf '  oxp3-gaming-sched is active (scx_cosmos)\n'
+    else
+        warn "the unit is installed but not active; check: systemctl status oxp3-gaming-sched"
+    fi
+}
+
+comp_gfx_install() {
+    say "known-good host Mesa (Anatase XMX build)"
+    local tool=$repo/tools/oxp3-mesa-restore.sh
+    [[ -x $tool ]] || { warn "missing $tool"; return 0; }
+    if (( DRY_RUN )); then
+        printf '  [dry-run] %s status ; %s restore\n' "$tool" "$tool"
+        return 0
+    fi
+    if "$tool" restore; then
+        printf '  host Mesa restored to the recorded build\n'
+    else
+        warn "could not restore the known-good Mesa (see the tool output above)"
+    fi
+    printf '  note: this is the usroverlay hotfix layer, cleared by reboot; the Flatpak runtime override is separate\n'
+}
+
 comp_decky_install() {
     say "Decky status plugin (verified zip -> the Decky plugins directory)"
     local target artifact out
@@ -1242,7 +1279,7 @@ add_component() {
 
 while (( $# )); do
     case $1 in
-        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--decky)
+        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--rgb-daemon|--imu|--audio|--sched|--gfx|--decky)
             add_component "${1#--}"
             [[ $1 == --volume ]] && VOLUME_MODE=plugin ;;
         --volume-daemon)
