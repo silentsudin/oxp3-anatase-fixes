@@ -57,7 +57,7 @@ def fix_states(report):
 class FixtureSetTest(unittest.TestCase):
     def test_every_declared_fixture_exists(self):
         names = [name for name, _r, _f in TRIAGE.EXPECTATIONS]
-        self.assertEqual(len(names), 8)
+        self.assertEqual(len(names), 9)
         for name in names:
             with self.subTest(fixture=name):
                 self.assertTrue((FIXTURES / name).is_dir(), "%s is missing" % name)
@@ -97,8 +97,9 @@ class FindingsTest(unittest.TestCase):
             sorted([
                 "bt.initramfs-stale", "power.power-key-poweroff",
                 "sleep.trigger-uninstalled", "bt.dracut-missing", "sleep.no-attempt",
-                "xmx.flatpak-helper", "xmx.trace-absent", "verify.not-installed",
-                "decky.not-installed", "power.profile-unsaved", "volume.not-installed",
+                "sleep.stats-inconsistent", "xmx.flatpak-helper", "xmx.trace-absent",
+                "verify.not-installed", "decky.not-installed",
+                "power.profile-unsaved", "volume.not-installed",
                 "polkit.no-session-agent",
             ]),
         )
@@ -157,7 +158,7 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(
             sorted(rules_of(report)),
             sorted(["sleep.logind-not-restarted", "power.power-key-poweroff",
-                    "sleep.no-attempt"]),
+                    "sleep.no-attempt", "sleep.stats-inconsistent"]),
         )
         not_restarted = next(f for f in report["findings"]
                              if f["rule"] == "sleep.logind-not-restarted")
@@ -168,6 +169,25 @@ class FindingsTest(unittest.TestCase):
                          if f["rule"] == "sleep.no-attempt")
         # "success=0" must never be phrased as "suspend is broken".
         self.assertIn("not proof", no_attempt["conclusion"])
+
+    def test_hw_sleep_counter_without_success_is_explained(self):
+        # success=0 with last_hw_sleep>0: the PMC resume hook wrote a number the
+        # generic suspend path never counted. The rule must explain the counter
+        # semantics and point at the boot's own clocks, not call suspend broken.
+        report = analyse_fixture("sleep-hw-counter")
+        rule = next(item for item in report["rules"]
+                    if item["id"] == "sleep.stats-inconsistent")
+        self.assertEqual(rule["state"], "triggered")
+        self.assertEqual(rule["severity"], "info")
+        self.assertIn("PMC", rule["conclusion"])
+        self.assertIn("earlier boot", rule["conclusion"])
+        commands = " ".join(action["command"] for action in rule["actions"])
+        self.assertIn("PM: suspend entry", commands)
+        self.assertIn("CLOCK_BOOTTIME", commands)
+        self.assertIn("sleep-cycle-test.sh", commands)
+        # And the tuple is read from the sleep evidence, not invented.
+        files = {item["file"] for item in rule["evidence"]}
+        self.assertIn("sleep/sleep.txt", files)
 
     def test_volume_degraded_diagnosis(self):
         report = analyse_fixture("volume-degraded")

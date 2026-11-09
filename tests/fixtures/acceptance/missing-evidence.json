@@ -1,0 +1,1306 @@
+{
+  "schema": 1,
+  "tool": "oxp3-acceptance",
+  "version": "1.0.0",
+  "generated_at": "2026-11-09T00:00:00Z",
+  "repo": "/synthetic",
+  "kernel": "synthetic",
+  "root": false,
+  "mode": "default",
+  "components": [
+    {
+      "id": "gamescope",
+      "title": "Gamescope",
+      "state": "working",
+      "group": "driver-stack",
+      "headline": true,
+      "summary": "PQ HDR on the internal SDC AMS881KB01 OLED with no black screens, real peak brightness and the HDR brightness slider; VRR frame-pacing fixes from gamescope 3.16.29/3.17.0 and 30-144 Hz modes, from patches/gamescope.",
+      "implementation": [
+        "patches/gamescope",
+        "oxp3-fixes-fast.sh",
+        "oxp3-fixes.sh"
+      ],
+      "doc": "docs/hw/hdr-vibrance.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "Anatase's gamescope rebuilt with patches/gamescope and installed into the writable /usr overlay",
+        "entrypoint": "./oxp3-fixes-fast.sh install",
+        "steps": [
+          "rebuild after every Anatase update; the overlay install is lost on the next deployment"
+        ]
+      },
+      "verify": [
+        {
+          "command": "rpm -q gamescope",
+          "expect": "a gamescope build newer than stock with the .oxp3 build date"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "installed into the /usr overlay, so it must be reapplied after every Anatase update",
+        "HDR inside the Gamemode session is the only privileged part; the two gamescope flags are in hdr-vibrance.md 5.2"
+      ],
+      "last_validated": {
+        "date": "2026-11-08",
+        "evidence": "docs/WORKING-BUILD-2026-11-08.md records gamescope-3.16.23.3-1.fc45.oxp3.202610292302 as the working build; HDR/WCG reproduction in docs/hw/hdr-vibrance.md"
+      }
+    },
+    {
+      "id": "mesa",
+      "title": "Mesa",
+      "state": "working",
+      "group": "driver-stack",
+      "headline": true,
+      "summary": "Mesa main at the pinned commit (ea40598): Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling, the Panther Lake hang fix, HPLOC TLAS, mesh fixes and fewer per-frame driver ioctls (patches/mesa 0200/0201/0205/0206/0207/0208/0211) - the tree every measured win used.",
+      "implementation": [
+        "patches/mesa",
+        "oxp3-fixes-fast.sh",
+        "oxp3-fixes.sh"
+      ],
+      "doc": "docs/BEST-CONFIG.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "Anatase's Mesa package rebuilt at the pinned main commit with patches/mesa (x86_64 + i686), same overlay",
+        "entrypoint": "./oxp3-fixes-fast.sh install"
+      },
+      "verify": [
+        {
+          "id": "gfx.mesa",
+          "expect": "the host driver prefix matches the recorded build"
+        },
+        {
+          "id": "gfx.working",
+          "expect": "tools/check-working.sh finds the recorded working build"
+        },
+        {
+          "id": "inst.paths",
+          "expect": "install-common.sh sys_fw/host_mesa/flatpak_mesa resolve against the live host paths"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "only the Intel Vulkan driver is replaced; GL stays stock",
+        "rejected patches 0210 and 0209 stay in patches/rejected and are not applied"
+      ],
+      "last_validated": {
+        "date": "2026-11-08",
+        "evidence": "docs/WORKING-BUILD-2026-11-08.md host ec418f04 / runtime 4d043cc2; tools/check-working.sh 7/7 OK (docs/QA.md row 33)"
+      }
+    },
+    {
+      "id": "xess-xmx",
+      "title": "XeSS XMX",
+      "state": "partial",
+      "group": "driver-stack",
+      "headline": true,
+      "summary": "XeSS SR/FG on the Arc XMX units instead of DP4a for native Steam and Heroic; the shim, ControlLib and compiler install, but the driver CM patches are parked on Mesa 26.3 while the installer pins main. Flatpak Steam has its own deployment (docs/hw/flatpak-xmx.md) and is not trace-verified yet.",
+      "implementation": [
+        "patches/xess-26.3",
+        "patches/xess-main",
+        "tools/lib/install-common.sh",
+        "tools/oxp3-flatpak-xmx.sh",
+        "oxp3-fixes-fast.sh"
+      ],
+      "doc": "docs/xess-xmx.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "shim, ControlLib and IGC compiler installed by the driver installer into the Steam Flatpak environment",
+        "entrypoint": "./oxp3-fixes-fast.sh install"
+      },
+      "verify": [
+        {
+          "id": "gfx.xmx.driver",
+          "expect": "the XMX driver build prefix matches the recorded one"
+        },
+        {
+          "id": "gfx.xmx.helper",
+          "expect": "the nodgrf compile helper is in the game environment"
+        },
+        {
+          "id": "gfx.xmx.igc",
+          "expect": "IGC/ocloc is present"
+        },
+        {
+          "id": "gfx.xmx.kernels",
+          "expect": "the XMX kernel cache is populated"
+        },
+        {
+          "id": "gfx.xmx.icd",
+          "expect": "the per-game XMX ICD/env resolves"
+        },
+        {
+          "id": "gfx.xmx.trace",
+          "expect": "an igdext trace was produced; SKIP is expected unless tracing was enabled"
+        }
+      ],
+      "dependencies": [
+        "mesa"
+      ],
+      "caveats": [
+        "XMX is unavailable until the 26.3 driver CM patches are ported to Mesa main",
+        "gfx.xmx.trace SKIPs unless an igdext trace was produced for that launch",
+        "Flatpak Steam: env must come from per-game launch options, the shim must be copied into the game prefix, and the kernel cache lives in ~/.cache/xess-xmx; see docs/hw/flatpak-xmx.md (no permission change needed, trace pending)"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/state/oxp3-status-2026-11-09.json xmx rows (warn: trace absent); patch status recorded in docs/xess-xmx.md; Flatpak: tools/oxp3-flatpak-xmx.sh status --probe-sandbox shows all launch paths visible and ocloc runnable inside the org.anatase.Steam sandbox (docs/hw/flatpak-xmx.md)"
+      }
+    },
+    {
+      "id": "mangohud",
+      "title": "MangoHud",
+      "state": "working",
+      "group": "driver-stack",
+      "headline": true,
+      "summary": "CPU power, GPU power and VRAM in the Gamemode overlay on Intel iGPUs.",
+      "implementation": [
+        "patches/mangohud",
+        "oxp3-fixes-fast.sh",
+        "oxp3-fixes.sh"
+      ],
+      "doc": "docs/BEST-CONFIG.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "Anatase's MangoHud rebuilt with patches/mangohud, same overlay",
+        "entrypoint": "./oxp3-fixes-fast.sh install"
+      },
+      "verify": [
+        {
+          "command": "rpm -q mangohud",
+          "expect": "mangohud-0.8.4 or newer with the .oxp3 build date"
+        }
+      ],
+      "dependencies": [
+        "rapl-power"
+      ],
+      "caveats": [
+        "the CPU/GPU power rows need rapl-power installed; VRAM is read from sysfs"
+      ],
+      "last_validated": {
+        "date": "2026-11-08",
+        "evidence": "docs/WORKING-BUILD-2026-11-08.md records mangohud-0.8.4 as part of the working configuration"
+      }
+    },
+    {
+      "id": "kernel-modules",
+      "title": "Kernel modules",
+      "state": "working",
+      "group": "driver-stack",
+      "headline": true,
+      "summary": "xe (VBT VS/PE-O backport, 7.3 VRR/DSB flip timing, resume out-of-memory fix, 7.2.8-7.2.13 stable fixes, IBC v3 on PTL, eDP HDR switches) plus iwlwifi/iwlmld and btintel/btintel_pcie fixes, built for the installed kernel and layered as kmod-oxp3.",
+      "implementation": [
+        "patches/kernel",
+        "oxp3-fixes-fast.sh",
+        "tools/lib/install-common.sh"
+      ],
+      "doc": "docs/WORKING-BUILD-2026-11-08.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "built for the installed kernel, signed with your MOK, layered as kmod-oxp3 with a regenerated initramfs",
+        "entrypoint": "./oxp3-fixes-fast.sh install",
+        "steps": [
+          "run install twice after a kernel change: the first run stages modules/firmware and asks for a reboot",
+          "./oxp3-fixes-fast.sh mok-setup once, to enrol the module signing key"
+        ]
+      },
+      "verify": [
+        {
+          "id": "gfx.xe",
+          "expect": "modinfo -F filename xe resolves under updates/"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "a kernel change needs a rebuild and two installs; the MOK key must already be enrolled",
+        "patches Anatase already carries are skipped one by one"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/state/snapshot-2026-11-09.txt: modinfo xe resolves to the layered copy; tools/check-working.sh 'patched xe module layered'"
+      }
+    },
+    {
+      "id": "firmware",
+      "title": "Firmware",
+      "state": "working",
+      "group": "driver-stack",
+      "headline": true,
+      "summary": "Display DMC v2.20 (v2.36 caps VRR near 74 fps), Bluetooth 24.80 and CPU microcode 0x11c, layered in /usr/lib/firmware/updates.",
+      "implementation": [
+        "oxp3-fixes-fast.sh",
+        "tools/lib/install-common.sh"
+      ],
+      "doc": "docs/WORKING-BUILD-2026-11-08.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "layered as oxp3-firmware together with the modules, in /usr/lib/firmware/updates",
+        "entrypoint": "./oxp3-fixes-fast.sh install"
+      },
+      "verify": [
+        {
+          "command": "rpm -q oxp3-firmware",
+          "expect": "oxp3-firmware-<version> layered in the booted deployment"
+        }
+      ],
+      "dependencies": [
+        "kernel-modules"
+      ],
+      "caveats": [
+        "/usr/lib/firmware belongs to the ostree image; only /usr/lib/firmware/updates is ours"
+      ],
+      "last_validated": {
+        "date": "2026-11-08",
+        "evidence": "docs/WORKING-BUILD-2026-11-08.md lists the firmware set (DMC v2.20, BT 24.80, ucode 0x11c); docs/state/snapshot-2026-11-09.txt for the live deployment"
+      }
+    },
+    {
+      "id": "rapl-power",
+      "title": "rapl-power",
+      "state": "working",
+      "group": "driver-stack",
+      "headline": true,
+      "summary": "CPU/GPU power for the overlay without opening the RAPL counters to users; also publishes dram and psys so the SAGV/memory-frequency effect is measurable without root.",
+      "implementation": [
+        "files/rapl-power",
+        "files/rapl-power.service"
+      ],
+      "doc": "docs/hw/sagv.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "/usr/local/libexec plus a system unit, installed by the driver installer",
+        "entrypoint": "./oxp3-fixes-fast.sh install"
+      },
+      "verify": [
+        {
+          "id": "pwr.rapl",
+          "expect": "rapl-power.service publishes the CPU/GPU/dram/psys values"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "installed by oxp3-fixes*.sh, not by tools/oxp3-hw-install.sh"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/state/oxp3-status-2026-11-09.json rapl indicator ok (docs/QA.md rows 29 and 33)"
+      }
+    },
+    {
+      "id": "sched-ext",
+      "title": "sched_ext (scx_cosmos)",
+      "state": "awaiting-install",
+      "group": "driver-stack",
+      "headline": true,
+      "summary": "scx_cosmos measured +4.8% Cyberpunk average and +5.7% FPS/W over EEVDF with GravityMark unchanged; the gaming-scheduler unit is installed by the fast installer.",
+      "implementation": [
+        "files/oxp3-gaming-sched.service",
+        "oxp3-fixes-fast.sh",
+        "tools/cpu-sched-test.sh",
+        "docs/cpu-sched-results.csv"
+      ],
+      "doc": "docs/cpu-sched.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "installed and enabled by the fast installer when scx_cosmos is present, with an EEVDF fallback",
+        "entrypoint": "./oxp3-fixes-fast.sh install"
+      },
+      "verify": [
+        {
+          "id": "sched.state",
+          "expect": "sched_ext state is enabled"
+        },
+        {
+          "id": "sched.scx",
+          "expect": "scx_cosmos is the running scheduler"
+        },
+        {
+          "id": "sched.unit",
+          "expect": "oxp3-gaming-sched.service is installed and active"
+        }
+      ],
+      "dependencies": [
+        "kernel-modules"
+      ],
+      "caveats": [
+        "not installed at all when scx_cosmos is absent; the slow installer does not install it",
+        "EEVDF is restored automatically if the scheduler unloads"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/cpu-sched-results.csv round-3 measurements; docs/state/oxp3-status-2026-11-09.json shows the unit not installed (warn)"
+      }
+    },
+    {
+      "id": "volume",
+      "title": "Volume keys",
+      "state": "awaiting-install",
+      "group": "hardware",
+      "headline": false,
+      "summary": "A hold on the rocker ramps instead of stepping: our daemon prefers hhd's virtual volume keyboard, falls back to the free physical AT keyboard, degrades observably on EBUSY, and keeps a force-release hwdb as defence in depth.",
+      "implementation": [
+        "tools/oxp3-voltap",
+        "files/84-oxp3-volume-keys.hwdb",
+        "tools/lib/install-common.sh"
+      ],
+      "doc": "docs/hw/volume-buttons.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "the standalone daemon (orchestrator --volume) or the hhd patch applied by oxp3-fixes.sh",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --volume",
+        "steps": [
+          "alternative: sudo tools/oxp3-voltap/install.sh install --hwdb",
+          "never combine the two: both normalise the same key"
+        ]
+      },
+      "verify": [
+        {
+          "id": "vol.unit",
+          "expect": "oxp3-voltap is active (running)"
+        },
+        {
+          "id": "vol.grab",
+          "expect": "this boot's journal has grabbed /dev/input/eventN"
+        },
+        {
+          "id": "vol.topology",
+          "expect": "the daemon would grab the hhd virtual volume keyboard, or a free physical fallback, and says why"
+        },
+        {
+          "id": "vol.holder",
+          "expect": "the physical AT keyboard is held only by hhd (or by nobody); SKIP without root"
+        },
+        {
+          "id": "vol.hwdb",
+          "expect": "the force-release entry exists and hwdb.bin is newer"
+        },
+        {
+          "id": "vol.hold",
+          "expect": "a hold yields exactly one step, not a ramp",
+          "root": true
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "do not combine with the hhd volume patch from oxp3-fixes.sh install",
+        "the standing alternative is the hhd patch, which is why the doc says pick one",
+        "device discovery is by name/phys/capabilities plus /proc/*/fdinfo holders, never by eventN; exit 2 = no candidate, 3 = every grab refused"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "tools/oxp3-voltap selftest and capture evidence in docs/hw/volume-buttons.md; not installed on the QA host (docs/QA.md row 34)"
+      }
+    },
+    {
+      "id": "leds",
+      "title": "Home button and top LEDs",
+      "state": "awaiting-install",
+      "group": "hardware",
+      "headline": false,
+      "summary": "The home button maps to KEY_HOMEPAGE and the top LEDs speak the recovered vendor HID protocol (5 zones, 11 presets).",
+      "implementation": [
+        "tools/oxp3_hid.py",
+        "tools/oxp3-led.py",
+        "tools/oxp3-homebtn.py",
+        "tools/oxp3-hid.rules",
+        "tools/oxp3-homebtn.service"
+      ],
+      "doc": "docs/hw/home-button-leds.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "one udev rule plus a user unit, from the orchestrator",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --leds"
+      },
+      "verify": [
+        {
+          "id": "hid.rule",
+          "expect": "/etc/udev/rules.d/90-oxp3-hid.rules present"
+        },
+        {
+          "id": "hid.access",
+          "expect": "the vendor hidraw node is writable by the invoking user"
+        },
+        {
+          "id": "hid.node",
+          "expect": "the selected node is the one whose report descriptor claims usage page 0xFF00"
+        },
+        {
+          "id": "led.status",
+          "expect": "oxp3-led.py status lists the device, zones and presets"
+        },
+        {
+          "id": "led.zones",
+          "expect": "all 5 zones and 11 presets are addressable"
+        },
+        {
+          "id": "led.sides",
+          "expect": "empty --sides encodes 0 frames and a real selection still encodes them (dry-run)"
+        },
+        {
+          "id": "homebtn.unit",
+          "expect": "oxp3-homebtn.service is active (running)"
+        },
+        {
+          "id": "homebtn.mapping",
+          "expect": "a press becomes KEY_HOMEPAGE"
+        },
+        {
+          "id": "homebtn.press",
+          "expect": "this boot's user journal has listening and pressed lines"
+        },
+        {
+          "id": "led.write",
+          "expect": "one solid frame is accepted by the device"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "the user unit references the checkout path; moving the repo needs a re-run",
+        "hidraw is root-only until the udev rule is installed",
+        "a press is only observed after someone presses the button once"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "tools/oxp3-led.py selftest 9/9 and tools/oxp3_hid.py 9/9 (docs/QA.md rows 38-39); not installed on the QA host"
+      }
+    },
+    {
+      "id": "rgb",
+      "title": "Body RGB zones",
+      "state": "awaiting-install",
+      "group": "hardware",
+      "headline": false,
+      "summary": "5 addressable body zones and 11 presets encoded from the captured frames, with a keeper daemon that holds our state over HHD.",
+      "implementation": [
+        "tools/oxp3-rgbd.py",
+        "tools/oxp3-rgbd.service",
+        "tools/oxp3-rgbd.toml.example",
+        "tools/oxp3-led.py"
+      ],
+      "doc": "docs/hw/rgb-coverage.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "shared HID rule plus ~/.config/oxp3-rgb.toml and a user unit",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --rgb",
+        "steps": [
+          "systemctl --user enable --now oxp3-rgbd.service after the rule is installed"
+        ]
+      },
+      "verify": [
+        {
+          "id": "rgbd.unit",
+          "expect": "oxp3-rgbd.service active and ~/.config/oxp3-rgb.toml present"
+        },
+        {
+          "id": "rgbd.check",
+          "expect": "PASS config parses (5 zones, N frames)"
+        },
+        {
+          "id": "rgbd.timing",
+          "expect": "the hhd journal is readable (the settle/debounce watcher path) and the example config encodes frames"
+        }
+      ],
+      "dependencies": [
+        "leds"
+      ],
+      "caveats": [
+        "needs ~/.config/oxp3-rgb.toml; the installer copies the example only when it is absent"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "captured frames in docs/hw/rgb-frames-2026-11-09.txt; rgbd --check reports 5 zones / 10 frames (docs/QA.md row 40)"
+      }
+    },
+    {
+      "id": "daemons",
+      "title": "Daemon lifecycle (suspend/hotplug)",
+      "state": "awaiting-install",
+      "group": "hardware",
+      "headline": false,
+      "summary": "oxp3-homebtn, oxp3-rgbd and oxp3-voltap rediscover their device by identity after a resume or hotplug, back off with a logged reason, recreate uinput, and let systemd restart them only as a last resort; the journal and two verify checks prove a live fd and every recovered loss.",
+      "implementation": [
+        "tools/oxp3_lifecycle.py",
+        "tools/oxp3-homebtn.py",
+        "tools/oxp3-rgbd.py",
+        "tools/oxp3-voltap"
+      ],
+      "doc": "docs/DAEMONS.md",
+      "root_required": "no",
+      "install": {
+        "summary": "no extra install: the lifecycle code ships with the existing homebtn/rgbd/voltap installs",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --all",
+        "steps": [
+          "or use the individual paths: --leds (home button), --rgb (keeper), --volume (rocker)"
+        ]
+      },
+      "verify": [
+        {
+          "id": "life.fd",
+          "expect": "every inspectable active daemon holds its device fd (the root daemon degrades to SKIP)"
+        },
+        {
+          "id": "life.reconnect",
+          "expect": "this boot's journal has no device loss without a later successful open"
+        },
+        {
+          "id": "life.sim",
+          "expect": "the offline reconnect/backoff/suspend suite passes"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "life.sim only runs with --full (it runs the offline test suite)",
+        "life.fd needs root to inspect /proc/<pid>/fd of the root-run oxp3-voltap",
+        "systemd Restart=always is the safety net; normal resume/hotplug does not restart the daemon"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "tests/unit/test_lifecycle.py, test_homebtn_lifecycle.py and test_rgbd_lifecycle.py (offline, fake fds and clocks); tools/oxp3-verify.sh --selftest asserts the lifecycle parsers"
+      }
+    },
+    {
+      "id": "sleep",
+      "title": "Suspend and wake policy",
+      "state": "awaiting-install",
+      "group": "hardware",
+      "headline": false,
+      "summary": "Suspend works here (nine real s2idle cycles in the journal) but nothing in the current boots asks for it: logind had no Handle* policy (power-key default poweroff), KDE PowerDevil owns handle-*-key, and hhd only forwards the key to Steam in Gamepad mode; a shipped logind drop-in plus polkit rule make sleep reachable without a desktop session.",
+      "implementation": [
+        "files/oxp3-sleep-wakeup",
+        "files/oxp3-sleep-wakeup.service",
+        "files/oxp3-sleep-pre.service",
+        "files/oxp3-sleep-log.service",
+        "files/99-oxp3-sleep-wakeup.rules",
+        "files/logind-oxp3.conf",
+        "files/49-oxp3-suspend.rules",
+        "tools/sleep-power-measure.sh"
+      ],
+      "doc": "docs/hw/sleep-power.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "three units, the wake-source rule, the logind/polkit trigger policy and the measurement tool",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --sleep"
+      },
+      "verify": [
+        {
+          "id": "sleep.mem",
+          "expect": "/sys/power/mem_sleep selects [s2idle]"
+        },
+        {
+          "id": "sleep.units",
+          "expect": "oxp3-sleep-wakeup is active and reports the pre/log units"
+        },
+        {
+          "id": "sleep.wakeup",
+          "expect": "every listed USB id / PCI address has wakeup disabled"
+        },
+        {
+          "id": "sleep.trigger",
+          "expect": "logind drop-in parsed with HandlePowerKey/SuspendKey=suspend, polkit rule present, pkcheck says yes, no sleep block inhibitor"
+        },
+        {
+          "id": "sleep.audit",
+          "expect": "the capability table and the suspend record block"
+        },
+        {
+          "id": "sleep.stats",
+          "expect": "success > 0 and last_hw_sleep > 0 (a real suspend)"
+        },
+        {
+          "id": "sleep.measure",
+          "expect": "PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h"
+        },
+        {
+          "id": "sleep.suspend",
+          "expect": "one real s2idle cycle (rtcwake) with suspend_stats/success incremented; needs --full --with-changes and OXP3_ALLOW_SUSPEND=1",
+          "root": true
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "sleep.suspend is the only check that really suspends the machine; it needs --full --with-changes and OXP3_ALLOW_SUSPEND=1",
+        "no real suspend recorded since install: run sudo tools/sleep-power-measure.sh suspend -w 600, or sudo systemctl suspend",
+        "sleep.measure SKIPs on AC by design",
+        "the logind drop-in is read at logind start: restart systemd-logind (or reboot) after installing",
+        "PowerDevil keeps owning handle-power-key while Plasma runs, so HandlePowerKey=suspend only takes effect when no desktop claims the key"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "trigger audit: journalctl -b all -k shows 9x 'PM: suspend entry (s2idle)' (Oct 12-19) with the Oct 16 login1.Suspend call from Steam via xdg-dbus-proxy; systemd-analyze cat-config systemd/logind.conf = [Login] only (poweroff default); systemd-inhibit shows PowerDevil block on handle-*; pkcheck login1.suspend exit 0; hhd 4.1.12 plugins/powerbutton/base.py:30,89-106,311-338,341-371 quoted in docs/hw/sleep-power.md 2.5"
+      }
+    },
+    {
+      "id": "audio",
+      "title": "Speaker tuning (Harman APO)",
+      "state": "working",
+      "group": "hardware",
+      "headline": false,
+      "summary": "The Harman speaker APO recovered as a PipeWire filter-chain sink: 8 bands, -8 dB pre-gain, 0.03 dB model error.",
+      "implementation": [
+        "tools/audio",
+        "files/52-oxp3-speakers.conf",
+        "files/oxp3-audio-route.service",
+        "files/oxp3-audio-resume@.service"
+      ],
+      "doc": "docs/hw/audio-harman-apo.md",
+      "root_required": "no",
+      "install": {
+        "summary": "a PipeWire drop-in in ~/.config, no root",
+        "entrypoint": "tools/oxp3-hw-install.sh --audio --audio-activate",
+        "steps": [
+          "tools/audio/eq-on.sh makes the filter sink the default and restarts the user PipeWire"
+        ]
+      },
+      "verify": [
+        {
+          "id": "aud.scripts",
+          "expect": "eq-on.sh and eq-off.sh are executable"
+        },
+        {
+          "id": "aud.server",
+          "expect": "an audio session answers pactl info"
+        },
+        {
+          "id": "aud.eq",
+          "expect": "oxp3_speaker_eq.sink is loaded"
+        },
+        {
+          "id": "aud.dummy",
+          "expect": "the default sink is real, not auto_null"
+        },
+        {
+          "id": "aud.model",
+          "expect": "the 8-band model table (max -1.6 dB, min -15.0 dB)"
+        },
+        {
+          "id": "aud.activate",
+          "expect": "eq-on.sh activates the sink"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "keep experiments in an isolated PIPEWIRE_RUNTIME_DIR; a throwaway instance can wedge the SOF card"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md row 50 (8 bands, max -1.6 dB, min -15.0 dB); model reproduction in docs/hw/audio-harman-apo.md"
+      }
+    },
+    {
+      "id": "bluetooth",
+      "title": "Bluetooth firmware",
+      "state": "awaiting-install",
+      "group": "hardware",
+      "headline": false,
+      "summary": "The radio was dead because btintel_pcie has no MODULE_FIRMWARE() entries: the pinned upstream files go into /usr/lib/firmware/updates and into the initramfs.",
+      "implementation": [
+        "tools/oxp3-bt-firmware.sh"
+      ],
+      "doc": "docs/hw/bluetooth.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "pinned upstream files plus a dracut install_items drop-in",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --bluetooth",
+        "steps": [
+          "or use the component installer directly: sudo tools/oxp3-bt-firmware.sh"
+        ]
+      },
+      "verify": [
+        {
+          "id": "bt.files",
+          "expect": "both ibt-00a0-0291 iml/pci files in updates/intel"
+        },
+        {
+          "id": "bt.dracut",
+          "expect": "/etc/dracut.conf.d/60-oxp3-bt-firmware.conf present"
+        },
+        {
+          "id": "bt.journal",
+          "expect": "no 'Failed to load Intel firmware file' this boot"
+        },
+        {
+          "id": "bt.controller",
+          "expect": "btmgmt sees a controller address"
+        },
+        {
+          "id": "bt.diag",
+          "expect": "pinned hashes match and this boot loaded the firmware"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "the running initramfs only gets the files after a rebuild and reboot",
+        "--check downloads the pinned upstream files to verify hashes, so it is not offline"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md row 47: both files present with matching pinned hashes; this boot still logged the load failure (exit 1, correct)"
+      }
+    },
+    {
+      "id": "power",
+      "title": "Power envelope (PL1/PL2/PL4)",
+      "state": "working",
+      "group": "hardware",
+      "headline": false,
+      "summary": "PL1/PL2/PL4 and tau settable on both RAPL zones without kernel patches, plus a saved boot/resume profile and the tdp-sync invariant.",
+      "implementation": [
+        "tools/oxp3-powerctl.py",
+        "tools/oxp3-power-install.sh",
+        "files/oxp3-power-profile.service",
+        "files/oxp3-power-resume.service",
+        "files/oxp3-tdp-sync",
+        "files/oxp3-tdp-sync.service",
+        "files/oxp3-rapl-pp1.service"
+      ],
+      "doc": "docs/hw/power-fan.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "powerctl, the boot/resume units and the tdp-sync unit",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --power --power-profile balanced"
+      },
+      "verify": [
+        {
+          "id": "pwr.zones",
+          "expect": "both intel-rapl:0 and intel-rapl-mmio:0 report PL1/PL2/PL4"
+        },
+        {
+          "id": "pwr.pl1",
+          "expect": "MSR PL1 equals MMIO PL1 (tdp-sync invariant)"
+        },
+        {
+          "id": "pwr.profile",
+          "expect": "the saved profile maps to the live platform_profile"
+        },
+        {
+          "id": "pwr.order",
+          "expect": "a dry-run profile switch orders raises ceiling-first and puts every lowering last"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "the units are inert until a profile is saved",
+        "writes are root-only and were not executed in the offline round"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md row 44 (both zones read, dry-run write order); docs/state/snapshot-2026-11-09.txt PL1/PL2/PL4 35/37/122 W"
+      }
+    },
+    {
+      "id": "fan",
+      "title": "Fan curve",
+      "state": "partial",
+      "group": "hardware",
+      "headline": false,
+      "summary": "A manual PWM fan curve works through pwm1. The EC keeps no fan-curve table on this board (recovered 2026-11-09: its auto/manual, duty and tach registers are exactly what oxpec already drives), so userspace is the only place a curve can live.",
+      "implementation": [
+        "tools/oxp3-powerctl.py",
+        "files/oxp3-fan-curve.service"
+      ],
+      "doc": "docs/hw/power-fan.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "an opt-in unit installed inactive",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --power --fan-curve"
+      },
+      "verify": [
+        {
+          "id": "pwr.fan",
+          "expect": "fan1_input 1-12000 rpm and pwm1_enable 1 or 2"
+        },
+        {
+          "id": "fan.curvedup",
+          "expect": "a curve file with duplicate temperature points is accepted (dry-run, one step)"
+        },
+        {
+          "id": "fan.savemode",
+          "expect": "the state file records mode=manual after pwm1_enable was written",
+          "root": true
+        }
+      ],
+      "dependencies": [
+        "power"
+      ],
+      "caveats": [
+        "SIGTERM restores EC auto mode",
+        "the acpi_fan EIO in the fan node is a known cosmetic bug",
+        "there is no vendor EC curve table to expose: Devs*FanCurve are ASUS WMI device ids; see upstream/oxpec-ec-addresses.md",
+        "the EC tach is 0x58/0x59 (upstream oxpec, OXP_2_SENSOR_FAN_REG); older notes said 0x76"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md row 44 (curve picks pwm 124 at 61 C in a dry run); docs/hw/power-fan.md EC findings"
+      }
+    },
+    {
+      "id": "battery",
+      "title": "Battery care",
+      "state": "partial",
+      "group": "hardware",
+      "headline": false,
+      "summary": "Charge limit and charge-inhibit ('bypass') are reachable through the driver's EC bytes, now identified: 0xA3 percent cap and 0xA4 bit mask (0x00/0x01/0x03). The charger tier (0xE3) and the charge floor (0xA5) have addresses but no ABI and no proven units.",
+      "implementation": [
+        "tools/oxp3-powerctl.py"
+      ],
+      "doc": "docs/hw/battery-tdp.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "saved through the power tool after the power units are installed",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --power --battery-limit 80 --battery-bypass on"
+      },
+      "verify": [
+        {
+          "id": "bat.threshold",
+          "expect": "a readable charge_control_end_threshold (80 when limited)"
+        },
+        {
+          "id": "bat.behaviour",
+          "expect": "charge_behaviour lists inhibit-charge"
+        },
+        {
+          "id": "bat.limit",
+          "expect": "no argument resolves to 100 % ('off') in a dry run and the real call is refused without root"
+        }
+      ],
+      "dependencies": [
+        "power"
+      ],
+      "caveats": [
+        "the EC keeps the last saved limit until it is changed again",
+        "bypass is charge-inhibit (EC 0xA4), the same byte and values the vendor writes; whether the EC also isolates the pack from the rail is unproven",
+        "addresses: upstream/oxpec-ec-addresses.md; mode 1 (0x01) is awake-only, mode 2 (0x03) is always"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md row 44 (limit 80, behaviour auto on the QA host); docs/hw/battery-tdp.md"
+      }
+    },
+    {
+      "id": "adaptive-tdp",
+      "title": "Adaptive TDP",
+      "state": "awaiting-install",
+      "group": "hardware",
+      "headline": false,
+      "summary": "An opt-in adaptive-TDP daemon that emits one decision object per interval and is installed inactive so it cannot change power policy by accident.",
+      "implementation": [
+        "tools/oxp3-adaptivetdp.py",
+        "files/oxp3-adaptivetdp.service"
+      ],
+      "doc": "docs/hw/battery-tdp.md",
+      "root_required": "yes",
+      "install": {
+        "summary": "installed but inactive; enable only after validating",
+        "entrypoint": "sudo tools/oxp3-hw-install.sh --power --adaptive-tdp",
+        "steps": [
+          "sudo systemctl enable --now oxp3-adaptivetdp.service"
+        ]
+      },
+      "verify": [
+        {
+          "id": "pwr.adaptive",
+          "expect": "inactive and disabled after install; FAIL when enabled but dead"
+        },
+        {
+          "id": "pwr.ac",
+          "expect": "on_ac is detected (so the battery clamps are live); SKIP with no AC/Mains node"
+        }
+      ],
+      "dependencies": [
+        "power"
+      ],
+      "caveats": [
+        "SIGTERM restores the preset that was active when it started",
+        "not enabled by --all"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md row 43: one dry-run decision object, no writes, no log entry"
+      }
+    },
+    {
+      "id": "sagv",
+      "title": "SAGV / memory frequency",
+      "state": "blocked",
+      "group": "hardware",
+      "headline": true,
+      "summary": "No Linux control exists: Windows pins the SAGV/QCLK-GV point through an MCHBAR register pair, while Linux only has the boot-time xe.enable_sagv switch, which can only disable.",
+      "implementation": [
+        "tools/oxp3-sagv.sh",
+        "upstream/intel-pmdemand-sagv-request.md"
+      ],
+      "doc": "docs/hw/sagv.md",
+      "root_required": "no",
+      "install": {
+        "summary": "nothing is installed; the probe is read-only and needs no root"
+      },
+      "verify": [
+        {
+          "command": "tools/oxp3-sagv.sh status",
+          "expect": "display v30, enable_sagv 0400, no point interface, MCHBAR unreadable, RAPL domains listed"
+        }
+      ],
+      "dependencies": [
+        "rapl-power"
+      ],
+      "caveats": [
+        "changing the point needs kernel work; the vendor path is recorded in upstream/intel-pmdemand-sagv-request.md",
+        "rapl-power's dram/psys values are what make the effect measurable"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md rows 45-46 (status ok, probe exits 3 by design); docs/hw/sagv.md vendor path recovery"
+      }
+    },
+    {
+      "id": "display",
+      "title": "Display HDR / vibrance / colour",
+      "state": "working",
+      "group": "hardware",
+      "headline": false,
+      "summary": "The internal OLED is 10-bit PQ/HDR10 wide gamut and Plasma toggles it; our ICC profile, vibrance shader and one per-game launch wrapper ship, while Gamemode needs the gamescope session flags.",
+      "implementation": [
+        "tools/display",
+        "tools/oxp3-gamewrap.sh",
+        "tools/lib/oxp3_gamewrap.py",
+        "tools/oxp3-gamewrap.toml.example",
+        "patches/gamescope"
+      ],
+      "doc": "docs/hw/hdr-vibrance.md",
+      "root_required": "partial",
+      "install": {
+        "summary": "user-scope status/HDR/ICC/vibrance and per-game launch composition; the Gamemode flag is the only privileged part",
+        "steps": [
+          "tools/display/display-mode.sh hdr on",
+          "tools/display/vibrance.sh install && tools/display/vibrance.sh set 35",
+          "install -m 0644 tools/oxp3-gamewrap.toml.example ~/.config/oxp3-gamewrap.toml (then opt games in; docs/LAUNCH.md)"
+        ]
+      },
+      "verify": [
+        {
+          "id": "dsp.hdr",
+          "expect": "HDR/WCG/depth/VRR reported for eDP-1 (HDR off is a valid state)"
+        },
+        {
+          "id": "dsp.icc",
+          "expect": "the ICC profile state is reported"
+        },
+        {
+          "id": "dsp.panel",
+          "expect": "the EDID verdict has 10-bit, PQ/HDR10 and BT.2020"
+        },
+        {
+          "id": "dsp.vibrance",
+          "expect": "the saturation shader tooling is present"
+        },
+        {
+          "command": "tools/oxp3-gamewrap.sh --status --json",
+          "expect": "one decision object per feature; HDR is skipped unless the panel reports HDR on and the app opted in"
+        }
+      ],
+      "dependencies": [
+        "gamescope"
+      ],
+      "caveats": [
+        "HDR in the Gamemode session is the only part that needs root",
+        "the panel is wide gamut; an ICC profile is what keeps SDR colours sane",
+        "feature composition for a launch is tools/oxp3-gamewrap.sh (docs/LAUNCH.md): per-game opt-in, HDR never forced, MangoHud config untouched",
+        "Flatpak Steam gets the XMX variables via tools/oxp3-flatpak-xmx.sh plus OXP3_XMX_ENV_FILE in the launch options (docs/hw/flatpak-xmx.md)"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md rows 51-52 (eDP-1 1920x1200@144, 10-bit, HDR off, WCG off); reproduction in docs/hw/hdr-vibrance.md"
+      }
+    },
+    {
+      "id": "imu",
+      "title": "IMU / gyro",
+      "state": "not-a-gap",
+      "group": "hardware",
+      "headline": false,
+      "summary": "The BMI260 works out of the box at 100 Hz and HHD syncs the gyro into the emulated Steam Controller; our tool is diagnostics only.",
+      "implementation": [
+        "tools/oxp3-imu.py",
+        "files/oxp3-bmi160.conf"
+      ],
+      "doc": "docs/hw/camera-imu.md",
+      "root_required": "no",
+      "install": {
+        "summary": "nothing to install; --imu only writes the modprobe snippet that keeps BMI260 bound"
+      },
+      "verify": [
+        {
+          "id": "imu.selftest",
+          "expect": "RESULT: PASS (0 warning(s)) - IMU usable, gyro exposed to Steam"
+        },
+        {
+          "id": "imu.iio",
+          "expect": "the ACPI-id/label device is selected, not the i2c in_anglvel_x_raw fallback"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "HHD must be running for the gyro-to-Steam path",
+        "the blacklist is only needed if the sensor is misdetected as BMI160"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md row 42: 16 OK, RESULT PASS (0 warnings), BMI260 at ~99 Hz"
+      }
+    },
+    {
+      "id": "camera",
+      "title": "Camera / IPU7",
+      "state": "not-a-gap",
+      "group": "hardware",
+      "headline": false,
+      "summary": "There is no camera hardware on this unit: every OVTI/INT3472 device is _STA=0 and there is no IPU7 function, so this is not a Linux gap.",
+      "implementation": [
+        "tools/oxp3-imu.py"
+      ],
+      "doc": "docs/hw/camera-imu.md",
+      "root_required": "not-applicable",
+      "install": {
+        "summary": "nothing; not applicable to this unit"
+      },
+      "verify": [
+        {
+          "command": "grep -H . /sys/bus/acpi/devices/OVTI*/status /sys/bus/acpi/devices/INT3472*/status",
+          "expect": "0 on every listed device (camera function disabled / absent)"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "other OXP3 SKUs may populate the camera; the ACPI dump in the doc is this unit"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/hw/camera-imu.md ACPI dump: every OVTI/INT3472 _STA=0, no IPU7 function"
+      }
+    },
+    {
+      "id": "fingerprint",
+      "title": "Fingerprint reader",
+      "state": "partial",
+      "group": "hardware",
+      "headline": true,
+      "summary": "Betterlife BF63112 on Intel LPSS SPI: the protocol is recovered byte-for-byte with a tested userspace library, an offline-tested SPI transport/_CRS parser and a driver that compiles, but enrol/verify are unimplemented and there is no kernel driver.",
+      "implementation": [
+        "tools/fingerprint"
+      ],
+      "doc": "docs/hw/fingerprint.md",
+      "root_required": "partial",
+      "install": {
+        "summary": "nothing is installed; tools/fingerprint/ holds the probe and the compile-checked skeleton"
+      },
+      "verify": [
+        {
+          "command": "python3 -m unittest discover -s tools/fingerprint/tests",
+          "expect": "Ran 289 tests ... OK"
+        },
+        {
+          "command": "tools/fingerprint/tests/run-c-tests.sh",
+          "expect": "ok: 324 checks, 10 vectors (podman fallback when no host compiler)"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "never run against the sensor; every runtime claim is marked inferred or unknown",
+        "the probe needs spidev bound and root, and the driver needs libfprint's internal API"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "2026-11-09: 289 Python tests OK (incl. SPI transport and _CRS parser), 324 C checks/10 vectors, session crypto OK; syntax-real OK against libfprint v1.94.9"
+      }
+    },
+    {
+      "id": "decky",
+      "title": "Decky status plugin",
+      "state": "working",
+      "group": "diagnostics",
+      "headline": true,
+      "summary": "A Decky Loader plugin and a headless CLI over one backend, showing live Mesa, XMX, sched_ext and hardware-fix status in the Steam Quick Access Menu.",
+      "implementation": [
+        "tools/decky-oxp3-status",
+        "tools/oxp3-status.sh"
+      ],
+      "doc": "docs/decky-plugin.md",
+      "root_required": "no",
+      "install": {
+        "summary": "offline build + typecheck + bundle, then copy the packaged plugin into the Decky homebrew plugins directory",
+        "entrypoint": "tools/decky-oxp3-status/build.sh --offline"
+      },
+      "verify": [
+        {
+          "id": "decky.dir",
+          "expect": "the plugin directory has plugin.json, main.py and dist/"
+        },
+        {
+          "id": "decky.backend",
+          "expect": "the backend imports in the plugin directory"
+        },
+        {
+          "id": "decky.status",
+          "expect": "the status backend agrees the machine is usable"
+        }
+      ],
+      "dependencies": [],
+      "caveats": [
+        "read-only and offline by design; a missing component reports SKIP/warn",
+        "the panel and tools/oxp3-status.sh share main.py, so they cannot drift"
+      ],
+      "last_validated": {
+        "date": "2026-11-09",
+        "evidence": "docs/QA.md rows 9-12: offline npm ci, tsc, smoke, 60-check selftest, byte-identical 33,843 B zip"
+      }
+    }
+  ],
+  "components_error": "",
+  "files": {
+    "tests/unit/test_voltap.py": true,
+    "tests/integration/volume/run.sh": true,
+    "docs/hw/volume-buttons.md": true,
+    "tests/unit/test_led.py": true,
+    "tests/unit/test_hid.py": true,
+    "tests/unit/test_rgbd.py": true,
+    "tests/unit/test_homebtn_lifecycle.py": true,
+    "docs/hw/home-button-leds.md": true,
+    "docs/hw/rgb-frames-2026-11-09.txt": true,
+    "tests/unit/test_sleep_cycles.py": true,
+    "tests/unit/test_sleep_trigger.py": true,
+    "docs/SLEEP-TEST.md": true,
+    "tests/fixtures/sleep-cycles": true,
+    "tests/unit/test_eq_measure.py": true,
+    "docs/audio-validation.md": true,
+    "tools/audio/test-isolation.sh": true,
+    "tools/fingerprint/tests": true,
+    "tools/fingerprint/oxp3-fp-session.sh": true,
+    "docs/hw/fingerprint.md": true,
+    "docs/hw/fingerprint-session.md": true,
+    "tools/decky-oxp3-status": true,
+    "docs/decky-plugin.md": true,
+    "docs/hw/gap-audit.md": true,
+    "docs/state/audit-2026-11-09.txt": true,
+    "docs/hw/components.yaml": true,
+    "patches/gamescope": true,
+    "oxp3-fixes-fast.sh": true,
+    "oxp3-fixes.sh": true,
+    "patches/mesa": true,
+    "patches/xess-26.3": true,
+    "patches/xess-main": true,
+    "tools/lib/install-common.sh": true,
+    "tools/oxp3-flatpak-xmx.sh": true,
+    "patches/mangohud": true,
+    "patches/kernel": true,
+    "files/rapl-power": true,
+    "files/rapl-power.service": true,
+    "files/oxp3-gaming-sched.service": true,
+    "tools/cpu-sched-test.sh": true,
+    "docs/cpu-sched-results.csv": true,
+    "tools/oxp3-voltap": true,
+    "files/84-oxp3-volume-keys.hwdb": true,
+    "tools/oxp3_hid.py": true,
+    "tools/oxp3-led.py": true,
+    "tools/oxp3-homebtn.py": true,
+    "tools/oxp3-hid.rules": true,
+    "tools/oxp3-homebtn.service": true,
+    "tools/oxp3-rgbd.py": true,
+    "tools/oxp3-rgbd.service": true,
+    "tools/oxp3-rgbd.toml.example": true,
+    "tools/oxp3_lifecycle.py": true,
+    "files/oxp3-sleep-wakeup": true,
+    "files/oxp3-sleep-wakeup.service": true,
+    "files/oxp3-sleep-pre.service": true,
+    "files/oxp3-sleep-log.service": true,
+    "files/99-oxp3-sleep-wakeup.rules": true,
+    "files/logind-oxp3.conf": true,
+    "files/49-oxp3-suspend.rules": true,
+    "tools/sleep-power-measure.sh": true,
+    "tools/audio": true,
+    "files/52-oxp3-speakers.conf": true,
+    "files/oxp3-audio-route.service": true,
+    "files/oxp3-audio-resume@.service": true,
+    "tools/oxp3-bt-firmware.sh": true,
+    "tools/oxp3-powerctl.py": true,
+    "tools/oxp3-power-install.sh": true,
+    "files/oxp3-power-profile.service": true,
+    "files/oxp3-power-resume.service": true,
+    "files/oxp3-tdp-sync": true,
+    "files/oxp3-tdp-sync.service": true,
+    "files/oxp3-rapl-pp1.service": true,
+    "files/oxp3-fan-curve.service": true,
+    "tools/oxp3-adaptivetdp.py": true,
+    "files/oxp3-adaptivetdp.service": true,
+    "tools/oxp3-sagv.sh": true,
+    "upstream/intel-pmdemand-sagv-request.md": true,
+    "tools/display": true,
+    "tools/oxp3-gamewrap.sh": true,
+    "tools/lib/oxp3_gamewrap.py": true,
+    "tools/oxp3-gamewrap.toml.example": true,
+    "tools/oxp3-imu.py": true,
+    "files/oxp3-bmi160.conf": true,
+    "tools/fingerprint": true,
+    "tools/oxp3-status.sh": true
+  },
+  "artifacts": {
+    "sleep_cycles_good": {
+      "found": false,
+      "path": "",
+      "detail": "synthetic"
+    },
+    "fingerprint_transcript": {
+      "found": false,
+      "path": "",
+      "detail": "synthetic"
+    },
+    "signoffs": {}
+  },
+  "sources": {
+    "verify": {
+      "status": "missing",
+      "rc": 127,
+      "duration_ms": 0,
+      "argv": [
+        "synthetic"
+      ],
+      "error": "synthetic missing source",
+      "data": null
+    },
+    "health": {
+      "status": "missing",
+      "rc": 127,
+      "duration_ms": 0,
+      "argv": [
+        "synthetic"
+      ],
+      "error": "synthetic missing source",
+      "data": null
+    },
+    "repo_test": {
+      "status": "missing",
+      "rc": 127,
+      "duration_ms": 0,
+      "argv": [
+        "synthetic"
+      ],
+      "error": "synthetic missing source",
+      "data": null
+    },
+    "preflight": null,
+    "gen_docs": null
+  },
+  "expect": {
+    "verdicts": {
+      "volume": "awaiting-hardware",
+      "leds": "awaiting-hardware",
+      "sleep": "awaiting-hardware",
+      "audio": "awaiting-hardware",
+      "fingerprint": "awaiting-hardware",
+      "decky": "awaiting-hardware",
+      "audit": "blocked"
+    },
+    "complete": 0,
+    "automated_complete": 0,
+    "exit_code": 1,
+    "no_device_claim": true
+  }
+}

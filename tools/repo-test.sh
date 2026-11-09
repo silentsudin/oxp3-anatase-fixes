@@ -763,6 +763,71 @@ PY
     printf 'selftest ok; live JSON schema ok; quiet one-line ok\n'
 }
 
+# Goal-level acceptance: the offline aggregation fixtures (all-green,
+# awaiting-install, blocked, missing-evidence) plus a live contract run.  The
+# live run composes the same read-only reporters as the health suite; exit 1 is
+# data (a blocked item or a failing live check), 3 means no source ran.
+suite_acceptance() {
+    local tool=$REPO/tools/oxp3-acceptance.sh
+    [ -x "$tool" ] || skip "tools/oxp3-acceptance.sh is missing"
+    [ -f "$REPO/tools/oxp3_acceptance.py" ] || skip "tools/oxp3_acceptance.py is missing"
+    [ -d "$REPO/tests/fixtures/acceptance" ] || skip "tests/fixtures/acceptance is missing"
+    need python3
+    cd "$REPO" || exit 1
+    "$tool" --selftest || return 1
+
+    local out=$LOGDIR/acceptance.json bundle=$LOGDIR/acceptance-bundle.json rc=0
+    "$tool" --json --save "$bundle" >"$out" || rc=$?
+    case $rc in
+        0|1) ;;
+        3) skip "no acceptance evidence source could run in this environment" ;;
+        *) printf 'FAIL acceptance --json exited %s\n' "$rc"; return 1 ;;
+    esac
+    [ -s "$out" ] || { printf 'FAIL acceptance wrote no JSON\n'; return 1; }
+    python3 - "$out" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+assert data.get("schema") == 1, data.get("schema")
+assert data.get("tool") == "oxp3-acceptance", data.get("tool")
+items = data.get("items")
+assert isinstance(items, list) and len(items) == 7, items
+vocab = data.get("verdict_vocabulary") or []
+assert vocab == [
+    "implemented-and-proven-offline", "awaiting-install",
+    "awaiting-hardware", "blocked", "not-a-gap",
+], vocab
+counts = data.get("counts") or {}
+assert counts.get("items") == 7, counts
+assert sum((counts.get("by_verdict") or {}).values()) == 7, counts
+for item in items:
+    assert item["verdict"] in vocab, item
+    assert isinstance(item["complete"], bool), item
+    # The core promise: no item may be complete without its device evidence.
+    if item["complete"]:
+        assert item["device"]["complete"] or item["verdict"] == "not-a-gap", item
+print("live JSON schema ok; 7 items; closed verdict vocabulary; no offline-only completion")
+PY
+
+    # Render the text report from the bundle the JSON run already collected, so
+    # the suite runs the live probes exactly once.
+    local text=$LOGDIR/acceptance.txt trc=0
+    "$tool" --evidence "$bundle" >"$text" 2>&1 || trc=$?
+    case $trc in
+        0|1) ;;
+        *) printf 'FAIL acceptance text run exited %s\n' "$trc"; return 1 ;;
+    esac
+    [ "$(grep -c '^\[' "$text")" -eq 7 ] \
+        || { printf 'FAIL acceptance text does not list 7 items\n'; return 1; }
+    grep -q '^== summary: 7 items' "$text" \
+        || { printf 'FAIL acceptance text has no summary line\n'; return 1; }
+    grep -q 'offline claim only' "$text" \
+        || { printf 'FAIL acceptance text lost the offline-only statement\n'; return 1; }
+    printf 'selftest ok; live JSON schema ok; 7-item text report ok\n'
+}
+
 # The sleep-cycle harness: offline analyser fixtures plus the read-only plan
 # and state modes.  A real suspend cycle needs root *and* an explicit owner
 # decision, so this suite never starts one; without root it reports the offline
@@ -942,6 +1007,9 @@ def_suite cli-contracts fast medium 180 0 \
 def_suite health fast medium 180 0 \
     "one-command health front-end: offline verdict selftest + live JSON/quiet contract" \
     "tools/oxp3-health.sh --selftest && ... --json && ... --quiet"
+def_suite acceptance fast medium 240 0 \
+    "goal-level acceptance: fixture aggregation selftest + live JSON/text contract" \
+    "tools/oxp3-acceptance.sh --selftest && ... --json"
 def_suite sleep-cycles fast fast 120 0 \
     "sleep-cycle harness: analyser fixtures, dry-run plan, no-suspend report (real cycles: root)" \
     "tools/sleep-cycle-test.sh --selftest && --dry-run && --no-suspend"

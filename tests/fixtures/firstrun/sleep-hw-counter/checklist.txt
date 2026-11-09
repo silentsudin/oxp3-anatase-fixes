@@ -1,0 +1,27 @@
+oxp3 first-run checklist - OneXPlayer 3 hardware fixes
+repo:   ~/git/linux_scratch/oxp3-anatase-fixes
+user:   <user>   home: ~   root: no
+kernel: 7.2.7-an28.fc45.x86_64
+
+ #  step                               state    detail
+---  ---------------------------------- -------- ------------------------------
+  1  driver stack (kernel, Mesa, gamesc ok       
+  2  hardware install (libexec helpers) todo     0/5 helpers installed
+  3  udev rules + volume force-release  todo     0/2 rules, hwdb missing
+  4  sleep trigger policy (logind drop- todo     drop-in missing, polkit missing
+  5  logind restarted after the drop-in unknown  drop-in absent
+  6  suspend policy units enabled       todo     0/3 enabled
+  7  Bluetooth firmware (updates/ + ini partial  firmware 2/2, dracut missing, hci0 present
+  8  power envelope (PL1/PL2/PL4)       todo     profile not saved; PL1 live 35.0 W
+  9  battery charge limit / inhibit     ok       
+ 10  IMU modprobe blacklist             ok       
+ 11  speaker EQ drop-in                 ok       
+ 12  RGB keeper config                  todo     missing
+ 13  home button / LED user unit        todo     not installed
+ 14  HDR / ICC / vibrance tooling       ok       
+ 15  XMX driver + per-game ICD          ok       
+ 16  Decky status plugin                todo     oxp3-status not installed (14 plugin(s))
+ 17  a real suspend recorded since boot todo     success=0 hw_sleep=120000000us
+ 18  evidence bundle collected          ok       
+
+checklist: 18 row(s)

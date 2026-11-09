@@ -1,0 +1,68 @@
+oxp3-verify 1.0.0  mode=default  kernel=7.2.7-an28.fc45.x86_64  root=no
+
+[SKIP  ] -          vol.unit               not installed
+[SKIP  ] -          vol.grab               daemon not running
+[PASS  ] -          vol.topology           physical AT keyboard is free (at-kbd)
+[SKIP  ] -          vol.holder             holder scan needs root (/proc/*/fdinfo)
+[SKIP  ] -          vol.hwdb               not installed
+[SKIP  ] -          hid.rule               not installed
+[PASS  ] -          led.status             protocol readable on /dev/hidraw4
+[PASS  ] -          led.zones              5 zones, 11 presets
+[SKIP  ] -          hid.access             udev rule not installed
+[SKIP  ] -          homebtn.unit           user unit not installed
+[SKIP  ] -          homebtn.mapping        unit not installed
+[SKIP  ] -          homebtn.press          unit not installed
+[SKIP  ] -          led.write              gated: only with --full
+[SKIP  ] -          rgbd.unit              no user config
+[SKIP  ] -          rgbd.check             no user config
+[SKIP  ] -          life.fd                no lifecycle daemon active
+[SKIP  ] -          life.reconnect         no lifecycle journal in this boot
+[SKIP  ] -          life.sim               gated: only with --full
+[PASS  ] -          sleep.mem              mem_sleep: [s2idle] deep
+[UNKNOWN] -          sleep.stats            last_hw_sleep=120000000us with success=0: not a completed suspend
+[SKIP  ] -          sleep.units            not installed
+[SKIP  ] -          sleep.wakeup           sleep policy not installed
+[SKIP  ] -          sleep.trigger          trigger policy not installed
+[PASS  ] -          sleep.audit            capability and record readable
+[SKIP  ] -          sleep.suspend          gated: needs --full, --with-changes and OXP3_ALLOW_SUSPEND=1
+[PASS  ] -          bt.files               2/2 pinned files present
+[SKIP  ] -          bt.dracut              no dracut drop-in
+[FAIL  ] -          bt.journal             kernel logged a firmware load failure
+[FAIL  ] -          bt.controller          hci0 exists but btmgmt lists 0 controllers (no firmware)
+[FAIL  ] -          bt.diag                action needed (action)
+[PASS  ] -          pwr.zones              both zones readable
+[PASS  ] -          pwr.pl1                PL1 35 W on both zones (tdp-sync invariant holds)
+[SKIP  ] -          pwr.profile            no saved profile
+[PASS  ] -          pwr.fan                auto mode, pwm 51/255 (enable=2), 1399 rpm
+[SKIP  ] -          pwr.adaptive           not installed (opt-in not used)
+[PASS  ] -          pwr.rapl               active
+[PASS  ] -          bat.threshold          charge_control_end_threshold=80
+[PASS  ] -          bat.behaviour          charge_behaviour: [auto] inhibit-charge
+[PASS  ] -          aud.scripts            eq-on.sh and eq-off.sh executable
+[PASS  ] -          aud.server             audio server reachable
+[PASS  ] -          aud.eq                 oxp3_speaker_eq.sink is the default sink
+[PASS  ] -          aud.dummy              default sink: oxp3_speaker_eq.sink
+[PASS  ] -          aud.model              8-band model reproduces (pre-gain -8 dB)
+[PASS  ] -          dsp.hdr                HDR=disabled, WCG=disabled
+[PASS  ] -          dsp.icc                no ICC profile applied (panel profile: none)
+[PASS  ] -          dsp.panel              EDID reports 10-bit PQ/HDR10 wide gamut
+[PASS  ] -          dsp.vibrance           shader present
+[PASS  ] -          gfx.mesa               ec418f04e589965a (match)
+[PASS  ] -          gfx.xmx.driver         4b1d55ea9483417f (match)
+[PASS  ] -          gfx.xmx.helper         xmx-cm-compile-nodgrf.sh
+[PASS  ] -          gfx.xmx.igc            ocloc-25.18.1
+[PASS  ] -          gfx.xmx.kernels        30 kernel(s)
+[PASS  ] -          gfx.xmx.icd            icd-xmx.json -> xmx driver
+[SKIP  ] -          gfx.xmx.trace          trace not present (expected unless tracing is enabled)
+[PASS  ] -          gfx.xe                 layered (xe.ko.xz)
+[PASS  ] -          gfx.working            state matches the recorded working build
+[SKIP  ] -          sched.state            gaming scheduler not installed (opt-in)
+[SKIP  ] -          sched.scx              gaming scheduler not installed (opt-in)
+[SKIP  ] -          sched.unit             not installed (opt-in)
+[SKIP  ] -          decky.dir              not installed
+[SKIP  ] -          decky.backend          not installed
+[PASS  ] -          decky.status           overall=warn (ok=23 warn=5 fail=0 unknown=0)
+[PASS  ] -          imu.selftest           RESULT: PASS (0 warning(s))
+[PASS  ] -          imu.iio                ACPI 10EC5280 selected
+
+== summary: 64 checks -> exit 1

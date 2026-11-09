@@ -156,7 +156,7 @@ installation count.
 
 ## 3. Rule catalogue
 
-All 32 rules, `id` · severity · what it reads → what it concludes. `--list-rules` prints
+All 33 rules, `id` · severity · what it reads → what it concludes. `--list-rules` prints
 the same table from the code, so this section cannot drift for long.
 
 **Bluetooth** — the root cause is the initramfs, never the files.
@@ -176,9 +176,15 @@ the same table from the code, so this section cannot drift for long.
 | `polkit.no-session-agent` | medium | `session/power.txt` → no `polkit-kde-authentication-agent-1` / `polkit-gnome-authentication-agent-1` is running ⇒ a Gamescope/Gamemode session has no agent at all, so a polkit action that needs an interactive decision (notably `login1.suspend` from a non-active seat) is denied instead of prompting; the shipped `49-oxp3-suspend.rules` is the non-interactive path |
 | `sleep.trigger-uninstalled` | high | `udev`, `verify_json`, `checklist` → no logind drop-in / polkit rule ⇒ no suspend path that works without a desktop session |
 | `sleep.logind-not-restarted` | high | `checklist` (`logind-restart`), `manifest`, `udev` → the drop-in is newer than logind's start ⇒ logind has not read it; restart it (cross-checked against the file evidence, so a contradictory checklist reports `unknown`) |
-| `sleep.no-attempt` | info/medium | `sleep`, `checklist`, `verify_json` → `success=0` ⇒ nothing asked the kernel to sleep; **not proof** that suspend is broken. `max_hw_sleep≈524 s` with `success=0` is stale; `journalctl -k` implies `-b`, so history needs `-b all` |
+| `sleep.no-attempt` | info/medium | `sleep`, `checklist`, `verify_json` → `success=0` ⇒ nothing asked the kernel to sleep; **not proof** that suspend is broken. A non-zero `max_hw_sleep` next to it is not stale either - it is the PMC reporting ceiling, not a duration (`sleep.stats-inconsistent`); `journalctl -k` implies `-b`, so history needs `-b all` |
+| `sleep.stats-inconsistent` | info | `sleep`, `verify_json` → `success=0` with any non-zero hardware-sleep number. `max_hw_sleep` is a probe-time reporting ceiling (`(2^32-1) x 122 us ≈ 6.06 days` on this platform), never a measured sleep, so `success=0` + `max>0` is coherent; `last_hw_sleep>0` + `success=0` is the odd tuple and may be an aborted s2idle cycle, because only the PMC resume hook writes it, not the generic suspend path. Neither value is persisted across boots ⇒ compare this boot's journal (`journalctl -b -k`) and `CLOCK_BOOTTIME - CLOCK_MONOTONIC` (0 s = no suspended time); `tools/sleep-cycle-test.sh` records the authoritative per-cycle BOOTTIME figure. Verify reports the same tuple as `UNKNOWN`, never `PASS`/`FAIL` |
 | `sleep.attempt-failed` | high | `sleep`, `verify_json` → `fail`/`failed_*` moved, or `success>0` with `last_hw_sleep=0` (the abort-in-3 s pattern) ⇒ read `last_failed_dev`/`last_failed_step` |
 | `sleep.block-inhibitor` | medium | `sleep` → a `block` on `sleep` from something other than PowerDevil ⇒ logind will not act on session/idle requests |
+
+Counter semantics behind those rows, with the kernel/ABI evidence, are in
+[hw/sleep-power.md §2.6](hw/sleep-power.md). The short version: `success`/`fail` are the
+generic suspend path and are boot-local; `last_hw_sleep`/`total_hw_sleep` are
+microseconds from the platform PMC; `max_hw_sleep` is a ceiling, not a duration.
 
 **XMX / graphics** — the failure mode is silent, so the rule carries the "Off" story.
 
@@ -297,7 +303,7 @@ point.
 
 ## 6. Fixtures and tests
 
-`tests/fixtures/firstrun/` holds eight synthetic bundles; `build-fixtures.py` in that
+`tests/fixtures/firstrun/` holds nine synthetic bundles; `build-fixtures.py` in that
 directory generates them (run it after editing a scenario). They are internally
 consistent: the manifest checklist, the verifier rows and the file-level evidence agree,
 so a verdict cannot be satisfied by one file alone.
@@ -305,11 +311,12 @@ so a verdict cannot be satisfied by one file alone.
 | fixture | encodes | expected headline |
 |---|---|---|
 | `healthy` | a fully installed machine, after a traced launch | no findings; every fix `ok` (sched `not-installed`, opt-in) |
-| `preinstall` | the current host: driver stack in, hardware fixes not | `bluetooth` broken; volume/leds/rgb/sleep/decky `not-installed`; no invented failures |
+| `preinstall` | the current host: driver stack in, hardware fixes not | `bluetooth` broken; volume/leds/rgb/sleep/decky `not-installed`; no invented failures; `sleep.stats-inconsistent` explains the zero-suspend counter tuple |
 | `bt-not-loaded` | blobs + drop-in present, kernel `-ENOENT`, no controller | one critical: the initramfs predates the files |
 | `xmx-no-trace` | wrong driver hash, `cm-compile.sh`, no ocloc, no trace | five XMX findings, `ocloc` first (critical), `graphics` broken |
 | `audio-wedged` | SOF card present, only `auto_null`, EQ sink missing | `audio.wedged` + `audio.eq-inactive`, `audio` broken |
-| `sleep-never-triggered` | policy installed, drop-in newer than logind, `success=0` | `sleep.logind-not-restarted`, `sleep.no-attempt`, power-key warning |
+| `sleep-never-triggered` | policy installed, drop-in newer than logind, `success=0` | `sleep.logind-not-restarted`, `sleep.no-attempt`, `sleep.stats-inconsistent`, power-key warning; the `sleep` fix is `partial` because the duration is `UNKNOWN` |
+| `sleep-hw-counter` | pre-install host but `success=0` with `last_hw_sleep>0` (an aborted/odd hardware-sleep tuple) | the pre-install findings + `sleep.stats-inconsistent`, which explains the PMC-vs-generic-path ordering and points at the journal and BOOTTIME |
 | `volume-degraded` | `DEGRADED: … (EBUSY)` in this boot's unit journal | `volume.degraded-busy`, `volume` broken |
 | `missing-files` | a manifest and a checklist, nothing else | only `bundle.gaps`; every fix `unknown`; no rule says `clear` without its file |
 
@@ -323,8 +330,8 @@ and no polkit agent; `sleep-never-triggered` = drop-in present but PowerDevil ov
 Checks:
 
 ```sh
-tools/oxp3-triage.py --selftest                    # 273 assertions over the fixtures
-python3 -m unittest discover -s tests/unit -p 'test_triage.py' -q   # 43 unit tests
+tools/oxp3-triage.py --selftest                    # 403 assertions over the fixtures
+python3 -m unittest discover -s tests/unit -p 'test_triage.py' -q   # 44 unit tests
 tools/repo-test.sh --only triage                   # the suite in the repo runner
 ```
 

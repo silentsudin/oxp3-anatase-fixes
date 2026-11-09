@@ -33,7 +33,8 @@ noticing a key.
 ## TL;DR
 
 1. **Suspend works on this machine; nothing asks for it.** `/sys/power/suspend_stats/success` is 0
-   *this boot* and the November boots contain no `PM: suspend entry` - but the same journal has nine
+   *this boot* and the November boots contain no `PM: suspend entry` (the non-zero `max_hw_sleep`
+   next to it is a counter ceiling, not a sleep - §2.6) - but the same journal has nine
    real `PM: suspend entry (s2idle)` cycles between Oct 12 and Oct 19, all of them from
    `systemd-logind` after Steam (flatpak, over `xdg-dbus-proxy`) called `login1.Suspend`. So the
    blocker is the *trigger*, not the platform: in the November boots no actor requested sleep, because
@@ -60,8 +61,8 @@ noticing a key.
 | suspend state | `/sys/power/mem_sleep` = `[s2idle] deep` | s2idle selected; `deep` (S3) is offered but is not a real PTL state |
 | states | `/sys/power/state` = `freeze mem` | only these two can be written |
 | hibernation | `/sys/power/disk` = `[disabled]` | secure-boot lockdown (`/sys/kernel/security/lockdown` = `none [integrity] confidentiality`) - hibernate is unavailable, so "sleep then hibernate" cannot be a fallback |
-| suspend counter | `suspend_stats/success` = 0, `fail` = 0, `total_hw_sleep` = 0 | **no suspend has ever completed on this boot** |
-| suspend anomaly | `max_hw_sleep` = 523,986,009,990 ns (~524 s) with success = 0 | internally inconsistent: an attempt would bump `success` or one of the `failed_*` counters. Treat as stale, re-read after the first controlled suspend (open point 2) |
+| suspend counter | `suspend_stats/success` = 0, `fail` = 0, `last_hw_sleep` = 0, `total_hw_sleep` = 0 | **no suspend has completed on this boot**; none of these is persisted across a boot (§2.6) |
+| non-counter | `max_hw_sleep` = 523,986,009,990 **us** (~6.06 days) with success = 0 | **not a sleep and not an anomaly**: this is `intel_pmc_core`'s S0ix-counter reporting ceiling `(2^32-1) x 122 us`, set at driver probe. The earlier "~524 s" reading in this file treated microseconds as nanoseconds. See §2.6 |
 | history | `journalctl --list-boots` = 60 boots; `journalctl -k \| grep -c "PM: suspend entry"` = **0**, but `-k` implies `-b` so that only counts this boot; `journalctl -b all -k \| grep -c "PM: suspend entry"` = **9** (Oct 12-19) | s2idle entry works; nothing in the November boots asks for it (see §2.5) |
 | wake sources | 9 ACPI entries `*enabled`, 7 PCI + 2 USB device wake bits enabled | section 2.3 |
 | inhibitors | 9 (`systemd-inhibit --list`) | one `block`: PowerDevil, `handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch`; the rest are `delay` (hhd for HDMI-CEC, kwin for locking, UPower, NetworkManager, ModemManager, rtkit, deepseek-harness) |
@@ -345,6 +346,61 @@ What the drop-in does *not* fix: while PowerDevil runs it still owns `handle-pow
 Gamescope-only session, a session where PowerDevil is not running). The KDE-side counterpart is a
 Power Management setting, not a logind one - see R1.
 
+### 2.6 What the suspend counters actually mean (counter audit, 2026-11-09)
+
+The tuple in `/sys/power/suspend_stats` is not one kind of number. `success`, `fail` and the
+`failed_*`/`last_failed_*` rows are written by the generic suspend path; the three `*_hw_sleep`
+rows are written only by the platform PMC driver, and one of them is not a measurement at all.
+That - not a kernel bug - is why this machine shows `success = 0` next to a 12-digit
+`max_hw_sleep`. The semantics were read from the local kernel tree
+(`/var/home/holzr/git/linux_scratch/kbuild-an19-src`: `kernel/power/main.c`,
+`drivers/platform/x86/intel/pmc/core.c`, `core.h`) and the ABI text
+(`Documentation/ABI/testing/sysfs-power`). The running `an28` tree is not installed here, so
+"an28 has the same code" is supported by the exact match of the derived number below, not by
+reading an28 itself.
+
+| attribute | written by | means | trust |
+|---|---|---|---|
+| `success` | `dpm_save_errno(0)` at the end of a completed suspend-resume (`kernel/power/suspend.c:651`) | completed cycles **this boot** | authoritative for "did a cycle complete" |
+| `fail`, `failed_*`, `last_failed_dev/step/errno` | the failure path (`dpm_save_errno(err)`, `dpm_save_failed_dev/step`) | failed attempts and where they stopped | authoritative; all-zero means none failed |
+| `last_hw_sleep` | only the platform PMC hook `pm_report_hw_sleep_time()` - intel: `pmc_core_is_s0ix_failed()` on resume with `(u32)(s0ix_counter - saved)` | hardware sleep time of the most recent cycle, **microseconds** | a cycle was processed; the magnitude is not authoritative (see 3 below) |
+| `total_hw_sleep` | summed by the same hook | sum of those deltas since boot, **microseconds** | same caveat |
+| `max_hw_sleep` | `pm_report_max_hw_sleep()` **at driver probe**: intel `(2^32-1) x counter step` (`0x7A` = 122 on the TGL/PTL maps), AMD `U64_MAX` | the maximum the hardware can report - a backstop for long cycles | **never** evidence of a suspend |
+
+Three properties decide how to read it:
+
+1. **Nothing is persisted.** `suspend_stats` is a plain `static struct` in `kernel/power/main.c`,
+   zero-initialised every boot; all attributes are `__ATTR_RO` (there is no store path), and
+   `max_hw_sleep` is re-derived at probe. So the numbers cannot be "left over from an earlier boot":
+   a reboot clears `success`, `last_hw_sleep` and `total_hw_sleep` together. (The three `*_hw_sleep`
+   attributes exist at all only because the ACPI FADT advertises Low-Power S0; on a machine that does
+   not, the same check reports that the duration is not measurable.)
+2. **`max_hw_sleep` is a per-platform constant, not an event.** Here it reads `523986009990` =
+   `(2^32-1) x 122` exactly - the S0ix counter's span at 122 us per tick: 523,986,009,990 **us** =
+   523,986 s = **about 6.06 days**. The previous baseline entry read it as ~524 s by assuming
+   nanoseconds, so it was 1000x off *and* never a sleep. It would read the same on a machine that
+   never suspended once.
+3. **`last_hw_sleep`/`total_hw_sleep` are PMC numbers, not kernel clocks.** `intel_pmc_core` casts
+   the delta to `u32`, so it wraps modulo 2^32 us = 4294.97 s = **about 71.6 min** (inference from
+   that cast; not measured here - the first long cycle is the test). `total_hw_sleep` accumulates the
+   same truncated deltas. For a real duration use `CLOCK_BOOTTIME - CLOCK_MONOTONIC`, which is what
+   `tools/sleep-cycle-test.sh` records per cycle.
+
+Reading the tuple we actually have (`success=0 fail=0 last=0 total=0 max=523986009990`):
+
+- **Evidence:** `CLOCK_BOOTTIME - CLOCK_MONOTONIC` = `0.000 s` at 16.4 h uptime (read live); that
+  difference *is* the suspended time since boot. `journalctl -b -k` contains zero `PM: suspend entry`
+  lines. `intel_pmc_core INT33A1:00: initialized` is in this boot's log, so a missing PMC measurement
+  means "no cycle", not "no driver". `/sys/power/s2idle` does not exist on this kernel;
+  `/sys/kernel/debug/pmc_core` is root-only and could not be read unprivileged here.
+- **Inference (well supported):** the 523986009990 is the probe-time ceiling; no suspend completed
+  this boot; and **`success = 0` does not mean the platform cannot suspend** - the retained journal
+  has nine real `PM: suspend entry (s2idle)` lines (§2.5.1).
+- **Not concluded:** why the November boots do not ask for suspend (that is §2.5), and what a real
+  cycle's `last_hw_sleep` will read. After the first controlled suspend `success` must increment and
+  `last_hw_sleep`/`total_hw_sleep` must become non-zero; `max_hw_sleep` must not move. Judge the
+  duration by `journalctl -b -k` and the `BOOTTIME - MONOTONIC` figure, never by `max_hw_sleep`.
+
 ## 3. Recommended configuration, ranked
 
 ### R1 - make suspend actually happen (highest impact, zero risk)
@@ -426,7 +482,8 @@ action is `allow_active=yes`):
 
     systemctl suspend        # or: gdbus call --system --dest org.freedesktop.login1                              #       --object-path /org/freedesktop/login1                              #       --method org.freedesktop.login1.Manager.Suspend false
     # after wake:
-    tools/oxp3-verify.sh --full        # sleep.stats: success > 0, last_hw_sleep > 0
+    tools/oxp3-verify.sh --full        # sleep.stats: success > 0 (and last_hw_sleep > 0
+                                       # when the kernel exposes the hardware-sleep attrs)
     journalctl -b all -k | grep "PM: suspend entry"
 
 If those two commands produce a `PM: suspend entry` and a growing `success` counter, the trigger is
@@ -555,6 +612,8 @@ agent workloads running was 7.8 W package / 56 °C, i.e. the machine was very mu
 
     # 1. a suspend really happened, and how long the hardware slept
     cat /sys/power/suspend_stats/success /sys/power/suspend_stats/last_hw_sleep
+    #   last_hw_sleep/total_hw_sleep are us from the platform PMC; max_hw_sleep is a
+    #   reporting ceiling, not a duration (§2.6). Judge the duration by BOOTTIME.
     journalctl -k -b | grep -E "PM: suspend entry|PM: suspend exit"
     journalctl -t oxp3-sleep -b            # per-resume summary + the wake source that fired
 
@@ -595,10 +654,15 @@ KDE: `kwriteconfig6 --file powerdevilrc --group Battery --key LidAction --delete
    `triggersLidAction = true`. R1 still sets it explicitly; if the first test shows no
    `PM: suspend entry`, test logind directly (`sudo systemctl suspend`, section 6 step 0) and compare
    `handle-lid-switch` against `systemd-inhibit --list`.
-2. **`max_hw_sleep` = 524 s with `success` = 0.** Inconsistent with every other counter and with the
-   log. Re-read after the first controlled suspend: if `success` increments and `max_hw_sleep` does not
-   move, it is a stale/derived value and can be ignored; if it moves again without a success, that is a
-   kernel bug worth a report.
+2. **`max_hw_sleep` = 524 s with `success` = 0 (closed 2026-11-09, §2.6).** The value is
+   `(2^32-1) x 122` **microseconds** - the PMC's S0ix-counter reporting ceiling (about 6.06 days),
+   set at probe; it is not a duration and never was. The old "~524 s" reading treated us as ns.
+   `success=0` with a non-zero `max_hw_sleep` is coherent, and `success`/`last_hw_sleep`/
+   `total_hw_sleep` are boot-local (static struct, read-only sysfs, no persistence). What is left to
+   watch is a real cycle: `success` must increment, `last_hw_sleep`/`total_hw_sleep` must become
+   non-zero, `max_hw_sleep` must not move, and the duration must match `BOOTTIME - MONOTONIC`. If a
+   >71.6 min cycle is reported shorter than BOOTTIME says, that is the `u32` cast in
+   `pmc_core_is_s0ix_failed()` wrapping, not a failed suspend.
 3. **Per-link L1 substates are not visible unprivileged** (`/sys/bus/pci/devices/0000:00:06.0/link/`
    exists but exposes no `*_aspm` attributes here, and `lspci -vv` needs root). Needed to judge open
    point 5:

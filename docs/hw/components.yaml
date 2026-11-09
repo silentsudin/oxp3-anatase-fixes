@@ -471,7 +471,7 @@ components:
       - id: sleep.audit
         expect: "the capability table and the suspend record block"
       - id: sleep.stats
-        expect: "success > 0 and last_hw_sleep > 0 (a real suspend)"
+        expect: "the counter tuple (success/fail/last_hw_sleep/total_hw_sleep/max_hw_sleep); PASS on a completed cycle, FAIL on a failed attempt or an abort, UNKNOWN (never PASS/FAIL) when success=0 meets a non-zero hardware-sleep number - max_hw_sleep is a counter ceiling, not a duration"
       - id: sleep.measure
         expect: "PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h"
       - id: sleep.suspend

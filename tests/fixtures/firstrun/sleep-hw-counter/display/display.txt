@@ -1,0 +1,19 @@
+== display-mode status (kscreen-doctor, ANSI stripped)
+
+== connected outputs
+Output: 1 eDP-1 <redacted:uuid>
+	enabled
+	connected
+	Panel
+	Modes:  1:1920x1200@144.00*  2:1920x1200@60.00
+	Vrr: Never
+	HDR: disabled
+	Wide Color Gamut: disabled
+	ICC profile: none
+	Color resolution: automatic (10), range: [6; 12] bits per color
+
+== vibrance tooling
+shader present; gamescope: not running
+
+== ICC profiles
+  /usr/share/color/icc                        (none)

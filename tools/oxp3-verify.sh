@@ -226,9 +226,43 @@ parse_display_status() { # stdin: tools/display/display-mode.sh status
 
 parse_suspend_stats() { # DIR
     local d=$1
-    printf 'SUCCESS=%s\nFAIL=%s\nLAST_HW_SLEEP=%s\nTOTAL_HW_SLEEP=%s\n' \
+    printf 'SUCCESS=%s\nFAIL=%s\nLAST_HW_SLEEP=%s\nTOTAL_HW_SLEEP=%s\nMAX_HW_SLEEP=%s\n' \
         "$(read1 "$d/success" || true)" "$(read1 "$d/fail" || true)" \
-        "$(read1 "$d/last_hw_sleep" || true)" "$(read1 "$d/total_hw_sleep" || true)"
+        "$(read1 "$d/last_hw_sleep" || true)" "$(read1 "$d/total_hw_sleep" || true)" \
+        "$(read1 "$d/max_hw_sleep" || true)"
+}
+
+# What the suspend_stats tuple can and cannot support. Pure function over the
+# numbers so --selftest can pin every branch without a host
+# (docs/hw/sleep-power.md 2.6):
+#   SUCCESS FAIL LAST MAX -> keyword
+# SUCCESS/FAIL empty = unreadable. LAST/MAX are empty when the kernel does not
+# expose the hardware-sleep attributes at all (they exist only when the ACPI FADT
+# advertises Low-Power S0). All three hw_* attributes are MICROSECONDS, not ns.
+# `max_hw_sleep` is the platform PMC's reporting ceiling (set at probe), never a
+# measurement - so success=0 with a non-zero max is coherent, not an anomaly to
+# PASS or FAIL on.
+suspend_stats_verdict() {
+    local success=$1 fail=$2 last=$3 max=$4
+    if [ -z "$success" ] || [ -z "$fail" ]; then
+        printf 'unreadable'
+    elif num_gt "$fail" 0; then
+        printf 'fail'
+    elif num_gt "$success" 0; then
+        if [ -z "$last" ]; then
+            printf 'pass-nohw'
+        elif num_gt "$last" 0; then
+            printf 'pass'
+        else
+            printf 'fail-abort'
+        fi
+    elif [ -n "$last" ] && num_gt "$last" 0; then
+        printf 'unknown-last'
+    elif [ -n "$max" ] && num_gt "$max" 0; then
+        printf 'unknown-ceiling'
+    else
+        printf 'skip'
+    fi
 }
 
 parse_logind_handles() { # stdin: systemd-analyze cat-config systemd/logind.conf
@@ -1588,7 +1622,7 @@ trigger_verdict() {
 }
 
 check_sleep() {
-    local mem kv success fail last_ total_ secs
+    local mem
     mem=$(read1 /sys/power/mem_sleep)
     if [ -z "$mem" ]; then
         record sleep.mem sleep "s2idle selected" SKIP "/sys/power/mem_sleep unreadable" "" "docs/hw/sleep-power.md"
@@ -1598,23 +1632,42 @@ check_sleep() {
         record sleep.mem sleep "s2idle selected" FAIL "s2idle is not the selected sleep state" "mem_sleep: $mem" "docs/hw/sleep-power.md (no cmdline change is normally needed)"
     fi
 
+    local kv success fail last_ total_ max_ tuple verdict secs
     kv=$(parse_suspend_stats /sys/power/suspend_stats)
     success=$(printf '%s\n' "$kv" | sed -n 's/^SUCCESS=//p')
     fail=$(printf '%s\n' "$kv" | sed -n 's/^FAIL=//p')
     last_=$(printf '%s\n' "$kv" | sed -n 's/^LAST_HW_SLEEP=//p')
     total_=$(printf '%s\n' "$kv" | sed -n 's/^TOTAL_HW_SLEEP=//p')
-    if [ -z "$success" ]; then
-        record sleep.stats sleep "real suspend recorded" SKIP "suspend_stats unreadable" "" "is CONFIG_PM_SLEEP_STATS enabled? docs/hw/sleep-power.md"
-    elif num_gt "$success" 0 && num_gt "$last_" 0; then
-        secs=$(awk -v u="$last_" 'BEGIN{printf "%.1f", u / 1000000}')
-        record sleep.stats sleep "real suspend recorded" PASS "last s2idle sleep ${secs}s (success=$success, fail=$fail)" "total_hw_sleep=${total_}us" ""
-    elif num_gt "$fail" 0; then
-        record sleep.stats sleep "real suspend recorded" FAIL "$fail failed suspend attempt(s)" "last_failed_dev=$(read1 /sys/power/suspend_stats/last_failed_dev) last_failed_step=$(read1 /sys/power/suspend_stats/last_failed_step)" "dmesg | grep -i suspend ; journalctl -b | grep -i 'PM: suspend'"
-    elif num_gt "$success" 0; then
-        record sleep.stats sleep "real suspend recorded" FAIL "suspend returned immediately (last_hw_sleep=0)" "success=$success total_hw_sleep=${total_}us: this is exactly the original bug" "sudo tools/sleep-power-measure.sh suspend -w 60 (or --full); check wake sources and /proc/acpi/wakeup"
-    else
-        record sleep.stats sleep "real suspend recorded" SKIP "no suspend attempt since boot" "success=0 fail=0" "sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes; or: sudo tools/sleep-power-measure.sh suspend -w 60"
-    fi
+    max_=$(printf '%s\n' "$kv" | sed -n 's/^MAX_HW_SLEEP=//p')
+    tuple="success=${success:-?} fail=${fail:-?} last_hw_sleep=${last_:-n/a}us total_hw_sleep=${total_:-n/a}us max_hw_sleep=${max_:-n/a}us"
+    verdict=$(suspend_stats_verdict "$success" "$fail" "$last_" "$max_")
+    case $verdict in
+        unreadable)
+            record sleep.stats sleep "real suspend recorded" SKIP "suspend_stats unreadable" "$tuple" "is CONFIG_PM_SLEEP_STATS enabled? docs/hw/sleep-power.md"
+            ;;
+        pass)
+            secs=$(awk -v u="$last_" 'BEGIN{printf "%.1f", u / 1000000}')
+            record sleep.stats sleep "real suspend recorded" PASS "last s2idle sleep ${secs}s (success=$success, fail=$fail)" "$tuple" ""
+            ;;
+        pass-nohw)
+            record sleep.stats sleep "real suspend recorded" PASS "$success completed suspend(s) counted" "$tuple: this kernel does not expose the hardware-sleep attributes (the ACPI FADT has no Low-Power S0 flag), so the duration is not measurable here" ""
+            ;;
+        fail)
+            record sleep.stats sleep "real suspend recorded" FAIL "$fail failed suspend attempt(s)" "$tuple last_failed_dev=$(read1 /sys/power/suspend_stats/last_failed_dev) last_failed_step=$(read1 /sys/power/suspend_stats/last_failed_step)" "dmesg | grep -i suspend ; journalctl -b | grep -i 'PM: suspend'"
+            ;;
+        fail-abort)
+            record sleep.stats sleep "real suspend recorded" FAIL "suspend returned immediately (last_hw_sleep=0)" "$tuple: this is exactly the original bug" "sudo tools/sleep-power-measure.sh suspend -w 60 (or --full); check wake sources and /proc/acpi/wakeup"
+            ;;
+        unknown-last)
+            record sleep.stats sleep "real suspend recorded" UNKNOWN "last_hw_sleep>0 with success=0: not a completed suspend" "$tuple: the hardware-sleep time comes from the platform PMC's resume hook, not from the generic suspend path, so an aborted cycle can leave it non-zero without counting a success; it is never persisted across boots. Compare this boot's kernel log and CLOCK_BOOTTIME-MONOTONIC before believing either number" "journalctl -b -k | grep -c 'PM: suspend entry' ; python3 -c 'import time; print(time.clock_gettime(time.CLOCK_BOOTTIME)-time.clock_gettime(time.CLOCK_MONOTONIC))' ; docs/hw/sleep-power.md 2.6"
+            ;;
+        unknown-ceiling)
+            record sleep.stats sleep "real suspend recorded" UNKNOWN "no completed suspend; max_hw_sleep is a ceiling, not a sleep" "$tuple: max_hw_sleep is the platform PMC's reporting ceiling ((2^32-1) x 122us on this platform, about 6.1 days), set at probe - not persisted and not a measured duration; success=0 does NOT mean the platform cannot suspend" "journalctl -b -k | grep -c 'PM: suspend entry' ; python3 -c 'import time; print(time.clock_gettime(time.CLOCK_BOOTTIME)-time.clock_gettime(time.CLOCK_MONOTONIC))' ; sudo tools/sleep-cycle-test.sh --cycles 1"
+            ;;
+        *)
+            record sleep.stats sleep "real suspend recorded" SKIP "no suspend attempt since boot" "$tuple" "sudo OXP3_ALLOW_SUSPEND=1 tools/oxp3-verify.sh --full --with-changes; or: sudo tools/sleep-power-measure.sh suspend -w 60"
+            ;;
+    esac
 
     local st load active file pre log pre_s log_s
     st=$(unit_state oxp3-sleep-wakeup.service)
@@ -2619,13 +2672,35 @@ run_selftest() {
     ind=$(status_indicator "$fx/oxp3-status.json" sched.unit)
     t_contains "status/sched-unit" "not installed" "$(printf '%s' "$ind" | cut -f2)"
 
-    # suspend_stats
+    # suspend_stats: the tuple and what it can support (docs/hw/sleep-power.md 2.6).
+    # max_hw_sleep is a probe-time ceiling, not a duration, so "success=0 with a
+    # non-zero max" must map to UNKNOWN, never PASS or FAIL.
     out=$(parse_suspend_stats "$fx/suspend-stats/healthy")
     t_eq "suspend/success" 2 "$(kv "$out" SUCCESS)"
     t_eq "suspend/last_hw_sleep" 12345678 "$(kv "$out" LAST_HW_SLEEP)"
+    t_eq "suspend/max_hw_sleep" 523986009990 "$(kv "$out" MAX_HW_SLEEP)"
     out=$(parse_suspend_stats "$fx/suspend-stats/broken")
     t_eq "suspend/broken-last_hw_sleep" 0 "$(kv "$out" LAST_HW_SLEEP)"
     t_eq "suspend/broken-fail" 1 "$(kv "$out" FAIL)"
+    out=$(parse_suspend_stats "$fx/suspend-stats/ceiling-max")
+    t_eq "suspend/ceiling-max-success" 0 "$(kv "$out" SUCCESS)"
+    t_eq "suspend/ceiling-max-max" 523986009990 "$(kv "$out" MAX_HW_SLEEP)"
+    out=$(parse_suspend_stats "$fx/suspend-stats/last-without-success")
+    t_eq "suspend/last-without-success-last" 120000000 "$(kv "$out" LAST_HW_SLEEP)"
+    t_eq "suspend/last-without-success-total" 120000000 "$(kv "$out" TOTAL_HW_SLEEP)"
+    out=$(parse_suspend_stats "$fx/suspend-stats/no-hw")
+    t_eq "suspend/no-hw-success" 1 "$(kv "$out" SUCCESS)"
+    t_eq "suspend/no-hw-last-empty" "" "$(kv "$out" LAST_HW_SLEEP)"
+    t_eq "suspend/verdict-pass" pass "$(suspend_stats_verdict 2 0 12345678 523986009990)"
+    t_eq "suspend/verdict-pass-nohw" pass-nohw "$(suspend_stats_verdict 1 0 "" "")"
+    t_eq "suspend/verdict-fail" fail "$(suspend_stats_verdict 1 1 0 523986009990)"
+    t_eq "suspend/verdict-abort" fail-abort "$(suspend_stats_verdict 1 0 0 523986009990)"
+    t_eq "suspend/verdict-last-without-success" unknown-last \
+        "$(suspend_stats_verdict 0 0 120000000 523986009990)"
+    t_eq "suspend/verdict-ceiling-max" unknown-ceiling \
+        "$(suspend_stats_verdict 0 0 0 523986009990)"
+    t_eq "suspend/verdict-skip" skip "$(suspend_stats_verdict 0 0 0 0)"
+    t_eq "suspend/verdict-unreadable" unreadable "$(suspend_stats_verdict "" "" "" "")"
 
     # sleep.trigger parsing: logind cat-config (compiled defaults vs our drop-in),
     # the polkit rule (shipped one must keep its guards and must not grant the

@@ -11,8 +11,8 @@
     "total": 64,
     "pass": 32,
     "fail": 3,
-    "skip": 29,
-    "unknown": 0
+    "skip": 28,
+    "unknown": 1
   },
   "exit_code": 1,
   "checks": [
@@ -191,9 +191,9 @@
       "id": "sleep.stats",
       "group": "sleep",
       "title": "a real suspend happened",
-      "state": "skip",
-      "summary": "no suspend attempt since boot",
-      "detail": "",
+      "state": "unknown",
+      "summary": "no completed suspend; max_hw_sleep is a ceiling, not a sleep",
+      "detail": "success=0 fail=0 last_hw_sleep=0us total_hw_sleep=0us max_hw_sleep=523986009990us",
       "remediation": "fix: see docs/VALIDATION.md"
     },
     {

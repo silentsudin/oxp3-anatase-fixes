@@ -212,7 +212,9 @@ PREINSTALL.update({
     "life.fd": ("skip", "no lifecycle daemon active", ""),
     "life.reconnect": ("skip", "no lifecycle journal in this boot", ""),
     "life.sim": ("skip", "gated: only with --full", ""),
-    "sleep.stats": ("skip", "no suspend attempt since boot", ""),
+    "sleep.stats": ("unknown", "no completed suspend; max_hw_sleep is a ceiling, not a sleep",
+                     "success=0 fail=0 last_hw_sleep=0us total_hw_sleep=0us "
+                     "max_hw_sleep=523986009990us"),
     "sleep.units": ("skip", "not installed", ""),
     "sleep.wakeup": ("skip", "sleep policy not installed", ""),
     "sleep.trigger": ("skip", "trigger policy not installed",
@@ -939,8 +941,21 @@ def healthy(root):
                                "(s2idle)"])
 
 
-def preinstall(root):
-    base_files(root, PREINSTALL,
+PREINSTALL_INHIBITORS = (
+    "HandheldDaemon   0    root  6810   systemd-inhibit sleep       "
+    "Handheld Daemon: Restore HDMI-CEC state before sleep   delay",
+    "PowerDevil       1000 <user> 147067 org_kde_powerde "
+    "handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch "
+    "KDE handles power events   block",
+    "compositor       1000 <user> 146825 kwin_wayland sleep   "
+    "Ensuring that the screen gets locked before going to sleep delay",
+)
+
+
+def _preinstall(root, *, last_hw, sleep_row, suspend_detail):
+    table = dict(PREINSTALL)
+    table["sleep.stats"] = sleep_row
+    base_files(root, table,
                checklist_states={
                    "hw-install": ("todo", "0/5 helpers installed"),
                    "udev-rules": ("todo", "0/2 rules, hwdb missing"),
@@ -952,7 +967,7 @@ def preinstall(root):
                    "rgb-config": ("todo", "missing"),
                    "homebtn-unit": ("todo", "not installed"),
                    "decky-plugin": ("todo", "oxp3-status not installed (14 plugin(s))"),
-                   "suspend-evidence": ("todo", "success=0 fail=0 hw_sleep=0"),
+                   "suspend-evidence": ("todo", suspend_detail),
                },
                indicators=PREINSTALL_INDICATORS, overall="warn",
                counts={"ok": 23, "warn": 5, "fail": 0, "unknown": 0, "na": 0},
@@ -970,15 +985,8 @@ def preinstall(root):
                                           "oxp3-fan-curve.service",
                                           "oxp3-adaptivetdp.service",
                                           "oxp3-gaming-sched.service")),
-               sleep=sleep_txt(success=0, last_hw=0, max_hw=523986009990, inhibitors=[
-                   "HandheldDaemon   0    root  6810   systemd-inhibit sleep       "
-                   "Handheld Daemon: Restore HDMI-CEC state before sleep   delay",
-                   "PowerDevil       1000 <user> 147067 org_kde_powerde "
-                   "handle-power-key:handle-suspend-key:handle-hibernate-key:handle-lid-switch "
-                   "KDE handles power events   block",
-                   "compositor       1000 <user> 146825 kwin_wayland sleep   "
-                   "Ensuring that the screen gets locked before going to sleep delay",
-               ]),
+               sleep=sleep_txt(success=0, last_hw=last_hw,
+                               inhibitors=PREINSTALL_INHIBITORS),
                audio_txt=audio(),
                xmx_txt=xmx(env={"VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/"
                                                  "intel_icd.x86_64.json",
@@ -994,6 +1002,22 @@ def preinstall(root):
                                "Nov 08 16:15:18.349280 <host> kernel: Bluetooth: hci0: "
                                "Failed to load Intel firmware file intel/"
                                "ibt-00a0-0291-iml.sfi (-2)"])
+
+
+def preinstall(root):
+    _preinstall(root, last_hw=0, sleep_row=PREINSTALL["sleep.stats"],
+                suspend_detail="success=0 fail=0 hw_sleep=0")
+
+
+def sleep_hw_counter(root):
+    """success=0 but the PMC reported a hardware-sleep time: the tuple that made
+    the old docs call the counters "internally inconsistent" (2.6)."""
+    _preinstall(root, last_hw=120000000,
+                sleep_row=("unknown", "last_hw_sleep=120000000us with success=0: "
+                                      "not a completed suspend",
+                           "success=0 fail=0 last_hw_sleep=120000000us "
+                           "total_hw_sleep=120000000us max_hw_sleep=523986009990us"),
+                suspend_detail="success=0 hw_sleep=120000000us")
 
 
 def bt_not_loaded(root):
@@ -1070,7 +1094,10 @@ def audio_wedged(root):
 def sleep_never_triggered(root):
     table = dict(HEALTHY)
     table.update({
-        "sleep.stats": ("skip", "no suspend attempt since boot", ""),
+        "sleep.stats": ("unknown", "no completed suspend; max_hw_sleep is a "
+                                    "ceiling, not a sleep",
+                         "success=0 fail=0 last_hw_sleep=0us total_hw_sleep=0us "
+                         "max_hw_sleep=523986009990us"),
         "sleep.trigger": ("pass", "drop-in parsed; pkcheck yes; no sleep block", ""),
     })
     base_files(root, table,
@@ -1148,6 +1175,7 @@ SCENARIOS = (
     ("xmx-no-trace", xmx_no_trace),
     ("audio-wedged", audio_wedged),
     ("sleep-never-triggered", sleep_never_triggered),
+    ("sleep-hw-counter", sleep_hw_counter),
     ("volume-degraded", volume_degraded),
     ("missing-files", missing_files),
 )

@@ -272,7 +272,7 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Suspend and wake policy | awaiting-install | `sleep.wakeup` | every listed USB id / PCI address has wakeup disabled | no |
 | Suspend and wake policy | awaiting-install | `sleep.trigger` | logind drop-in parsed with HandlePowerKey/SuspendKey=suspend, polkit rule present, pkcheck says yes, no sleep block inhibitor | no |
 | Suspend and wake policy | awaiting-install | `sleep.audit` | the capability table and the suspend record block | no |
-| Suspend and wake policy | awaiting-install | `sleep.stats` | success > 0 and last_hw_sleep > 0 (a real suspend) | no |
+| Suspend and wake policy | awaiting-install | `sleep.stats` | the counter tuple (success/fail/last_hw_sleep/total_hw_sleep/max_hw_sleep); PASS on a completed cycle, FAIL on a failed attempt or an abort, UNKNOWN (never PASS/FAIL) when success=0 meets a non-zero hardware-sleep number - max_hw_sleep is a counter ceiling, not a duration | no |
 | Suspend and wake policy | awaiting-install | `sleep.measure` | PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h | no |
 | Suspend and wake policy | awaiting-install | `sleep.suspend` | one real s2idle cycle (rtcwake) with suspend_stats/success incremented; needs --full --with-changes and OXP3_ALLOW_SUSPEND=1 | yes |
 | Speaker tuning (Harman APO) | working | `aud.scripts` | eq-on.sh and eq-off.sh are executable | no |

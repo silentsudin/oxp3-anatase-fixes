@@ -9,7 +9,7 @@
 
 REPO_TEST = tools/repo-test.sh
 
-.PHONY: help test test-full verify preflight health decky install-dry-run units unit test-integration clean
+.PHONY: help test test-full verify preflight health acceptance decky install-dry-run units unit test-integration clean
 
 help:
 	@printf '%s\n' \
@@ -18,6 +18,7 @@ help:
 		'make verify          - post-reboot hardware acceptance harness (read-only, no root)' \
 		'make preflight       - read-only install-prerequisite verdict (docs/PREFLIGHT.md)' \
 		'make health          - one read-only verdict: ready to install, working/failing, what is left' \
+		'make acceptance      - seven goal items judged from evidence (offline+device, read-only)' \
 		'make decky           - build, smoke-test and package the Decky plugin (offline)' \
 		'make install-dry-run - print every hardware-installer command, change nothing' \
 		'make units           - verify systemd units, udev rules and hwdb files' \
@@ -41,6 +42,11 @@ preflight:
 # verify + firstrun checklist + status, summarised. Read-only; see docs/HEALTH.md.
 health:
 	tools/oxp3-health.sh
+
+# Goal-level acceptance report: docs/hw/components.yaml + verify/health/repo-test
+# evidence, one verdict per goal item. Read-only; see docs/ACCEPTANCE.md.
+acceptance:
+	tools/oxp3-acceptance.sh
 
 decky:
 	cd tools/decky-oxp3-status && ./build.sh --offline

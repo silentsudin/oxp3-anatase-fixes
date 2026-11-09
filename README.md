@@ -14,6 +14,12 @@ working / what is left" from preflight + verify + the firstrun checklist + statu
 non-`PASS` rows with their fix and the next 1-3 commands. `--json` for machines, `--quiet` for one
 line, `--full` to pass `--full` to verify; details in [docs/HEALTH.md](docs/HEALTH.md).
 
+**Judge the goal, not the memory:** [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) has the seven-item
+acceptance table (implementation, proof, manual step, verdict) and
+`tools/oxp3-acceptance.sh` reproduces it from `docs/hw/components.yaml` plus the live verifier,
+health and repo-test evidence. It never calls an item device-proven from offline evidence alone;
+`--json`, `--verbose`, `--selftest` and `make acceptance` are the machine/test entry points.
+
 <!-- BEGIN GENERATED: readme-summary (source: docs/hw/components.yaml; regenerate: tools/gen-docs.py --write) -->
 | Part | State | Fixes | How it is installed |
 |---|---|---|---|

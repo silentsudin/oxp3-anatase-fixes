@@ -39,11 +39,11 @@ failing command and its log path.
 Recorded on this host (2026-11-09, no root):
 
 ```
-== 36 suite(s): 29 pass, 0 fail, 7 skip -> exit 0      # --fast, ≈ 88 s
+== 40 suite(s): 31 pass, 0 fail, 9 skip -> exit 0      # --fast, ≈ 114 s (2026-11-09)
 ```
 
 The inventory is the runner's, not a number copied here: `tools/repo-test.sh --list` prints the
-current **36 suites**, of which **31** run in `--fast` and all 36 in `--full`, with each suite's
+current **40 suites**, of which **35** run in `--fast` and all 40 in `--full`, with each suite's
 mode, tier and timeout. `--full` was not re-run in this round; it is expected to add the five
 full-only rows and keep the three explained skips (§9).
 
@@ -108,12 +108,13 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `eq-model` | fast | fast | 60 s | `python3` | – |
 | `firstrun` | fast | medium | 120 s | `python3`, `bash` | – (self-test in `$TMPDIR`; the dry run writes nothing) |
 | `wizard` | fast | fast | 300 s | `python3`, `bash` | – (scripted stdin, `--simulate`, private state dir) |
-| `triage` | fast | fast | 120 s | `python3` | – (rule selftest + 8 fixture bundles) |
+| `triage` | fast | fast | 120 s | `python3` | – (rule selftest + 9 fixture bundles) |
 | `preflight` | fast | fast | 120 s | `python3`, `bash` | – (fixtures in memory; the live `--json` is read-only) |
 | `gen-docs` | fast | fast | 60 s | `python3`, `docs/hw/components.yaml` | – (registry/generated-block check; it runs the `unit` discovery for the HANDOVER block) |
 | `cli-contracts` | fast | medium | 180 s | `python3`, `git` | – (probes run in a throw-away copy with `HOME`/XDG/`TMPDIR` redirected) |
 | `rollback` | fast | fast | 120 s | `bash`, `python3` | – (`--root` prefix + private state dir in `$TMPDIR`) |
 | `health` | fast | medium | 180 s | `python3`, `bash` | – (fixture selftest; the live runs are read-only and write only `<log>/health*.log`) |
+| `acceptance` | fast | medium | 240 s | `python3`, `bash` | – (fixture selftest; one live read-only verify/health/repo-test run, the bundle goes to `<log>/acceptance-bundle.json`) |
 
 Areas and what is actually proven:
 

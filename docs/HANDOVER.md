@@ -32,6 +32,10 @@ executed for this document.
 
 Then: `tools/repo-test.sh --fast` (offline; `--list` prints its inventory), `tools/oxp3-preflight.sh`
 (read-only, before any install) and `tools/oxp3-verify.sh` (read-only).
+For "are the seven goal items done?", read [`ACCEPTANCE.md`](ACCEPTANCE.md) and run
+`tools/oxp3-acceptance.sh` (`--json` for machines): it derives each item's verdict from
+`hw/components.yaml` plus the verify/health/repo-test evidence and names the exact device step that
+is still missing. It never turns offline evidence into a device-proven claim.
 The suite is green apart from the explained `SKIP`s listed on every run; the harness has one known
 failing group (§2).
 No RE was needed for this round; Ghidra is only for the vendor-binary work already recorded in the
@@ -88,8 +92,8 @@ Counted from the `state:` field of each component in `docs/hw/components.yaml`.
 | volatile fact | value | how this number was obtained |
 |---|---|---|
 | checks declared by `tools/oxp3-verify.sh` | **78** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
-| suites in `tools/repo-test.sh` | **39** (**34** in `--fast`, **39** in `--full`) | parsed from the `def_suite` registrations and their mode column |
-| tests in `tests/unit` | **723** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
+| suites in `tools/repo-test.sh` | **40** (**35** in `--fast`, **40** in `--full`) | parsed from the `def_suite` registrations and their mode column |
+| tests in `tests/unit` | **743** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
 <!-- END GENERATED: handover-state -->
 
 The full matrix with summaries, implementation paths, install entrypoints, verify ids and caveats is
@@ -142,7 +146,7 @@ behaves. Both are needed; neither substitutes for the other.
 | home button / top LEDs | [`hw/home-button-leds.md`](hw/home-button-leds.md): recovered HID report, 5 zones / 11 presets, obfuscation limits | `led-selftest`/`hid-selftest` (captured frames 9/9), `hid.node`, `led.sides`, `led.zones` |
 | body RGB | [`hw/rgb-coverage.md`](hw/rgb-coverage.md) + captured frames [`hw/rgb-frames-2026-11-09.txt`](hw/rgb-frames-2026-11-09.txt) | `rgbd --check` (5 zones / 10 frames), `rgbd.timing`, `tests/unit/test_rgbd.py` |
 | daemons (resume/hotplug) | [`DAEMONS.md`](DAEMONS.md): contract, journal vocabulary, failure modes | `tests/unit/test_{lifecycle,homebtn_lifecycle,rgbd_lifecycle}.py`, `life.fd`, `life.reconnect`, `life.sim` (`--full`) |
-| suspend / wake policy | [`hw/sleep-power.md` §2.3-2.5](hw/sleep-power.md): 9 real s2idle entries, HHD 4.1.12 line quotes, logind/polkit state, inhibitor semantics | `sleep.*` checks; `sleep.stats` encodes the never-suspended bug (needs `success>0` **and** `last_hw_sleep>0`) |
+| suspend / wake policy | [`hw/sleep-power.md` §2.3-2.6](hw/sleep-power.md): 9 real s2idle entries, HHD 4.1.12 line quotes, logind/polkit state, inhibitor semantics, suspend-counter ABI (`max_hw_sleep` is a ceiling, not a duration) | `sleep.*` checks; `sleep.stats` reports the counter tuple and says `UNKNOWN` - never `PASS`/`FAIL` - when `success=0` meets a hardware-sleep number |
 | Bluetooth | [`hw/bluetooth.md`](hw/bluetooth.md): PCIe `8086:e476`, boot-log timing, SHA-256 of both blobs, `MODULE_FIRMWARE` absence | `bt.*` checks (5), `oxp3-bt-firmware.sh --check` |
 | power envelope / fan / battery | [`hw/power-fan.md`](hw/power-fan.md), [`hw/battery-tdp.md`](hw/battery-tdp.md): vendor `perf_conf.ini` table, `PerfMode.exe` Ghidra, EC findings | `pwr.*`, `fan.*`, `bat.*` checks; `tests/unit/test_powerctl.py`, `test_adaptivetdp.py` |
 | speaker EQ | [`hw/audio-harman-apo.md`](hw/audio-harman-apo.md): recovered 8-band model (0.03 dB error) | `eq-model` suite, `aud.model`, `aud.eq` |
@@ -167,8 +171,9 @@ Each `components.yaml` `last_validated.evidence` points at the file that carries
    `PM: suspend entry (s2idle)` between Oct 12 and 19. The real defect is the *trigger*: logind had no
    `Handle*` policy (power key default `poweroff`), PowerDevil holds a `block` inhibitor on
    `handle-*`, and HHD only forwards the key to Steam while a Steam Gamepad session runs. Fixed as a
-   shipped logind drop-in + polkit rule, and encoded in `sleep.stats` (`success>0` **and**
-   `last_hw_sleep>0`). See [`hw/sleep-power.md` §2.5](hw/sleep-power.md), commits `11c4bf5` → `250dcfe`.
+   shipped logind drop-in + polkit rule, and encoded in `sleep.stats` (`success>0`, with
+   `last_hw_sleep>0` only when the kernel exposes the hardware-sleep attrs). See
+   [`hw/sleep-power.md` §2.5](hw/sleep-power.md), commits `11c4bf5` → `250dcfe`.
 2. **"Camera is a Linux gap" was refuted.** There is no IPU7 PCI function (`8086:b05d` absent), every
    `OVTI*`/`INT3472` ACPI device is `_STA=0`, the vendor package carries no camera driver and the
    console has no camera UI ⇒ not-a-gap on this unit (other SKUs may populate it).
@@ -196,7 +201,17 @@ Each `components.yaml` `last_validated.evidence` points at the file that carries
    (the Oct 16 Steam call proves it) — corrected in [`hw/sleep-power.md` §2.5.4](hw/sleep-power.md).
    And "Flatpak Steam is not supported" was incomplete: the sandbox is not the obstacle, the missing
    pieces are per-game launch options and the shim inside the prefix — [`hw/flatpak-xmx.md`](hw/flatpak-xmx.md).
-7. **Corrections made *while writing this file*** (small, factual, no behaviour change): the
+7. **The `max_hw_sleep` "anomaly" was an ABI/unit misread, not a kernel bug.** The tuple
+   `success=0` next to `max_hw_sleep=523986009990` looked internally inconsistent. It is not:
+   `max_hw_sleep` is a probe-time reporting ceiling (`(2^32-1) x 122` **microseconds** = about
+   6.06 days on this platform) and is not a measurement; the old "~524 s" reading treated
+   microseconds as nanoseconds; `success`/`last_hw_sleep`/`total_hw_sleep` are boot-local and
+   never persisted, and `CLOCK_BOOTTIME - CLOCK_MONOTONIC` was 0.000 s at 16.4 h uptime. Now
+   documented in [`hw/sleep-power.md` §2.6](hw/sleep-power.md), reported as `UNKNOWN` by
+   `sleep.stats`, and explained by the `sleep.stats-inconsistent` triage rule. The kernel and ABI
+   quotes behind it are in [`hw/sleep-power.md` §2.6](hw/sleep-power.md) (read from the local kernel
+   tree, which stays out of the repo).
+8. **Corrections made *while writing this file*** (small, factual, no behaviour change): the
    `hw/sleep-power.md` baseline row still said "has not suspended once" (now cites the 9-entry count and
    the `-k`/`-b` trap); `hw/sagv.md` §5.4 referred to "a device that never suspended"; `docs/TESTING.md`
    §3/§9 had suite counts that had drifted. Those counts are now generated in §2 instead of copied
@@ -327,8 +342,9 @@ deployment, so keep persistent work in `/etc`, `/usr/local` or `$HOME` ([`INSTAL
 * **`/usr` overlay vs `LocalPackages`**: `kmod-oxp3`/`oxp3-firmware` show as *LocalPackages*, not
   *LayeredPackages*; re-check after the next Anatase update that both still apply, and note that the
   docs' "layered" wording covers the module path, not an rpm-ostree layer.
-* **`sleep.stats` and `xmx.trace`** are `SKIP`/`warn` by design until a real suspend and an igdext
-  trace exist (`sleep.stats` says "no suspend attempt since boot" today); do not "fix" them with a
+* **`sleep.stats` and `xmx.trace`** are `SKIP`/`UNKNOWN`/`warn` by design until a real suspend and an
+  igdext trace exist (`sleep.stats` says "max_hw_sleep is a ceiling, not a sleep" on a boot with no
+  suspend, and is `UNKNOWN`, not a pass or a fail, in that state); do not "fix" them with a
   config edit.
 * **`hw/gap-audit.md`** is the earliest audit and is superseded on the Bluetooth row; its rankings are
   still useful, its baseline table is not current.

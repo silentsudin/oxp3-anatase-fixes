@@ -1,0 +1,2 @@
+libexec: vol=yes sleep-wakeup=yes sleep-log=yes powerctl=yes adaptivetdp=no
+udev rules: hid=yes sleep-wakeup=yes volume-hwdb=yes

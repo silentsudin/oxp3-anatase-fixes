@@ -456,10 +456,14 @@ disagreement is the bug. Add a new failure mode by adding a scenario to
 * **This harness has not cycled the hardware yet.** The owner run above is the
   acceptance step; the first report should replace the "not yet measured" state
   honestly.
-* **`max_hw_sleep` inconsistency from [hw/sleep-power.md §8](hw/sleep-power.md)**:
-  the first real run will show whether it is stale. The harness records the
-  counter per cycle but does not use it for the verdict (BOOTTIME/MONOTONIC is
-  the primary clock).
+* **`max_hw_sleep` is a ceiling, not a measurement (resolved 2026-11-09).**
+  [hw/sleep-power.md §2.6](hw/sleep-power.md) reads the kernel and ABI: the value
+  is the platform PMC's S0ix-counter reporting span (`(2^32-1) x 122 us ≈ 6.06 days`),
+  set at probe; `last_hw_sleep`/`total_hw_sleep` are microseconds from the PMC resume
+  hook and can wrap (a `u32` cast, ~71.6 min) on long cycles. The harness keeps
+  recording the counter per cycle but never uses it for the verdict -
+  BOOTTIME/MONOTONIC is the authoritative clock, and the first real run should
+  compare the two to confirm the wrap behaviour.
 * **60 s is short for a bag claim.** The default is a screen. If it passes,
   repeat with `--sleep 300` (or longer) before treating the number as final.
 * **S0ix residency is root-only** and its ratio is informational; it is not

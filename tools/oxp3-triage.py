@@ -627,7 +627,8 @@ def parse_suspend(bundle: Bundle) -> Dict[str, Any]:
         for name, (value, number) in audit.items():
             out["stats"][name] = value
             out["lines"][name] = number
-    for name in ("success", "fail", "failed_suspend", "failed_resume", "last_hw_sleep"):
+    for name in ("success", "fail", "failed_suspend", "failed_resume", "last_hw_sleep",
+                 "total_hw_sleep", "max_hw_sleep"):
         try:
             out["stats"][name + "_int"] = int(out["stats"].get(name, "") or 0)
         except ValueError:
@@ -1664,9 +1665,11 @@ def sleep_no_attempt(f: Facts) -> Outcome:
         "triggered",
         "suspend_stats/success is still 0 and no failed_* counter moved, so nothing has "
         "asked the kernel to sleep on this boot. That is not proof that suspend is broken "
-        "- it means the trigger path was not exercised. `max_hw_sleep` reading ~524 s with "
-        "success=0 is a stale, internally inconsistent value, not evidence of a sleep. "
-        "Note the known trap: `journalctl -k` implies `-b`, so history needs `-b all`.",
+        "- it means the trigger path was not exercised. The hardware-sleep numbers are "
+        "not evidence of a sleep either: `max_hw_sleep` is a reporting ceiling set at "
+        "probe, not a duration (docs/hw/sleep-power.md 2.6), so `success=0` with a "
+        "non-zero `max_hw_sleep` is coherent, not stale. Note the known trap: "
+        "`journalctl -k` implies `-b`, so history needs `-b all`.",
         evidence,
         [action],
         severity="medium" if _sleep_trigger_broken(f) else "info",
@@ -1677,6 +1680,88 @@ def _sleep_trigger_broken(f: Facts) -> bool:
     dropin = _logind_dropin(f)
     polkit = _polkit_rule(f)
     return not (dropin and dropin.get("present")) or not (polkit and polkit.get("present"))
+
+
+@rule(
+    "sleep.stats-inconsistent",
+    "hardware-sleep counters without a completed suspend",
+    "info",
+    "sleep",
+    ("sleep", "verify_json"),
+)
+def sleep_stats_inconsistent(f: Facts) -> Outcome:
+    """Explain `last_hw_sleep`/`max_hw_sleep` when `success` is 0.
+
+    The three hw_* attributes are not written by the generic suspend path: only the
+    platform PMC driver reports them, and `max_hw_sleep` is a probe-time reporting
+    ceiling, not a measurement (docs/hw/sleep-power.md 2.6). A non-zero max with
+    success=0 is therefore coherent; a non-zero `last_hw_sleep` with success=0 needs
+    this boot's own journal and CLOCK_BOOTTIME before it means anything.
+    """
+    stats = (f.suspend or {}).get("stats") or {}
+    if "success" not in stats:
+        return Outcome("unknown", "no suspend statistics in this bundle")
+    success = stats.get("success_int") or 0
+    fail = stats.get("fail_int") or 0
+    last = stats.get("last_hw_sleep_int") or 0
+    total = stats.get("total_hw_sleep_int") or 0
+    peak = stats.get("max_hw_sleep_int") or 0
+    if success > 0:
+        return Outcome(
+            "clear",
+            "the counters describe a completed cycle (success=%d, fail=%d, "
+            "last_hw_sleep=%d us, max_hw_sleep=%d us); judge the duration against "
+            "CLOCK_BOOTTIME, not against max_hw_sleep" % (success, fail, last, peak),
+        )
+    if last == 0 and peak == 0:
+        return Outcome(
+            "clear",
+            "no completed suspend and no hardware-sleep number: the tuple is coherent "
+            "with a boot that never suspended",
+        )
+    lines = (f.suspend or {}).get("lines", {})
+    evidence = []
+    for name in ("success", "fail", "last_hw_sleep", "total_hw_sleep", "max_hw_sleep"):
+        if lines.get(name):
+            evidence.append(f.bundle.evidence_line("sleep", lines[name]))
+    actions = [
+        Action("journalctl -b -k | grep -c 'PM: suspend entry'",
+               "this boot's kernel log is the direct record of a suspend entry; 0 "
+               "matches success=0 (use -b all for history)", privileged=False),
+        Action("python3 -c 'import time; print(time.clock_gettime(time.CLOCK_BOOTTIME) "
+               "- time.clock_gettime(time.CLOCK_MONOTONIC))'",
+               "suspended time since boot: CLOCK_BOOTTIME counts through suspend, "
+               "CLOCK_MONOTONIC does not; 0 s means no s2idle time elapsed this boot",
+               privileged=False),
+        Action("sudo tools/sleep-cycle-test.sh --cycles 1",
+               "the authoritative per-cycle BOOTTIME-MONOTONIC measurement; "
+               "max_hw_sleep is not a duration"),
+    ]
+    if last > 0:
+        return Outcome(
+            "triggered",
+            "success=0 but last_hw_sleep=%d us (total_hw_sleep=%d us): only the "
+            "platform PMC's resume hook writes those, not the generic suspend path, so "
+            "a cycle that reached S0ix and then aborted can leave them non-zero without "
+            "counting a success. They are plain in-memory counters (zeroed at boot, "
+            "never persisted, sysfs is read-only), so this cannot be a value from an "
+            "earlier boot. Compare this boot's journal and BOOTTIME first."
+            % (last, total),
+            [item for item in evidence if item],
+            actions,
+            confidence="medium",
+        )
+    return Outcome(
+        "triggered",
+        "success=0 with max_hw_sleep=%d us: max_hw_sleep is a hardware reporting "
+        "ceiling, not a measured sleep - intel_pmc_core sets it at probe to "
+        "(2^32-1) x 122 us = 523986009990 us (about 6.1 days), AMD uses U64_MAX. It "
+        "belongs to no suspend, is not persisted, and must never be read as one; with "
+        "last_hw_sleep/total_hw_sleep at 0 the tuple is coherent with a boot that never "
+        "suspended. The earlier '~524 s' reading was a us/ns unit error." % peak,
+        [item for item in evidence if item],
+        actions,
+    )
 
 
 @rule(
@@ -2269,7 +2354,11 @@ def env_kernel_mismatch(f: Facts) -> Outcome:
 
 
 # -- Verification summary --------------------------------------------------
-COVERED_UNKNOWNS = {"aud.dummy"}
+# UNKNOWN rows that another rule explains in its own words; they must not also
+# produce verify.unknown. sleep.stats is explained by sleep.stats-inconsistent
+# (success=0 with a hardware-sleep number is a counter-semantics question, not a
+# harness failure).
+COVERED_UNKNOWNS = {"aud.dummy", "sleep.stats"}
 
 COVERED_FAILS = {
     "bt.journal",
@@ -3268,9 +3357,10 @@ EXPECTATIONS: Tuple[Tuple[str, Tuple[str, ...], Dict[str, str]], ...] = (
     (
         "preinstall",
         ("bt.initramfs-stale", "power.power-key-poweroff", "sleep.trigger-uninstalled",
-         "bt.dracut-missing", "sleep.no-attempt", "xmx.flatpak-helper", "xmx.trace-absent",
-         "verify.not-installed", "decky.not-installed", "power.profile-unsaved",
-         "volume.not-installed", "polkit.no-session-agent"),
+         "bt.dracut-missing", "sleep.no-attempt", "sleep.stats-inconsistent",
+         "xmx.flatpak-helper", "xmx.trace-absent", "verify.not-installed",
+         "decky.not-installed", "power.profile-unsaved", "volume.not-installed",
+         "polkit.no-session-agent"),
         {"volume": "not-installed", "leds": "not-installed", "rgb": "not-installed",
          "daemons": "not-installed", "sleep": "not-installed", "power": "partial",
          "battery": "ok", "audio": "ok", "display": "ok", "graphics": "ok",
@@ -3296,8 +3386,22 @@ EXPECTATIONS: Tuple[Tuple[str, Tuple[str, ...], Dict[str, str]], ...] = (
     ),
     (
         "sleep-never-triggered",
-        ("sleep.logind-not-restarted", "power.power-key-poweroff", "sleep.no-attempt"),
-        {"sleep": "ok", "bluetooth": "ok"},
+        ("sleep.logind-not-restarted", "power.power-key-poweroff", "sleep.no-attempt",
+         "sleep.stats-inconsistent"),
+        {"sleep": "partial", "bluetooth": "ok"},
+    ),
+    (
+        "sleep-hw-counter",
+        ("bt.initramfs-stale", "power.power-key-poweroff", "sleep.trigger-uninstalled",
+         "bt.dracut-missing", "sleep.no-attempt", "sleep.stats-inconsistent",
+         "xmx.flatpak-helper", "xmx.trace-absent", "verify.not-installed",
+         "decky.not-installed", "power.profile-unsaved", "volume.not-installed",
+         "polkit.no-session-agent"),
+        {"volume": "not-installed", "leds": "not-installed", "rgb": "not-installed",
+         "daemons": "not-installed", "sleep": "not-installed", "power": "partial",
+         "battery": "ok", "audio": "ok", "display": "ok", "graphics": "ok",
+         "sched": "not-installed", "decky": "not-installed", "imu": "ok",
+         "bluetooth": "broken"},
     ),
     (
         "volume-degraded",

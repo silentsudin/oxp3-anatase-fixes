@@ -19,7 +19,7 @@ oxp3-verify 1.0.0  mode=default  kernel=7.2.7-an28.fc45.x86_64  root=no
 [PASS  ] -          life.reconnect         one device loss, recovered
 [SKIP  ] -          life.sim               gated: only with --full
 [PASS  ] -          sleep.mem              mem_sleep: [s2idle] deep
-[SKIP  ] -          sleep.stats            no suspend attempt since boot
+[UNKNOWN] -          sleep.stats            no completed suspend; max_hw_sleep is a ceiling, not a sleep
 [PASS  ] -          sleep.units            3/3 enabled and active
 [PASS  ] -          sleep.wakeup           9 wake sources disarmed as documented
 [PASS  ] -          sleep.trigger          drop-in parsed; pkcheck yes; no sleep block

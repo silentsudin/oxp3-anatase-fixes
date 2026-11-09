@@ -19,7 +19,7 @@ oxp3-verify 1.0.0  mode=default  kernel=7.2.7-an28.fc45.x86_64  root=no
 [SKIP  ] -          life.reconnect         no lifecycle journal in this boot
 [SKIP  ] -          life.sim               gated: only with --full
 [PASS  ] -          sleep.mem              mem_sleep: [s2idle] deep
-[SKIP  ] -          sleep.stats            no suspend attempt since boot
+[UNKNOWN] -          sleep.stats            no completed suspend; max_hw_sleep is a ceiling, not a sleep
 [SKIP  ] -          sleep.units            not installed
 [SKIP  ] -          sleep.wakeup           sleep policy not installed
 [SKIP  ] -          sleep.trigger          trigger policy not installed

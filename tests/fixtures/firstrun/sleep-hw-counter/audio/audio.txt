@@ -1,0 +1,32 @@
+== ALSA / SOF cards
+
+0 [sofhdadsp      ]: sof-hda-dsp - sof-hda-dsp
+                      ONE_NETBOOK-ONEXPLAYER3-Defaultstring
+
+== PipeWire / PulseAudio
+
+-- pactl info
+Server String: /run/user/1000/pulse/native
+Server Name: PulseAudio (on PipeWire 1.6.9)
+Default Sink: oxp3_speaker_eq.sink
+Cookie: <redacted:cookie>
+
+-- pactl list short sinks
+40	oxp3_speaker_eq.sink	PipeWire	float32le 2ch 48000Hz	SUSPENDED
+
+-- pactl get-default-sink
+oxp3_speaker_eq.sink
+
+-- filter-chain modules
+29	libpipewire-module-filter-chain	{
+
+== speaker EQ drop-in
+  ~/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf present
+  sha256 8caebc145da1919d18f2a63b5be486b4800de1c12864a58dde2c030a4d2081ab
+    # OneXPlayer 3 internal-speaker EQ (ours)
+
+== audio units (user scope)
+
+  oxp3-audio-route.service     active
+  pipewire.service             active
+  wireplumber.service          active
