@@ -43,7 +43,10 @@ it is then the only action in the runbook that is not a read, and the plan and
 the command say so), `--allow-existing-bind`,
 `--allow-takeover`, `--crs FILE` (use an already-extracted resource template),
 `--gpio N` / `--irq-edge E` / `--gpio-chip NAME` (override the `_CRS` value
-for an experiment; the plan prints what it will use).
+for an experiment; the plan prints what it will use), `--irq-pin N` /
+`--reset-pin N` (the runtime `_INI`/`GNUM` lines; the template has 0), and
+`--gpio-backend auto|gpiod|chardev|sysfs|poll` (force the GPIO backend; the
+default also honours `$FPBF63112_GPIO_BACKEND`).
 
 Exit codes: `0` done and restore verified, `1` a step failed (the restore still
 ran and is reported), `2` usage or precondition refusal (nothing was changed),
@@ -211,6 +214,67 @@ Failure shapes, and what they mean:
 Whatever the outcome, the runbook restores the binding and says whether the
 restore was verified - a failed read does not leave the machine altered.
 
+### 5.1 The retry after the all-zero probe: reset 16 and IRQ 18
+
+The 2026-11-09 run (`docs/state/fp-session-20261109T110322Z/`) bound spidev and
+read `fw`, `scheme` and `info` as **all zeros**. That run had `irq=no reset=no`:
+the static template's `GpioInt`/`GpioIo` pin tables contain 0, and the real
+lines exist only as the `_INI` objects `INT1`/`TRST` (`GNUM` of `0x001A0412` and
+`0x001A0410`). The reset was therefore never driven and the IRQ fell back to a
+timed poll. The resolved mapping (evidence in
+[fingerprint-transport.md §8.6](fingerprint-transport.md#86-gpio-v2-character-device-backend-and-this-boards-lines-2026-11-09))
+is `\_SB.GPI1` = ACPI `INTC10BC:01` = `/dev/gpiochip1`, IRQ **18**, reset
+**16**. The exact retry is:
+
+```sh
+sudo tools/fingerprint/oxp3-fp-session.sh \
+    --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 --allow-reset
+```
+
+`--irq-pin`/`--reset-pin` supply the numbers the firmware computes at runtime;
+`--gpio-chip gpiochip1` is the controller (`gpiochipN`, a `/dev` path or a chip
+label are all accepted); `--allow-reset` is what makes the runbook pulse line
+16 (the only non-read action, still gated and announced in the plan). No other
+flag is needed: with no `gpiod` module and no `/sys/class/gpio`
+(`CONFIG_GPIO_SYSFS` is off), the auto order picks the new `chardev` backend
+(`gpiod -> chardev -> sysfs -> poll`). To pin that choice down, add
+`--gpio-backend chardev` or export `FPBF63112_GPIO_BACKEND=chardev`; both reach
+the probe unchanged.
+
+What the plan should now say (if one of these still says "none", the override
+did not take and the command was mistyped):
+
+```
+GpioInt line     : 18 (from --irq-pin; the template's pin list is a runtime placeholder)
+GpioIo reset line: 16 (from --reset-pin)
+GpioIo reset line 16 will be PULSED (--allow-reset)
+```
+
+A **valid** answer is non-zero, non-`0xff` and internally plausible:
+
+```
+fw: opcode 0xa0 selector 0x40 answer 7 B
+    00 00 04 01 02 03 04
+    fw=1.2.3.4 project=BOE MOC variant=4 mode=0 raw=01020304
+scheme: opcode 0xa1 selector 0x42 answer 64 B
+    04 00 01 ...                    (a table; non-zero, not all 0xff)
+info: opcode 0xc1 selector 0x02 answer 9 B
+    00 00 00 00 40 00 40 00 00
+    fields a=0 b=0  sensor=64x64  image=4096 B flags=0x00
+```
+
+The concrete numbers are the expected *shape* (§5), not a captured answer; the
+test is that the payload is no longer all zero and that `width*height` is a
+sane image size. **All zeros** now means "the bus clocked, but the sensor still
+did not drive MISO after a real reset pulse": the remaining suspects are the
+reset polarity (active-low is assumed), the possibility that the module wants
+the interrupt *before* it answers (the probe clocks first and waits after), or
+that reset 16 is not the line this firmware actually toggles. **All `0xff`**
+means nothing answered on the bus at all (chip select/controller), and a
+timeout with no bytes means the node exists but the transfer never completed -
+check `bytes_tx` in `sys-after.txt`. Whatever happens, the runbook restores the
+spidev binding and says whether the restore was verified.
+
 ## 6. Handing the transcript back
 
 Give the whole `docs/state/fp-session-*` directory (or just `summary.json` +
@@ -278,6 +342,15 @@ Extraction cascade: `--crs FILE` (validated) -> `/sys/firmware/acpi/tables/DSDT`
 run as root or supply `--crs`. `iasl`, when present, only writes the readable
 excerpt.
 
+Known limitation of that scan on this DSDT: FPRT `_CRS` is
+`ConcatenateResTemplate(SBFB, SBFG)`. The scanner accepts the first `Return(Buffer)` that
+parses as an SPI template, so it extracts `SBFB` (the 38-byte SPI descriptor)
+and not `SBFG` (the `GpioInt` + `GpioIo` descriptor). `acpi-info.txt` therefore
+reports no IRQ/reset pins even though `SBFG` exists; the real lines come from
+`_INI`/`GNUM` and are passed with `--irq-pin 18 --reset-pin 16` (§5.1). Teach
+the scanner to concatenate both named buffers before relying on `_CRS` for the
+GPIOs.
+
 ## 9. Offline testing (what is covered without root or a sensor)
 
 `tools/fingerprint/oxp3-fp-session.sh --selftest` (74 checks) and
@@ -322,10 +395,21 @@ or without the sensor, and never binds anything).
   without `--allow-reset`. With `--allow-reset` it passes `--crs` so the probe
   can see the pin, and the plan prints that the line will be pulsed. Treat that
   as a deliberate experiment, not as part of a read-only run.
-* The IRQ is only used when `_CRS` supplies a `GpioInt` and `--no-irq` is not
-  given; the probe then requests the line (libgpiod, else sysfs) and releases
-  it on close. A sysfs export is a transient sysfs write inside that request,
-  which is why the request is listed in the phase output.
+* The IRQ is only used when the run knows a line (a `_CRS` `GpioInt`, or
+  `--irq-pin`, or `--gpio`) and `--no-irq` is not given; the probe then
+  requests the line (`gpiod`, else the GPIO v2 chardev, else sysfs) and
+  releases it on close. A sysfs export is a transient sysfs write inside that
+  request, which is why the request is listed in the phase output; the chardev
+  backend writes nothing outside its own request fd.
+* The reset line's **polarity is assumed active-low** (ACPI `GpioIo` has no
+  polarity field) and the probe has no flag to invert it. If the pulse on line
+  16 produces no change, this is the first thing to revisit in the code, not a
+  reason to repeat the run.
+* Whether the sensor needs the interrupt at all is still unproven: the probe
+  clocks the selector/answer first and waits for the IRQ afterwards. If the
+  first answer stays all-zero with the lines configured, the next experiment is
+  to reorder that (wait for the edge, then clock the read), which is a code
+  change, not a new runbook flag.
 * `acpidump` is used only when the sysfs DSDT cannot be read; that path is
   implemented but not exercised on this host (no `acpica-tools` here).
 * Whether the first read needs the IRQ before the answer, whether the module

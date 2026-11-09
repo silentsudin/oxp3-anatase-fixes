@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import ctypes
 import dataclasses
+import errno
 import fcntl
 import os
 import select
@@ -87,6 +88,93 @@ def spi_ioc_message(n: int) -> int:
 
 
 SPI_IOC_MESSAGE_1 = spi_ioc_message(1)
+
+# ---------------------------------------------------------------------------
+# Linux GPIO character-device ABI v2 (linux/gpio.h) - stdlib only
+#
+# The controller nodes are /dev/gpiochipN; every request is one
+# GPIO_V2_GET_LINE_IOCTL on the chip fd and every event read is a
+# struct gpio_v2_line_event from the returned request fd.  No libgpiod and no
+# /sys/class/gpio are involved.
+#
+# Struct sizes on a 64-bit kernel (the kernel builds these with explicit
+# padding, so they are identical for 32/64-bit userspace):
+#
+#   struct gpiochip_info                68 B   (2 x 32 sName + u32 lines)
+#   struct gpio_v2_line_values          16 B   (u64 bits, u64 mask)
+#   struct gpio_v2_line_attribute       16 B   (u32 id, u32 pad, u64 union)
+#   struct gpio_v2_line_config_attribute 24 B  (attribute + u64 mask)
+#   struct gpio_v2_line_config         272 B   (u64 flags, u32 num_attrs,
+#                                               5 x u32 pad, 10 x attr)
+#   struct gpio_v2_line_request        592 B   (64 x u32 offsets,
+#                                               32 sName consumer,
+#                                               config 272, u32 num_lines,
+#                                               u32 event_buffer_size,
+#                                               5 x u32 pad, s32 fd)
+#   struct gpio_v2_line_event           48 B   (u64 timestamp_ns, u32 id,
+#                                               u32 offset, u32 seqno,
+#                                               u32 line_seqno, 6 x u32 pad)
+#
+# The ioctl numbers are _IOC()-encoded from those sizes; a wrong size changes
+# the number and the kernel answers ENOTTY instead of misreading the buffer.
+# ---------------------------------------------------------------------------
+
+GPIO_MAX_NAME_SIZE = 32
+GPIO_V2_LINES_MAX = 64
+GPIO_V2_LINE_NUM_ATTRS_MAX = 10
+
+GPIO_V2_LINE_FLAG_ACTIVE_LOW = 1 << 1
+GPIO_V2_LINE_FLAG_INPUT = 1 << 2
+GPIO_V2_LINE_FLAG_OUTPUT = 1 << 3
+GPIO_V2_LINE_FLAG_EDGE_RISING = 1 << 4
+GPIO_V2_LINE_FLAG_EDGE_FALLING = 1 << 5
+
+GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES = 2
+GPIO_V2_LINE_EVENT_RISING_EDGE = 1
+GPIO_V2_LINE_EVENT_FALLING_EDGE = 2
+
+_GPIOCHIP_INFO = struct.Struct("<32s32sI")            # 68 B
+assert _GPIOCHIP_INFO.size == 68
+_GPIO_LINE_VALUES = struct.Struct("<QQ")              # 16 B
+assert _GPIO_LINE_VALUES.size == 16
+_GPIO_LINE_CONFIG_ATTR = struct.Struct("<IIQQ")       # 24 B
+assert _GPIO_LINE_CONFIG_ATTR.size == 24
+_GPIO_LINE_CONFIG_HEAD = struct.Struct("<QI5I")       # 32 B + 10 attrs
+assert _GPIO_LINE_CONFIG_HEAD.size == 32
+_GPIO_LINE_REQUEST_HEAD = struct.Struct("<64I32s")    # 288 B
+assert _GPIO_LINE_REQUEST_HEAD.size == 288
+_GPIO_LINE_REQUEST_TAIL = struct.Struct("<II5Ii")     # 32 B
+assert _GPIO_LINE_REQUEST_TAIL.size == 32
+_GPIO_LINE_EVENT = struct.Struct("<QIIII6I")          # 48 B
+assert _GPIO_LINE_EVENT.size == 48
+
+_GPIO_LINE_CONFIG_SIZE = 32 + 10 * _GPIO_LINE_CONFIG_ATTR.size   # 272
+_GPIO_LINE_REQUEST_SIZE = 288 + _GPIO_LINE_CONFIG_SIZE + 32      # 592
+_GPIO_LINE_CONFIG_ATTR_OFFSET = 288 + 32                         # 320
+_GPIO_LINE_REQUEST_TAIL_OFFSET = 288 + _GPIO_LINE_CONFIG_SIZE    # 560
+_GPIO_LINE_REQUEST_FD_OFFSET = _GPIO_LINE_REQUEST_SIZE - 4       # 588
+
+
+def _gpio_ioc(direction: int, nr: int, size: int) -> int:
+    """Linux ``_IOC(dir, 0xb4, nr, size)`` for the GPIO ioctl family."""
+    return (direction << 30) | (size << 16) | (0xB4 << 8) | nr
+
+
+GPIO_GET_CHIPINFO_IOCTL = _gpio_ioc(2, 0x01, _GPIOCHIP_INFO.size)
+GPIO_V2_GET_LINE_IOCTL = _gpio_ioc(3, 0x07, _GPIO_LINE_REQUEST_SIZE)
+GPIO_V2_LINE_GET_VALUES_IOCTL = _gpio_ioc(3, 0x0E, _GPIO_LINE_VALUES.size)
+GPIO_V2_LINE_SET_VALUES_IOCTL = _gpio_ioc(3, 0x0F, _GPIO_LINE_VALUES.size)
+assert GPIO_GET_CHIPINFO_IOCTL == 0x8044B401
+assert GPIO_V2_GET_LINE_IOCTL == 0xC250B407
+assert GPIO_V2_LINE_SET_VALUES_IOCTL == 0xC010B40F
+
+#: Environment override for the GPIO backend, read when ``backend="auto"``
+#: (or ``None``).  The probe's ``--gpio-backend`` passes the value explicitly.
+GPIO_BACKEND_ENV = "FPBF63112_GPIO_BACKEND"
+
+#: Backend names in the order they are tried by ``backend="auto"``.
+IRQ_BACKENDS = ("gpiod", "chardev", "sysfs", "poll")
+RESET_BACKENDS = ("gpiod", "chardev", "sysfs")
 
 # ---------------------------------------------------------------------------
 # Recovered wire constants
@@ -243,6 +331,435 @@ class Cancelled(SpiError):
 
 class IrqUnavailable(SpiError):
     """No GPIO backend could be opened for the interrupt line."""
+
+
+class GpioError(SpiError):
+    """Base class for the GPIO character-device (uAPI v2) backend."""
+
+
+class GpioChipNotFound(GpioError):
+    """The requested /dev/gpiochipN node (or its name/label) does not exist."""
+
+
+class GpioLineOutOfRange(GpioError):
+    """The line offset is outside the chip's reported line count."""
+
+
+class GpioUnsupported(GpioError):
+    """ENOTTY: not a GPIO character device, or no uAPI v2 support."""
+
+
+class GpioInvalidRequest(GpioError):
+    """EINVAL: the kernel rejected the line request/values/event buffer."""
+
+
+class GpioPermissionDenied(GpioError):
+    """EACCES/EPERM: the process may not open or request this GPIO line."""
+
+
+class GpioLineBusy(GpioError):
+    """EBUSY: another consumer already owns the requested line."""
+
+
+def _gpio_backend(backend: str | None) -> str:
+    """Resolve ``auto``/``None`` through ``$FPBF63112_GPIO_BACKEND``."""
+    if backend not in (None, "auto"):
+        return backend
+    env = os.environ.get(GPIO_BACKEND_ENV, "").strip()
+    return env or "auto"
+
+
+def _gpio_os_error(exc: OSError, what: str) -> GpioError:
+    """Translate one GPIO errno into the typed error the caller can act on."""
+    code = exc.errno
+    detail = exc.strerror or str(exc)
+    if code == errno.ENOTTY:
+        return GpioUnsupported(
+            f"{what}: {detail} (ENOTTY); the kernel's GPIO character device "
+            f"does not support the v2 uAPI here (CONFIG_GPIO_CDEV?)")
+    if code == errno.EINVAL:
+        return GpioInvalidRequest(
+            f"{what}: {detail} (EINVAL); the kernel rejected the line request "
+            f"(flags/attributes/num_lines/line offset)")
+    if code in (errno.EACCES, errno.EPERM):
+        return GpioPermissionDenied(
+            f"{what}: {detail} (errno {code}); opening a GPIO chip or "
+            f"requesting a line normally needs root or a udev ACL")
+    if code == errno.EBUSY:
+        return GpioLineBusy(f"{what}: {detail} (EBUSY)")
+    if code in (errno.ENOENT, errno.ENODEV, errno.ENXIO):
+        return GpioChipNotFound(f"{what}: {detail} (errno {code})")
+    return GpioError(f"{what}: {detail} (errno {code})")
+
+
+def _gpio_ioctl(fd: int, request: int, buf: bytearray, what: str) -> None:
+    """One ioctl on a mutable buffer; raises a typed :class:`GpioError`.
+
+    ``fcntl.ioctl`` with a ``bytearray`` mutates it in place and returns ``0``,
+    which is what the kernel's _IOWR structs (request/fd, values) need.
+    """
+    try:
+        fcntl.ioctl(fd, request, buf)
+    except OSError as exc:
+        raise _gpio_os_error(exc, what) from exc
+
+
+# ---------------------------------------------------------------------------
+# GPIO character device: line requests, values and events
+# ---------------------------------------------------------------------------
+
+def build_line_request(offsets, flags: int, *,
+                       consumer: str = "fpbf63112",
+                       attrs=(),
+                       event_buffer_size: int = 0) -> bytearray:
+    """Pack one ``struct gpio_v2_line_request`` (592 B, see above).
+
+    ``attrs`` is an iterable of ``(attr_id, value, mask)`` tuples, packed as
+    ``struct gpio_v2_line_config_attribute`` entries.  ``flags`` never contains
+    ``GPIO_V2_LINE_FLAG_ACTIVE_LOW``: this backend inverts values/edges in
+    software so the physical level is explicit on the wire.
+    """
+    offsets = tuple(int(o) for o in offsets)
+    if not 1 <= len(offsets) <= GPIO_V2_LINES_MAX:
+        raise GpioInvalidRequest(
+            f"a line request needs 1..{GPIO_V2_LINES_MAX} offsets, "
+            f"not {len(offsets)}")
+    for line in offsets:
+        if not 0 <= line <= 0xFFFFFFFF:
+            raise GpioLineOutOfRange(f"GPIO line offset out of range: {line}")
+    attrs = tuple(attrs)
+    if len(attrs) > GPIO_V2_LINE_NUM_ATTRS_MAX:
+        raise GpioInvalidRequest(
+            f"at most {GPIO_V2_LINE_NUM_ATTRS_MAX} config attributes are "
+            f"allowed, not {len(attrs)}")
+    if not 0 <= event_buffer_size <= 0xFFFFFFFF:
+        raise GpioInvalidRequest(
+            f"event_buffer_size out of range: {event_buffer_size}")
+    name = str(consumer).encode("utf-8")[:GPIO_MAX_NAME_SIZE - 1]
+    buf = bytearray(_GPIO_LINE_REQUEST_SIZE)
+    _GPIO_LINE_REQUEST_HEAD.pack_into(
+        buf, 0, *(offsets + (0,) * (GPIO_V2_LINES_MAX - len(offsets))), name)
+    _GPIO_LINE_CONFIG_HEAD.pack_into(
+        buf, _GPIO_LINE_REQUEST_HEAD.size, flags, len(attrs), 0, 0, 0, 0, 0)
+    for index, (attr_id, value, mask) in enumerate(attrs):
+        _GPIO_LINE_CONFIG_ATTR.pack_into(
+            buf, _GPIO_LINE_CONFIG_ATTR_OFFSET
+            + index * _GPIO_LINE_CONFIG_ATTR.size,
+            attr_id, 0, value, mask)
+    _GPIO_LINE_REQUEST_TAIL.pack_into(
+        buf, _GPIO_LINE_REQUEST_TAIL_OFFSET,
+        len(offsets), event_buffer_size, 0, 0, 0, 0, 0, -1)
+    return buf
+
+
+@dataclasses.dataclass(frozen=True)
+class GpioLineEvent:
+    """One decoded ``struct gpio_v2_line_event`` (48 B)."""
+
+    timestamp_ns: int
+    event_id: int
+    offset: int
+    seqno: int
+    line_seqno: int
+
+    @property
+    def edge(self) -> str | None:
+        """``"rising"``/``"falling"``, or ``None`` for an unknown id."""
+        if self.event_id == GPIO_V2_LINE_EVENT_RISING_EDGE:
+            return "rising"
+        if self.event_id == GPIO_V2_LINE_EVENT_FALLING_EDGE:
+            return "falling"
+        return None
+
+
+def decode_line_event(raw) -> GpioLineEvent:
+    """Decode the first ``struct gpio_v2_line_event`` from ``raw``."""
+    if len(raw) < _GPIO_LINE_EVENT.size:
+        raise GpioInvalidRequest(
+            f"GPIO event is {len(raw)} B; need "
+            f"{_GPIO_LINE_EVENT.size} B for one record")
+    (timestamp_ns, event_id, offset, seqno, line_seqno,
+     *_padding) = _GPIO_LINE_EVENT.unpack_from(bytes(raw[:48]), 0)
+    return GpioLineEvent(timestamp_ns, event_id, offset, seqno, line_seqno)
+
+
+def decode_line_events(raw) -> tuple[GpioLineEvent, ...]:
+    """Decode every complete event in one ``read()`` from the request fd."""
+    raw = bytes(raw)
+    if len(raw) % _GPIO_LINE_EVENT.size:
+        raise GpioInvalidRequest(
+            f"GPIO event read returned {len(raw)} B, not a multiple of "
+            f"{_GPIO_LINE_EVENT.size} B")
+    return tuple(decode_line_event(raw[index:index + _GPIO_LINE_EVENT.size])
+                 for index in range(0, len(raw), _GPIO_LINE_EVENT.size))
+
+
+class GpioChardev:
+    """One GPIO chip opened through ``/dev/gpiochipN`` (uAPI v2).
+
+    ``chip`` may be ``"gpiochip1"`` (joined onto ``dev_dir``), an absolute path
+    such as ``"/dev/gpiochip1"``, or a chip name/label (e.g. ``"INTC10BC"``):
+    the last form scans ``dev_dir`` and matches ``struct gpiochip_info``'s name
+    and label with ``GPIO_GET_CHIPINFO_IOCTL``.  Construction does no I/O;
+    :meth:`open` resolves and opens the chip and reads its line count.
+    """
+
+    def __init__(self, chip: str | None = None, *, dev_dir: str = "/dev"):
+        self.chip = chip or "gpiochip0"
+        self.dev_dir = dev_dir
+        self.path: str | None = None
+        self.fd: int | None = None
+        self.name: str | None = None
+        self.label: str | None = None
+        self.lines: int | None = None
+
+    # -- lifecycle ---------------------------------------------------------
+    def open(self) -> "GpioChardev":
+        if self.fd is not None:
+            return self
+        path = self._resolve_path()
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+        except FileNotFoundError as exc:
+            raise GpioChipNotFound(
+                f"GPIO chip {self.chip!r} not found at {path}") from exc
+        except PermissionError as exc:
+            raise GpioPermissionDenied(
+                f"cannot open {path}: {exc.strerror or exc}; GPIO character "
+                f"devices normally need root or a udev ACL") from exc
+        except OSError as exc:
+            raise _gpio_os_error(exc, f"open {path}") from exc
+        self.fd = fd
+        self.path = path
+        try:
+            name, label, lines = self._read_chipinfo(fd)
+        except GpioError:
+            self.close()
+            raise
+        self.name, self.label, self.lines = name, label, lines
+        return self
+
+    def close(self) -> None:
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            finally:
+                self.fd = None
+
+    # -- chip lookup -------------------------------------------------------
+    def _resolve_path(self) -> str:
+        chip = str(self.chip)
+        if chip.startswith("/"):
+            return chip
+        if chip.startswith("gpiochip") and chip[8:].isdigit():
+            return os.path.join(self.dev_dir, chip)
+        return self._resolve_by_name(chip)
+
+    def _resolve_by_name(self, wanted: str) -> str:
+        try:
+            entries = sorted(os.listdir(self.dev_dir))
+        except OSError as exc:
+            raise GpioChipNotFound(
+                f"cannot list {self.dev_dir}: {exc}") from exc
+        seen = []
+        for entry in entries:
+            if not entry.startswith("gpiochip"):
+                continue
+            path = os.path.join(self.dev_dir, entry)
+            try:
+                fd = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+            except OSError:
+                continue
+            try:
+                name, label, _lines = self._read_chipinfo(fd)
+            except GpioError:
+                continue
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            seen.append(f"{entry}={name!r}/{label!r}")
+            if wanted in (name, label):
+                return path
+        raise GpioChipNotFound(
+            f"no GPIO chip named or labelled {wanted!r} in {self.dev_dir}"
+            + (f" (saw {', '.join(seen)})" if seen else ""))
+
+    @staticmethod
+    def _read_chipinfo(fd: int) -> tuple[str, str, int]:
+        buf = bytearray(_GPIOCHIP_INFO.size)
+        _gpio_ioctl(fd, GPIO_GET_CHIPINFO_IOCTL, buf,
+                    "GPIO_GET_CHIPINFO_IOCTL")
+        name, label, lines = _GPIOCHIP_INFO.unpack_from(buf, 0)
+        return (name.split(b"\0", 1)[0].decode("utf-8", "replace"),
+                label.split(b"\0", 1)[0].decode("utf-8", "replace"),
+                lines)
+
+    def check_line(self, line: int) -> None:
+        """Refuse an offset outside the chip before the request ioctl."""
+        if not isinstance(line, int) or isinstance(line, bool) or line < 0:
+            raise GpioLineOutOfRange(f"GPIO line offset must be >= 0: {line!r}")
+        if self.lines is not None and line >= self.lines:
+            raise GpioLineOutOfRange(
+                f"line {line} is outside {self.path} "
+                f"({self.lines} lines, offsets 0..{self.lines - 1})")
+
+    def request_lines(self, request: bytearray | bytes) -> int:
+        """Issue ``GPIO_V2_GET_LINE_IOCTL``; return the request fd."""
+        if self.fd is None:
+            raise GpioError("GPIO chip is not open")
+        if len(request) != _GPIO_LINE_REQUEST_SIZE:
+            raise GpioInvalidRequest(
+                f"line request is {len(request)} B; need "
+                f"{_GPIO_LINE_REQUEST_SIZE} B")
+        buf = bytearray(request)
+        _gpio_ioctl(self.fd, GPIO_V2_GET_LINE_IOCTL, buf,
+                    f"GPIO_V2_GET_LINE_IOCTL on {self.path}")
+        fd = struct.unpack_from("<i", buf, _GPIO_LINE_REQUEST_FD_OFFSET)[0]
+        if fd < 0:
+            raise GpioInvalidRequest(
+                f"GPIO_V2_GET_LINE_IOCTL on {self.path} returned fd {fd}")
+        return fd
+
+
+class _ChardevOutput:
+    """Reset line through the GPIO v2 character device."""
+
+    name = "chardev"
+
+    def __init__(self, line: int, chip: str | None = None,
+                 active_low: bool = False, *, dev_dir: str = "/dev"):
+        self._line = line
+        self._active_low = bool(active_low)
+        self._chardev = GpioChardev(chip, dev_dir=dev_dir)
+        self._fd: int | None = None
+        self._open()
+
+    def _physical(self, logical) -> int:
+        """Logical assertion -> physical level (active-low inverts)."""
+        value = 1 if logical else 0
+        return value ^ 1 if self._active_low else value
+
+    def _open(self) -> None:
+        dev = self._chardev.open()
+        try:
+            dev.check_line(self._line)
+            request = build_line_request(
+                (self._line,), GPIO_V2_LINE_FLAG_OUTPUT,
+                consumer="fpbf63112-reset",
+                attrs=((GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES,
+                        self._physical(0), 1),))
+            self._fd = dev.request_lines(request)
+        except SpiError:
+            self._chardev.close()
+            raise
+
+    def set(self, value: int) -> None:
+        if self._fd is None:
+            raise GpioError(f"GPIO output line {self._line} is closed")
+        physical = self._physical(value)
+        buf = bytearray(_GPIO_LINE_VALUES.size)
+        _GPIO_LINE_VALUES.pack_into(buf, 0, physical, 1)
+        _gpio_ioctl(self._fd, GPIO_V2_LINE_SET_VALUES_IOCTL, buf,
+                    f"GPIO_V2_LINE_SET_VALUES_IOCTL line {self._line}")
+
+    def close(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            finally:
+                self._fd = None
+        self._chardev.close()
+
+
+class _ChardevWaiter:
+    """Interrupt line through the GPIO v2 character device."""
+
+    name = "chardev"
+
+    def __init__(self, line: int, chip: str | None = None,
+                 edge: str = "rising", active_low: bool = False, *,
+                 dev_dir: str = "/dev"):
+        if edge not in ("rising", "falling", "both"):
+            raise ValueError(f"bad edge {edge!r}")
+        self._line = line
+        self._edge = edge
+        self._active_low = bool(active_low)
+        self._chardev = GpioChardev(chip, dev_dir=dev_dir)
+        self._fd: int | None = None
+        self.last_event: GpioLineEvent | None = None
+        self._open()
+
+    def _open(self) -> None:
+        dev = self._chardev.open()
+        try:
+            dev.check_line(self._line)
+            edge_flags = {
+                "rising": GPIO_V2_LINE_FLAG_EDGE_RISING,
+                "falling": GPIO_V2_LINE_FLAG_EDGE_FALLING,
+                "both": (GPIO_V2_LINE_FLAG_EDGE_RISING
+                         | GPIO_V2_LINE_FLAG_EDGE_FALLING),
+            }[self._edge]
+            request = build_line_request(
+                (self._line,), GPIO_V2_LINE_FLAG_INPUT | edge_flags,
+                consumer="fpbf63112")
+            self._fd = dev.request_lines(request)
+        except SpiError:
+            self._chardev.close()
+            raise
+
+    def wait(self, timeout_s: float):
+        """Return ``(logical_edge, None)`` or ``(None, None)`` on timeout."""
+        if self._fd is None:
+            raise GpioError(f"GPIO event line {self._line} is closed")
+        try:
+            ready, _, _ = select.select([self._fd], [], [], timeout_s)
+        except InterruptedError:
+            return None, None
+        except (OSError, ValueError) as exc:
+            raise _gpio_os_error(
+                exc if isinstance(exc, OSError) else OSError(
+                    errno.EBADF, str(exc)),
+                f"select on GPIO event line {self._line}") from exc
+        if not ready:
+            return None, None
+        try:
+            # Exactly one event: any further queued events stay in the kernel
+            # buffer for the next wait() instead of being decoded and dropped.
+            raw = os.read(self._fd, _GPIO_LINE_EVENT.size)
+        except InterruptedError:
+            return None, None
+        except BlockingIOError:
+            return None, None
+        except OSError as exc:
+            raise _gpio_os_error(
+                exc, f"read GPIO event from line {self._line}") from exc
+        events = decode_line_events(raw)
+        if not events:
+            return None, None
+        event = events[0]
+        self.last_event = event
+        edge = event.edge
+        if self._active_low and edge is not None:
+            # We did not ask the kernel for ACTIVE_LOW, so the event id is the
+            # physical edge: invert it into the logical assertion edge.
+            edge = "falling" if edge == "rising" else "rising"
+        return edge, None
+
+    def close(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            finally:
+                self._fd = None
+        self._chardev.close()
 
 
 # ---------------------------------------------------------------------------
@@ -545,11 +1062,12 @@ class LinuxSpiIO:
 class IrqEvent:
     """One observed interrupt wait result."""
 
-    source: str                 # "gpiod", "sysfs", "poll"
+    source: str                 # "gpiod", "chardev", "sysfs", "poll"
     elapsed_ms: float
     edge: str | None = None     # "rising"/"falling" when known
     value: int | None = None    # line level when known
     observed: bool = True       # False only for the time-based fallback
+    timestamp_ns: int | None = None  # chardev event timestamp, when available
 
     @property
     def asserted(self) -> bool | None:
@@ -564,12 +1082,18 @@ class IrqEvent:
 class GpioIrqWaiter:
     """Wait for the sensor's interrupt line without touching it at import.
 
-    Backend order: ``gpiod`` (libgpiod v1 or v2 Python bindings) -> sysfs
-    edge -> polling.  The sysfs path writes ``export``/``direction``/``edge``
-    (and ``active_low`` when the controller exposes it) under
-    ``/sys/class/gpio`` (root, and it may conflict with another owner); the
-    polling fallback cannot see an edge and only waits out the timeout, so it
-    warns loudly and reports ``observed=False``.
+    Backend order: ``gpiod`` (libgpiod v1 or v2 Python bindings) -> ``chardev``
+    (the GPIO v2 character device, no libgpiod needed) -> sysfs edge ->
+    polling.  The sysfs path writes ``export``/``direction``/``edge`` (and
+    ``active_low`` when the controller exposes it) under ``/sys/class/gpio``
+    (root, and it may conflict with another owner); the polling fallback
+    cannot see an edge and only waits out the timeout, so it warns loudly and
+    reports ``observed=False``.
+
+    ``backend`` may be ``"auto"`` (the order above, with an environment
+    override) or one of ``gpiod``/``chardev``/``sysfs``/``poll`` to force a
+    single backend.  ``$FPBF63112_GPIO_BACKEND`` overrides ``"auto"``;
+    the probe's ``--gpio-backend`` passes the same names explicitly.
 
     ``edge`` is the *logical* assertion edge after ``active_low`` is applied:
     for an active-low line, a rising logical edge is the physical falling
@@ -583,6 +1107,7 @@ class GpioIrqWaiter:
                  edge: str = "rising", active_low: bool = False,
                  backend: str = "auto",
                  sysfs_base: str = "/sys/class/gpio",
+                 chardev_dir: str = "/dev",
                  gpiod_module=None,
                  warn=warnings.warn,
                  clock=time.monotonic, sleep=time.sleep):
@@ -592,8 +1117,13 @@ class GpioIrqWaiter:
         self.chip = chip
         self.edge = edge
         self.active_low = active_low
-        self.backend = backend
+        self.backend = _gpio_backend(backend)
+        if self.backend not in (("auto",) + IRQ_BACKENDS):
+            raise ValueError(
+                f"unknown IRQ backend {self.backend!r}; choose auto, "
+                f"{', '.join(IRQ_BACKENDS)}, or set ${GPIO_BACKEND_ENV}")
         self.sysfs_base = sysfs_base
+        self.chardev_dir = chardev_dir
         self._gpiod_module = gpiod_module
         self._warn = warn
         self._clock = clock
@@ -605,7 +1135,7 @@ class GpioIrqWaiter:
     def _open_impl(self):
         if self._impl is not None:
             return self._impl
-        order = (["gpiod", "sysfs", "poll"] if self.backend == "auto"
+        order = (list(IRQ_BACKENDS) if self.backend == "auto"
                  else [self.backend])
         errors = []
         for candidate in order:
@@ -614,6 +1144,10 @@ class GpioIrqWaiter:
                     self._impl = _GpiodWaiter(
                         self.line, self.chip, self.edge, self.active_low,
                         self._gpiod_module)
+                elif candidate == "chardev":
+                    self._impl = _ChardevWaiter(
+                        self.line, self.chip, self.edge, self.active_low,
+                        dev_dir=self.chardev_dir)
                 elif candidate == "sysfs":
                     self._impl = _SysfsWaiter(
                         self.line, self.edge, self.active_low,
@@ -638,10 +1172,10 @@ class GpioIrqWaiter:
         started = self._clock()
         if isinstance(impl, _PollWaiter):
             self._warn(
-                "no gpiod/sysfs GPIO backend: falling back to a time-based "
-                "poll; the interrupt line cannot be observed, so a timeout "
-                "here does not prove the device is idle", RuntimeWarning,
-                stacklevel=2)
+                "no gpiod/chardev/sysfs GPIO backend: falling back to a "
+                "time-based poll; the interrupt line cannot be observed, so a "
+                "timeout here does not prove the device is idle",
+                RuntimeWarning, stacklevel=2)
             impl.wait(timeout_ms / 1000.0)
             return IrqEvent(source="poll",
                             elapsed_ms=(self._clock() - started) * 1000.0,
@@ -651,8 +1185,10 @@ class GpioIrqWaiter:
         if edge is None and value is None:
             raise SpiTimeout(f"no interrupt on GPIO {self.line} within "
                              f"{timeout_ms} ms")
+        last = getattr(impl, "last_event", None)
         return IrqEvent(source=impl.name, elapsed_ms=elapsed,
-                        edge=edge, value=value)
+                        edge=edge, value=value,
+                        timestamp_ns=getattr(last, "timestamp_ns", None))
 
     def close(self) -> None:
         if self._impl is not None and not self._closed:
@@ -846,20 +1382,30 @@ class GpioResetLine:
     """Output line used to pulse the sensor reset (only when configured).
 
     ``active_low`` is the electrical polarity of the reset input.  The
-    backend receives the logical values 1 (asserted) and 0 (idle); polarity is
-    applied by the gpiod request flags or by the sysfs ``active_low``
-    attribute, and emulated in software when the kernel exposes neither.
+    backend receives the logical values 1 (asserted) and 0 (idle).  gpiod
+    applies it through request flags, sysfs through ``active_low`` when the
+    kernel exposes it, and the chardev backend in software (it never sets
+    ``GPIO_V2_LINE_FLAG_ACTIVE_LOW``; it writes the physical inverted level).
+
+    Backend order: ``gpiod`` -> ``chardev`` -> sysfs.  ``backend`` may force
+    one, and ``$FPBF63112_GPIO_BACKEND`` overrides ``auto``.
     """
 
     def __init__(self, line: int, *, chip: str | None = None,
                  active_low: bool = True, backend: str = "auto",
                  sysfs_base: str = "/sys/class/gpio",
+                 chardev_dir: str = "/dev",
                  gpiod_module=None, sleep=time.sleep):
         self.line = line
         self.chip = chip
         self.active_low = active_low
-        self.backend = backend
+        self.backend = _gpio_backend(backend)
+        if self.backend not in (("auto",) + RESET_BACKENDS):
+            raise ValueError(
+                f"unknown reset backend {self.backend!r}; choose auto, "
+                f"{', '.join(RESET_BACKENDS)}, or set ${GPIO_BACKEND_ENV}")
         self.sysfs_base = sysfs_base
+        self.chardev_dir = chardev_dir
         self._gpiod_module = gpiod_module
         self._sleep = sleep
         self._impl = None
@@ -867,7 +1413,7 @@ class GpioResetLine:
     def _open(self):
         if self._impl is not None:
             return self._impl
-        order = (["gpiod", "sysfs"] if self.backend == "auto"
+        order = (list(RESET_BACKENDS) if self.backend == "auto"
                  else [self.backend])
         errors = []
         for candidate in order:
@@ -876,6 +1422,10 @@ class GpioResetLine:
                     self._impl = _GpiodOutput(
                         self.line, self.chip, self.active_low,
                         self._gpiod_module)
+                elif candidate == "chardev":
+                    self._impl = _ChardevOutput(
+                        self.line, self.chip, self.active_low,
+                        dev_dir=self.chardev_dir)
                 elif candidate == "sysfs":
                     self._impl = _SysfsOutput(
                         self.line, self.active_low, self.sysfs_base)

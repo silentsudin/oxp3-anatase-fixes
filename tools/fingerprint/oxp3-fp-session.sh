@@ -80,7 +80,11 @@
 #   --irq-pin N                    override the GpioInt pin (firmware may compute it
 #                                  at runtime via _INI/GNUM, so the template has 0)
 #   --reset-pin N                  override the GpioIo reset pin the same way
-#   --gpio-chip NAME               gpiochip the line lives on (gpiod backends)
+#   --gpio-chip NAME               gpiochip the line lives on (name, /dev path
+#                                  or chip label; chardev needs gpiochipN or a path)
+#   --gpio-backend B               force the GPIO backend instead of auto:
+#                                  gpiod, chardev, sysfs or poll (poll is the IRQ
+#                                  only; the probe refuses it for the reset line)
 #   --allow-reset                  let the probe pulse a GpioIo reset line (only if
 #                                  _CRS has one; the plan says so first)
 #   --allow-existing-bind          use a spidev bind this session did not create
@@ -135,6 +139,7 @@ IRQ_PIN_OVERRIDE=""
 RESET_PIN_OVERRIDE=""
 GPIO_OVERRIDE=""
 GPIO_CHIP=""
+GPIO_BACKEND=""
 CPOL_OVERRIDE=""
 BITS_OVERRIDE=""
 SPEED_OVERRIDE=""
@@ -189,6 +194,8 @@ while [ "$#" -gt 0 ]; do
         --gpio=*) GPIO_OVERRIDE=${1#*=}; shift ;;
         --gpio-chip) [ "$#" -ge 2 ] || exit 2; GPIO_CHIP=$2; shift 2 ;;
         --gpio-chip=*) GPIO_CHIP=${1#*=}; shift ;;
+        --gpio-backend) [ "$#" -ge 2 ] || exit 2; GPIO_BACKEND=$2; shift 2 ;;
+        --gpio-backend=*) GPIO_BACKEND=${1#*=}; shift ;;
         --irq-edge) [ "$#" -ge 2 ] || exit 2; CPOL_OVERRIDE=$2; shift 2 ;;
         --irq-edge=*) CPOL_OVERRIDE=${1#*=}; shift ;;
         --bits) [ "$#" -ge 2 ] || exit 2; BITS_OVERRIDE=$2; shift 2 ;;
@@ -206,6 +213,10 @@ done
 
 case $CMD_TIMEOUT in ''|*[!0-9]*) printf '%s: --timeout must be a number\n' "$PROG" >&2; exit 2 ;; esac
 [ "$CMD_TIMEOUT" -gt 0 ] || { printf '%s: --timeout must be positive\n' "$PROG" >&2; exit 2; }
+case $GPIO_BACKEND in
+    ''|auto|gpiod|chardev|sysfs|poll) ;;
+    *) printf '%s: --gpio-backend must be auto, gpiod, chardev, sysfs or poll\n' "$PROG" >&2; exit 2 ;;
+esac
 
 # ------------------------------------------------------------------ constants
 DEV_ACPI_DIR=/sys/bus/acpi/devices/BF63112:00
@@ -797,6 +808,7 @@ probe_args() { # mode(dry|real) -> words
     [ -n "$CONN_SPEED" ] && out+=" --speed $CONN_SPEED"
     [ -n "$CONN_MODE" ] && out+=" --mode $CONN_MODE"
     [ -n "$CONN_BITS" ] && out+=" --bits $CONN_BITS"
+    [ -n "$GPIO_BACKEND" ] && out+=" --gpio-backend $GPIO_BACKEND"
     if [ "$IRQ_USED" = 1 ] && [ -n "$CONN_IRQ" ]; then
         out+=" --gpio $CONN_IRQ"
         [ -n "$GPIO_CHIP" ] && out+=" --gpio-chip $GPIO_CHIP"

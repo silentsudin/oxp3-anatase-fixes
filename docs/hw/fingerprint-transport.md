@@ -401,10 +401,11 @@ from the driver; whether the module answers that shape is the experiment in
   after a reset. A blocking spidev ioctl cannot be preempted from userspace;
   the deadline is checked before, after and around the IRQ wait, and a kernel
   hang is explicitly out of scope.
-* **IRQ.** `GpioIrqWaiter` tries libgpiod v1/v2, then sysfs, then a timed poll.
-  It takes the *logical* edge (`rising` = assertion after `active_low`), so
-  ACPI `GpioInt` polarity maps to `active_low`, not to a different edge name.
-  The sysfs backend writes `export`/`direction`/`edge` (and `active_low` when
+* **IRQ.** `GpioIrqWaiter` tries libgpiod v1/v2, then the GPIO v2 character
+  device (`chardev`, §8.6), then sysfs, then a timed poll. It takes the
+  *logical* edge (`rising` = assertion after `active_low`), so ACPI `GpioInt`
+  polarity maps to `active_low`, not to a different edge name. The sysfs
+  backend writes `export`/`direction`/`edge` (and `active_low` when
   available), tracks the level across the wakeup to derive rising/falling, and
   unexports a line it exported. The poll fallback warns and reports
   `observed=False`; `capture_wait` treats that as a timeout instead of a
@@ -413,7 +414,8 @@ from the driver; whether the module answers that shape is the experiment in
 * **Reset.** `GpioResetLine` drives logical 1 (assert) for 5 ms, logical 0 for
   10 ms, then `SpiTransport.open` sleeps 50 ms. It is only pulsed with
   `allow_reset=True`; the polarity is applied by gpiod flags, the sysfs
-  `active_low` attribute, or software when the kernel exposes neither.
+  `active_low` attribute, or in software by the chardev backend (which writes
+  the inverted physical level and never requests `ACTIVE_LOW`).
 * **Safety gate.** Every transfer needs `allow_writes=True`; for this probe
   that flag is the explicit opt-in. Read opcodes must also be on the explicit
   allowlist (`SAFE_READ_OPS`: `0xA0`, `0xA1`, `0xB3`, `0xC0`, `0xC1` and the
@@ -459,6 +461,9 @@ sudo python3 tools/fingerprint/oxp3-fp-probe.py --crs /tmp/fprt-crs.bin \
 
 `--gpio`/`--irq-edge`/`--irq-active-low` are optional; `--crs` fills in speed,
 mode, bits and the IRQ/reset pins when the CLI does not override them.
+`--gpio-chip` accepts `gpiochipN`, a `/dev/gpiochipN` path, or a chip
+name/label; `--gpio-backend auto|gpiod|chardev|sysfs|poll` (or
+`$FPBF63112_GPIO_BACKEND`) forces one backend instead of the auto order.
 `--allow-op` extends the read allowlist with one `--op` byte, and even then a
 destructive selector is refused. Reset additionally needs `--reset-gpio N
 --allow-reset`. `--dry-run` never opens `/dev/spidev*` or any GPIO; it prints
@@ -547,13 +552,118 @@ make -C tools/fingerprint syntax-real LIBFPRINT_SRC=/tmp/libfprint-1.94.9 \
 * the `_CRS` values (speed, mode, bits, chip select) and whether the PXA2xx PIO
   path at that clock behaves; the `_CRS` is root-only and this session forbids
   privilege escalation, so it was not read here;
-* the `GpioInt` edge/level/polarity and the mapping from the ACPI pin index to
-  a Linux line number (why the driver takes `BF63112_IRQ_GPIO` explicitly);
-* whether `_CRS` exposes a `GpioIo` reset line, its polarity, and whether the
-  module needs a reset pulse at all;
+* whether the module needs the `GpioInt` at all, and in which order: the
+  controller/line mapping is now resolved (GPI1/`gpiochip1`, IRQ 18, reset 16;
+  §8.6), but no run has yet proven that the first answer depends on the
+  interrupt;
+* the reset pulse polarity: `_CRS`/ACPI `GpioIo` carries no polarity and the
+  probe assumes active-low, so whether the module needs a pulse at all and
+  whether it is asserted low or high is still a hardware experiment;
 * suspend/resume semantics: the driver closes the spidev node instead of
   sending the unproven 0xB6 SLEEP selector;
 * the answer length/record layouts for `0xA1` and the UID/count queries.
+
+### 8.6 GPIO v2 character-device backend and this board's lines (2026-11-09)
+
+This host has **no `/sys/class/gpio`** (the kernel is built with
+`CONFIG_GPIO_SYSFS` off) and the Python `gpiod` module is not installed, so
+both backends the probe had before are unusable here. `fpbf63112/spi.py` now
+has a third, pure-stdlib backend that talks to `/dev/gpiochipN` with
+`fcntl.ioctl`/`struct` only. It is registered as `chardev`:
+
+| ioctl | number | struct | size |
+|---|---|---|---|
+| `GPIO_GET_CHIPINFO_IOCTL` | `0x8044B401` | `gpiochip_info` | 68 B |
+| `GPIO_V2_GET_LINE_IOCTL` | `0xC250B407` | `gpio_v2_line_request` | 592 B |
+| `GPIO_V2_LINE_GET_VALUES_IOCTL` | `0xC010B40E` | `gpio_v2_line_values` | 16 B |
+| `GPIO_V2_LINE_SET_VALUES_IOCTL` | `0xC010B40F` | `gpio_v2_line_values` | 16 B |
+| `read()` from the request fd | - | `gpio_v2_line_event` | 48 B |
+
+`struct gpio_v2_line_config` is 272 B (32-byte header + 10 x 24-byte
+`gpio_v2_line_config_attribute`); inside the request the offsets are at 0,
+`consumer` at 256, the config at 288, `num_lines` at 560,
+`event_buffer_size` at 564 and the returned `fd` at 588. The ioctl numbers are
+`_IOC()`-encoded from exactly those sizes, so a size mistake changes the number
+and the kernel answers `ENOTTY` instead of misreading the buffer.
+
+* **Chip lookup.** `gpiochip1`, an absolute path such as `/dev/gpiochip1`, or
+  a chip name/label (`GPI1`, `INTC10BC`) resolved by scanning `/dev` and
+  matching `gpiochip_info.name`/`label`.
+* **Reset (output).** The line is requested as `OUTPUT` with one
+  `OUTPUT_VALUES` attribute (id 2) carrying the initial physical level;
+  `set(1)/set(0)` issues `GPIO_V2_LINE_SET_VALUES_IOCTL` with `mask=1`.
+  `active_low` is applied in software (the physical bit is inverted); the
+  request never sets `GPIO_V2_LINE_FLAG_ACTIVE_LOW`, so the level on the wire
+  is explicit and testable.
+* **IRQ (input/event).** Request `INPUT | EDGE_RISING`, `EDGE_FALLING` or both
+  (`--irq-edge`); `select()` with the caller's timeout; `read()` whole 48-byte
+  events; event id 1/2 -> `rising`/`falling`, `timestamp_ns` is carried in
+  `IrqEvent.timestamp_ns`, and `active_low` inverts the logical edge. `EINTR`
+  from `select`/`read` is a clean timeout; a clean timeout is what
+  `GpioIrqWaiter.wait` turns into `SpiTimeout`.
+* **Typed failures.** `GpioUnsupported` (`ENOTTY`: not a GPIO v2 chardev),
+  `GpioInvalidRequest` (`EINVAL`: kernel rejected the request/values),
+  `GpioPermissionDenied` (`EACCES`/`EPERM`), `GpioLineBusy` (`EBUSY`),
+  `GpioChipNotFound`, `GpioLineOutOfRange`. The auto chain catches them and
+  tries the next backend; a forced backend reports the typed reason instead of
+  falling back.
+
+**Backend order and forcing.** IRQ: `gpiod -> chardev -> sysfs -> poll`;
+reset: `gpiod -> chardev -> sysfs`. `--gpio-backend chardev` in the probe (and
+in `oxp3-fp-session.sh`, which forwards it) or `FPBF63112_GPIO_BACKEND=chardev`
+forces it deterministically. `poll` is IRQ-only and the probe refuses it when a
+reset line is configured. Unit coverage lives in
+`tests/fingerprint/test_gpio_chardev.py` (31 tests, all ioctls and errors
+monkeypatched; no real `/dev/gpiochip` is opened).
+
+#### Resolved chip and lines on this unit
+
+| item | value | evidence |
+|---|---|---|
+| controller | `\_SB.GPI1` = ACPI `INTC10BC:01` = `/dev/gpiochip1` | device `GPI1` has `_HID INTC10BC` (via `GHID`), `_CID INTC105F` and `_UID = 1` (DSDT `DeviceOp` at `0x120c5`); live sysfs `/sys/bus/acpi/devices/INTC10BC:01/path` = `\_SB_.GPI1`, `uid` = `1`, and `/sys/bus/platform/devices/INTC10BC:01/gpiochip1` exists. Platform enumeration `INTC10BC:00..04` yields `gpiochip0..4` (`:01` -> `gpiochip1`), which is also the debugfs `/dev/gpiochipN` order. |
+| IRQ | line **18** | FPRT `_INI` computes `INT1 = GNUM(0x001A0412)`; `GNMB(arg)` is `arg & 0x7f` = `0x12` = 18 (the controller base from `GINF` is 0 here). |
+| reset | line **16** | the same `_INI` computes `TRST = GNUM(0x001A0410)`; `arg & 0x7f` = `0x10` = 16. |
+
+The ACPICA/AML evidence, decoded from the DSDT captured in
+`docs/state/fp-session-20261109T110322Z/dsdt.aml` (sha256
+`df64f6828a93b8309a7c552c03dd0d4e367cf3229e244b3878c96fbb11500921`):
+
+```asl
+Device (FPRT) {                         // DeviceOp 0x02bbea
+    Method (_INI, 0, NotSerialized) {   // 0x02bc9a, body 0x02bca2
+        LDGP = 0x001A0412
+        LRGP = 0x001A0410
+        INT1 = GNUM (LDGP)              // -> 18
+        TRST = GNUM (LRGP)              // -> 16
+        SHPOLDGP = One
+        SHPOLRGP = One
+        Return (Zero)
+    }
+    Method (_CRS, 0, NotSerialized) {   // 0x02bce4
+        Return (ConcatenateResTemplate (SBFB, SBFG))
+    }
+}
+
+Method (GNUM, 1, NotSerialized) {       // DSDT 0x0137fd
+    Local0 = GNMB (Arg0)                // Arg0 & 0x7f
+    Local1 = GGRP (Arg0)                // (Arg0 >> 7) & 7
+    Local2 = GCOM (Arg0)                // (Arg0 >> 10) & 7
+    Return (GINF (Local2, Local1, 7) + Local0)
+}
+```
+
+Two consequences matter for the probe:
+
+1. The static template in `SBFG` carries a `GpioInt` (edge-triggered,
+   active-high, wake-capable) and a `GpioIo`, but **both pin tables are 0**;
+   the real line numbers only exist as the `INT1`/`TRST` objects that `_INI`
+   creates. That is why `--irq-pin 18 --reset-pin 16` is required.
+2. `_CRS` is `ConcatenateResTemplate(SBFB, SBFG)`, and the runbook's AML scan currently
+   accepts the first `Return(Buffer)` that parses as an SPI template, i.e. it
+   extracts `SBFB` only (38 B). Its `acpi-info.txt` therefore says "no
+   `GpioInt`" even though `SBFG` has one. Until the scanner is taught to
+   concatenate the two named buffers, the CLI overrides are the reliable way
+   to pass the GPIOs; this is a known limitation, not a hardware fact.
 
 ## 9. Next steps
 
@@ -645,11 +755,13 @@ explanation and as the fallback if the script cannot run.
   experiments borrowed from the USB dispatch table, not proven SPI opcodes;
 * the real answer length for `0xA1` and whether `0xC1` is the same 9-byte
   record as on USB;
-* the `GpioInt` edge/level and polarity, which the parser reads from `_CRS`
-  but which no sensor has exercised;
-* whether `_CRS` exposes a `GpioIo` reset line at all, and its polarity - ACPI
-  `GpioIo` has no polarity field, so the probe assumes the conventional
-  active-low and requires `--allow-reset` explicitly;
+* whether the module raises the interrupt before it answers, and whether the
+  50 ms reset settle is needed. The lines themselves are resolved (§8.6): the
+  static `SBFG` `GpioInt` is edge/active-high/wake-capable, but the real
+  numbers (IRQ 18, reset 16) come from `_INI`/`GNUM` and must be passed with
+  `--irq-pin`/`--reset-pin`;
+* the reset polarity - ACPI `GpioIo` has no polarity field, so the probe
+  assumes the conventional active-low and requires `--allow-reset` explicitly;
 * the controller-side values (speed/mode/bits) and whether the PXA2xx PIO path
   with no DMA channels at 1 MHz behaves; and
 * everything about the device's response to the first selector byte, including

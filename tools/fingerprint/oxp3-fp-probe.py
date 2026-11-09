@@ -380,7 +380,14 @@ def main(argv=None):
                     help="bits per word; omitted means leave the default")
     ap.add_argument("--gpio", type=int, default=None,
                     help="GpioInt line number (the sensor interrupt)")
-    ap.add_argument("--gpio-chip", default=None, help="gpiochip name")
+    ap.add_argument("--gpio-chip", default=None,
+                    help="gpiochip name (gpiochipN), /dev path, or chip label")
+    ap.add_argument("--gpio-backend", default=None,
+                    choices=("auto", "gpiod", "chardev", "sysfs", "poll"),
+                    help="force the GPIO backend instead of auto "
+                         "(gpiod -> chardev -> sysfs -> poll for the IRQ, "
+                         "gpiod -> chardev -> sysfs for reset; 'poll' is "
+                         "IRQ-only). Default: $FPBF63112_GPIO_BACKEND or auto")
     ap.add_argument("--irq-edge", choices=("rising", "falling", "both"),
                     default=None, help="logical assertion edge")
     ap.add_argument("--irq-active-low", action="store_true",
@@ -541,7 +548,8 @@ def run_spi(args, cmds):
 
     if args.dry_run:
         print(f"dry-run: transport=spi spidev={args.spidev or '(unset)'} "
-              f"allow_writes={args.allow_writes}")
+              f"allow_writes={args.allow_writes} "
+              f"gpio_backend={args.gpio_backend or 'auto'}")
         print(f"         speed={params['speed']} mode={params['mode']} "
               f"bits={params['bits']} chip-select={params['chip_select']} "
               f"gpio={params['gpio']} reset={params['reset_gpio']}")
@@ -566,6 +574,10 @@ def run_spi(args, cmds):
         print("refusing: --reset-gpio needs --allow-reset (the default is to "
               "leave the module alone)", file=sys.stderr)
         return 2
+    if params["reset_gpio"] is not None and args.gpio_backend == "poll":
+        print("refusing: --gpio-backend poll cannot drive the reset line; "
+              "use auto, chardev, gpiod or sysfs", file=sys.stderr)
+        return 2
     if params["chip_select"] not in (None, 0):
         print(f"note: _CRS says chip select {params['chip_select']}; spidev "
               "chooses the chip select by device node, not by this value",
@@ -579,11 +591,12 @@ def run_spi(args, cmds):
     if params["gpio"] is not None:
         irq = spi.GpioIrqWaiter(
             params["gpio"], chip=args.gpio_chip, edge=params["edge"],
-            active_low=params["active_low"])
+            active_low=params["active_low"], backend=args.gpio_backend)
     reset = None
     if params["reset_gpio"] is not None:
         reset = spi.GpioResetLine(
-            params["reset_gpio"], chip=args.gpio_chip, active_low=True)
+            params["reset_gpio"], chip=args.gpio_chip,
+            active_low=True, backend=args.gpio_backend)
     transport = spi.SpiTransport(
         args.spidev, speed_hz=params["speed"], mode=params["mode"],
         bits_per_word=params["bits"], allow_writes=True,

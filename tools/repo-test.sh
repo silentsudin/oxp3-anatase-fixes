@@ -187,7 +187,8 @@ suite_python_compile() {
 suite_fp_python() {
     need python3
     cd "$REPO" || exit 1
-    python3 -m unittest discover -s tools/fingerprint/tests -q
+    python3 -m unittest discover -s tools/fingerprint/tests -q &&
+    python3 -m unittest discover -s tests/fingerprint -q
 }
 
 # Session crypto vectors + a 4 KiB benchmark, no device, no root.
