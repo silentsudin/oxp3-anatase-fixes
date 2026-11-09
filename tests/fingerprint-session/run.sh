@@ -102,6 +102,7 @@ fi
 
 # ---------------------------------------------------------------- 3. plan / no mutation
 before=$(find "$TMP/clean" -printf '%p %s %T@\n' 2>/dev/null | sort | sha256sum)
+before_plan=$(ls -1d "$REPO"/docs/state/fp-session-* 2>/dev/null | sort)
 if "$S" --dry-run --root "$TMP/clean" >"$TMP/plan.txt" 2>&1; then
     pass "--dry-run exits 0 on a healthy fixture"
 else
@@ -122,10 +123,11 @@ if [ "$before" = "$after" ] && unbound "$TMP/clean"; then
 else
     fail "--dry-run changed nothing in the fixture tree"
 fi
-if ls -1d "$REPO"/docs/state/fp-session-* >/dev/null 2>&1; then
-    fail "--dry-run wrote a transcript into docs/state"
-else
+after_plan=$(ls -1d "$REPO"/docs/state/fp-session-* 2>/dev/null | sort)
+if [ "$after_plan" = "$before_plan" ]; then
     pass "--dry-run wrote no transcript into docs/state"
+else
+    fail "--dry-run wrote a transcript into docs/state"
 fi
 "$S" --non-interactive --root "$TMP/clean" >"$TMP/plan2.txt" 2>&1
 if [ $? -eq 0 ] && contains "$TMP/plan2.txt" 'Copy/paste sequence' && contains "$TMP/plan2.txt" 'sudo tools/fingerprint/oxp3-fp-session.sh'; then

@@ -2073,6 +2073,8 @@ EOF
 
     # -- 3. plan mode: full plan, no mutation, no transcript in docs/state
     local plan_out=$base/plan.txt
+    local st_state_baseline
+    st_state_baseline=$(ls -1d "$STATE_DIR_DEFAULT"/fp-session-* 2>/dev/null | sort)
     if bash "$self" --dry-run --root "$fx" >"$plan_out" 2>&1; then
         st_pass "--dry-run exits 0"
     else
@@ -2102,10 +2104,14 @@ EOF
     else
         st_pass "plan mode did not bind anything"
     fi
-    if ls -1d "$STATE_DIR_DEFAULT"/fp-session-* >/dev/null 2>&1; then
-        st_fail "plan mode wrote a transcript into docs/state"
-    else
+    # Compare against a baseline: real sessions from the owner may already exist in
+    # docs/state, and plan mode must not ADD one.
+    local after_plan
+    after_plan=$(ls -1d "$STATE_DIR_DEFAULT"/fp-session-* 2>/dev/null | sort)
+    if [ "$after_plan" = "${st_state_baseline:-}" ]; then
         st_pass "plan mode wrote no transcript into docs/state"
+    else
+        st_fail "plan mode wrote a transcript into docs/state"
     fi
     if bash "$self" --non-interactive --root "$fx" >"$base/plan2.txt" 2>&1; then
         st_pass "--non-interactive exits 0"
