@@ -30,9 +30,11 @@ case ${1:-status} in
         want=$(sha256sum "$known" | cut -d' ' -f1)
         if [[ $cur == "$want" ]]; then echo "already the recorded build ($want)"; exit 0; fi
         echo "current $cur -> restoring $want"
-        if [[ $(rpm-ostree status --booted 2>/dev/null | awk -F': ' '/Unlocked/{print $2}') != hotfix ]]; then
-            rpm-ostree usroverlay || { echo "could not enter the usroverlay" >&2; exit 1; }
-        fi
+        unlock=$(rpm-ostree status --booted 2>/dev/null | awk -F': ' '/Unlocked/{print $2}')
+        case ${unlock:-none} in
+            none|"") rpm-ostree usroverlay || { echo "could not enter the usroverlay" >&2; exit 1; } ;;
+            *) echo "deployment already unlocked ($unlock); using the writable /usr layer" ;;
+        esac
         cp -f -- "$known" "$target" || exit 1
         got=$(have)
         [[ $got == "$want" ]] || { echo "restore verification failed: $got" >&2; exit 1; }

@@ -24,6 +24,10 @@
       "power",
       "imu",
       "audio",
+      "sched",
+      "gfx",
+      "xmx",
+      "mango",
       "decky"
     ]
   }

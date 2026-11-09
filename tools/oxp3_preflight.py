@@ -70,9 +70,9 @@ OK = "OK"
 WARN = "WARN"
 FAIL = "FAIL"
 
-COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "audio", "decky")
-ROOT_COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "decky")
-USER_COMPONENTS = ("leds", "rgb", "audio")
+COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "audio", "sched", "gfx", "xmx", "mango", "decky")
+ROOT_COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "sched", "gfx", "mango", "decky")
+USER_COMPONENTS = ("leds", "rgb", "audio", "xmx")
 DAEMON_COMPONENTS = ("volume", "leds", "rgb", "power")
 HID_COMPONENTS = ("leds", "rgb")
 UINPUT_COMPONENTS = ("volume", "leds")
@@ -152,6 +152,24 @@ COMPONENT_FILES = {
     ),
     "imu": ("/etc/modprobe.d/oxp3-bmi160.conf",),
     "audio": ("{home}/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf",),
+    "sched": (
+        "/etc/systemd/system/oxp3-gaming-sched.service",
+        "/usr/bin/scx_cosmos",
+    ),
+    "gfx": (
+        "/etc/systemd/system/oxp3-mesa-keep.service",
+        "/usr/local/libexec/oxp3-mesa-keep",
+        "{home}/.cache/oxp3-fixes/known-good/host-ec418f04-libvulkan_intel.so",
+    ),
+    "xmx": (
+        "{home}/.local/share/xess-xmx-release",
+        "{home}/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so",
+        "{home}/.config/xess-xmx",
+    ),
+    "mango": (
+        "/usr/bin/mangohud",
+        "/usr/bin/mangoapp",
+    ),
     "decky": (
         "{home}/homebrew/plugins/oxp3-status/plugin.json",
         "{home}/homebrew/plugins/oxp3-status/.oxp3-managed",

@@ -64,3 +64,9 @@ if [ "$profile" = loud ]; then
   echo "      Full-scale content near 142 Hz can clip - use --safe for the no-clip chain." >&2
 fi
 pactl list sinks short | grep -E 'oxp3_speaker_eq|HiFi__Speaker__sink' || true
+
+# UCM re-runs when PipeWire opens the card, which resets the mixer to its default
+# 82/87.  Re-apply the maximum now and once more shortly after, so the loudness
+# survives the restart that eq-on itself triggers.
+"$(dirname "$0")/gain-stage.sh" apply >/dev/null 2>&1 || true
+( sleep 3; "$(dirname "$0")/gain-stage.sh" apply >/dev/null 2>&1 || true ) &

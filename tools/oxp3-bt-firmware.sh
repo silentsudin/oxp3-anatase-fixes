@@ -332,7 +332,12 @@ omit_drivers+=" btintel_pcie ""
     fi
     if [[ $dry == 0 ]]; then
       if [[ $ostree == 1 ]]; then
-        sudo rpm-ostree initramfs --enable || warn "rpm-ostree initramfs --enable failed"
+        out=$(sudo rpm-ostree initramfs --enable 2>&1) || {
+            case $out in
+                *"already enabled"*) info "initramfs regeneration already enabled" ;;
+                *) warn "rpm-ostree initramfs --enable failed: $out" ;;
+            esac
+        }
       else
         sudo dracut -f --kver "$(uname -r)" || warn "dracut failed"
       fi

@@ -814,8 +814,26 @@ comp_xmx_install() {
         printf '  [dry-run] as %s: %s install\n' "$TARGET_USER" "$tool"
         return 0
     fi
-    as_user_run "$tool" install
-    as_user_run "$tool" status | sed 's/^/  /'
+    # install is per game prefix: cover every Proton prefix that already exists.
+    local home base appids=() d
+    home=$(user_home "$TARGET_USER")
+    for base in "$home/.var/app/org.anatase.Steam" "$home/.var/app/com.valvesoftware.Steam"; do
+        [ -d "$base" ] || continue
+        base=$base/.local/share/Steam/steamapps/compatdata
+        for d in "$base"/*; do
+            [ -d "$d" ] && appids+=("$(basename "$d")")
+        done
+    done
+    if (( ${#appids[@]} == 0 )); then
+        as_user_run "$tool" status | sed 's/^/  /'
+        printf '  no Flatpak Steam Proton prefix exists yet, so there is no game shim to place.\n'
+        printf '  the per-session env/ICD files are written by %s install --appid <id> after the first launch.\n' "$(basename "$tool")"
+        return 0
+    fi
+    for d in "${appids[@]}"; do
+        printf '  appid %s\n' "$d"
+        as_user_run "$tool" install --appid "$d" || warn "install failed for appid $d"
+    done
 }
 
 comp_mango_install() {
