@@ -254,8 +254,16 @@ cmd_suspend() {
     LABEL=${LABEL/window/s2idle}
     [[ $EUID -eq 0 ]] || die "suspend mode needs root: sudo $0 suspend -w $win"
     command -v rtcwake >/dev/null || die "rtcwake not found (util-linux)"
-    awk -v s="$(tr -d '\n' < /sys/power/mem_sleep)" 'BEGIN{exit (s !~ /\[s2idle\]/)}' &&
-        die "/sys/power/mem_sleep is not s2idle; this measures s2idle only (see docs/hw/sleep-power.md)"
+    # Measure whatever mode the kernel has active, and label the result: s2idle is
+    # what we ship, but a machine that fell back to deep must still be measurable.
+    mem_state=$(tr -d '\n' < /sys/power/mem_sleep)
+    mem_mode=$(printf '%s\n' "$mem_state" | awk '{for(i=1;i<=NF;i++) if ($i ~ /^\[/) {gsub(/[][]/,"",$i); print $i}}')
+    [ -n "$mem_mode" ] || die "/sys/power/mem_sleep is unreadable: $mem_state"
+    if [ "$mem_mode" != s2idle ]; then
+        echo "sleep-power-measure: active sleep mode is '$mem_mode' (mem_sleep: $mem_state), not s2idle." >&2
+        echo "  measuring it anyway and labelling the result; make it s2idle with:" >&2
+        echo "  echo s2idle | sudo tee /sys/power/mem_sleep   (or: sudo tools/oxp3-hw-install.sh --sleep)" >&2
+    fi
 
     echo "== suspending for ${win}s via 'rtcwake -m mem' (s2idle, RTC alarm wakes it)" >&2
     T0=$(date +%s); E0=$(battery_energy_wh) || die "no readable battery"
