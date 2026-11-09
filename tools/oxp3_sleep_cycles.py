@@ -1895,8 +1895,9 @@ def _print_preflight(errors, warnings, opts):
     commands = [
         ("rtcwake -m mem -s %d -d %s -v"
          if getattr(opts, "direct", False) else
-         "rtcwake -m no -s %d -d %s -v && systemctl suspend")
-        % (opts.sleep_s, opts.rtc or "rtc0"),
+         "echo $(( $(date +%%s) + %d )) > /sys/class/rtc/%s/wakealarm && systemctl suspend")
+        % ((opts.sleep_s, opts.rtc or "rtc0") if getattr(opts, "direct", False)
+           else (opts.sleep_s, opts.rtc or "rtc0")),
         "journalctl -k -b --since=@<cycle-start-epoch> --until=@<resume-epoch> "
         "--no-pager -o short-iso",
         "rtcwake -m disable -d %s" % (opts.rtc or "rtc0"),
@@ -2131,39 +2132,46 @@ def cmd_run(opts):
                 if rtc:
                     cmd += ["-d", rtc["name"]]
             else:
-                # Arm the wake alarm only, then suspend through logind, which runs
-                # the sleep.target units (SD-reader park) and lets the EC/firmware
-                # see a normal OS-initiated suspend instead of a raw power-state write.
-                cmd = ["rtcwake", "-m", "no", "-s", str(opts.sleep_s), "-v"]
-                if rtc:
-                    cmd += ["-d", rtc["name"]]
+                # Program the alarm through the RTC sysfs interface, not /dev/rtc:
+                # the bench froze inside rtcwake's RTC_WKALM_SET after a previous
+                # resume (journal stops before "PM: suspend entry"), while the first
+                # cycle of a boot always worked. sysfs wakealarm is the same alarm
+                # without the ioctl path, then logind performs the suspend.
+                cmd = ["write-%s" % (rtc["name"] if rtc else "rtc0"),
+                       "+%ds" % opts.sleep_s, "# then: systemctl suspend"]
             print("     %s" % " ".join(cmd))
             rc = None
             log = ""
             timed_out = False
             try:
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=opts.sleep_s + 120,
-                    check=False,
-                )
-                rc = proc.returncode
-                log = ((proc.stdout or "") + (proc.stderr or "")).strip()[-4000:]
-                if not direct:
-                    if rc != 0:
-                        raise OSError("could not arm the RTC alarm (%s)" % rc)
-                    suspend = subprocess.run(
-                        ["systemctl", "suspend"],
-                        capture_output=True,
-                        text=True,
-                        timeout=opts.sleep_s + 300,
-                        check=False,
-                    )
-                    rc = suspend.returncode
-                    log += ("\n[systemctl suspend] rc=%d\n%s"
-                            % (rc, ((suspend.stdout or "") + (suspend.stderr or "")).strip()[-2000:]))
+                if direct:
+                    proc = subprocess.run(
+                        cmd, capture_output=True, text=True,
+                        timeout=opts.sleep_s + 120, check=False)
+                    rc = proc.returncode
+                    log = ((proc.stdout or "") + (proc.stderr or "")).strip()[-4000:]
+                else:
+                    # sysfs alarm: epoch in, epoch readable back, 0 to clear
+                    name = rtc["name"] if rtc else "rtc0"
+                    path = "/sys/class/rtc/%s/wakealarm" % name
+                    epoch = int(time.time()) + opts.sleep_s
+                    try:
+                        with open(path, "w", encoding="ascii") as handle:
+                            handle.write("%d\n" % epoch)
+                        with open(path, "r", encoding="ascii") as handle:
+                            got = handle.read().strip()
+                        rc = 0
+                        log = "sysfs %s <- %d, read back %r" % (path, epoch, got)
+                        if not got:
+                            raise OSError("wakealarm did not stick")
+                        suspend = subprocess.run(
+                            ["systemctl", "suspend"], capture_output=True,
+                            text=True, timeout=opts.sleep_s + 300, check=False)
+                        rc = suspend.returncode
+                        log += ("\n[systemctl suspend] rc=%d\n%s"
+                                % (rc, ((suspend.stdout or "") + (suspend.stderr or "")).strip()[-2000:]))
+                    except OSError as exc:
+                        raise OSError("could not arm %s: %s" % (path, exc))
             except subprocess.TimeoutExpired as exc:
                 log = "rtcwake timed out after %d s: %s" % (
                     opts.sleep_s + 300,
