@@ -14,7 +14,7 @@ See [`docs/hw/fingerprint.md`](../../docs/hw/fingerprint.md) for the hardware ev
 | path | what it is |
 |---|---|
 | `fpbf63112/protocol.py` | Python protocol library (stdlib only): frame build/parse, CRC-32, length/offset arithmetic, chunk sums, command table, image reassembly, retry state machine |
-| `fpbf63112/matrix.py` | the `--try-matrix` planner/runner (3 polarities x 2 settle delays x 3 IRQ edges), the `--try-write-shape` planner/runner (selector bit 0 x 6 paddings x read length, 60 cells) and the `--try-link` planner/runner (mode 0-3 x 1/4 MHz x 10/150/300 ms settle, 16/24 cells; plausible-fw / plausible-info / byte-shift-detected / all-zeros / all-0xff / timeout / error / malformed verdicts), the valid-answer parsers (0xAA/L/CRC-32 frame or bare recovered layout, plus candidate-offset shift analysis), and the transport-agnostic runners |
+| `fpbf63112/matrix.py` | the `--try-matrix` planner/runner (3 polarities x 2 settle delays x 3 IRQ edges), the `--try-write-shape` planner/runner (selector bit 0 x 6 paddings x read length, 60 cells) and the `--try-link` planner/runner (mode 0-3 x 1/4 MHz x 10/150/300 ms settle, 16/24 cells; plausible-fw / plausible-info / byte-shift-detected / all-zeros / all-0xff / timeout / error / malformed verdicts), the `--compare-read-shapes` planner/runner (split vs cs-held at mode 0, cs-held at modes 1-3; agreement and best -7..+7 bit shift), the valid-answer parsers (0xAA/L/CRC-32 frame or bare recovered layout, plus candidate-offset shift analysis), and the transport-agnostic runners |
 | `fpbf63112/spi.py` | recovered SPI/SPB transport (stdlib only): selector `(opcode & 0x3f) << 1`, two-entry `spi_ioc_transfer` sequence, 1000/2030 (5000/10010 image, 2000/4016 restore) deadlines, gpiod/sysfs/poll IRQ waiters, reset pulse, cancel settle, allowlist/destructive gates |
 | `fpbf63112/acpi.py` | raw `_CRS` resource-template parser for `SpiSerialBus`, `GpioInt`, `GpioIo`, I2C and IRQ items; validates lengths/offsets and reduces them to the driver parameters |
 | `fpbf63112/aml.py` | locates the FPRT `_CRS` in raw DSDT/SSDT AML (`14 <PkgLength> "_CRS"` + `A4 11 <PkgLength>` buffer), validates the result with `acpi.py`, prefers the `SPI1` scope, and reports ambiguity instead of guessing |
@@ -35,7 +35,7 @@ See [`docs/hw/fingerprint.md`](../../docs/hw/fingerprint.md) for the hardware ev
 | `Makefile` | `py-test`, `proto-test`, `spi-test`, `syntax`, `gpiod-syntax`, `syntax-real` targets |
 | `tests/run-c-tests.sh`, `tests/check-libfprint.sh` | run the C targets here without a host compiler (ephemeral podman) |
 | `oxp3-fp-session.sh` | the guided root runbook: preconditions, `_CRS` extraction/parse, confirmation before each mutation, guarded read-only probe, trap-driven rollback with verification, `--dry-run`/`--non-interactive`/`--resume`, `summary.json` transcript. `--selftest` is offline; `--fixture-init` builds fake `/sys` trees for the tests |
-| `oxp3-fp-probe.py` | the standalone `sudo` bring-up probe: `--transport spi` (default) or the old `--transport frame`; `--dry-run` and `acpi_info --crs` do no I/O; a real transfer needs `--spidev PATH` and `--allow-writes`; `--try-matrix` sweeps reset polarity/settle/IRQ edge (0xA0 then 0xA1/0xC1 only) and writes a JSON table; `--try-write-shape` pins `--reset-polarity active-high|active-low`, `--settle-ms` and `--irq-edge` and sweeps selector bit 0 x padding x read length, writing the candidate-offset table; `--try-link` pins those electrical settings and sweeps SPI mode x clock x settle with the DLL-exact read frame, writing the action-verdict table; destructive opcodes are refused by opcode and selector |
+| `oxp3-fp-probe.py` | the standalone `sudo` bring-up probe: `--transport spi` (default) or the old `--transport frame`; `--dry-run` and `acpi_info --crs` do no I/O; a real transfer needs `--spidev PATH` and `--allow-writes`; `--try-matrix` sweeps reset polarity/settle/IRQ edge (0xA0 then 0xA1/0xC1 only) and writes a JSON table; `--try-write-shape` pins `--reset-polarity active-high|active-low`, `--settle-ms` and `--irq-edge` and sweeps selector bit 0 x padding x read length, writing the candidate-offset table; `--try-link` pins those electrical settings and sweeps SPI mode x clock x settle with the DLL-exact read frame, writing the action-verdict table; `--compare-read-shapes` reads 0xA0/0xC1/0xA1 with both the split and cs-held transfer shapes (plus cs-held at modes 1-3) and reports whether they agree and by how many bits they shift, writing the comparison table; `--read-shape cs-held|split|frame|selector` selects the read shape; destructive opcodes are refused by opcode and selector |
 
 ## What is proven, inferred, and unknown
 
@@ -110,6 +110,10 @@ sudo tools/fingerprint/oxp3-fp-session.sh --try-write-shape \
 sudo tools/fingerprint/oxp3-fp-session.sh --try-link \
     --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 \
     --reset-polarity active-high --irq-edge rising --allow-reset
+# hardware: split vs cs-held transfer shape after phase-scaled answers
+sudo tools/fingerprint/oxp3-fp-session.sh --compare-read-shapes \
+    --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 \
+    --reset-polarity active-high --settle-ms 10 --irq-edge rising --allow-reset
 ```
 
 The whole root sequence above - preconditions, `_CRS` extraction and parse, the

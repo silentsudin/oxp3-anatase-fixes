@@ -69,7 +69,20 @@ class RecordingIO:
             self.on_message()
         if self.clock is not None and self.advance_ms:
             self.clock.advance_ms(self.advance_ms)
-        return (b"", self.answer)
+        received = []
+        for transfer in transfers:
+            if not transfer.rx_len:
+                received.append(b"")
+            elif len(transfers) == 1:
+                # Combined full-duplex shape: the prefix (selector [+ lead])
+                # clocks zeros before the answer bytes.
+                pad = max(0, transfer.rx_len - len(self.answer))
+                body = self.answer[:transfer.rx_len - pad]
+                received.append(b"\x00" * pad + body)
+            else:
+                received.append(self.answer[:transfer.rx_len].ljust(
+                    transfer.rx_len, b"\x00"))
+        return tuple(received)
 
     def close(self):
         self.closed = True
@@ -237,18 +250,61 @@ class TestSelector(unittest.TestCase):
 
 
 class TestPlans(unittest.TestCase):
-    def test_read_plan_is_selector_then_receive_clock(self):
+    def test_default_read_plan_is_one_cs_held_transfer(self):
         plan = spi.build_plan(0xA0, read_len=7)
         self.assertEqual(plan.operation, "read")
+        self.assertEqual(plan.read_shape, "cs-held")
         self.assertEqual(plan.selector, 0x40)
+        self.assertEqual(len(plan.transfers), 1)
+        self.assertEqual(plan.transfers[0].tx, b"\x40" + b"\x00" * 7)
+        self.assertEqual(plan.transfers[0].rx_len, 8)
+        self.assertEqual(plan.answer_len, 7)
+        self.assertEqual(plan.answer_offset, 1)
+        self.assertEqual(plan.prefix_tx, b"\x40")
+        self.assertEqual(plan.tx, b"\x40" + b"\x00" * 7)
+        self.assertEqual(plan.rx_len, 8)
+
+    def test_split_read_plan_is_selector_then_receive_clock(self):
+        plan = spi.build_plan(0xA0, read_len=7, read_shape="split")
+        self.assertEqual(plan.read_shape, "split")
         self.assertEqual(len(plan.transfers), 2)
         self.assertEqual(plan.transfers[0].tx, b"\x40")
         self.assertEqual(plan.transfers[0].rx_len, 0)
         self.assertEqual(plan.transfers[1].tx, b"")
         self.assertEqual(plan.transfers[1].rx_len, 7)
         self.assertEqual(plan.answer_len, 7)
+        self.assertEqual(plan.answer_offset, 0)
         self.assertEqual(plan.tx, b"\x40")
         self.assertEqual(plan.rx_len, 7)
+
+    def test_bad_read_shape_is_refused(self):
+        with self.assertRaises(ValueError):
+            spi.build_plan(0xA0, read_len=7, read_shape="full-duplex")
+        with self.assertRaises(ValueError):
+            spi.build_shape_plan(0xA0, read_len=7, read_shape="nope")
+
+    def test_malformed_cs_held_plans_are_refused(self):
+        # rx_len must equal the tx length (one full-duplex buffer).
+        with self.assertRaises(ValueError):
+            spi.SpiPlan(0xA0, "read", b"", 7, 0x40,
+                        (spi.SpiTransfer(b"\x40" + b"\x00" * 7, 7),),
+                        400, 400, read_shape="cs-held")
+        # Everything after the selector prefix must be zero clocks.
+        with self.assertRaises(ValueError):
+            spi.SpiPlan(0xA0, "read", b"", 7, 0x40,
+                        (spi.SpiTransfer(b"\x40" + b"\x01" * 7, 8),),
+                        400, 400, read_shape="cs-held")
+        # Two transfers is the split shape, not cs-held.
+        with self.assertRaises(ValueError):
+            spi.SpiPlan(0xA0, "read", b"", 7, 0x40,
+                        (spi.SpiTransfer(b"\x40", 0),
+                         spi.SpiTransfer(b"", 7)),
+                        400, 400, read_shape="cs-held")
+        # A read shape does not apply to writes.
+        with self.assertRaises(ValueError):
+            spi.SpiPlan(0x2D, "write", b"", 0, 0xDA,
+                        (spi.SpiTransfer(b"\xda", 0),),
+                        400, 400, read_shape="cs-held")
 
     def test_write_plan_is_selector_then_payload(self):
         plan = spi.build_plan(0x2D, operation="write", payload=b"\x10")
@@ -332,7 +388,8 @@ class TestLinuxSpiIO(unittest.TestCase):
                 mock.patch.object(spi.fcntl, "ioctl", side_effect=fake_ioctl):
             io_obj.open()
             io_obj.configure(speed_hz=1_000_000, mode=3, bits_per_word=8)
-            rx = io_obj.message(spi.build_plan(0xA0, read_len=7).transfers)
+            rx = io_obj.message(spi.build_plan(
+                0xA0, read_len=7, read_shape="split").transfers)
             io_obj.close()
 
         self.assertEqual(rx, (b"", answer))
@@ -353,8 +410,47 @@ class TestLinuxSpiIO(unittest.TestCase):
         self.assertNotEqual(rx1, 0)
         self.assertEqual(ctypes.string_at(tx0, 1), b"\x40")
         self.assertEqual(io_obj.last_transfers,
-                         spi.build_plan(0xA0, read_len=7).transfers)
+                         spi.build_plan(0xA0, read_len=7,
+                                        read_shape="split").transfers)
         self.assertEqual(io_obj.last_message, (b"", answer))
+
+    def test_combined_read_is_one_full_duplex_ioctl(self):
+        calls = []
+        answer = b"\x01\x02\x03\x04\x05\x06\x07"
+
+        def fake_open(path, flags):
+            return 9
+
+        def fake_close(fd):
+            pass
+
+        def fake_ioctl(fd, request, arg):
+            calls.append((request, bytes(arg)))
+            if request == spi.spi_ioc_message(1):
+                tx, rx, length = struct.unpack_from("<QQI", arg, 0)
+                self.assertEqual(ctypes.string_at(tx, length),
+                                 b"\x40" + b"\x00" * 7)
+                ctypes.memmove(rx, b"\x00" + answer, 8)
+
+        io_obj = spi.LinuxSpiIO("/dev/spidev-test")
+        with mock.patch.object(spi.os, "open", side_effect=fake_open), \
+                mock.patch.object(spi.os, "close", side_effect=fake_close), \
+                mock.patch.object(spi.fcntl, "ioctl", side_effect=fake_ioctl):
+            io_obj.open()
+            rx = io_obj.message(spi.build_plan(0xA0, read_len=7).transfers)
+
+        self.assertEqual(rx, (b"\x00" + answer,))
+        messages = [item for item in calls
+                    if item[0] == spi.spi_ioc_message(1)]
+        self.assertEqual(len(messages), 1, "one xfer2-style ioctl, no split")
+        _request, msg = messages[0]
+        self.assertEqual(len(msg), spi._SPI_IOC_TRANSFER.size)
+        fields = struct.unpack_from("<QQIIHBBBBBB", msg, 0)
+        tx, rx, length = fields[:3]
+        self.assertEqual((length, rx != 0), (8, True))
+        # cs_change is the 7th field and must stay 0, so CS is held for the
+        # whole combined transfer (never deasserted after the selector).
+        self.assertEqual(fields[6], 0)
 
     def test_single_transfer_wrapper(self):
         seen = {}
@@ -469,13 +565,110 @@ class TestExecute(unittest.TestCase):
         plan = transport.plan(0xA0, read_len=3)
         self.assertEqual(transport.execute(plan), b"\x10" * 3)
 
+    def test_cs_held_execute_returns_the_slice_after_the_prefix(self):
+        io_obj = RecordingIO(b"\xde\xad\xbe\xef")
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     spi_io=io_obj)
+        self.assertEqual(transport.read(0xA0, 4), b"\xde\xad\xbe\xef")
+        self.assertEqual(len(io_obj.messages), 1, "one combined message")
+        transfers = io_obj.messages[0]
+        self.assertEqual(len(transfers), 1, "one transfer, not split")
+        self.assertEqual(transfers[0].tx, b"\x40" + b"\x00" * 4)
+        self.assertEqual(transfers[0].rx_len, 5)
+        self.assertEqual(transfers[0].tx[0], 0x40)
+        self.assertEqual(transfers[0].tx[1:], b"\x00" * 4)
+
+    def test_split_execute_still_uses_the_two_segment_shape(self):
+        io_obj = RecordingIO(b"\xde\xad\xbe\xef")
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     spi_io=io_obj)
+        self.assertEqual(transport.read(0xA0, 4, read_shape="split"),
+                         b"\xde\xad\xbe\xef")
+        transfers = io_obj.messages[0]
+        self.assertEqual(len(transfers), 2)
+        self.assertEqual(transfers[0].tx, b"\x40")
+        self.assertEqual(transfers[0].rx_len, 0)
+        self.assertEqual(transfers[1].tx, b"")
+        self.assertEqual(transfers[1].rx_len, 4)
+
+    def test_backend_without_combined_transfer_fails_closed(self):
+        class NoCombined(RecordingIO):
+            supports_combined_transfer = False
+
+        io_obj = NoCombined(b"\x00" * 7)
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     spi_io=io_obj)
+        with self.assertRaises(spi.TransferShapeUnsupported) as caught:
+            transport.read(0xA0, 7)
+        self.assertIn("cs-held", str(caught.exception))
+        self.assertIn("refusing to fall back", str(caught.exception))
+        self.assertEqual(io_obj.messages, [], "no ioctl, and no split fallback")
+
+    def test_not_implemented_combined_transfer_fails_closed(self):
+        class NoCombinedIO(RecordingIO):
+            def message(self, transfers):
+                self.messages.append(tuple(transfers))
+                raise NotImplementedError("no full-duplex ioctl here")
+
+        io_obj = NoCombinedIO()
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     spi_io=io_obj)
+        with self.assertRaises(spi.TransferShapeUnsupported):
+            transport.read(0xA0, 7)
+        self.assertEqual(len(io_obj.messages), 1)
+        self.assertEqual(len(io_obj.messages[0]), 1,
+                         "the fallback must not add a second call")
+
+    def test_kernel_rejected_combined_transfer_is_typed(self):
+        class EINVALIO(RecordingIO):
+            def message(self, transfers):
+                self.messages.append(tuple(transfers))
+                raise OSError(spi.errno.EINVAL, "Invalid argument")
+
+        io_obj = EINVALIO()
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     spi_io=io_obj)
+        with self.assertRaises(spi.TransferShapeUnsupported):
+            transport.read(0xA0, 7)
+        self.assertEqual(len(io_obj.messages), 1)
+
+    def test_extra_receive_segments_are_a_short_combined_read(self):
+        class TwoBuffers(RecordingIO):
+            def message(self, transfers):
+                self.messages.append(tuple(transfers))
+                return (b"\x00\x10\x10\x10\x10\x10\x10\x10", b"")
+
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     spi_io=TwoBuffers())
+        with self.assertRaises(spi.SpiError) as caught:
+            transport.read(0xA0, 7)
+        self.assertIn("short cs-held SPI read", str(caught.exception))
+
+    def test_other_oserror_is_a_plain_spi_error(self):
+        class BrokenIO(RecordingIO):
+            def message(self, transfers):
+                self.messages.append(tuple(transfers))
+                raise OSError(spi.errno.EIO, "I/O error")
+
+        transport = spi.SpiTransport("/dev/fake", allow_writes=True,
+                                     spi_io=BrokenIO())
+        with self.assertRaises(spi.SpiError) as caught:
+            transport.read(0xA0, 7)
+        self.assertNotIsInstance(caught.exception,
+                                 spi.TransferShapeUnsupported)
+
     def test_short_read_is_rejected(self):
-        io_obj = RecordingIO(b"\x00\x01")
+        class ShortIO(RecordingIO):
+            def message(self, transfers):
+                self.messages.append(tuple(transfers))
+                return (b"\x00\x01",)
+
+        io_obj = ShortIO()
         transport = spi.SpiTransport("/dev/fake", allow_writes=True,
                                      spi_io=io_obj)
         with self.assertRaises(spi.SpiError) as caught:
             transport.read(0xA0, 7)
-        self.assertIn("short SPI read", str(caught.exception))
+        self.assertIn("short cs-held SPI read", str(caught.exception))
 
     def test_write_returns_no_bytes(self):
         transport, io_obj = self.make(write_allowlist=[0x2D])
@@ -889,9 +1082,9 @@ class TestProbeCLI(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertIn("selector 0x40", out)
         self.assertIn("selector 0x02", out)
-        self.assertIn("read_shape=frame", out)
-        self.assertIn("40 00 00 00 | <- 7 B", out)
-        self.assertIn("02 | <- 9 B", out)
+        self.assertIn("read_shape=cs-held", out)
+        self.assertIn("40 | <- 7 B (cs held)", out)
+        self.assertIn("02 | <- 9 B (cs held)", out)
         self.assertIn("timeout 1000/2030 ms", out)
 
     def test_dry_run_selector_only_comparison_shape(self):
@@ -900,8 +1093,17 @@ class TestProbeCLI(unittest.TestCase):
              "--spidev", "/dev/spidev-fake", "fw"])
         self.assertEqual(rc, 0, err)
         self.assertIn("read_shape=selector", out)
-        self.assertIn("40 | <- 7 B", out)
+        self.assertIn("40 | <- 7 B (cs held)", out)
         self.assertIn("lead 0 B", out)
+
+    def test_dry_run_frame_shape_keeps_the_measured_lead(self):
+        rc, out, err = self.run_main(
+            ["--dry-run", "--read-shape", "frame",
+             "--spidev", "/dev/spidev-fake", "fw"])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("read_shape=frame", out)
+        self.assertIn("lead 3 B: 00 00 00", out)
+        self.assertIn("40 00 00 00 | <- 7 B (cs held)", out)
 
     def test_dry_run_uses_crs_values(self):
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as fh:
@@ -1001,13 +1203,24 @@ class TestReadShapes(unittest.TestCase):
                                     padding=b"\x00\x00", read_len=64,
                                     timeout_ms=400, total_ms=400)
         self.assertEqual(plan.selector, 0x41)
+        self.assertEqual(plan.read_shape, "cs-held")
         self.assertEqual(plan.shape.selector_variant, "read-bit0")
+        self.assertEqual(plan.transfers[0].tx,
+                         b"\x41\x00\x00" + b"\x00" * 64)
+        self.assertEqual(plan.transfers[0].rx_len, 67)
+        self.assertEqual(plan.prefix_tx, b"\x41\x00\x00")
+        self.assertEqual(plan.answer_offset, 3)
+        self.assertEqual(plan.answer_len, 64)
+
+    def test_split_shape_plan_is_kept_for_comparison(self):
+        plan = spi.build_shape_plan(0xA0, selector_variant="read-bit0",
+                                    padding=b"\x00\x00", read_len=64,
+                                    timeout_ms=400, total_ms=400,
+                                    read_shape="split")
+        self.assertEqual(plan.read_shape, "split")
         self.assertEqual(plan.transfers[0].tx, b"\x41\x00\x00")
         self.assertEqual(plan.transfers[0].rx_len, 0)
-        self.assertEqual(plan.transfers[1].tx, b"")
         self.assertEqual(plan.transfers[1].rx_len, 64)
-        self.assertEqual(plan.tx, b"\x41\x00\x00")
-        self.assertEqual(plan.answer_len, 64)
 
     def test_shape_plan_rejects_writes_and_bad_input(self):
         with self.assertRaises(ValueError):
@@ -1025,7 +1238,8 @@ class TestReadShapes(unittest.TestCase):
                                     padding=b"\x00", read_len=64,
                                     timeout_ms=400, total_ms=400)
         self.assertEqual(transport.execute(plan), b"\x00" * 64)
-        self.assertEqual(io_obj.messages[0][0].tx, b"\x41\x00")
+        self.assertEqual(io_obj.messages[0][0].tx[:2], b"\x41\x00")
+        self.assertEqual(io_obj.messages[0][0].tx[2:], b"\x00" * 64)
 
     def test_shape_selector_alias_of_a_destructive_opcode_is_refused(self):
         # 0x02 (the read alias of JTAG's 0xC2) with selector bit 0 set is
@@ -1062,10 +1276,12 @@ class TestReadFrame(unittest.TestCase):
         self.assertEqual(frame.read_len, 7)
         self.assertEqual(frame.lead, b"\x00\x00\x00")
         self.assertEqual(frame.tx, b"\x40\x00\x00\x00")
-        self.assertEqual(frame.transfers[0].tx, b"\x40\x00\x00\x00")
-        self.assertEqual(frame.transfers[1].rx_len, 7)
-        self.assertEqual(frame.transfers[1].tx, b"")
-        self.assertEqual(frame.hexdump(), "40 00 00 00 | <- 7 B")
+        self.assertEqual(frame.transfers[0].tx,
+                         b"\x40\x00\x00\x00" + b"\x00" * 7)
+        self.assertEqual(frame.transfers[0].rx_len, 11)
+        self.assertEqual(len(frame.transfers), 1)
+        self.assertEqual(frame.hexdump(),
+                         "40 00 00 00 | <- 7 B (cs held)")
 
     def test_scheme_frame_is_selector_plus_two_zero_lead_bytes(self):
         frame = spi.build_read_frame(0xA1)
@@ -1105,7 +1321,9 @@ class TestReadFrame(unittest.TestCase):
                                      read_allowlist=[0xA0], spi_io=io_obj)
         answer = spi.send_read(transport, 0xA0)
         self.assertEqual(answer, b"\xff\x7f\x50\x03\x00\x00\x00")
-        self.assertEqual(io_obj.messages[0][0].tx, b"\x40\x00\x00\x00")
+        self.assertEqual(io_obj.messages[0][0].tx[:4],
+                         b"\x40\x00\x00\x00")
+        self.assertEqual(io_obj.messages[0][0].tx[4:], b"\x00" * 7)
 
     def test_read_frame_keeps_gates(self):
         transport = spi.SpiTransport("/dev/fake", allow_writes=True,
@@ -1123,10 +1341,22 @@ class TestReadFrame(unittest.TestCase):
                                      read_allowlist=[0xA0], spi_io=io_obj)
         self.assertEqual(transport.read_command_frame("fw"),
                          b"\xff\x7f\x50\x03\x00\x00\x00")
-        self.assertEqual(io_obj.messages[0][0].tx, b"\x40\x00\x00\x00")
+        self.assertEqual(io_obj.messages[0][0].tx[:4],
+                         b"\x40\x00\x00\x00")
+        self.assertEqual(io_obj.messages[0][0].tx[4:], b"\x00" * 7)
 
 
 class TestReadAnswer(unittest.TestCase):
+    def test_cs_held_answer_has_no_lead_bytes_to_skip(self):
+        answer = b"\xff\x7f\x50\x03\x00\x00\x00"
+        parsed = spi.parse_read_answer(0xA0, answer, read_shape="cs-held")
+        self.assertEqual(parsed.framing, "bare")
+        self.assertEqual(parsed.skipped, 0)
+        self.assertEqual(parsed.payload, answer)
+        self.assertEqual(parsed.fields.version, 3)
+        with self.assertRaises(ValueError):
+            spi.parse_read_answer(0xA0, answer, read_shape="nope")
+
     def test_bare_fw_answer_with_lead(self):
         answer = b"\xff\x7f\x50\x03\x00\x00\x00"
         parsed = spi.parse_read_answer(0xA0, answer, lead=b"\x00\x00\x00")

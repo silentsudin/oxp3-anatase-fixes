@@ -896,10 +896,29 @@ device consumes cannot be decided statically, and is the one open point.
 `fpbf63112/spi.py` now has `READ_LEAD_BYTES` (`0xA0: 00 00 00`, `0xA1: 00 00`),
 `ReadFrame`, `build_read_frame()`, `send_read()`, `SpiTransport.read_frame()`
 and `parse_read_answer()` (bare answer + optional 0xAA/CRC-32 frame; rejects
-short answers, non-zero lead bytes and a corrupt CRC). The probe defaults to
-`--read-shape frame` (selector + measured lead); `--read-shape selector` keeps
-the DLL-exact one-byte frame for comparison. Unit coverage is
-`tests/fingerprint/test_spi.py::TestReadFrame` and `TestReadAnswer`.
+short answers, non-zero lead bytes and a corrupt CRC). The read **transfer
+shape** is explicit:
+
+* `read_shape="cs-held"` (default): one full-duplex spidev transfer. The
+  transmit buffer is `selector [+ lead] + read_len` zero bytes and the receive
+  buffer is the same length; the answer is the `read_len` bytes *after* the
+  prefix. This is the shape the vendor driver's single `SPB_TRANSFER_LIST`
+  implies and it gives the device no segment boundary to reset its bit phase
+  at. `SpiPlan.answer_offset` is the prefix length.
+* `read_shape="split"`: the historical two-segment message - a transmit-only
+  selector segment followed by a receive-only clock segment, both in the same
+  `SPI_IOC_MESSAGE`. Kept only for `--compare-read-shapes`, never used as a
+  silent fallback. A backend that cannot issue the combined transfer raises
+  `spi.TransferShapeUnsupported` (typed) instead of falling back; the kernel's
+  `EINVAL`/`ENOTSUP`/`EOPNOTSUPP` on the combined ioctl is translated to the
+  same error.
+
+The probe defaults to `--read-shape cs-held` (DLL-exact selector-only);
+`--read-shape selector` is the old name for the same combined shape,
+`--read-shape frame` is the combined shape with the measured lead bytes, and
+`--read-shape split` reruns the two-segment shape for comparison. Unit
+coverage is `tests/fingerprint/test_spi.py::TestPlans`, `TestLinuxSpiIO`,
+`TestTransport`, `TestReadFrame` and `TestReadAnswer`.
 
 ## 8.10 The try-link sweep: mode x clock x settle
 
@@ -918,9 +937,10 @@ them in one bounded, read-only run with the reset polarity and IRQ edge pinned:
   `--link-settles 10,150,300`,
 
 for 2 x 2 x 4 = **16 cells** (24 with the optional settle). Every cell reads
-`0xA0` (7 B), `0xC1` (9 B) and `0xA1` (64 B) with the **DLL-exact read frame**
-of §8.9 (one selector byte, then N receive clocks; no lead, no padding), at a
-400 ms per-cell timeout. There is no early stop: the whole grid is the result.
+`0xA0` (7 B), `0xC1` (9 B) and `0xA1` (64 B) with the **DLL-exact cs-held
+read shape** of §8.9 (one full-duplex transfer, selector only, no lead or
+padding), at a 400 ms per-cell timeout. There is no early stop: the whole grid
+is the result. If the answers are still phase-scaled, run §8.11 next.
 
 The console table and `link.json` have one row/record per cell with the mode,
 clock, settle, the three answers (0xA1 truncated to its first 16 bytes for the
@@ -960,6 +980,71 @@ opcode/selector gate, and the reset pulse needs `--allow-reset`.
 `link.json` is embedded in `summary.json` under `link`; the flag is forwarded
 by the runbook (the exact command is in `commands.txt`).
 
+## 8.11 The try-compare-read-shapes run: split vs cs-held
+
+The 2026-11-09 16-cell sweep (§8.10) produced deterministic but phase-scaled
+answers: `0xC1` read as `32 32 ...` at mode 0, `00 32 32 ...` at mode 1,
+`00 64 64 ...` at mode 2 and `00 c8 c8 ...` at mode 3 - each mode doubles the
+repeated byte, the signature of sampling the same edge at a different bit
+phase. Speed (1/4 MHz) and settle (10/150 ms) changed nothing, so the link
+parameters are not the variable. The last transport-level difference between
+the probe and the vendor driver is the transfer shape: the probe's historical
+read was the two-segment message (transmit-only selector, then receive-only
+clock), while `FUN_18001197c` submits one `SPB_TRANSFER_LIST` and the probe's
+new default is one full-duplex spidev transfer with chip select held for the
+whole call.
+
+`--compare-read-shapes` measures both shapes in one pinned run:
+
+* mode 0 / 4 MHz / the pinned reset settle: **both** shapes, read inside the
+  same session (one reset pulse) so reset timing cannot masquerade as a shape
+  difference,
+* modes 1, 2, 3 / 4 MHz / the same settle: **cs-held** only,
+* every shape/mode reads `0xA0` (7 B), `0xC1` (9 B) and `0xA1` (64 B) with the
+  same read-only allowlist and a 400 ms per-read timeout.
+
+There are four cells and five shape rows. The console table is one row per
+shape/mode and ends with the per-command mode-0 comparison:
+
+```
+# shape  mode 0xA0 (7B)               0xC1 (9B)                0xA1 (first 16B)      agree verdict
+  split     0 00 00 00 ff 7f 50 03    32 32 32 32 32 32 32 ... 32 32 ...                - malformed
+ cs-held    0 ff 7f 50 03 00 00 00    02 00 02 00 02 00 00 ... 04 00 01 ...            no plausible-fw
+ cs-held    1 ...
+```
+
+The comparison is a **best bit shift in `-7..+7`**, computed on the interior
+bytes only (the zero-filled edge is excluded, so it can neither create nor
+destroy a match). `shift > 0` maps the reference left; the report always names
+the direction (`shift` maps cs-held onto split). Equal bytes mean the shape
+was not the bug; an exact shift means a phase artefact; different bytes with
+no exact shift mean the device really drove different data. Constant
+(`00`/`FF`) streams and streams shorter than two bytes report no match.
+
+**Decision tree.** `read-shapes.json` (embedded in `summary.json` under
+`read_shapes`) contains `outcome`, `verdict`, the rows, the comparisons and
+the mode comparisons:
+
+* **cs-held differs from split and the cs-held answer is layout-plausible**
+  (`plausible-fw`/`plausible-info`) -> success: the split segment boundary was
+  the bug. Repeat that shape/mode in a normal read, then use it in the driver.
+* **the shapes agree byte for byte and the answer is still phase-scaled across
+  modes** -> the transfer shape was not the bug. The sampling edge/clock
+  polarity is wrong (use the mode that recovers the stream), or the device is
+  not driving MISO and the bytes are crosstalk; check the IRQ-first hypothesis
+  and the power/reset state before changing the driver.
+* **the shapes differ by an exact bit shift** -> phase artefact, not different
+  data: keep cs-held and fix the clock edge/polarity.
+* **the shapes differ with no exact shift** -> re-run once, then treat the
+  cs-held bytes as primary; the segment boundary changed the device data.
+* **both shapes are empty/timeout/error** -> no data reached the host; fix the
+  spidev/GPIO access, not the shape.
+
+The run needs `--allow-reset` (it pulses the reset line once per cell) plus the
+GpioInt and GpioIo pins. The exact owner command is in
+[`fingerprint-session.md`](fingerprint-session.md) §5.5; the probe invocation
+is recorded in `commands.txt` and includes `--read-shapes-json`.
+
 ## 9. Next steps
 
 **If the goal is this unit (SPI-only, the realistic path).** This is the exact
@@ -997,8 +1082,11 @@ explanation and as the fallback if the script cannot run.
        --spidev /dev/spidev0.0 --dry-run fw info uid count
    ```
 
-   This prints the selector and the two-entry transfer for each read, plus the
-   recovered 1000/2030 ms deadlines, without opening anything.
+   This prints the selector and the exact transfer shape for each read
+   (`cs-held` by default: one full-duplex transfer, `selector + N` zeros out,
+   the answer after the selector; `--read-shape split` shows the historical
+   two-segment message), plus the recovered 1000/2030 ms deadlines, without
+   opening anything.
 
 3. **Bind `spidev` (the only state change; reversible):**
 

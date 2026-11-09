@@ -64,6 +64,7 @@
 #   <out>/matrix.json        the --try-matrix table (only with --try-matrix)
 #   <out>/write-shape.json   the --try-write-shape table (only with --try-write-shape)
 #   <out>/link.json          the --try-link sweep table (only with --try-link)
+#   <out>/read-shapes.json   the --compare-read-shapes table (only with it)
 #   <out>/sys-before.txt     driver/override/module state before any change
 #   <out>/sys-after.txt      the same after the restore
 #   <out>/commands.txt       the exact commands, for copy/paste
@@ -116,6 +117,14 @@
 #                                  0xA0/0xC1/0xA1 with the DLL-exact frame;
 #                                  needs --allow-reset, an IRQ pin and a reset
 #                                  pin; table -> link.json
+#   --compare-read-shapes          one pinned read-only run that reads 0xA0 7B,
+#                                 0xC1 9B and 0xA1 64B with BOTH the split and
+#                                 cs-held transfer shapes at mode 0 / 4 MHz,
+#                                 plus cs-held at modes 1/2/3; prints the
+#                                 shape/mode table, whether the two shapes
+#                                 agree and the best -7..+7 bit shift between
+#                                 them; needs --allow-reset, an IRQ pin and a
+#                                 reset pin; table -> read-shapes.json
 #   --allow-existing-bind          use a spidev bind this session did not create
 #                                  (never unbound by us)
 #   --allow-takeover               take the device from another driver; it is
@@ -166,6 +175,7 @@ ALLOW_RESET=0
 TRY_MATRIX=0
 TRY_WRITE_SHAPE=0
 TRY_LINK=0
+COMPARE_READ_SHAPES=0
 LINK_SETTLES="10,150"
 RESET_POLARITY="active-high"
 SETTLE_MS=10
@@ -223,6 +233,7 @@ while [ "$#" -gt 0 ]; do
         --try-matrix) TRY_MATRIX=1; shift ;;
         --try-write-shape) TRY_WRITE_SHAPE=1; shift ;;
         --try-link) TRY_LINK=1; shift ;;
+        --compare-read-shapes) COMPARE_READ_SHAPES=1; shift ;;
         --link-settles) [ "$#" -ge 2 ] || exit 2; LINK_SETTLES=$2; shift 2 ;;
         --link-settles=*) LINK_SETTLES=${1#*=}; shift ;;
         --reset-polarity)
@@ -276,6 +287,11 @@ if [ "$TRY_LINK" = 1 ] && { [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ];
     printf '%s: --try-link is a separate experiment; run one at a time\n' "$PROG" >&2
     exit 2
 fi
+if [ "$COMPARE_READ_SHAPES" = 1 ] && { [ "$TRY_MATRIX" = 1 ] \
+        || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; }; then
+    printf '%s: --compare-read-shapes is a separate experiment; run one at a time\n' "$PROG" >&2
+    exit 2
+fi
 case $LINK_SETTLES in
     ''|*[!0-9,]*)
         printf '%s: --link-settles must be a comma-separated list of ms values\n' "$PROG" >&2
@@ -301,6 +317,10 @@ if [ "$TRY_WRITE_SHAPE" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
 fi
 if [ "$TRY_LINK" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
     printf '%s: --try-link pulses the reset line once per cell; pass --allow-reset\n' "$PROG" >&2
+    exit 2
+fi
+if [ "$COMPARE_READ_SHAPES" = 1 ] && [ "$ALLOW_RESET" != 1 ]; then
+    printf '%s: --compare-read-shapes pulses the reset line once per cell; pass --allow-reset\n' "$PROG" >&2
     exit 2
 fi
 
@@ -354,6 +374,7 @@ PROBE_RAN=0
 MATRIX_OUTCOME=""
 WRITE_SHAPE_OUTCOME=""
 LINK_OUTCOME=""
+READ_SHAPES_OUTCOME=""
 RESTORED=0
 RESTORE_RC=""
 RESTORE_NOTES=()
@@ -471,7 +492,7 @@ state_load() {
             EXTERNAL_BIND|MODULE_LOADED_BEFORE|MODULE_LOADED_BY_US|SPIDEV_PATH|SPIDEV_NAME|\
             CRS_SHA|CRS_METHOD|CONN_SPEED|CONN_MODE|CONN_BITS|CONN_IRQ|CONN_EDGE|\
             CONN_ACTIVE_LOW|CONN_RESET|IRQ_USED|PROBE_RAN|PROBE_RC|RESTORED|RUN_ID|READS|ROOT|\
-            TRY_MATRIX|TRY_WRITE_SHAPE|TRY_LINK|RESET_POLARITY|SETTLE_MS|LINK_SETTLES)
+            TRY_MATRIX|TRY_WRITE_SHAPE|TRY_LINK|COMPARE_READ_SHAPES|RESET_POLARITY|SETTLE_MS|LINK_SETTLES)
                 # The key list above is closed, so assigning the variable by
                 # name cannot be influenced by the file's contents.
                 STATE_KEYS+=("$k"); STATE_VALS[$k]=$v
@@ -514,6 +535,7 @@ sync_state() {
     state_set TRY_MATRIX "$TRY_MATRIX"
     state_set TRY_WRITE_SHAPE "$TRY_WRITE_SHAPE"
     state_set TRY_LINK "$TRY_LINK"
+    state_set COMPARE_READ_SHAPES "$COMPARE_READ_SHAPES"
     state_set LINK_SETTLES "$LINK_SETTLES"
     state_set RESET_POLARITY "$RESET_POLARITY"
     state_set SETTLE_MS "$SETTLE_MS"
@@ -930,6 +952,18 @@ parse_crs() { # run the probe's acpi_info and interpret the keys
         note "link sweep        : reset polarity $RESET_POLARITY, edge ${CONN_EDGE:-rising} pinned; settles $LINK_SETTLES ms"
         note "link cells        : SPI mode 0/1/2/3 x 1/4 MHz x each settle; 0xA0 7B, 0xC1 9B, 0xA1 64B per cell"
     fi
+    if [ "$COMPARE_READ_SHAPES" = 1 ]; then
+        if [ -z "$CONN_IRQ" ] || [ "$NO_IRQ" = 1 ]; then
+            fail "--compare-read-shapes needs the GpioInt line (--irq-pin N); the known-good edge is rising"
+            return 1
+        fi
+        if [ -z "$CONN_RESET" ]; then
+            fail "--compare-read-shapes needs the GpioIo reset line (--reset-pin N)"
+            return 1
+        fi
+        note "read-shape compare : reset polarity $RESET_POLARITY, edge ${CONN_EDGE:-rising}, settle ${SETTLE_MS} ms pinned"
+        note "read-shape cells   : mode 0 split+cs-held, modes 1/2/3 cs-held; 0xA0 7B, 0xC1 9B, 0xA1 64B per shape"
+    fi
     return 0
 }
 
@@ -937,7 +971,7 @@ parse_crs() { # run the probe's acpi_info and interpret the keys
 probe_args() { # mode(dry|real) -> words
     local mode=$1 out=""
     out="--spidev $(sq "${SPIDEV_PATH:-/dev/spidevN.M}")"
-    if [ "$TRY_LINK" != 1 ]; then
+    if [ "$TRY_LINK" != 1 ] && [ "$COMPARE_READ_SHAPES" != 1 ]; then
         [ -n "$CONN_SPEED" ] && out+=" --speed $CONN_SPEED"
         [ -n "$CONN_MODE" ] && out+=" --mode $CONN_MODE"
     fi
@@ -955,7 +989,8 @@ probe_args() { # mode(dry|real) -> words
     [ "$TRY_MATRIX" = 1 ] && out+=" --try-matrix"
     [ "$TRY_WRITE_SHAPE" = 1 ] && out+=" --try-write-shape"
     [ "$TRY_LINK" = 1 ] && out+=" --try-link --link-settles $LINK_SETTLES"
-    if [ "$mode" = dry ] && { [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; } && [ -n "$CONN_RESET" ]; then
+    [ "$COMPARE_READ_SHAPES" = 1 ] && out+=" --compare-read-shapes"
+    if [ "$mode" = dry ] && { [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ] || [ "$COMPARE_READ_SHAPES" = 1 ]; } && [ -n "$CONN_RESET" ]; then
         # The dry run shows the reset line too; it never pulses it.
         out+=" --reset-gpio $CONN_RESET"
         [ "$IRQ_USED" != 1 ] && [ -n "$GPIO_CHIP" ] && out+=" --gpio-chip $GPIO_CHIP"
@@ -978,12 +1013,15 @@ probe_args() { # mode(dry|real) -> words
         if [ "$TRY_LINK" = 1 ]; then
             out+=" --link-json $(sq "$T/link.json")"
         fi
+        if [ "$COMPARE_READ_SHAPES" = 1 ]; then
+            out+=" --read-shapes-json $(sq "$T/read-shapes.json")"
+        fi
     fi
     printf '%s' "$out"
 }
 
 probe_reads() { # the positional command list (empty in an experiment mode)
-    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; then
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ] || [ "$COMPARE_READ_SHAPES" = 1 ]; then
         return 0
     fi
     printf '%s' "$READS"
@@ -996,6 +1034,8 @@ probe_reads_label() { # what the summary records as the read set
         printf 'write-shape:0xA0/0xA1/0xC1'
     elif [ "$TRY_LINK" = 1 ]; then
         printf 'link:0xA0/0xC1/0xA1'
+    elif [ "$COMPARE_READ_SHAPES" = 1 ]; then
+        printf 'read-shapes:0xA0/0xC1/0xA1'
     else
         printf '%s' "$READS"
     fi
@@ -1040,6 +1080,10 @@ print_plan() {
     if [ "$TRY_LINK" = 1 ]; then
         note "--try-link: SPI mode 0/1/2/3 x 1/4 MHz x settle $LINK_SETTLES ms"
         note "$(( ${#LINK_SETTLE_VALUES[@]} * 8 )) cells; reset polarity $RESET_POLARITY and edge ${CONN_EDGE:-rising} pinned; 0xA0/0xC1/0xA1 per cell; table -> link.json"
+    fi
+    if [ "$COMPARE_READ_SHAPES" = 1 ]; then
+        note "--compare-read-shapes: mode 0 split+cs-held, modes 1/2/3 cs-held, 4 MHz, settle ${SETTLE_MS} ms"
+        note "reset polarity $RESET_POLARITY and edge ${CONN_EDGE:-rising} pinned; 0xA0/0xC1/0xA1 per shape; table -> read-shapes.json"
     fi
     note "$(probe_command real)"
     printf ' 4. restore\n'
@@ -1637,7 +1681,7 @@ phase_dryrun() {
     fi
     printf '$ %s\n' "$(probe_command dry)"
     # shellcheck disable=SC2086
-    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; then
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ] || [ "$COMPARE_READ_SHAPES" = 1 ]; then
         python3 -I -B "$PROBE" $(probe_args dry) --dry-run >"$out" 2>&1 || rc=$?
     else
         python3 -I -B "$PROBE" $(probe_args dry) --dry-run $READS >"$out" 2>&1 || rc=$?
@@ -1666,6 +1710,10 @@ phase_probe() {
         note "link queries: 0xA0 (7 B), 0xC1 (9 B), 0xA1 (64 B) per cell (allowlist enforced)"
         note "link cells: SPI mode 0/1/2/3 x 1/4 MHz x settle $LINK_SETTLES ms; 400 ms/cell"
         note "pinned settings: reset $RESET_POLARITY, edge ${CONN_EDGE:-rising}"
+    elif [ "$COMPARE_READ_SHAPES" = 1 ]; then
+        note "read-shape queries: 0xA0 (7 B), 0xC1 (9 B), 0xA1 (64 B) per shape (allowlist enforced)"
+        note "read-shape cells: mode 0 split+cs-held, modes 1/2/3 cs-held, 4 MHz, 400 ms/read"
+        note "pinned settings: reset $RESET_POLARITY, settle ${SETTLE_MS} ms, edge ${CONN_EDGE:-rising}"
     else
         note "allowlisted reads: $READS"
     fi
@@ -1698,7 +1746,7 @@ phase_probe() {
     printf '$ %s\n' "$(probe_command real)"
     printf '%s\n' "$(probe_command real)" >>"$T/commands.txt"
     # shellcheck disable=SC2086
-    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ]; then
+    if [ "$TRY_MATRIX" = 1 ] || [ "$TRY_WRITE_SHAPE" = 1 ] || [ "$TRY_LINK" = 1 ] || [ "$COMPARE_READ_SHAPES" = 1 ]; then
         python3 -I -B "$PROBE" $(probe_args real) >"$out" 2>&1 || rc=$?
     else
         python3 -I -B "$PROBE" $(probe_args real) $READS >"$out" 2>&1 || rc=$?
@@ -1737,6 +1785,16 @@ phase_probe() {
         else
             LINK_OUTCOME="missing"
             fail "the probe did not write $T/link.json"
+        fi
+    fi
+    if [ "$COMPARE_READ_SHAPES" = 1 ]; then
+        if [ -s "$T/read-shapes.json" ]; then
+            READ_SHAPES_OUTCOME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("outcome","unknown"))' "$T/read-shapes.json" 2>/dev/null || printf unknown)
+            journal answer read-shapes "outcome=${READ_SHAPES_OUTCOME:-unknown}"
+            note "read-shapes outcome: ${READ_SHAPES_OUTCOME:-unknown} (full table: read-shapes.json)"
+        else
+            READ_SHAPES_OUTCOME="missing"
+            fail "the probe did not write $T/read-shapes.json"
         fi
     fi
     if [ "$rc" -ne 0 ]; then
@@ -1842,6 +1900,25 @@ compute_unknowns() {
                     ;;
                 *)
                     add_unknown "the link sweep did not produce a readable outcome; see link.json in this transcript"
+                    ;;
+            esac
+        fi
+        if [ "$COMPARE_READ_SHAPES" = 1 ]; then
+            case $READ_SHAPES_OUTCOME in
+                plausible-fw|plausible-info)
+                    add_unknown "the cs-held read shape produced a protocol-plausible answer; repeat that shape/mode in a normal read before trusting it"
+                    ;;
+                shapes-agree)
+                    add_unknown "the split and cs-held shapes returned identical bytes, so the split segment boundary was not the bug; the remaining hypotheses are the sampling edge/clock polarity or a device not driving MISO (crosstalk)"
+                    ;;
+                cs-held-divergent)
+                    add_unknown "the cs-held and split shapes returned different bytes with no exact bit shift; see read-shapes.json for the per-row bytes"
+                    ;;
+                no-plausible-answer|no-answer)
+                    add_unknown "the read-shape comparison produced no readable answer from either shape; see read-shapes.json"
+                    ;;
+                *)
+                    add_unknown "the read-shape comparison did not produce a readable outcome; see read-shapes.json in this transcript"
                     ;;
             esac
         fi
@@ -1951,6 +2028,13 @@ write_summary() {
         else
             printf '  "link": null,\n'
         fi
+        if [ -s "$T/read-shapes.json" ] && python3 -m json.tool "$T/read-shapes.json" >/dev/null 2>&1; then
+            printf '  "read_shapes": '
+            cat "$T/read-shapes.json"
+            printf ',\n'
+        else
+            printf '  "read_shapes": null,\n'
+        fi
         printf '  "restore": {"attempted": %s, "verified": %s, "exit": %s, "driver": %s, "override": %s, "notes": [' \
             "$([ "$RESTORED" = 1 ] && printf true || printf false)" \
             "$([ "$RESTORE_RC" = 0 ] && printf true || printf false)" \
@@ -1971,7 +2055,7 @@ write_summary() {
             printf '%s' "$(json_str "$u")"
         done
         printf '],\n'
-        printf '  "files": {"journal": "journal.tsv", "console": "session.log", "acpi_info": "acpi-info.txt", "crs": "fprt-crs.bin", "dry_run": "probe-dryrun.txt", "readonly": "probe-readonly.txt", "matrix": "matrix.json", "write_shape": "write-shape.json", "link": "link.json", "commands": "commands.txt"}\n'
+        printf '  "files": {"journal": "journal.tsv", "console": "session.log", "acpi_info": "acpi-info.txt", "crs": "fprt-crs.bin", "dry_run": "probe-dryrun.txt", "readonly": "probe-readonly.txt", "matrix": "matrix.json", "write_shape": "write-shape.json", "link": "link.json", "read_shapes": "read-shapes.json", "commands": "commands.txt"}\n'
         printf '}\n'
     } >"$f"
 
@@ -1997,6 +2081,7 @@ write_summary() {
         [ "$TRY_MATRIX" = 1 ] && printf '# matrix: %s (matrix.json)\n' "${MATRIX_OUTCOME:-unknown}"
         [ "$TRY_WRITE_SHAPE" = 1 ] && printf '# write-shape: %s (write-shape.json)\n' "${WRITE_SHAPE_OUTCOME:-unknown}"
         [ "$TRY_LINK" = 1 ] && printf '# link: %s (link.json)\n' "${LINK_OUTCOME:-unknown}"
+        [ "$COMPARE_READ_SHAPES" = 1 ] && printf '# read-shapes: %s (read-shapes.json)\n' "${READ_SHAPES_OUTCOME:-unknown}"
         printf '# hand this directory back for analysis: summary.json + journal.tsv\n'
     } >"$T/README.txt" 2>/dev/null || true
     return 0

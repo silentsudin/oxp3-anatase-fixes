@@ -401,7 +401,7 @@ driver cannot start.
 | file | what it is |
 |---|---|
 | `tools/fingerprint/oxp3-fp-probe.py` | bring-up probe. Default `--transport spi` sends the recovered selector + two-entry SPB transaction (`--spidev` and `--allow-writes` required for I/O); `--dry-run` prints exact plans with no I/O; `acpi_info --crs FILE` parses an extracted `_CRS` offline. `--transport frame` keeps the old `0xAA`/CRC experiment. Refuses destructive opcodes by opcode *and* selector. Stdlib only. |
-| `tools/fingerprint/fpbf63112/matrix.py` | the `--try-matrix` planner/runner (reset polarity x settle x IRQ edge), the `--try-write-shape` planner/runner (selector bit 0 x padding x read length) and the `--try-link` planner/runner (SPI mode x clock x settle, with plausible-fw/plausible-info/byte-shift-detected/all-zeros/all-0xff/timeout/error/malformed verdicts), valid-answer parsers with CRCs and candidate-offset shift analysis, JSON reports; transport-agnostic so tests use a fake transport |
+| `tools/fingerprint/fpbf63112/matrix.py` | the `--try-matrix` planner/runner (reset polarity x settle x IRQ edge), the `--try-write-shape` planner/runner (selector bit 0 x padding x read length) and the `--try-link` planner/runner (SPI mode x clock x settle, with plausible-fw/plausible-info/byte-shift-detected/all-zeros/all-0xff/timeout/error/malformed verdicts), the `--compare-read-shapes` planner/runner (split vs cs-held with best -7..+7 bit-shift analysis), valid-answer parsers with CRCs and candidate-offset shift analysis, JSON reports; transport-agnostic so tests use a fake transport |
 | `tools/fingerprint/fpbf63112/spi.py` | recovered SPI/SPB transport: selector computation, two `spi_ioc_transfer` entries per command, recovered 1000/2030 (5000/10010 image, 2000/4016 restore) timeouts, IRQ waiters (gpiod v1/v2, sysfs, poll), reset pulse, cancel settle, and the allowlist/destructive gates |
 | `tools/fingerprint/fpbf63112/acpi.py` | raw `_CRS` resource-template parser for `SpiSerialBus`, `GpioInt`, `GpioIo`, I2C and IRQ items; validates lengths/offsets and reduces them to `SpiConnection` (speed, mode, bits, CS, IRQ, reset) |
 | `tools/fingerprint/fpbf63112/aml.py` | finds and validates the FPRT `_CRS` resource template in the raw DSDT AML, so the runbook does not depend on `iasl` or on copying bytes out of ASL by hand |
@@ -513,6 +513,12 @@ Steps 1, 2, 4 and 5 are read-only; step 3 is the only state change (the
    --reset-pin 16 --gpio-chip gpiochip1 --reset-polarity active-high
    --irq-edge rising --allow-reset` (guide:
    [fingerprint-transport.md §8.10](fingerprint-transport.md#810-the-try-link-sweep-mode-x-clock-x-settle)).
+   If the per-mode answers scale by two (a phase artefact), compare the split
+   and cs-held transfer shapes directly:
+   `sudo tools/fingerprint/oxp3-fp-session.sh --compare-read-shapes --irq-pin
+   18 --reset-pin 16 --gpio-chip gpiochip1 --reset-polarity active-high
+   --settle-ms 10 --irq-edge rising --allow-reset` (guide:
+   [fingerprint-transport.md §8.11](fingerprint-transport.md#811-the-try-compare-read-shapes-run-split-vs-cs-held)).
 
 ## Safety
 

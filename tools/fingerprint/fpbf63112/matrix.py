@@ -916,6 +916,7 @@ class SpiWriteShapeSession:
         self._reset = None
         self._irq = None
         self._transport = None
+        self._last_plan = None
 
     def open(self) -> "SpiWriteShapeSession":
         if self._transport is not None:
@@ -952,6 +953,7 @@ class SpiWriteShapeSession:
         plan = spi.build_shape_plan(
             opcode, selector_variant=selector_variant, padding=padding,
             read_len=read_len, timeout_ms=limit, total_ms=limit)
+        self._last_plan = plan
         try:
             data = self._transport.execute(plan)
         except spi.SpiTimeout as exc:
@@ -962,9 +964,7 @@ class SpiWriteShapeSession:
         return ReadResult(data, "", irq)
 
     def _received(self) -> bytes:
-        io = getattr(self._transport, "_io", None)
-        message = getattr(io, "last_message", ()) if io is not None else ()
-        return b"".join(message)
+        return _transport_received(self._transport, self._last_plan)
 
     def close(self) -> None:
         if self._transport is not None:
@@ -995,6 +995,24 @@ class ReadResult:
     data: bytes = b""
     error: str = ""
     irq: str = ""       # "fired", "none", "error" (or "" when unknown)
+
+
+def _transport_received(transport, plan=None) -> bytes:
+    """Bytes of the last message, sliced to the answer for a cs-held read.
+
+    ``SpiTransport.execute`` raises a timeout *after* the transfer when only
+    the IRQ is missing; the failure paths keep those bytes as diagnostics.  A
+    combined read's receive buffer starts with the selector/lead clocks, so
+    without the slice the diagnostic answer would be misaligned by the prefix.
+    """
+    io = getattr(transport, "_io", None)
+    message = getattr(io, "last_message", ()) if io is not None else ()
+    raw = b"".join(message)
+    if (plan is not None and plan.operation == "read"
+            and plan.read_shape == "cs-held"):
+        start = plan.answer_offset
+        return raw[start:start + plan.read_len]
+    return raw
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1290,6 +1308,7 @@ class SpiMatrixSession:
         self._reset = None
         self._irq = None
         self._transport = None
+        self._last_plan = None
 
     def open(self) -> "SpiMatrixSession":
         if self._transport is not None:
@@ -1324,6 +1343,7 @@ class SpiMatrixSession:
         plan = spi.build_plan(opcode, read_len=read_len,
                               timeout_ms=self.timeout_ms,
                               total_ms=self.timeout_ms)
+        self._last_plan = plan
         try:
             data = self._transport.execute(plan)
         except spi.SpiTimeout as exc:
@@ -1337,9 +1357,7 @@ class SpiMatrixSession:
         return ReadResult(data, "", irq)
 
     def _received(self) -> bytes:
-        io = getattr(self._transport, "_io", None)
-        message = getattr(io, "last_message", ()) if io is not None else ()
-        return b"".join(message)
+        return _transport_received(self._transport, self._last_plan)
 
     def close(self) -> None:
         if self._transport is not None:
@@ -1992,6 +2010,7 @@ class SpiLinkSession:
         self._reset = None
         self._irq = None
         self._transport = None
+        self._last_plan = None
 
     def open(self) -> "SpiLinkSession":
         if self._transport is not None:
@@ -2025,6 +2044,7 @@ class SpiLinkSession:
         # DLL-exact read shape: one selector byte, then read_len receive bytes.
         plan = spi.build_plan(opcode, read_len=read_len,
                               timeout_ms=limit, total_ms=limit)
+        self._last_plan = plan
         try:
             data = self._transport.execute(plan)
         except spi.SpiTimeout as exc:
@@ -2035,9 +2055,7 @@ class SpiLinkSession:
         return ReadResult(data, "", irq)
 
     def _received(self) -> bytes:
-        io = getattr(self._transport, "_io", None)
-        message = getattr(io, "last_message", ()) if io is not None else ()
-        return b"".join(message)
+        return _transport_received(self._transport, self._last_plan)
 
     def close(self) -> None:
         if self._transport is not None:
@@ -2052,6 +2070,687 @@ class SpiLinkSession:
 
 def write_link_report(report: LinkReport, path: str) -> None:
     """Write the link table as stable, pretty JSON."""
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(report.to_dict(), handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+# ---------------------------------------------------------------------------
+# Read-shape comparison (--compare-read-shapes): split vs cs-held
+# ---------------------------------------------------------------------------
+#
+# The 2026-11-09 hardware runs answered deterministically but *implausibly*,
+# and only the SPI mode/phase changed the bytes: 0xA0/0xC1 read as
+# 00 32 32 ... at mode 1, 00 64 64 ... at mode 2, 00 c8 c8 ... at mode 3.
+# That is the signature of sampling one edge at different bit phases, not of a
+# register read.  Two transport explanations remain and only a controlled
+# comparison separates them:
+#
+# * the "split" shape the earlier probe used - a transmit-only selector
+#   segment followed by a receive-only clock segment, both inside one
+#   SPI_IOC_MESSAGE - gives the controller/device a segment boundary after the
+#   selector, and
+# * the "cs-held" shape the vendor driver's single SPB transfer list implies -
+#   one full-duplex spidev transfer, transmit `selector + N` zeros, receive
+#   `N + 1` bytes, chip select asserted for the whole call.
+#
+# This experiment reads 0xA0 (7 B), 0xC1 (9 B) and 0xA1 (64 B) with **both**
+# shapes at mode 0 / 4 MHz / the pinned settle, then with `cs-held` at modes
+# 1, 2 and 3.  The two mode-0 shapes run inside one session (one reset pulse),
+# so a reset-timing difference cannot masquerade as a shape difference.  The
+# table reports each shape/mode row, and for every command whether the two
+# mode-0 answers agree and the best bit shift (-7..+7) from cs-held to split:
+# a pure bit shift is a phase artefact; equal bytes mean the transfer shape was
+# not the bug; different bytes with no shift mean the device really drove
+# different data.
+
+READ_SHAPE_SCHEMA = 1
+
+#: Per-read timeout, matching the link sweep's bounded experiment budget.
+READ_SHAPE_TIMEOUT_MS = 400
+
+#: Pinned electrical/link settings for the comparison.
+READ_SHAPE_SPEED_HZ = 4_000_000
+READ_SHAPE_SETTLE_MS = 10
+
+#: The two shapes, in the order the table prints them.
+READ_SHAPES: tuple[str, ...] = ("split", "cs-held")
+
+#: The three reads, in table order and with their recovered layout lengths.
+READ_SHAPE_QUERIES: tuple[MatrixQuery, ...] = LINK_QUERIES
+
+#: Bit shifts tested when asking "is one answer the other shifted by N bits?".
+SHIFT_RANGE: tuple[int, ...] = tuple(range(-7, 8))
+
+
+@dataclasses.dataclass(frozen=True)
+class ShiftMatch:
+    """The best bit shift that maps ``reference`` onto ``candidate``.
+
+    ``best_shift > 0`` means the candidate equals the reference shifted left
+    (towards the MSB) by that many bits: ``cand[i] = (ref[i] << s) |
+    (ref[i+1] >> (8-s))``.  ``best_shift < 0`` is the mirror.  Only bytes whose
+    shifted value uses two real reference bytes are compared, so the zero-filled
+    edge cannot create or destroy a match.  Equal and constant streams are
+    handled explicitly; ties are all reported and resolved deterministically
+    (smallest |shift| first, positive before negative).
+    """
+
+    reference_len: int
+    candidate_len: int
+    best_shift: int | None
+    best_matches: int
+    compared: int
+    best_score: float
+    ties: tuple[int, ...]
+    reason: str = ""
+
+    @property
+    def exact(self) -> bool:
+        return (self.best_shift is not None and self.compared > 0
+                and self.best_matches == self.compared)
+
+    def to_dict(self) -> dict:
+        return {
+            "best_shift": self.best_shift,
+            "best_matches": self.best_matches,
+            "compared": self.compared,
+            "best_score": round(self.best_score, 6),
+            "exact": self.exact,
+            "ties": list(self.ties),
+            "reference_len": self.reference_len,
+            "candidate_len": self.candidate_len,
+            "reason": self.reason,
+        }
+
+
+def _shift_stream(data: bytes, shift: int) -> bytes:
+    """Shift ``data`` by ``shift`` bits (positive = towards the MSB)."""
+    n = len(data)
+    if shift == 0:
+        return bytes(data)
+    if shift > 0:
+        out = bytearray(n)
+        for index in range(n):
+            value = (data[index] << shift) & 0xFF
+            if index + 1 < n:
+                value |= data[index + 1] >> (8 - shift)
+            out[index] = value
+        return bytes(out)
+    magnitude = -shift
+    out = bytearray(n)
+    for index in range(n):
+        value = (data[index] >> magnitude) & 0xFF
+        if index > 0:
+            value |= (data[index - 1] << (8 - magnitude)) & 0xFF
+        out[index] = value
+    return bytes(out)
+
+
+def bit_shift_match(reference: bytes, candidate: bytes,
+                    *, shifts=SHIFT_RANGE) -> ShiftMatch:
+    """Find the best ``candidate = reference shifted by N bits`` match.
+
+    All shifts in ``-7..+7`` are tested by default.  The returned object is
+    always populated; ``best_shift`` is ``None`` for degenerate inputs (fewer
+    than two bytes, a constant stream, or no comparable byte).  ``exact`` says
+    the whole comparable window matched.
+    """
+    reference = bytes(reference)
+    candidate = bytes(candidate)
+    shifts = tuple(int(shift) for shift in shifts)
+    n = min(len(reference), len(candidate))
+    base = dict(reference_len=len(reference), candidate_len=len(candidate))
+    if not shifts or any(shift < -7 or shift > 7 for shift in shifts):
+        raise ValueError("shift candidates must be within -7..+7")
+    if n < 2:
+        return ShiftMatch(best_shift=None, best_matches=0, compared=0,
+                          best_score=0.0, ties=(), reason="too short", **base)
+    if (_all_byte(reference, 0x00) or _all_byte(reference, 0xFF)
+            or _all_byte(candidate, 0x00) or _all_byte(candidate, 0xFF)):
+        return ShiftMatch(best_shift=None, best_matches=0, compared=0,
+                          best_score=0.0, ties=(), reason="constant stream",
+                          **base)
+    scores: dict[int, tuple[int, int]] = {}
+    for shift in shifts:
+        if shift > 0:
+            indexes = range(0, n - 1)          # last byte has no right neighbour
+        elif shift < 0:
+            indexes = range(1, n)              # first byte has no left neighbour
+        else:
+            indexes = range(0, n)
+        shifted = _shift_stream(reference, shift)
+        matches = sum(1 for index in indexes
+                      if candidate[index] == shifted[index])
+        scores[shift] = (matches, len(indexes))
+    best_score = max(matches / compared for matches, compared in scores.values())
+    ties = tuple(shift for shift in sorted(
+        scores, key=lambda value: (abs(value), value < 0))
+        if scores[shift][0] / scores[shift][1] == best_score)
+    best_shift = ties[0]
+    best_matches, compared = scores[best_shift]
+    if best_score == 0.0:
+        return ShiftMatch(best_shift=None, best_matches=best_matches,
+                          compared=compared, best_score=0.0, ties=(),
+                          reason="no byte matched at any shift", **base)
+    return ShiftMatch(best_shift=best_shift, best_matches=best_matches,
+                      compared=compared, best_score=best_score, ties=ties,
+                      **base)
+
+
+@dataclasses.dataclass(frozen=True)
+class ReadShapeCell:
+    """One session of the read-shape comparison.
+
+    A cell may capture more than one shape (the mode-0 cell captures both) so
+    the two shapes are read after the same reset pulse and settle.
+    """
+
+    index: int
+    mode: int
+    speed_hz: int
+    settle_ms: int
+    shapes: tuple[str, ...] = READ_SHAPES
+
+    def label(self) -> str:
+        return (f"{self.index}: mode={self.mode} "
+                f"speed={_speed_label(self.speed_hz)} "
+                f"settle={self.settle_ms}ms "
+                f"shapes={'+'.join(self.shapes)}")
+
+
+def plan_read_shapes(*, speed_hz: int = READ_SHAPE_SPEED_HZ,
+                     settle_ms: int = READ_SHAPE_SETTLE_MS,
+                     modes=LINK_MODES) -> tuple[ReadShapeCell, ...]:
+    """The deterministic shape comparison: mode 0 both shapes, modes 1-3 cs-held."""
+    speed_hz = int(speed_hz)
+    settle_ms = int(settle_ms)
+    modes = tuple(int(mode) for mode in modes)
+    if speed_hz <= 0:
+        raise ValueError("read-shape speed must be Hz > 0")
+    if settle_ms < 0:
+        raise ValueError("read-shape settle must be ms >= 0")
+    if not modes:
+        raise ValueError("the read-shape comparison needs at least one mode")
+    for mode in modes:
+        if mode not in (0, 1, 2, 3):
+            raise ValueError(f"unknown SPI mode {mode!r}; choose 0..3")
+    if len(set(modes)) != len(modes):
+        raise ValueError("the read-shape modes must be unique")
+    if 0 not in modes:
+        raise ValueError("the read-shape comparison needs mode 0 for the "
+                         "split-vs-cs-held reference")
+    cells = [ReadShapeCell(1, 0, speed_hz, settle_ms, READ_SHAPES)]
+    for mode in modes:
+        if mode == 0:
+            continue
+        cells.append(ReadShapeCell(len(cells) + 1, mode, speed_hz, settle_ms,
+                                   ("cs-held",)))
+    return tuple(cells)
+
+
+@dataclasses.dataclass(frozen=True)
+class ReadShapeAttempt:
+    """One (cell, shape) row: its three reads and the per-answer verdicts."""
+
+    cell: ReadShapeCell
+    shape: str
+    reads: tuple[LinkRead, ...]
+
+    def read_for(self, opcode: int) -> LinkRead | None:
+        for read in self.reads:
+            if read.query.opcode == opcode:
+                return read
+        return None
+
+    def hex_for(self, opcode: int) -> str:
+        read = self.read_for(opcode)
+        return read.read.data.hex(" ") if read is not None else ""
+
+    def data_for(self, opcode: int) -> bytes:
+        read = self.read_for(opcode)
+        return bytes(read.read.data) if read is not None else b""
+
+    def to_dict(self) -> dict:
+        return {
+            "index": self.cell.index,
+            "shape": self.shape,
+            "mode": self.cell.mode,
+            "speed_hz": self.cell.speed_hz,
+            "speed": _speed_label(self.cell.speed_hz),
+            "settle_ms": self.cell.settle_ms,
+            "answers": {
+                read.query.name: {
+                    "opcode": f"0x{read.query.opcode:02x}",
+                    "read_len": read.query.read_len,
+                    "hex": read.read.data.hex(" "),
+                    "bytes": len(read.read.data),
+                    "error": read.read.error,
+                    "irq": read.read.irq,
+                    "verdict": read.check.verdict,
+                    "detail": read.check.detail,
+                    "fields": read.check.fields,
+                }
+                for read in self.reads
+            },
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ShapeComparison:
+    """The mode-0 split-vs-cs-held answer to one command."""
+
+    query: MatrixQuery
+    split: ReadShapeAttempt | None
+    cs_held: ReadShapeAttempt | None
+
+    def _bytes(self, attempt):
+        return attempt.data_for(self.query.opcode) if attempt is not None else b""
+
+    @property
+    def agree(self) -> bool | None:
+        split = self._bytes(self.split)
+        cs_held = self._bytes(self.cs_held)
+        if not split or not cs_held:
+            return None
+        return split == cs_held
+
+    @property
+    def shift(self) -> ShiftMatch | None:
+        split = self._bytes(self.split)
+        cs_held = self._bytes(self.cs_held)
+        if not split or not cs_held:
+            return None
+        return bit_shift_match(cs_held, split)
+
+    def to_dict(self) -> dict:
+        split_hex = self._bytes(self.split).hex(" ")
+        held_hex = self._bytes(self.cs_held).hex(" ")
+        shift = self.shift
+        return {
+            "opcode": f"0x{self.query.opcode:02x}",
+            "command": self.query.name,
+            "split_hex": split_hex,
+            "cs_held_hex": held_hex,
+            "agree": self.agree,
+            "shift": shift.to_dict() if shift is not None else None,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ModeComparison:
+    """One non-zero-mode cs-held answer compared with cs-held at mode 0."""
+
+    query: MatrixQuery
+    mode: int
+    mode0: ReadShapeAttempt | None
+    other: ReadShapeAttempt | None
+
+    def to_dict(self) -> dict:
+        reference = (self.mode0.data_for(self.query.opcode)
+                     if self.mode0 is not None else b"")
+        candidate = (self.other.data_for(self.query.opcode)
+                     if self.other is not None else b"")
+        shift = (bit_shift_match(reference, candidate)
+                 if reference and candidate else None)
+        return {
+            "opcode": f"0x{self.query.opcode:02x}",
+            "command": self.query.name,
+            "mode": self.mode,
+            "same_as_mode0": bool(reference) and reference == candidate,
+            "hex": candidate.hex(" "),
+            "mode0_hex": reference.hex(" "),
+            "shift": shift.to_dict() if shift is not None else None,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ReadShapeReport:
+    """The complete read-shape comparison result."""
+
+    cells: tuple[ReadShapeCell, ...]
+    attempts: tuple[ReadShapeAttempt, ...]
+    queries: tuple[MatrixQuery, ...]
+    timeout_ms: int
+    context: dict
+
+    # -- lookup ------------------------------------------------------------
+    def attempt(self, shape: str, mode: int) -> ReadShapeAttempt | None:
+        for attempt in self.attempts:
+            if attempt.shape == shape and attempt.cell.mode == mode:
+                return attempt
+        return None
+
+    def comparisons(self) -> tuple[ShapeComparison, ...]:
+        split = self.attempt("split", 0)
+        held = self.attempt("cs-held", 0)
+        return tuple(ShapeComparison(query, split, held)
+                     for query in self.queries)
+
+    def mode_comparisons(self) -> tuple[ModeComparison, ...]:
+        reference = self.attempt("cs-held", 0)
+        rows = []
+        for attempt in self.attempts:
+            if attempt.shape != "cs-held" or attempt.cell.mode == 0:
+                continue
+            for query in self.queries:
+                rows.append(ModeComparison(query, attempt.cell.mode,
+                                           reference, attempt))
+        return tuple(rows)
+
+    # -- verdicts ----------------------------------------------------------
+    @property
+    def mode_sensitive(self) -> bool:
+        """True when a non-mode-0 cs-held answer differs from cs-held mode 0."""
+        return any(not row["same_as_mode0"] for row in
+                   (comparison.to_dict() for comparison in self.mode_comparisons()))
+
+    @property
+    def plausible_answers(self) -> tuple[tuple[ReadShapeAttempt, LinkRead], ...]:
+        found = []
+        for attempt in self.attempts:
+            if attempt.shape != "cs-held":
+                continue
+            for read in attempt.reads:
+                if read.check.plausible:
+                    found.append((attempt, read))
+        return tuple(found)
+
+    @property
+    def outcome(self) -> str:
+        if not self.attempts:
+            return "no-answer"
+        if self.plausible_answers:
+            return PLAUSIBLE_FW if any(
+                read.check.verdict == PLAUSIBLE_FW
+                for _attempt, read in self.plausible_answers) else PLAUSIBLE_INFO
+        comparisons = self.comparisons()
+        if comparisons and all(item.agree is True for item in comparisons):
+            return "shapes-agree"
+        if any(item.agree is False for item in comparisons):
+            return "cs-held-divergent"
+        if all(not attempt.reads[0].read.data for attempt in self.attempts):
+            return "no-answer"
+        return "no-plausible-answer"
+
+    @property
+    def verdict(self) -> str:
+        comparisons = self.comparisons()
+        agree = [item.agree for item in comparisons if item.agree is not None]
+        different = [item for item in comparisons if item.agree is False]
+        plausible = self.plausible_answers
+        if plausible:
+            attempt, read = plausible[0]
+            how = ("the split and cs-held answers differ, so the split "
+                   "segment boundary was the bug" if different
+                   else "both shapes agree, so the transfer shape was not "
+                   "the bug")
+            return (f"CS-HELD PLAUSIBLE ({read.check.verdict}) at "
+                    f"{attempt.shape} mode {attempt.cell.mode} "
+                    f"{_speed_label(attempt.cell.speed_hz)}: "
+                    f"{read.check.detail}; {how}")
+        if agree and len(agree) == len(comparisons) and all(agree):
+            scaling = (" and the answer still changes with SPI mode"
+                       if self.mode_sensitive else "")
+            return ("the two shapes agree on every command; the split "
+                    "transfer was not the bug" + scaling +
+                    ". If the bytes are still phase-scaled, the sampling "
+                    "edge/clock polarity is wrong or the device is not "
+                    "driving MISO (crosstalk)")
+        if different:
+            shifts = [item.shift for item in different if item.shift]
+            shifted = [shift for shift in shifts if shift.exact]
+            if shifted:
+                best = shifted[0]
+                return (f"the shapes differ and split is cs-held shifted by "
+                        f"{best.best_shift:+d} bit(s): a phase artefact, not "
+                        f"different data")
+            return ("the shapes differ with no exact bit shift: the device "
+                    "drove different data, or the cs-held window is "
+                    "misaligned")
+        return "no readable answer from either shape; see the per-row bytes"
+
+
+    # -- rendering ---------------------------------------------------------
+    def to_dict(self) -> dict:
+        return {
+            "schema": READ_SHAPE_SCHEMA,
+            "planned": len(self.cells),
+            "attempted": len(self.attempts),
+            "timeout_ms": self.timeout_ms,
+            "context": self.context,
+            "queries": [
+                {
+                    "name": query.name,
+                    "opcode": f"0x{query.opcode:02x}",
+                    "read_len": query.read_len,
+                }
+                for query in self.queries
+            ],
+            "cells": [
+                {
+                    "index": cell.index,
+                    "mode": cell.mode,
+                    "speed_hz": cell.speed_hz,
+                    "speed": _speed_label(cell.speed_hz),
+                    "settle_ms": cell.settle_ms,
+                    "shapes": list(cell.shapes),
+                }
+                for cell in self.cells
+            ],
+            "rows": [attempt.to_dict() for attempt in self.attempts],
+            "comparisons": [item.to_dict() for item in self.comparisons()],
+            "mode_comparison": [row.to_dict()
+                                for row in self.mode_comparisons()],
+            "mode_sensitive": self.mode_sensitive,
+            "outcome": self.outcome,
+            "verdict": self.verdict,
+        }
+
+    def render_table(self) -> list[str]:
+        """The compact console table: shape, mode, per-command hex, agreement."""
+        lines = [
+            "# shape  mode 0xA0 (7B)               0xC1 (9B)               "
+            " 0xA1 (first 16B)                agree verdict"
+        ]
+        comparisons = {item.query.opcode: item for item in self.comparisons()}
+        for attempt in self.attempts:
+            fw = attempt.hex_for(0xA0) or "-"
+            info = attempt.hex_for(0xC1) or "-"
+            scheme = attempt.hex_for(0xA1)[:47] or "-"
+            if attempt.cell.mode == 0:
+                checks = [comparisons[opcode].agree
+                          for opcode in comparisons]
+                if any(value is False for value in checks):
+                    agree = "no"
+                elif checks and all(value is True for value in checks):
+                    agree = "yes"
+                else:
+                    agree = "-"
+            else:
+                agree = "n/a"
+            verdict = attempt.reads[0].check.verdict if attempt.reads else "-"
+            lines.append(
+                f"{attempt.shape:>7} {attempt.cell.mode:>4} "
+                f"{fw:<25} {info:<24} {scheme:<32} {agree:>5} {verdict}")
+        lines.append("")
+        lines.append("mode-0 shape comparison (split vs cs-held; shift maps "
+                     "cs-held -> split):")
+        for item in self.comparisons():
+            shift = item.shift
+            if item.agree is None:
+                detail = "not comparable (an answer is empty)"
+            elif item.agree:
+                detail = "agree (bytes identical)"
+            elif shift is not None and shift.exact:
+                detail = (f"differ; split is cs-held shifted "
+                          f"{shift.best_shift:+d} bit(s)")
+            elif shift is not None and shift.best_shift is not None:
+                detail = (f"differ; best shift {shift.best_shift:+d} bit(s), "
+                          f"{shift.best_matches}/{shift.compared} bytes match")
+            else:
+                detail = "differ; no comparable shift"
+            lines.append(f"  0x{item.query.opcode:02x} {item.query.name:<7} "
+                         f"{detail}")
+        lines.append(f"verdict: {self.verdict}")
+        return lines
+
+
+def validate_read_shape_queries(queries) -> tuple[MatrixQuery, ...]:
+    """Only the read-only 0xA0/0xC1/0xA1 link queries are allowed."""
+    return validate_link_queries(queries)
+
+
+def run_read_shapes(cells, *, connect, timeout_ms: int = READ_SHAPE_TIMEOUT_MS,
+                    queries=READ_SHAPE_QUERIES,
+                    context: dict | None = None) -> ReadShapeReport:
+    """Run the shape comparison; ``connect(cell)`` is the only I/O seam.
+
+    ``connect(cell)`` returns an object with
+    ``read(opcode, read_len, shape) -> ReadResult`` and an optional
+    ``close()``.  The mode-0 cell asks for both shapes from the same session,
+    so both are read after one reset pulse.
+    """
+    cells = tuple(cells)
+    queries = validate_read_shape_queries(queries)
+    timeout_ms = int(timeout_ms)
+    if timeout_ms <= 0:
+        raise ValueError("read-shape timeout must be > 0")
+    attempts = []
+    for cell in cells:
+        session = connect(cell)
+        try:
+            for shape in cell.shapes:
+                reads = []
+                for query in queries:
+                    try:
+                        result = session.read(query.opcode, query.read_len,
+                                              shape)
+                    except (spi.SpiError, OSError) as exc:
+                        result = ReadResult(b"", f"error: {exc}")
+                    if not isinstance(result, ReadResult):
+                        result = ReadResult(
+                            bytes(getattr(result, "data", b"")),
+                            str(getattr(result, "error", "")),
+                            str(getattr(result, "irq", "")))
+                    data = bytes(result.data or b"")
+                    error = result.error or ""
+                    if error and not data and error.startswith("timeout"):
+                        check = LinkCheck(LINK_TIMEOUT, error)
+                    elif error and not data:
+                        check = LinkCheck(LINK_ERROR, error)
+                    else:
+                        check = analyze_link_answer(query.opcode, data)
+                    reads.append(LinkRead(query, result, check))
+                attempts.append(ReadShapeAttempt(cell, shape, tuple(reads)))
+        finally:
+            close = getattr(session, "close", None)
+            if callable(close):
+                close()
+    return ReadShapeReport(cells, tuple(attempts), queries, timeout_ms,
+                           dict(context or {}))
+
+
+class SpiReadShapeSession:
+    """One read-shape comparison cell on the real GPIO/SPI backends.
+
+    The reset line is pulsed once per cell with the pinned polarity, then the
+    cell's settle delay is applied, then the interrupt line is requested and a
+    fresh :class:`~fpbf63112.spi.SpiTransport` opens the spidev node with this
+    cell's mode.  Both mode-0 shapes are read through that same session, so a
+    reset-timing difference cannot look like a transfer-shape difference.
+    """
+
+    def __init__(self, cell: ReadShapeCell, *, spidev_path: str,
+                 reset_active_low: bool = False,
+                 edge: str = "rising",
+                 bits_per_word: int | None = None,
+                 gpio_chip: str | None = None,
+                 reset_pin: int | None = None, irq_pin: int | None = None,
+                 irq_active_low: bool = False,
+                 timeout_ms: int = READ_SHAPE_TIMEOUT_MS,
+                 gpio_backend: str | None = "auto",
+                 sleep=time.sleep):
+        self.cell = cell
+        self.spidev_path = spidev_path
+        self.reset_active_low = bool(reset_active_low)
+        self.edge = edge
+        self.bits_per_word = bits_per_word
+        self.gpio_chip = gpio_chip
+        self.reset_pin = reset_pin
+        self.irq_pin = irq_pin
+        self.irq_active_low = bool(irq_active_low)
+        self.timeout_ms = int(timeout_ms)
+        self.gpio_backend = gpio_backend
+        self._sleep = sleep
+        self._reset = None
+        self._irq = None
+        self._transport = None
+        self._last_plan = None
+
+    def open(self) -> "SpiReadShapeSession":
+        if self._transport is not None:
+            return self
+        if self.reset_pin is None:
+            raise spi.SpiError("the read-shape comparison pulses the reset "
+                               "line, but no reset pin was configured")
+        self._reset = spi.GpioResetLine(
+            self.reset_pin, chip=self.gpio_chip,
+            active_low=self.reset_active_low, backend=self.gpio_backend)
+        self._reset.pulse()
+        if self.cell.settle_ms:
+            self._sleep(self.cell.settle_ms / 1000.0)
+        if self.irq_pin is None:
+            raise spi.SpiError("the read-shape comparison needs an interrupt "
+                               "line")
+        self._irq = spi.GpioIrqWaiter(
+            self.irq_pin, chip=self.gpio_chip, edge=self.edge,
+            active_low=self.irq_active_low, backend=self.gpio_backend)
+        self._transport = spi.SpiTransport(
+            self.spidev_path, speed_hz=self.cell.speed_hz,
+            mode=self.cell.mode, bits_per_word=self.bits_per_word,
+            allow_writes=True, read_allowlist=LINK_ALLOWED_OPS, irq=self._irq)
+        return self
+
+    def read(self, opcode: int, read_len: int,
+             shape: str = "cs-held") -> ReadResult:
+        try:
+            self.open()
+        except (spi.SpiError, OSError) as exc:
+            return ReadResult(b"", f"error: {exc}", "error")
+        limit = self.timeout_ms
+        try:
+            plan = spi.build_plan(opcode, read_len=read_len,
+                                  timeout_ms=limit, total_ms=limit,
+                                  read_shape=shape)
+        except ValueError as exc:
+            return ReadResult(b"", f"error: {exc}", "error")
+        self._last_plan = plan
+        try:
+            data = self._transport.execute(plan)
+        except spi.SpiTimeout as exc:
+            return ReadResult(self._received(), f"timeout: {exc}", "none")
+        except spi.SpiError as exc:
+            return ReadResult(self._received(), f"error: {exc}", "error")
+        irq = "fired" if self._transport.last_irq is not None else "unknown"
+        return ReadResult(data, "", irq)
+
+    def _received(self) -> bytes:
+        return _transport_received(self._transport, self._last_plan)
+
+    def close(self) -> None:
+        if self._transport is not None:
+            self._transport.close()
+            self._transport = None
+        if self._reset is not None:
+            try:
+                self._reset.close()
+            finally:
+                self._reset = None
+
+
+def write_read_shapes_report(report: ReadShapeReport, path: str) -> None:
+    """Write the read-shape comparison as stable, pretty JSON."""
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(report.to_dict(), handle, indent=2, sort_keys=True)
         handle.write("\n")

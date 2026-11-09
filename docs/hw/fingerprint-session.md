@@ -50,7 +50,12 @@ needs `--allow-reset`, an IRQ pin and a reset pin; the table is written to
 `write-shape.json`), `--try-link` (the link-parameter sweep after a readable
 but implausible answer: SPI mode 0/1/2/3 x 1/4 MHz x settle 10/150 ms, plus
 300 ms with `--link-settles`; needs `--allow-reset`, an IRQ pin and a reset
-pin; the table is written to `link.json`), `--reset-polarity active-high|active-low` and
+pin; the table is written to `link.json`), `--compare-read-shapes` (one pinned
+run that reads `0xA0` 7 B, `0xC1` 9 B and `0xA1` 64 B with both the split and
+cs-held transfer shapes at mode 0 / 4 MHz, plus cs-held at modes 1/2/3, and
+reports whether the two shapes agree and the best `-7..+7` bit shift between
+them; needs `--allow-reset`, an IRQ pin and a reset pin; the table is written
+to `read-shapes.json`), `--reset-polarity active-high|active-low` and
 `--settle-ms N` (the now-known-good electrical settings; defaults
 active-high/10 ms), `--allow-takeover`, `--crs FILE` (use an already-extracted
 resource template),
@@ -64,9 +69,9 @@ default also honours `$FPBF63112_GPIO_BACKEND`).
 
 The electrical side is pinned and the read frame is recovered
 (`fingerprint-transport.md` §8.9): active-high reset, 10 ms settle, rising
-edge, 4 MHz, mode 0, and the probe's default `--read-shape frame` (selector +
-the measured lead bytes). The next run is the ordinary read, not another
-experiment:
+edge, 4 MHz, mode 0, and the probe's default `--read-shape cs-held` (one
+full-duplex transfer, selector only). The next run is the ordinary read, not
+another experiment:
 
 ```sh
 sudo tools/fingerprint/oxp3-fp-session.sh --reads "fw scheme info" \
@@ -87,8 +92,10 @@ It sends only `0xA0`, `0xA1` and `0xC1`, keeps the read allowlist and every
 safety gate, and pulses the reset only because `--allow-reset` is explicit.
 Expected on success: `fw` decodes the 7-byte record (`state`, project
 `0x7F50`, version), `scheme` returns its table and `info` the 9-byte geometry.
-`--read-shape selector` reruns the DLL-exact one-byte frame for comparison and
-is expected to leave the payload 3/2 bytes into the window.
+`--read-shape cs-held` is the default combined transfer; `--read-shape split`
+reruns the older two-segment message for comparison (and is expected to leave
+the payload 3/2 bytes into the window); `--read-shape frame` is the combined
+shape with the measured lead bytes.
 
 Exit codes: `0` done and restore verified, `1` a step failed (the restore still
 ran and is reported), `2` usage or precondition refusal (nothing was changed),
@@ -174,6 +181,7 @@ so treat it as host-specific data and do not commit it.
 | `matrix.json` | the `--try-matrix` table: every cell (polarity, settle, edge), the bytes read, the verdict, the winning cell (or the all-attempts verdict); same content embedded in `summary.json` |
 | `write-shape.json` | the `--try-write-shape` table: every selector/padding/read-length cell, the bytes, the CRC offset and candidate offset; same content embedded in `summary.json` under `write_shape` |
 | `link.json` | the `--try-link` table: every mode/clock/settle cell with 0xA0/0xC1/0xA1 bytes and the action verdict; same content embedded in `summary.json` under `link` |
+| `read-shapes.json` | the `--compare-read-shapes` table: one row per shape/mode with 0xA0/0xC1/0xA1 bytes, plus the split-vs-cs-held agreement and best bit shift; same content embedded in `summary.json` under `read_shapes` |
 | `answers.tsv` | the parsed answers: command, byte count, hex, interpretation |
 | `sys-before.txt`, `sys-after.txt` | driver / override / module / node / `bytes_tx`, before and after |
 | `commands.txt` | the exact probe commands, for copy/paste |
@@ -182,7 +190,8 @@ so treat it as host-specific data and do not commit it.
 
 `summary.json` (schema 1) top-level keys: `schema tool version unique_name
 run_id started_at finished_at mode fixture root_prefix host transcript device
-acpi binding mutations probe matrix write_shape link restore unknowns files`.
+acpi binding mutations probe matrix write_shape link read_shapes restore
+unknowns files`.
 
 * `acpi`: `method` (`sysfs-dsdt`, `acpidump`, `crs-argument`, `resumed`),
   `crs_sha256`, `crs_bytes`, `speed_hz`, `mode`, `bits`, `chip_select`,
@@ -205,6 +214,10 @@ acpi binding mutations probe matrix write_shape link restore unknowns files`.
   `planned`, `attempted`, `modes`, `speeds_hz`, `settles_ms`, and `cells[]`
   with `mode`, `speed_hz`, `settle_ms`, `verdict`, `byte_shift` and the three
   `answers`).
+* `read_shapes`: `null` unless `--compare-read-shapes` ran, otherwise the
+  complete `read-shapes.json` object (`outcome`, `verdict`, `planned`,
+  `attempted`, `rows[]` with `shape`, `mode`, `answers`, `comparisons[]` with
+  `agree` and `shift`, and `mode_comparison[]`).
 * `restore`: `attempted`, `verified`, `exit`, `driver`, `override`, `notes[]`.
 * `unknowns[]`: the remaining open questions, computed from what actually
   happened (e.g. "no GpioInt in `_CRS`", "no firmware answer was parsed",
@@ -519,6 +532,79 @@ before it answers, not another SPI mode. `byte-shift-detected` is not success:
 it says which mode recovers the stream, so repeat that mode in a normal read
 before changing the driver.
 
+### 5.5 The read-shape comparison after the phase-scaled answers
+
+The 2026-11-09 16-cell sweep gave `mode 0: 00 00 00 ff 7f 50 03` for `0xA0`
+and `32 32 ...` for `0xC1`, then `00 32 32 ...`, `00 64 64 ...`, `00 c8 c8 ...`
+at modes 1/2/3: each mode doubles the repeated byte, which is the signature of
+sampling the same stream at a different bit phase, not of a register read.
+Speed (1/4 MHz) and settle (10/150 ms) changed nothing. The remaining
+transport hypothesis is the transfer shape: the earlier probe used the
+historical **split** message (transmit-only selector segment, then a
+receive-only clock segment, both in one `SPI_IOC_MESSAGE`), while the vendor
+driver's single `SPB_TRANSFER_LIST` is one **cs-held** full-duplex transfer
+(`selector + N` zeros out, `N + 1` bytes in). `--compare-read-shapes` measures
+both in one pinned run, with both mode-0 shapes read inside the same session
+(one reset pulse) so reset timing cannot look like a shape difference.
+
+The exact owner command:
+
+```sh
+sudo tools/fingerprint/oxp3-fp-session.sh \
+    --compare-read-shapes \
+    --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 \
+    --reset-polarity active-high --settle-ms 10 --irq-edge rising \
+    --allow-reset
+```
+
+The probe command recorded in `commands.txt` is:
+
+```sh
+sudo python3 tools/fingerprint/oxp3-fp-probe.py --spidev /dev/spidev0.0 \
+    --bits 8 --reset-polarity active-high --settle-ms 10 \
+    --gpio 18 --gpio-chip gpiochip1 --irq-edge rising --irq-active-low \
+    --compare-read-shapes --allow-writes --reset-gpio 16 --allow-reset \
+    --read-shapes-json docs/state/fp-session-<run>/read-shapes.json
+```
+
+It reads `0xA0` (7 B), `0xC1` (9 B) and `0xA1` (64 B) with **split** and
+**cs-held** at mode 0 / 4 MHz / the pinned settle, then cs-held at modes 1, 2
+and 3. The console table is one row per shape/mode:
+
+```
+# shape  mode 0xA0 (7B)               0xC1 (9B)                0xA1 (first 16B)                 agree verdict
+  split     0 00 00 00 ff 7f 50 03    32 32 32 32 32 32 32 ... 32 32 ...                            - malformed
+ cs-held    0 ff 7f 50 03 00 00 00    02 00 02 00 02 00 00 00 ... 04 00 01 ...                  no plausible-fw
+ cs-held    1 ...
+```
+
+After the rows it prints the mode-0 comparison per command: whether the two
+shapes agree and, when they do not, the best bit shift in `-7..+7` that maps
+the cs-held answer onto the split one (a pure bit shift is a **phase
+artefact**; equal bytes mean the transfer shape was not the bug). The whole
+table is `read-shapes.json` and is embedded in `summary.json` under
+`read_shapes`.
+
+**Decision tree for the table.**
+
+* **cs-held differs from split *and* the cs-held answer is layout-plausible**
+  (`plausible-fw`/`plausible-info`) -> success: the split transfer boundary was
+  the bug. Repeat the cs-held read in a normal run, then wire that shape into
+  the driver.
+* **the shapes agree byte for byte and the answer remains phase-scaled across
+  modes** -> the split transfer was not the bug. The sampling edge/clock
+  polarity is wrong (try the mode that recovers the stream), or the device is
+  not driving MISO and the bytes are crosstalk/echo; check the IRQ-first and
+  power/reset state before changing the driver.
+* **the shapes differ only by an exact bit shift** -> phase artefact, not
+  different data: keep the cs-held shape and fix the clock edge/polarity.
+* **the shapes differ with no exact shift** -> the device really returned
+  different bytes for the two transfers; re-run once, then treat the cs-held
+  bytes as the primary data and the split bytes as an artefact of the segment
+  boundary.
+* **both shapes are empty/timeout/error** -> no data reached the host; the
+  transfer shape is not the question. Fix the spidev/GPIO access first.
+
 ## 6. Handing the transcript back
 
 Give the whole `docs/state/fp-session-*` directory (or just `summary.json` +
@@ -624,9 +710,10 @@ GPIOs.
   nonexistent GPIO chip path, every cell fails closed, and the 18-attempt
   `matrix.json` (plus its embedded copy and outcome in `summary.json`) is
   asserted in the transcript;
-* `--try-write-shape` and `--try-link` get the same treatment: the flag and
-  its explicit JSON path reach the probe, every cell fails closed against the
-  fake node/GPIO, and the 60-cell `write-shape.json` / 16-cell `link.json`
+* `--try-write-shape`, `--try-link` and `--compare-read-shapes` get the same
+  treatment: the flag and its explicit JSON path reach the probe, every cell
+  fails closed against the fake node/GPIO, and the 60-cell
+  `write-shape.json` / 16-cell `link.json` / 4-cell-5-row `read-shapes.json`
   (plus the embedded copy and outcome in `summary.json`, and the compact table
   in `probe-readonly.txt`) are asserted.
 

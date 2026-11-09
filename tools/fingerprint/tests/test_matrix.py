@@ -947,5 +947,363 @@ class TestProbeLinkIntegration(unittest.TestCase):
             self.assertIn("link:", text)
 
 
+
+# ---------------------------------------------------------------------------
+# Read-shape comparison (--compare-read-shapes)
+# ---------------------------------------------------------------------------
+
+class ReadShapeFakeSession:
+    """Fake transport for the read-shape runner: keyed by (mode, shape, op)."""
+
+    def __init__(self, cell, answers, closed):
+        self.cell = cell
+        self.answers = answers
+        self.closed = closed
+
+    def read(self, opcode, read_len, shape):
+        value = self.answers.get((self.cell.mode, shape, opcode))
+        if value is None:
+            value = b"\x00" * read_len
+        if callable(value):
+            return value(opcode, read_len, shape)
+        return read_result(bytes(value))
+
+    def close(self):
+        self.closed.append((self.cell.index, self.cell.mode))
+
+
+def run_read_shape_fake(answers, cells=None, closed=None):
+    cells = tuple(cells or matrix.plan_read_shapes())
+    closed = closed if closed is not None else []
+
+    def connect(cell):
+        return ReadShapeFakeSession(cell, answers, closed)
+
+    return matrix.run_read_shapes(cells, connect=connect), closed
+
+
+class TestShiftDetector(unittest.TestCase):
+    def test_every_shift_in_range_is_recovered_exactly(self):
+        reference = bytes([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+                           0x11, 0x22])
+        for shift in range(-7, 8):
+            candidate = matrix._shift_stream(reference, shift)
+            match = matrix.bit_shift_match(reference, candidate)
+            self.assertIsNotNone(match.best_shift, shift)
+            self.assertEqual(match.best_shift, shift,
+                             (shift, match.to_dict()))
+            self.assertTrue(match.exact, (shift, match.to_dict()))
+            self.assertEqual(match.reference_len, len(reference))
+
+    def test_best_match_and_tie_handling(self):
+        repeated = b"\x64" * 9
+        # 0x32 = 0x64 >> 1, but the repeating byte also makes +7 equivalent;
+        # both must be reported and the smallest |shift| wins.
+        match = matrix.bit_shift_match(repeated, b"\x32" * 9,
+                                       shifts=(-1, 7))
+        self.assertEqual(match.best_shift, -1)
+        self.assertEqual(match.ties, (-1, 7))
+        self.assertTrue(match.exact)
+        self.assertEqual(match.best_matches, match.compared)
+
+    def test_degenerate_streams(self):
+        short = matrix.bit_shift_match(b"\x01", b"\x02")
+        self.assertIsNone(short.best_shift)
+        self.assertEqual(short.reason, "too short")
+        constant = matrix.bit_shift_match(b"\x00" * 9, b"\x00" * 9)
+        self.assertIsNone(constant.best_shift)
+        self.assertEqual(constant.reason, "constant stream")
+        other = matrix.bit_shift_match(b"\xff" * 9, b"\x7f" * 9)
+        self.assertIsNone(other.best_shift)
+        equal = matrix.bit_shift_match(b"\x10\x20\x30\x40", b"\x10\x20\x30\x40")
+        self.assertEqual(equal.best_shift, 0)
+        self.assertTrue(equal.exact)
+        different = matrix.bit_shift_match(b"\x10\x20\x30\x40",
+                                           b"\x55\xaa\x55\xaa")
+        self.assertIsNone(different.best_shift)
+        self.assertEqual(different.reason, "no byte matched at any shift")
+
+    def test_shift_candidates_are_bounded(self):
+        with self.assertRaises(ValueError):
+            matrix.bit_shift_match(b"\x01\x02", b"\x01\x02", shifts=(8,))
+        with self.assertRaises(ValueError):
+            matrix.bit_shift_match(b"\x01\x02", b"\x01\x02", shifts=(-8,))
+
+
+class TestTransportReceived(unittest.TestCase):
+    def test_cs_held_diagnostics_skip_the_tx_prefix(self):
+        class FakeIO:
+            last_message = (b"\x00" + b"\xaa" * 7,)
+
+        class FakeTransport:
+            _io = FakeIO()
+
+        plan = matrix.spi.build_plan(0xA0, read_len=7)
+        self.assertEqual(matrix._transport_received(FakeTransport(), plan),
+                         b"\xaa" * 7)
+        split = matrix.spi.build_plan(0xA0, read_len=7, read_shape="split")
+        self.assertEqual(matrix._transport_received(FakeTransport(), split),
+                         b"\x00" + b"\xaa" * 7)
+        self.assertEqual(matrix._transport_received(FakeTransport(), None),
+                         b"\x00" + b"\xaa" * 7)
+
+
+class TestReadShapePlanner(unittest.TestCase):
+    def test_default_plan_is_four_cells_and_five_rows(self):
+        cells = matrix.plan_read_shapes()
+        self.assertEqual(len(cells), 4)
+        first = cells[0]
+        self.assertEqual((first.mode, first.speed_hz, first.settle_ms),
+                         (0, matrix.READ_SHAPE_SPEED_HZ,
+                          matrix.READ_SHAPE_SETTLE_MS))
+        self.assertEqual(first.shapes, ("split", "cs-held"))
+        self.assertEqual([cell.mode for cell in cells[1:]], [1, 2, 3])
+        self.assertTrue(all(cell.shapes == ("cs-held",) for cell in cells[1:]))
+        report, _closed = run_read_shape_fake({})
+        self.assertEqual(len(report.attempts), 5)
+        self.assertEqual([(a.cell.mode, a.shape) for a in report.attempts],
+                         [(0, "split"), (0, "cs-held"),
+                          (1, "cs-held"), (2, "cs-held"), (3, "cs-held")])
+
+    def test_planner_rejects_bad_dimensions(self):
+        with self.assertRaises(ValueError):
+            matrix.plan_read_shapes(speed_hz=0)
+        with self.assertRaises(ValueError):
+            matrix.plan_read_shapes(settle_ms=-1)
+        with self.assertRaises(ValueError):
+            matrix.plan_read_shapes(modes=())
+        with self.assertRaises(ValueError):
+            matrix.plan_read_shapes(modes=(1, 2))
+        with self.assertRaises(ValueError):
+            matrix.plan_read_shapes(modes=(0, 0))
+
+    def test_queries_are_the_three_layout_lengths(self):
+        self.assertEqual([(q.name, q.opcode, q.read_len)
+                          for q in matrix.READ_SHAPE_QUERIES],
+                         [("fw", 0xA0, 7), ("info", 0xC1, 9),
+                          ("scheme", 0xA1, 64)])
+
+
+class TestReadShapeRunner(unittest.TestCase):
+    def test_shapes_agree_and_cs_held_is_plausible(self):
+        answers = {
+            (0, "split", 0xA0): VALID_FW,
+            (0, "cs-held", 0xA0): VALID_FW,
+            (0, "split", 0xC1): VALID_INFO,
+            (0, "cs-held", 0xC1): VALID_INFO,
+            (0, "split", 0xA1): VALID_SCHEME,
+            (0, "cs-held", 0xA1): VALID_SCHEME,
+        }
+        report, closed = run_read_shape_fake(answers)
+        self.assertEqual(report.outcome, matrix.PLAUSIBLE_FW)
+        self.assertTrue(all(item.agree is True for item in report.comparisons()))
+        self.assertIn("both shapes agree", report.verdict)
+        self.assertEqual(len(closed), 4)
+        self.assertEqual(closed[0], (1, 0),
+                         "both mode-0 shapes share one session/reset")
+
+    def test_split_was_the_bug_when_only_cs_held_parses(self):
+        shifted = matrix._shift_stream(VALID_FW, -1)
+        answers = {
+            (0, "split", 0xA0): shifted,
+            (0, "cs-held", 0xA0): VALID_FW,
+            (0, "split", 0xC1): matrix._shift_stream(VALID_INFO, -1),
+            (0, "cs-held", 0xC1): VALID_INFO,
+        }
+        report, _ = run_read_shape_fake(answers)
+        self.assertEqual(report.outcome, matrix.PLAUSIBLE_FW)
+        fw = report.comparisons()[0]
+        self.assertIs(fw.agree, False)
+        self.assertEqual(fw.shift.best_shift, -1)
+        self.assertTrue(fw.shift.exact)
+        self.assertIn("split segment boundary was the bug", report.verdict)
+
+    def test_phase_artefact_without_a_plausible_answer(self):
+        first = b"\x12\x34\x56\x78\x9a\xbc\xde\xf0\x11\x22"
+        right = matrix._shift_stream(first, -2)
+        answers = {
+            (0, "split", 0xC1): right,
+            (0, "cs-held", 0xC1): first,
+                 }
+        report, _ = run_read_shape_fake(answers)
+        self.assertEqual(report.outcome, "cs-held-divergent")
+        comparison = report.comparisons()[1]
+        self.assertIs(comparison.agree, False)
+        self.assertEqual(comparison.shift.best_shift, -2)
+        self.assertTrue(comparison.shift.exact)
+        self.assertIn("phase artefact", report.verdict)
+
+    def test_mode_sensitivity_is_reported(self):
+        answers = {
+            (0, "cs-held", 0xC1): b"\x64" * 9,
+            (1, "cs-held", 0xC1): b"\x32" * 9,
+            (2, "cs-held", 0xC1): b"\x32" * 9,
+            (3, "cs-held", 0xC1): b"\x32" * 9,
+        }
+        report, _ = run_read_shape_fake(answers)
+        self.assertTrue(report.mode_sensitive)
+        rows = [row.to_dict() for row in report.mode_comparisons()
+                if row.query.opcode == 0xC1 and row.mode == 1]
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["same_as_mode0"])
+        self.assertEqual(rows[0]["shift"]["best_shift"], -1)
+
+    def test_json_and_table_are_complete(self):
+        import json
+        answers = {
+            (0, "split", 0xA0): VALID_FW,
+            (0, "cs-held", 0xA0): VALID_FW,
+            (0, "cs-held", 0xC1): VALID_INFO,
+        }
+        report, _ = run_read_shape_fake(answers)
+        data = json.loads(json.dumps(report.to_dict()))
+        self.assertEqual(data["schema"], matrix.READ_SHAPE_SCHEMA)
+        self.assertEqual((data["planned"], data["attempted"]), (4, 5))
+        self.assertEqual(len(data["rows"]), 5)
+        self.assertEqual(len(data["comparisons"]), 3)
+        table = "\n".join(report.render_table())
+        for needle in ("shape", "mode", "cs-held", "0xA0", "0xC1",
+                       "0xA1", "agree", "verdict"):
+            self.assertIn(needle, table)
+
+    def test_without_a_reset_pin_the_session_fails_closed(self):
+        cell = matrix.plan_read_shapes()[0]
+        session = matrix.SpiReadShapeSession(cell, spidev_path="/dev/null")
+        result = session.read(0xA0, 7, "cs-held")
+        self.assertIn("error", result.error)
+        self.assertIn("reset", result.error)
+        self.assertEqual(result.data, b"")
+
+
+class TestProbeReadShapeIntegration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.probe = support.load_probe()
+
+    def run_probe(self, argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = self.probe.main(argv)
+        return rc, out.getvalue()
+
+    def test_probe_dry_run_plans_the_comparison_and_does_no_io(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "read-shapes.json")
+            rc, text = self.run_probe([
+                "--compare-read-shapes", "--dry-run",
+                "--spidev", "/dev/spidev0.0", "--gpio", "18",
+                "--gpio-chip", "gpiochip1", "--reset-gpio", "16",
+                "--allow-reset", "--allow-writes",
+                "--read-shapes-json", path])
+            self.assertEqual(rc, 0)
+            self.assertIn("compare-read-shapes: 4 cells", text)
+            self.assertIn("mode=0", text)
+            self.assertIn("mode=3", text)
+            self.assertIn("shapes=split+cs-held", text)
+            self.assertFalse(os.path.exists(path),
+                             "a dry run must not write the comparison JSON")
+
+    def test_probe_refuses_command_names_in_compare_mode(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main(["--compare-read-shapes", "fw"])
+        self.assertEqual(rc, 2)
+
+    def test_probe_refuses_compare_without_allow_reset(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main([
+                "--compare-read-shapes", "--spidev", "/dev/spidev0.0",
+                "--gpio", "18", "--reset-gpio", "16", "--allow-writes"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--allow-reset", out.getvalue())
+
+    def test_probe_compare_refuses_a_bad_timeout(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main(["--compare-read-shapes", "--dry-run",
+                                  "--read-shapes-timeout-ms", "50"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--read-shapes-timeout-ms", out.getvalue())
+
+    def test_probe_compare_refuses_op_and_commands(self):
+        for argv, needle in ((["--compare-read-shapes", "--op", "0xA0"],
+                              "--op"),
+                             (["--compare-read-shapes", "fw"],
+                              "do not name commands")):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(out):
+                rc = self.probe.main(argv)
+            self.assertEqual(rc, 2, argv)
+            self.assertIn(needle, out.getvalue())
+
+    def test_probe_compare_refuses_a_missing_spidev(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main([
+                "--compare-read-shapes", "--gpio", "18",
+                "--reset-gpio", "16", "--allow-reset", "--allow-writes"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--spidev", out.getvalue())
+
+    def test_probe_compare_refuses_a_missing_json_directory(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            spidev = os.path.join(tmp, "spidev0.0")
+            open(spidev, "w").close()
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(out):
+                rc = self.probe.main([
+                    "--compare-read-shapes", "--spidev", spidev,
+                    "--gpio", "18", "--reset-gpio", "16",
+                    "--gpio-chip", os.path.join(tmp, "gpiochip1"),
+                    "--allow-reset", "--allow-writes",
+                    "--read-shapes-json", os.path.join(tmp, "missing",
+                                                       "out.json")])
+            self.assertEqual(rc, 2)
+            self.assertIn("does not exist", out.getvalue())
+
+    def test_probe_refuses_compare_with_another_experiment(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            rc = self.probe.main([
+                "--compare-read-shapes", "--try-link", "--allow-reset"])
+        self.assertEqual(rc, 2)
+
+    def test_probe_writes_the_table_even_when_every_cell_fails(self):
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            spidev = os.path.join(tmp, "spidev0.0")
+            open(spidev, "w").close()
+            path = os.path.join(tmp, "read-shapes.json")
+            rc, text = self.run_probe([
+                "--compare-read-shapes", "--spidev", spidev,
+                "--gpio", "18",
+                "--gpio-chip", os.path.join(tmp, "gpiochip1"),
+                "--reset-gpio", "16", "--allow-reset", "--allow-writes",
+                "--reset-polarity", "active-high", "--irq-edge", "rising",
+                "--read-shapes-json", path])
+            self.assertEqual(rc, 1)
+            self.assertTrue(os.path.exists(path))
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.assertEqual((data["planned"], data["attempted"]), (4, 5))
+            self.assertEqual(data["outcome"], "no-answer")
+            self.assertIn("compare-read-shapes:", text)
+            self.assertIn("verdict:", text)
+
+
 if __name__ == "__main__":
     unittest.main()

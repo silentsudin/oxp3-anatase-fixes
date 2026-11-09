@@ -7,10 +7,14 @@ does not drive.  It has two transports:
 ``--transport spi`` (default) - the one this unit actually uses.  It speaks the
 SPB/SPI wire format recovered from ``BetterlifeFingerprintDevice.dll``
 (``FUN_180017020`` read / ``FUN_180017404`` write): a one-byte selector
-``(opcode & 0x3f) << 1`` (bit 7 set for host->device writes), then the driver's
-two-entry sequence (write the selector, then clock out the fixed-size answer or
-write the payload).  See ``fpbf63112/spi.py`` and
-docs/hw/fingerprint-transport.md.
+``(opcode & 0x3f) << 1`` (bit 7 set for host->device writes), then the answer.
+A read defaults to the **cs-held** shape: one full-duplex spidev transfer whose
+transmit buffer is ``selector [+ lead] + N`` zero bytes and whose receive buffer
+is the same length, returning the N bytes after the selector.  ``--read-shape
+split`` keeps the older two-segment message (transmit-only selector, then a
+receive-only clock) for comparison; ``--compare-read-shapes`` runs both in one
+pinned run and reports whether the answers agree and by how many bits they are
+shifted.  See ``fpbf63112/spi.py`` and docs/hw/fingerprint-transport.md.
 
 ``--transport frame`` - the older experiment that puts the USB branch's 0xAA /
 CRC-32 frame on the SPI wire.  Kept only to test the "is the USB frame behind
@@ -483,13 +487,30 @@ def main(argv=None):
                     help="comma-separated settle delays after reset in ms "
                          "(default 10,150; add 300 for the optional third "
                          "value)")
-    ap.add_argument("--read-shape", choices=("frame", "selector"),
-                    default="frame",
-                    help="read frame: 'frame' (default) = the selector plus "
-                         "the observed lead bytes (3 for 0xA0, 2 for 0xA1, "
-                         "0xC1 unknown), so the payload starts at answer "
-                         "offset 0; 'selector' = the DLL-exact one-byte "
-                         "selector for comparison")
+    ap.add_argument("--compare-read-shapes", action="store_true",
+                    help="one pinned run that reads 0xA0 7B, 0xC1 9B and "
+                         "0xA1 64B with both the split and cs-held shapes at "
+                         "mode 0 / 4 MHz / the pinned settle, plus cs-held at "
+                         "modes 1/2/3; prints the shape/mode table, the "
+                         "split-vs-cs-held agreement and the best bit shift "
+                         "(-7..+7); table -> read-shapes.json")
+    ap.add_argument("--read-shapes-json", default=None,
+                    help="write the --compare-read-shapes table to this JSON "
+                         "file (default: read-shapes.json in the current "
+                         "directory)")
+    ap.add_argument("--read-shapes-timeout-ms", type=int, default=400,
+                    help="per-read timeout for --compare-read-shapes in ms "
+                         "(default 400, range 100..2000)")
+    ap.add_argument("--read-shape",
+                    choices=("cs-held", "split", "frame", "selector"),
+                    default="cs-held",
+                    help="read transfer shape/prefix: 'cs-held' (default) = "
+                         "one full-duplex transfer, DLL-exact selector-only; "
+                         "'split' = the older transmit-only selector then "
+                         "receive-only clock (comparison only); 'frame' = "
+                         "cs-held with the observed lead bytes (3 for 0xA0, "
+                         "2 for 0xA1, 0xC1 unknown); 'selector' = cs-held, "
+                         "selector-only (the old name)")
     args = ap.parse_args(argv)
 
     if args.crypto_selftest:
@@ -499,6 +520,31 @@ def main(argv=None):
         print("refusing: --try-matrix and --try-write-shape are separate "
               "experiments; run one at a time", file=sys.stderr)
         return 2
+
+    if args.compare_read_shapes:
+        if args.transport != "spi":
+            print("refusing: --compare-read-shapes is the SPI read-shape "
+                  "experiment; the frame transport has no selector/segment "
+                  "shape", file=sys.stderr)
+            return 2
+        if args.try_matrix or args.try_write_shape or args.try_link:
+            print("refusing: --compare-read-shapes is a separate experiment; "
+                  "run one at a time", file=sys.stderr)
+            return 2
+        if args.commands:
+            print("refusing: --compare-read-shapes sends its own allowlisted "
+                  "queries (0xA0/0xC1/0xA1); do not name commands",
+                  file=sys.stderr)
+            return 2
+        if args.op is not None:
+            print("refusing: --compare-read-shapes does not take --op",
+                  file=sys.stderr)
+            return 2
+        if not 100 <= args.read_shapes_timeout_ms <= 2000:
+            print("refusing: --read-shapes-timeout-ms must be 100..2000",
+                  file=sys.stderr)
+            return 2
+        return run_read_shape_compare(args)
 
     if args.try_link:
         if args.transport != "spi":
@@ -592,9 +638,26 @@ def _refuse_destructive(spi, opcode):
             f"{names}: refusing unconditionally")
 
 
+def _read_shape_plan(spi, opcode, read_len, *, shape,
+                     timeout_ms=None, total_ms=None):
+    """Build one read plan for ``--read-shape``; map the legacy name too."""
+    if shape == "split":
+        return spi.build_plan(opcode, operation="read", read_len=read_len,
+                              timeout_ms=timeout_ms, total_ms=total_ms,
+                              read_shape="split")
+    if shape == "frame":
+        lead = None                       # the measured lead bytes
+    else:                                  # cs-held / selector
+        lead = b""                         # DLL-exact selector only
+    return spi.build_read_frame(
+        opcode, read_len, lead=lead,
+        timeout_ms=timeout_ms, total_ms=total_ms,
+        read_shape="cs-held").plan
+
+
 def _spi_plan(spi, args, cmd):
     """Return ``(label, SpiPlan)`` for one command; never performs I/O."""
-    shape = getattr(args, "read_shape", "frame")
+    shape = getattr(args, "read_shape", "cs-held")
     if cmd == "raw":
         if args.op is None:
             raise spi.SpiError("--op is required for the raw command")
@@ -606,21 +669,14 @@ def _spi_plan(spi, args, cmd):
             raise spi.SpiError("SPI writes are deliberately not implemented; "
                                "--data belongs to the frame transport")
         _refuse_destructive(spi, args.op)
-        if shape == "frame":
-            return (f"op 0x{args.op:02x}",
-                    spi.build_read_frame(args.op, args.rx).plan)
         return (f"op 0x{args.op:02x}",
-                spi.build_plan(args.op, operation="read",
-                               read_len=args.rx))
+                _read_shape_plan(spi, args.op, args.rx, shape=shape))
     if cmd in spi.COMMANDS:
         command = spi.COMMANDS[cmd]
         _refuse_destructive(spi, command.opcode)
-        if shape == "frame":
-            return (cmd, spi.build_read_frame(
-                command.opcode, command.read_len,
-                timeout_ms=command.timeout_ms,
-                total_ms=command.total_ms).plan)
-        return (cmd, spi.plan_command(command))
+        return (cmd, _read_shape_plan(
+            spi, command.opcode, command.read_len, shape=shape,
+            timeout_ms=command.timeout_ms, total_ms=command.total_ms))
     raise spi.SpiError(f"unknown command {cmd!r}; choose from "
                        f"{', '.join(spi.COMMANDS)}")
 
@@ -1068,6 +1124,139 @@ def run_spi_link(args):
                                    matrix.PLAUSIBLE_INFO) else 1
 
 
+def run_read_shape_compare(args):
+    """``--compare-read-shapes``: split vs cs-held, one pinned run.
+
+    The reset polarity/IRQ edge/settle are pinned exactly like ``--try-link``;
+    the only variables are the transfer shape and (for cs-held) the SPI mode.
+    Both mode-0 shapes are read inside one session (one reset pulse), so a
+    reset-timing difference cannot masquerade as a shape difference.
+    """
+    spi = _load_spi()
+    acpi = _load_acpi()
+    matrix = _load_matrix()
+    try:
+        params = _spi_parameters(args, spi, acpi)
+        cells = matrix.plan_read_shapes(settle_ms=args.settle_ms)
+    except (spi.SpiError, ValueError) as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+    bits = params["bits"] if params["bits"] is not None else 8
+
+    if args.dry_run:
+        print(f"dry-run: read-shape comparison spidev={args.spidev or '(unset)'} "
+              f"allow_writes={args.allow_writes} "
+              f"gpio_backend={args.gpio_backend or 'auto'}")
+        print(f"         pinned reset polarity={args.reset_polarity} "
+              f"edge={params['edge']} settle={args.settle_ms}ms bits={bits} "
+              f"speed={matrix.READ_SHAPE_SPEED_HZ}Hz "
+              f"chip={args.gpio_chip or '(unset)'} irq={params['gpio']} "
+              f"reset={params['reset_gpio']} "
+              f"timeout={args.read_shapes_timeout_ms}ms")
+        print(f"compare-read-shapes: {len(cells)} cells "
+              f"(mode 0 split+cs-held, modes 1/2/3 cs-held); each reads "
+              f"0xA0 7B + 0xC1 9B + 0xA1 64B")
+        for cell in cells:
+            print(f" {cell.index:>2} mode={cell.mode} "
+                  f"speed={matrix._speed_label(cell.speed_hz)} "
+                  f"settle={cell.settle_ms:>3}ms "
+                  f"shapes={'+'.join(cell.shapes)}")
+        print("compare-read-shapes: the table reports whether split and "
+              "cs-held agree and the best -7..+7 bit shift between them")
+        print("dry-run: no device or GPIO is opened; no JSON is written")
+        return 0
+
+    if not args.spidev:
+        print("refusing: --spidev /dev/spidevN.M is required for a real "
+              "read-shape comparison (there is no default device)",
+              file=sys.stderr)
+        return 2
+    if not args.allow_writes:
+        print("refusing: --allow-writes is required before any SPI transfer "
+              "(even a read)", file=sys.stderr)
+        return 2
+    if params["gpio"] is None:
+        print("refusing: --compare-read-shapes needs the GpioInt line "
+              "(--gpio N or a _CRS that carries it); the known-good edge is "
+              "rising", file=sys.stderr)
+        return 2
+    if params["reset_gpio"] is None:
+        print("refusing: --compare-read-shapes needs the GpioIo reset line "
+              "(--reset-gpio N or a _CRS that carries it)", file=sys.stderr)
+        return 2
+    if not args.allow_reset:
+        print("refusing: --compare-read-shapes pulses the reset line once per "
+              "cell; pass --allow-reset", file=sys.stderr)
+        return 2
+    if args.gpio_backend == "poll":
+        print("refusing: --gpio-backend poll cannot drive the reset line; "
+              "use auto, chardev, gpiod or sysfs", file=sys.stderr)
+        return 2
+
+    out_path = os.path.abspath(args.read_shapes_json or "read-shapes.json")
+    parent = os.path.dirname(out_path) or "."
+    if not os.path.isdir(parent):
+        print(f"refusing: the --read-shapes-json directory does not exist: "
+              f"{parent}", file=sys.stderr)
+        return 2
+
+    if args.speed is not None or args.mode is not None:
+        print("compare-read-shapes: --speed/--mode are ignored; the comparison "
+              "pins 4 MHz and sets the mode per cell", file=sys.stderr)
+    print(f"compare-read-shapes: {len(cells)} cells, per-read timeout "
+          f"{args.read_shapes_timeout_ms}ms, read-only queries 0xA0/0xC1/0xA1")
+    print(f"compare-read-shapes: spidev={args.spidev} "
+          f"chip={args.gpio_chip or '(unset)'} irq={params['gpio']} "
+          f"reset={params['reset_gpio']} reset_polarity="
+          f"{args.reset_polarity} edge={params['edge']} bits={bits}")
+
+    active_low = args.reset_polarity == "active-low"
+
+    def connect(cell):
+        return matrix.SpiReadShapeSession(
+            cell, spidev_path=args.spidev,
+            reset_active_low=active_low, edge=params["edge"],
+            bits_per_word=bits, gpio_chip=args.gpio_chip,
+            reset_pin=params["reset_gpio"], irq_pin=params["gpio"],
+            irq_active_low=bool(params["active_low"]),
+            timeout_ms=args.read_shapes_timeout_ms,
+            gpio_backend=args.gpio_backend)
+
+    context = {
+        "spidev": args.spidev,
+        "gpio_chip": args.gpio_chip,
+        "irq_pin": params["gpio"],
+        "reset_pin": params["reset_gpio"],
+        "reset_polarity": args.reset_polarity,
+        "irq_edge": params["edge"],
+        "irq_active_low": bool(params["active_low"]),
+        "bits_per_word": bits,
+        "gpio_backend": args.gpio_backend or "auto",
+        "speed_hz": matrix.READ_SHAPE_SPEED_HZ,
+        "settle_ms": args.settle_ms,
+        "shapes": list(matrix.READ_SHAPES),
+    }
+    try:
+        report = matrix.run_read_shapes(
+            cells, connect=connect, timeout_ms=args.read_shapes_timeout_ms,
+            context=context)
+    except matrix.MatrixRefused as exc:
+        print(f"refusing: {exc}", file=sys.stderr)
+        return 2
+
+    for line in report.render_table():
+        print(line)
+    try:
+        matrix.write_read_shapes_report(report, out_path)
+    except OSError as exc:
+        print(f"compare-read-shapes: could not write {out_path}: {exc}",
+              file=sys.stderr)
+        return 1
+    print(f"compare-read-shapes: table written to {out_path}")
+    return 0 if report.outcome in (matrix.PLAUSIBLE_FW,
+                                   matrix.PLAUSIBLE_INFO) else 1
+
+
 def run_spi(args, cmds):
     """Hardware SPI path: every gate is checked before any open()."""
     spi = _load_spi()
@@ -1159,8 +1348,9 @@ def run_spi(args, cmds):
             parsed = None
             if args.read_shape == "frame" and answer:
                 try:
-                    parsed = spi.parse_read_answer(plan.opcode, answer,
-                                                   lead=lead)
+                    parsed = spi.parse_read_answer(
+                        plan.opcode, answer, lead=lead,
+                        read_shape=plan.read_shape)
                 except spi.AnswerError as exc:
                     print(f"{label}: answer rejected - {exc}", file=sys.stderr)
                     return 1

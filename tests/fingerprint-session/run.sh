@@ -652,6 +652,92 @@ else
     pass "a link dry run wrote no table"
 fi
 
+# ------------------------------------------------------- 16. --compare-read-shapes
+# The pinned split-vs-cs-held comparison against the fixture's fake spidev node
+# and a nonexistent GPIO chip: every row fails closed, but the flag must reach
+# the probe, the 5-row table must land in read-shapes.json and summary.json,
+# and the compact table must be in the probe transcript.
+fixture "$TMP/compare" clean
+mkdir -p "$TMP/session-compare"
+printf 'y\ny\nprobe\n' | "$S" --root "$TMP/compare" --out "$TMP/session-compare" \
+    --compare-read-shapes --irq-pin 18 --reset-pin 16 \
+    --gpio-chip "$TMP/compare/dev/gpiochip1" --allow-reset \
+    >"$TMP/compare.out" 2>&1
+compare_rc=$?
+show_log "$TMP/compare.out"
+if [ "$compare_rc" -eq 1 ]; then
+    pass "--compare-read-shapes runs to a verdict (exit 1 = no plausible answer)"
+else
+    fail "--compare-read-shapes runs to a verdict (exit $compare_rc)"
+fi
+unbound "$TMP/compare" && pass "--compare-read-shapes restored the previous binding" \
+    || fail "--compare-read-shapes restored the previous binding"
+contains "$TMP/session-compare/commands.txt" '--compare-read-shapes' \
+    && pass "the session passes --compare-read-shapes to the probe" \
+    || fail "the session passes --compare-read-shapes to the probe"
+contains "$TMP/session-compare/commands.txt" '--read-shapes-json' \
+    && pass "the session passes an explicit --read-shapes-json path" \
+    || fail "the session passes an explicit --read-shapes-json path"
+if [ -s "$TMP/session-compare/read-shapes.json" ]; then
+    pass "the read-shape table lands in the transcript (read-shapes.json)"
+else
+    fail "the read-shape table lands in the transcript (read-shapes.json)"
+fi
+if python3 - "$TMP/session-compare/read-shapes.json" <<'PYSHAPES'
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["planned"] == 4, data["planned"]
+assert data["attempted"] == 5, data["attempted"]
+assert data["outcome"] == "no-answer", data["outcome"]
+rows = data["rows"]
+assert [row["shape"] for row in rows] == [
+    "split", "cs-held", "cs-held", "cs-held", "cs-held"], rows
+assert [row["mode"] for row in rows[:2]] == [0, 0], rows
+assert [row["mode"] for row in rows[2:]] == [1, 2, 3], rows
+assert len(data["comparisons"]) == 3, data["comparisons"]
+assert data["comparisons"][0]["agree"] is None, data["comparisons"][0]
+PYSHAPES
+then
+    pass "read-shapes.json has 4 cells / 5 rows and the documented shape"
+else
+    fail "read-shapes.json has 4 cells / 5 rows and the documented shape"
+fi
+contains "$TMP/session-compare/probe-readonly.txt" 'compare-read-shapes:' \
+    && pass "the compact read-shape table is in the probe transcript" \
+    || fail "the compact read-shape table is in the probe transcript"
+contains "$TMP/session-compare/probe-readonly.txt" 'verdict:' \
+    && pass "the read-shape table carries a verdict line" \
+    || fail "the read-shape table carries a verdict line"
+contains "$TMP/session-compare/summary.json" '"read_shapes"' \
+    && pass "summary.json records the read-shape table" \
+    || fail "summary.json records the read-shape table"
+contains "$TMP/session-compare/summary.json" '"read-shapes:0xA0/0xC1/0xA1"' \
+    && pass "summary.json names the read-shape query set" \
+    || fail "summary.json names the read-shape query set"
+if python3 -m json.tool "$TMP/session-compare/summary.json" >/dev/null 2>&1; then
+    pass "summary.json stays valid JSON with read_shapes embedded"
+else
+    fail "summary.json stays valid JSON with read_shapes embedded"
+fi
+# A dry run must print the plan without opening a device or writing a table.
+"$S" --dry-run --root "$TMP/compare" --compare-read-shapes \
+    --irq-pin 18 --reset-pin 16 --gpio-chip gpiochip1 --allow-reset \
+    >"$TMP/compare-plan.txt" 2>&1
+if [ $? -eq 0 ] && contains "$TMP/compare-plan.txt" '--compare-read-shapes' \
+   && contains "$TMP/compare-plan.txt" 'mode 0 split+cs-held' \
+   && contains "$TMP/compare-plan.txt" 'read-shapes.json'; then
+    pass "a compare-read-shapes dry run shows the pinned plan"
+else
+    fail "a compare-read-shapes dry run shows the pinned plan"
+fi
+if [ -e "$TMP/compare/read-shapes.json" ]; then
+    fail "a compare-read-shapes dry run wrote no table"
+else
+    pass "a compare-read-shapes dry run wrote no table"
+fi
+
 printf -- '------------------------------------------------------------------------\n'
 if [ "$FAILED" -eq 0 ]; then
     printf 'fingerprint-session: %d checks passed\n' "$COUNT"

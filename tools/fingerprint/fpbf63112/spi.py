@@ -21,11 +21,20 @@ branch, not the USB branch); the full evidence is in
   ``0xC2`` (JTAG) from ``0x02``.  :class:`SpiTransport` therefore refuses by
   *selector* as well as by opcode (see ``FORBIDDEN_SELECTORS`` below).
 
-* a **read** is the driver's two-entry SPB sequence: write the 1-byte
+* a **read** is the driver's single SPB transfer list: write the 1-byte
   selector, then clock ``len`` bytes out of the device
-  (``FUN_18001197c`` builds the two transfers, ``FUN_180017020`` issues them
-  and waits).  There is no length field and no leading status byte on the
-  wire: the caller passes the exact length of the register/data it wants.
+  (``FUN_18001197c`` builds the list, ``FUN_180017020`` issues it and waits).
+  There is no length field and no leading status byte on the wire: the caller
+  passes the exact length of the register/data it wants.  The default
+  :data:`DEFAULT_READ_SHAPE` is ``"cs-held"``: **one** full-duplex spidev
+  transfer whose transmit buffer is ``selector + len`` zeros and whose receive
+  buffer is ``len + 1`` bytes; the answer is the ``len`` bytes *after* the
+  selector byte.  Chip select is asserted for the whole call and the device is
+  never given a segment boundary to reset its bit phase at.  The historical
+  two-segment shape (a transmit-only selector segment followed by a
+  receive-only segment, both in one ``SPI_IOC_MESSAGE``) stays available as
+  ``read_shape="split"`` for the ``--compare-read-shapes`` experiment; it is
+  never used as a silent fallback.
 * a **write** is the same two-entry sequence with the payload as the second
   transfer (``FUN_180017404``).
 * completion is the WDF request completion event
@@ -185,6 +194,17 @@ RESET_BACKENDS = ("gpiod", "chardev", "sysfs")
 SELECTOR_READ = 0x00
 SELECTOR_WRITE = 0x80
 
+#: Read transfer shapes.  ``"cs-held"`` is one full-duplex spidev transfer
+#: (transmit ``selector + N`` zeros, receive ``N + 1`` bytes, answer the bytes
+#: after the selector), so chip select is held and there is no segment boundary
+#: for the device to reset its bit phase at.  ``"split"`` is the older
+#: two-segment message kept for ``--compare-read-shapes`` only: a transmit-only
+#: selector segment followed by a receive-only clock segment, submitted in the
+#: same ``SPI_IOC_MESSAGE``.  Both shapes exist so a run can tell "the split
+#: boundary was the bug" from "the sampling edge/clock is wrong".
+READ_SHAPES = ("cs-held", "split")
+DEFAULT_READ_SHAPE = "cs-held"
+
 
 def selector(opcode: int, write: bool = False) -> int:
     """The one-byte selector for ``opcode`` (see the module docstring)."""
@@ -325,6 +345,18 @@ class UnsafeCommand(SpiRefused):
 
 class AnswerError(SpiError):
     """A read answer could not be validated (short, bad lead, bad CRC)."""
+
+
+class TransferShapeUnsupported(SpiError):
+    """The platform cannot issue the requested read transfer shape.
+
+    Raised only for a ``"cs-held"`` read: the backend declared it cannot submit
+    one full-duplex transfer, or the kernel rejected it.  There is deliberately
+    **no fallback** to the ``"split"`` shape - a silent fallback would hide the
+    exact difference the ``--compare-read-shapes`` run is looking for.  Pass
+    ``read_shape="split"`` explicitly (probe: ``--read-shape split``) to run
+    the old shape for comparison.
+    """
 
 
 class SpiTimeout(SpiError):
@@ -826,10 +858,14 @@ class ReadShape:
 class SpiPlan:
     """One transaction, fully determined before any I/O happens.
 
-    ``transfers`` is the exact two-entry SPB sequence: selector first, then
-    the payload (write) or the read clocking (read).  ``tx`` is the
-    concatenation of the outgoing bytes and ``rx_len`` the total receive
-    length; ``answer_len`` is the number of device bytes a read returns.
+    ``transfers`` is the exact spidev sequence: for a read either one
+    full-duplex ``"cs-held"`` transfer (``selector [+ lead] + read_len`` zeros
+    out, the same number + ``read_len`` bytes in) or the historical
+    ``"split"`` two segments (transmit-only selector, then receive-only
+    clock).  ``tx`` is the concatenation of the outgoing bytes and ``rx_len``
+    the total receive length; ``answer_len`` is the number of device bytes a
+    read returns and :attr:`answer_offset` is how many bytes of the received
+    stream precede those answer bytes.
     """
 
     opcode: int
@@ -841,10 +877,17 @@ class SpiPlan:
     timeout_ms: int
     total_ms: int
     shape: ReadShape | None = None
+    read_shape: str = "split"
 
     def __post_init__(self) -> None:
         if self.operation not in ("read", "write"):
             raise ValueError(f"bad operation {self.operation!r}")
+        if self.read_shape not in READ_SHAPES:
+            raise ValueError(
+                f"bad read shape {self.read_shape!r}; "
+                f"choose from {', '.join(READ_SHAPES)}")
+        if self.read_shape != "split" and self.operation != "read":
+            raise ValueError("a read shape only applies to a read plan")
         if self.shape is not None and self.operation != "read":
             raise ValueError("a write shape only applies to a read plan")
         if self.shape is None:
@@ -859,21 +902,43 @@ class SpiPlan:
                 raise ValueError("a read-shape selector must not set bit 7")
         if not self.transfers:
             raise ValueError("plan has no transfers")
-        first_tx = bytes([self.selector])
+        prefix_tx = bytes([self.selector])
         if self.shape is not None:
-            first_tx += self.shape.padding
-        if self.transfers[0].tx != first_tx:
-            raise ValueError("first transfer must be the selector byte")
+            prefix_tx += self.shape.padding
+        if self.transfers[0].tx[:len(prefix_tx)] != prefix_tx:
+            raise ValueError("first transfer must start with the selector byte")
         if self.operation == "read":
-            if len(self.transfers) != 2:
-                raise ValueError("read plan is selector + receive clock")
-            if self.transfers[0].rx_len:
-                raise ValueError("selector transfer must not read")
-            if self.transfers[1].tx:
-                raise ValueError("read plan's second transfer is receive-only")
-            if self.transfers[1].rx_len != self.read_len:
-                raise ValueError("read plan rx_len must equal read_len")
+            if self.read_shape == "cs-held":
+                if len(self.transfers) != 1:
+                    raise ValueError(
+                        "a cs-held read is exactly one full-duplex transfer")
+                transfer = self.transfers[0]
+                if transfer.rx_len != len(transfer.tx):
+                    raise ValueError(
+                        "a cs-held read needs one rx byte per tx byte")
+                if transfer.tx[:len(prefix_tx)] != prefix_tx:
+                    raise ValueError(
+                        "a cs-held read's tx must be the selector prefix")
+                if transfer.tx[len(prefix_tx):] != b"\x00" * self.read_len:
+                    raise ValueError(
+                        "a cs-held read must clock zeros after its prefix")
+                if len(transfer.tx) - len(prefix_tx) != self.read_len:
+                    raise ValueError(
+                        "a cs-held read's tx length must be prefix + read_len")
+            else:
+                if len(self.transfers) != 2:
+                    raise ValueError("split read plan is selector + receive clock")
+                if self.transfers[0].rx_len:
+                    raise ValueError("selector transfer must not read")
+                if self.transfers[0].tx != prefix_tx:
+                    raise ValueError("split read's selector transfer is tx-only")
+                if self.transfers[1].tx:
+                    raise ValueError("read plan's second transfer is receive-only")
+                if self.transfers[1].rx_len != self.read_len:
+                    raise ValueError("read plan rx_len must equal read_len")
         else:
+            if self.read_shape != "split":
+                raise ValueError("a write plan always uses the split shape")
             if len(self.transfers) not in (1, 2):
                 raise ValueError("write plan is selector (+ payload)")
             if any(t.rx_len for t in self.transfers):
@@ -907,8 +972,27 @@ class SpiPlan:
     def answer_len(self) -> int:
         return self.read_len if self.operation == "read" else 0
 
+    @property
+    def prefix_tx(self) -> bytes:
+        """The host bytes before the read window (selector + any lead)."""
+        if self.operation != "read":
+            return b""
+        if self.read_shape == "cs-held":
+            return self.transfers[0].tx[:self.answer_offset]
+        return self.transfers[0].tx
+
+    @property
+    def answer_offset(self) -> int:
+        """Received bytes to skip before the first answer byte."""
+        if self.operation != "read" or self.read_shape != "cs-held":
+            return 0
+        return len(self.transfers[0].tx) - self.read_len
+
     def hexdump(self) -> str:
         """The exact wire bytes, with receive-only regions marked."""
+        if self.operation == "read" and self.read_shape == "cs-held":
+            return (f"{self.prefix_tx.hex(' ')} | <- {self.answer_len} B "
+                    f"(cs held)")
         parts = []
         for transfer in self.transfers:
             if transfer.tx:
@@ -921,14 +1005,24 @@ class SpiPlan:
 def build_plan(opcode: int, *, operation: str = "read",
                payload: bytes = b"", read_len: int | None = None,
                timeout_ms: int | None = None,
-               total_ms: int | None = None) -> SpiPlan:
+               total_ms: int | None = None,
+               read_shape: str = DEFAULT_READ_SHAPE) -> SpiPlan:
     """Build the exact transaction for ``opcode``, without touching hardware.
 
-    * read : selector transfer, then a receive-only transfer of ``read_len``
-      bytes (the device clocks its answer out during that second transfer).
-    * write: selector transfer, then the payload as a write transfer.
+    * read : one full-duplex ``"cs-held"`` transfer by default - the transmit
+      buffer is the selector plus ``read_len`` zero bytes and the receive
+      buffer is the same length; the answer is the ``read_len`` bytes after
+      the selector.  ``read_shape="split"`` keeps the historical two-segment
+      message (transmit-only selector, then a receive-only clock) for the
+      ``--compare-read-shapes`` experiment.
+    * write: selector transfer, then the payload as a write transfer (always
+      the split shape; a read shape does not apply).
     """
     payload = bytes(payload)
+    if read_shape not in READ_SHAPES:
+        raise ValueError(
+            f"bad read shape {read_shape!r}; "
+            f"choose from {', '.join(READ_SHAPES)}")
     if operation == "read":
         if payload:
             raise ValueError("a read plan takes no payload")
@@ -939,15 +1033,20 @@ def build_plan(opcode: int, *, operation: str = "read",
             raise ValueError("read payload longer than read_len")
         default_timeout, default_total = default_timeouts(opcode)
         sel = selector(opcode, write=False)
-        transfers = (
-            SpiTransfer(bytes([sel]), 0),
-            SpiTransfer(b"", n),
-        )
+        if read_shape == "cs-held":
+            transfers = (SpiTransfer(bytes([sel]) + b"\x00" * n, n + 1),)
+        else:
+            transfers = (
+                SpiTransfer(bytes([sel]), 0),
+                SpiTransfer(b"", n),
+            )
         return SpiPlan(
             opcode, "read", payload, n, sel, transfers,
             timeout_ms if timeout_ms is not None else default_timeout,
-            total_ms if total_ms is not None else default_total)
+            total_ms if total_ms is not None else default_total,
+            read_shape=read_shape)
     if operation == "write":
+        # A write has no read window; its plan is always the split shape.
         default_timeout, default_total = default_timeouts(opcode)
         sel = selector(opcode, write=True)
         transfers = (SpiTransfer(bytes([sel]), 0),)
@@ -963,31 +1062,42 @@ def build_plan(opcode: int, *, operation: str = "read",
 def build_shape_plan(opcode: int, *, selector_variant: str = "read",
                      padding: bytes = b"", read_len: int | None = None,
                      timeout_ms: int | None = None,
-                     total_ms: int | None = None) -> SpiPlan:
+                     total_ms: int | None = None,
+                     read_shape: str = DEFAULT_READ_SHAPE) -> SpiPlan:
     """Build one read with an experimental selector/padding write shape.
 
     This is the *only* way to put a selector other than
     ``(opcode & 0x3f) << 1`` on the wire, and it stays read-only: the
     direction bit (bit 7) is never set, only bit 0 can vary, and the caller
     still has to pass the transport's read allowlist and destructive-opcode
-    gate.  ``read_len`` bytes are clocked after the selector plus ``padding``.
+    gate.  ``read_len`` bytes are clocked after the selector plus ``padding``;
+    with the default ``read_shape="cs-held"`` that is one full-duplex transfer
+    whose transmit prefix is selector + padding.
     """
     n = read_len if read_len is not None else 0
     if n <= 0:
         raise ValueError("read_len must be > 0")
+    if read_shape not in READ_SHAPES:
+        raise ValueError(
+            f"bad read shape {read_shape!r}; "
+            f"choose from {', '.join(READ_SHAPES)}")
     shape = ReadShape(selector_variant, padding)
     base = selector(opcode, write=False)
     sel = base | shape.selector_bit0
     default_timeout, default_total = default_timeouts(opcode)
-    transfers = (
-        SpiTransfer(bytes([sel]) + shape.padding, 0),
-        SpiTransfer(b"", n),
-    )
+    prefix = bytes([sel]) + shape.padding
+    if read_shape == "cs-held":
+        transfers = (SpiTransfer(prefix + b"\x00" * n, len(prefix) + n),)
+    else:
+        transfers = (
+            SpiTransfer(prefix, 0),
+            SpiTransfer(b"", n),
+        )
     return SpiPlan(
         opcode, "read", b"", n, sel, transfers,
         timeout_ms if timeout_ms is not None else default_timeout,
         total_ms if total_ms is not None else default_total,
-        shape=shape)
+        shape=shape, read_shape=read_shape)
 
 
 def plan_command(command: "SpiCommand", **kwargs) -> SpiPlan:
@@ -1087,8 +1197,8 @@ class ReadFrame:
 
     @property
     def tx(self) -> bytes:
-        """The exact bytes the host writes (selector + lead bytes)."""
-        return self.plan.transfers[0].tx
+        """The host bytes before the read window (selector + lead bytes)."""
+        return self.plan.prefix_tx
 
     @property
     def transfers(self) -> tuple[SpiTransfer, ...]:
@@ -1117,14 +1227,18 @@ def build_read_frame(opcode: int, read_len: int | None = None, *,
                      lead: bytes | None = None,
                      selector_variant: str = "read",
                      timeout_ms: int | None = None,
-                     total_ms: int | None = None) -> ReadFrame:
+                     total_ms: int | None = None,
+                     read_shape: str = DEFAULT_READ_SHAPE) -> ReadFrame:
     """Build the recovered read frame without touching hardware.
 
     ``lead`` defaults to :data:`READ_LEAD_BYTES` for the measured opcodes and
     to ``b""`` otherwise (0xC1's lead is unknown).  Pass ``lead=b""`` for the
     DLL-exact selector-only frame; pass an explicit bytes value to try another
-    lead.  The safety gate is not applied here - :meth:`SpiTransport.execute`
-    still enforces allowlist, destructive-opcode/selector and ``allow_writes``.
+    lead.  ``read_shape`` defaults to the single full-duplex ``"cs-held"``
+    transfer; ``"split"`` keeps the historical two-segment message for
+    comparison.  The safety gate is not applied here -
+    :meth:`SpiTransport.execute` still enforces allowlist,
+    destructive-opcode/selector and ``allow_writes``.
     """
     command = _command_by_opcode(opcode)
     if read_len is None:
@@ -1144,7 +1258,8 @@ def build_read_frame(opcode: int, read_len: int | None = None, *,
         total_ms = command.total_ms if command is not None else CMD_TOTAL_MS
     plan = build_shape_plan(opcode, selector_variant=selector_variant,
                             padding=lead, read_len=read_len,
-                            timeout_ms=timeout_ms, total_ms=total_ms)
+                            timeout_ms=timeout_ms, total_ms=total_ms,
+                            read_shape=read_shape)
     return ReadFrame(opcode, read_len, lead, plan)
 
 
@@ -1168,7 +1283,8 @@ class ReadAnswer:
 
 def parse_read_answer(opcode: int, answer: bytes | bytearray | memoryview, *,
                       lead: bytes | None = None,
-                      strict: bool = True) -> ReadAnswer:
+                      strict: bool = True,
+                      read_shape: str = "split") -> ReadAnswer:
     """Validate and decode one read answer (synthetic bytes; no I/O).
 
     Two framings are accepted:
@@ -1176,11 +1292,13 @@ def parse_read_answer(opcode: int, answer: bytes | bytearray | memoryview, *,
     * ``0xAA | L:u32 | ... | CRC-32`` - the USB answer frame.  The CRC-32 is
       checked by :func:`fpbf63112.protocol.parse_frame`; a corrupt CRC is a
       rejection, not a warning.
-    * the bare fixed-size answer used on SPI.  When the DLL-exact
-      selector-only frame was used (``lead=b""``), the answer still begins
-      with the observed lead bytes (three for 0xA0, two for 0xA1); they are
-      checked to be zero and skipped so the payload starts where the USB
-      layout expects it.
+    * the bare fixed-size answer used on SPI.  For the ``"split"`` shape the
+      DLL-exact selector-only frame's answer still begins with the observed
+      lead bytes (three for 0xA0, two for 0xA1); they are checked to be zero
+      and skipped so the payload starts where the USB layout expects it.  For
+      the ``"cs-held"`` shape those bytes were clocked during the transmit
+      prefix and are not part of the returned answer, so nothing is skipped
+      (``read_shape="cs-held"``).
 
     Known layouts are decoded with the protocol records (0xA0 ->
     :class:`~fpbf63112.protocol.FirmwareInfo`, 0xC1 ->
@@ -1189,6 +1307,8 @@ def parse_read_answer(opcode: int, answer: bytes | bytearray | memoryview, *,
     """
     from . import protocol  # local import: the SPI core has no other dependency
 
+    if read_shape not in READ_SHAPES:
+        raise ValueError(f"bad read shape {read_shape!r}")
     raw = bytes(answer)
     if not raw:
         raise AnswerError(f"opcode 0x{opcode:02x}: empty answer")
@@ -1215,7 +1335,7 @@ def parse_read_answer(opcode: int, answer: bytes | bytearray | memoryview, *,
 
     prefix = READ_LEAD_BYTES.get(opcode, b"")
     lead = prefix if lead is None else bytes(lead)
-    skip = max(0, len(prefix) - len(lead))
+    skip = 0 if read_shape == "cs-held" else max(0, len(prefix) - len(lead))
     skipped = raw[:skip]
     if strict and any(skipped):
         raise AnswerError(
@@ -1254,7 +1374,14 @@ class LinuxSpiIO:
     Only ``open``/``configure``/``message``/``close`` are part of the
     interface :class:`SpiTransport` uses; ``transfer`` is a convenience
     wrapper kept for small callers and probes.
+
+    spidev's ``SPI_IOC_MESSAGE`` handles one full-duplex transfer natively, so
+    a ``"cs-held"`` read plan (transmit ``selector + N`` zeros, receive
+    ``N + 1``) is always supported here.
     """
+
+    #: One spidev transfer is full duplex; the combined read shape is native.
+    supports_combined_transfer = True
 
     def __init__(self, path: str):
         self.path = path
@@ -1974,10 +2101,11 @@ class SpiTransport:
     def plan(self, opcode: int, *, operation: str = "read",
              payload: bytes = b"", read_len: int | None = None,
              timeout_ms: int | None = None,
-             total_ms: int | None = None) -> SpiPlan:
+             total_ms: int | None = None,
+             read_shape: str = DEFAULT_READ_SHAPE) -> SpiPlan:
         return build_plan(opcode, operation=operation, payload=payload,
                           read_len=read_len, timeout_ms=timeout_ms,
-                          total_ms=total_ms)
+                          total_ms=total_ms, read_shape=read_shape)
 
     def plan_command(self, name: str, **kwargs) -> SpiPlan:
         try:
@@ -2026,20 +2154,42 @@ class SpiTransport:
     def execute(self, plan: SpiPlan) -> bytes:
         """Run one plan and return the device's answer bytes.
 
-        A read returns exactly ``plan.read_len`` bytes (the second transfer's
-        receive buffer); a write returns ``b""``.  The per-attempt and total
-        deadlines cover opening, the transfer and the optional IRQ wait.
-        spidev itself performs a synchronous, kernel-bounded ioctl, so a
-        kernel hang cannot be interrupted here.
+        A read returns exactly ``plan.read_len`` bytes: for ``"cs-held"`` the
+        bytes after the selector in the single full-duplex receive buffer, for
+        ``"split"`` the receive-only segment's bytes.  A write returns
+        ``b""``.  The per-attempt and total deadlines cover opening, the
+        transfer and the optional IRQ wait.  spidev itself performs a
+        synchronous, kernel-bounded ioctl, so a kernel hang cannot be
+        interrupted here.
         """
         self._check(plan)
         self._check_cancel()
         self.open()
+        if (plan.operation == "read" and plan.read_shape == "cs-held"
+                and getattr(self._io, "supports_combined_transfer", True) is False):
+            raise TransferShapeUnsupported(
+                f"opcode 0x{plan.opcode:02x}: the injected spidev backend "
+                f"declares supports_combined_transfer=False, so one "
+                f"full-duplex cs-held transfer is impossible; refusing to "
+                f"fall back to the split shape (pass read_shape='split' "
+                f"explicitly to run the comparison)")
         started = self._clock()
         self._check_deadline(plan, started, "before transfer")
         try:
             received = self._io.message(plan.transfers)
+        except NotImplementedError as exc:
+            raise TransferShapeUnsupported(
+                f"opcode 0x{plan.opcode:02x}: the spidev backend cannot "
+                f"submit the combined full-duplex read transfer; refusing to "
+                f"fall back to the split shape ({exc})") from exc
         except OSError as exc:
+            if (plan.operation == "read" and plan.read_shape == "cs-held"
+                    and exc.errno in (errno.EINVAL, errno.ENOTSUP,
+                                      errno.EOPNOTSUPP)):
+                raise TransferShapeUnsupported(
+                    f"opcode 0x{plan.opcode:02x}: the kernel rejected the "
+                    f"combined full-duplex read transfer ({exc}); refusing "
+                    f"to fall back to the split shape") from exc
             raise SpiError(
                 f"SPI transfer for opcode 0x{plan.opcode:02x} failed: "
                 f"{exc}") from exc
@@ -2056,6 +2206,15 @@ class SpiTransport:
             self.last_irq = self.irq.wait(int(remaining))
             self._check_deadline(plan, started, "after IRQ")
         if plan.operation == "read":
+            if plan.read_shape == "cs-held":
+                want = plan.answer_offset + plan.read_len
+                if len(received) != 1 or len(received[0]) < want:
+                    got = len(received[0]) if len(received) == 1 else len(answer)
+                    raise SpiError(
+                        f"short cs-held SPI read for opcode "
+                        f"0x{plan.opcode:02x}: {got} of {want} bytes in one "
+                        f"full-duplex buffer")
+                return received[0][plan.answer_offset:want]
             if len(answer) < plan.read_len:
                 raise SpiError(
                     f"short SPI read for opcode 0x{plan.opcode:02x}: "
@@ -2066,30 +2225,35 @@ class SpiTransport:
     # -- command helpers ---------------------------------------------------
     def read(self, opcode: int, length: int, *,
              timeout_ms: int | None = None,
-             total_ms: int | None = None) -> bytes:
+             total_ms: int | None = None,
+             read_shape: str = DEFAULT_READ_SHAPE) -> bytes:
         """Read ``length`` bytes for ``opcode`` (exactly the answer bytes)."""
         plan = self.plan(opcode, operation="read", read_len=length,
-                         timeout_ms=timeout_ms, total_ms=total_ms)
+                         timeout_ms=timeout_ms, total_ms=total_ms,
+                         read_shape=read_shape)
         return self.execute(plan)
 
-    def read_command(self, name: str) -> bytes:
+    def read_command(self, name: str, *,
+                     read_shape: str = DEFAULT_READ_SHAPE) -> bytes:
         command = COMMANDS[name]
         return self.read(command.opcode, command.read_len,
                          timeout_ms=command.timeout_ms,
-                         total_ms=command.total_ms)
+                         total_ms=command.total_ms,
+                         read_shape=read_shape)
 
     def read_frame(self, opcode: int, read_len: int | None = None,
                    **kwargs) -> bytes:
         """Read with the recovered frame (selector + observed lead bytes)."""
         return send_read(self, opcode, read_len, **kwargs)
 
-    def read_command_frame(self, name: str, *, lead: bytes | None = None) -> bytes:
+    def read_command_frame(self, name: str, *, lead: bytes | None = None,
+                           read_shape: str = DEFAULT_READ_SHAPE) -> bytes:
         """Read a named command with :func:`build_read_frame`."""
         command = COMMANDS[name]
         return self.execute(build_read_frame(
             command.opcode, command.read_len, lead=lead,
             timeout_ms=command.timeout_ms,
-            total_ms=command.total_ms).plan)
+            total_ms=command.total_ms, read_shape=read_shape).plan)
 
     def write(self, opcode: int, payload: bytes, *,
               timeout_ms: int | None = None,
