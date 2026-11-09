@@ -30,6 +30,16 @@ report() {
     echo "== hhd service: $(systemctl is-active hhd.service)"
     echo "== hhd controller mode: $(mode_now)"
     echo "== emulated steam controller (hidraw only unless uinput): $(hid_state)"
+    echo "== physical pad (xpad, hidden by hhd's devhide rule in steam mode):"
+    local pe
+    for pe in /sys/class/input/event*/device/uevent; do
+        [[ -e $pe ]] || continue
+        if grep -q "PRODUCT=3/45e/28e" "$pe" 2>/dev/null; then
+            printf '  %s: physical 045e:028e pad, %s\n' \
+                "$(basename "$(dirname "$(dirname "$pe")")")" \
+                "$(ls -l "/dev/input/$(basename "$(dirname "$(dirname "$pe")")")" 2>/dev/null | awk '{print $1}')"
+        fi
+    done
     echo "== gamepad-like input nodes:"; input_nodes
     local n; n=$(ls /dev/hidraw* 2>/dev/null | wc -l)
     echo "== hidraw nodes: $n"
@@ -44,12 +54,12 @@ report() {
 switch_mode() {
     local want=$1 label=$2
     echo "== switching HHD controller output to $want ($label)"
-    hhdctl set controllers.oxp.controller_mode.mode "$want" 2>&1 | tail -3
+    hhdctl set "controllers.oxp.controller_mode.mode=$want" 2>&1 | tail -3
     systemctl restart hhd.service
     echo "== waiting for the new device"
     for _ in $(seq 1 15); do
         sleep 1
-        if [[ $want == uinput ]] && grep -qi "X-Box 360 pad" /proc/bus/input/devices 2>/dev/null; then break; fi
+        if [[ $want == uinput ]] && hhdctl get controllers.oxp.controller_mode.mode --values 2>/dev/null | grep -q uinput; then break; fi
         if [[ $want != uinput ]] && [[ $(hid_state) == yes ]]; then break; fi
     done
     report
