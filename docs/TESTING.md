@@ -165,7 +165,7 @@ Areas and what is actually proven:
   the CLI's `--json` output must parse as JSON. The Decky CLI's live exit code
   (0/1/2) is reported but not asserted: it is a status verdict about the host,
   not a repository test. `make decky` runs the full offline build directly.
-* **`oxp3-verify`** — the parser self-test (157 assertions over synthetic
+* **`oxp3-verify`** — the parser self-test (199 assertions over synthetic
   fixtures) through both documented entrypoints (`--selftest` and
   `tests/verify/run.sh`).
 * **rollback** — `tests/rollback/run.sh`: installs into a `--root` prefix, adopts the
@@ -187,7 +187,7 @@ Areas and what is actually proven:
   HDR gating on the panel state, vibrance backend choice, MangoHud env-only
   behaviour, gamescope wrapping/inside-session handling, argv/JSON safety and
   the parsed-not-sourced XMX env file. The `unit` suite runs the same file.
-* **unit** — the stdlib `unittest` suite in `tests/unit/` (the count is what `unittest` itself prints, currently 658 tests in ~4.8 s):
+* **unit** — the stdlib `unittest` suite in `tests/unit/` (the count is what `unittest` itself prints, currently 960 tests in ~5.6 s):
   HID/LED frame encoders, rgbd TOML config and frame planning, powerctl
   parsers/write ordering/readback and exit codes, adaptivetdp policy and
   hysteresis, the voltap tap state machine, IMU helpers, EDID/ICC parsers and

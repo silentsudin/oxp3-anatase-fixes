@@ -547,6 +547,36 @@ components:
       date: 2026-11-09
       evidence: "docs/QA.md row 50 (8 bands, max -1.6 dB, min -15.0 dB); model reproduction in docs/hw/audio-harman-apo.md"
 
+  - id: audio-mic
+    title: Internal microphone (ALC245 digital mic)
+    state: partial
+    group: hardware
+    headline: false
+    summary: "The internal mic is the ALC245's fixed digital-mic pin 0x12, not a PCH DMIC: Linux already routes it to the capture ADC, but the shipped UCM profile gates its only source on the external Mic Jack, so an opt-in machine profile exposes it as an always-available Internal Microphone."
+    implementation:
+      - tools/audio/mic_diag.py
+      - tools/audio/internal-mic.sh
+      - files/ucm2
+    doc: docs/hw/audio-microphone.md
+    root_required: "yes"
+    install:
+      summary: "an opt-in UCM2 machine profile plus three include overrides under /usr/share/alsa/ucm2; no shipped file is edited"
+      entrypoint: "sudo tools/audio/internal-mic.sh install"
+      steps:
+        - "then, as the desktop user: systemctl --user restart pipewire wireplumber"
+        - "undo: sudo tools/audio/internal-mic.sh undo"
+    verify:
+      - id: aud.mic
+        expect: "the ALC245 pin 0x12 path is exposed as an always-available capture source (SKIP while the opt-in profile is not installed)"
+    dependencies: []
+    caveats:
+      - "the harness never captures audio (no arecord/pw-record against the hardware); the owner records one clip"
+      - "the codec keeps its own auto-mic switching, so a plugged headset still selects the 0x19 mic on the same PCM"
+      - "not wired into the audio installer: a wrong UCM profile must never be able to touch speaker routing"
+    last_validated:
+      date: 2026-11-09
+      evidence: "live codec#0 widget tree (pin 0x12 -> mixer 0x23 input 4 -> ADC 0x08), amixer controls, pactl source ports and the UCM2 lookup; capture not run, see docs/hw/audio-microphone.md"
+
   - id: bluetooth
     title: Bluetooth firmware
     state: awaiting-install

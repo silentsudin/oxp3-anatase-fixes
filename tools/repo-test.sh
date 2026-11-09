@@ -962,7 +962,7 @@ def_suite decky-cli fast fast 120 0 \
     "Decky CLI --json emits valid JSON (live exit code not asserted)" \
     "python3 tools/decky-oxp3-status/main.py --json --no-color"
 def_suite verify-selftest fast fast 120 0 \
-    "oxp3-verify parser unit tests against synthetic fixtures (157 checks)" \
+    "oxp3-verify parser unit tests against synthetic fixtures (199 checks)" \
     "tools/oxp3-verify.sh --selftest"
 def_suite verify-fixtures fast fast 120 0 \
     "the tests/verify/run.sh fixture runner (same selftest entrypoint)" \

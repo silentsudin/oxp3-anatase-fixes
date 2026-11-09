@@ -77,23 +77,23 @@ unit-test run. Change the source, then `tools/gen-docs.py --write`; never edit t
 State roll-up and the volatile counts this page used to re-type. Every value below is
 computed by `tools/gen-docs.py` from the named source; **do not hand-edit this block**.
 
-**25 components**: **10** `working`, **4** `partial`, **1** `blocked`, **2** `not-a-gap`, **8** `awaiting-install`.
+**26 components**: **10** `working`, **5** `partial`, **1** `blocked`, **2** `not-a-gap`, **8** `awaiting-install`.
 Counted from the `state:` field of each component in `docs/hw/components.yaml`.
 
 | state | components (doc link) |
 |---|---|
 | `working` (10) | gamescope ([hdr-vibrance](hw/hdr-vibrance.md)), mesa ([BEST-CONFIG](BEST-CONFIG.md)), mangohud ([BEST-CONFIG](BEST-CONFIG.md)), kernel-modules ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), firmware ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), rapl-power ([sagv](hw/sagv.md)), audio ([audio-harman-apo](hw/audio-harman-apo.md)), power ([power-fan](hw/power-fan.md)), display ([hdr-vibrance](hw/hdr-vibrance.md)), decky ([decky-plugin](decky-plugin.md)) |
-| `partial` (4) | xess-xmx ([xess-xmx](xess-xmx.md)), fan ([power-fan](hw/power-fan.md)), battery ([battery-tdp](hw/battery-tdp.md)), fingerprint ([fingerprint](hw/fingerprint.md)) |
+| `partial` (5) | xess-xmx ([xess-xmx](xess-xmx.md)), audio-mic ([audio-microphone](hw/audio-microphone.md)), fan ([power-fan](hw/power-fan.md)), battery ([battery-tdp](hw/battery-tdp.md)), fingerprint ([fingerprint](hw/fingerprint.md)) |
 | `blocked` (1) | sagv ([sagv](hw/sagv.md)) |
 | `not-a-gap` (2) | imu ([camera-imu](hw/camera-imu.md)), camera ([camera-imu](hw/camera-imu.md)) |
 | `awaiting-install` (8) | sched-ext ([cpu-sched](cpu-sched.md)), volume ([volume-buttons](hw/volume-buttons.md)), leds ([home-button-leds](hw/home-button-leds.md)), rgb ([rgb-coverage](hw/rgb-coverage.md)), daemons ([DAEMONS](DAEMONS.md)), sleep ([sleep-power](hw/sleep-power.md)), bluetooth ([bluetooth](hw/bluetooth.md)), adaptive-tdp ([battery-tdp](hw/battery-tdp.md)) |
-| **total** (25) | every component in the data file; add a component there, not here |
+| **total** (26) | every component in the data file; add a component there, not here |
 
 | volatile fact | value | how this number was obtained |
 |---|---|---|
-| checks declared by `tools/oxp3-verify.sh` | **87** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
+| checks declared by `tools/oxp3-verify.sh` | **88** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
 | suites in `tools/repo-test.sh` | **42** (**37** in `--fast`, **42** in `--full`) | parsed from the `def_suite` registrations and their mode column |
-| tests in `tests/unit` | **923** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
+| tests in `tests/unit` | **960** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
 <!-- END GENERATED: handover-state -->
 
 The full matrix with summaries, implementation paths, install entrypoints, verify ids and caveats is
