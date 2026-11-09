@@ -559,6 +559,17 @@ def apply(root="/", state_path=None, dry_run=False):
         ok, detail = write_value(row["path"], row["after"])
         row = dict(row, applied=ok, detail=detail)
         applied.append(row)
+    # If an earlier version applied ASPM and the owner now leaves it at the
+    # firmware default, converge the host by restoring the recorded pre-image.
+    if not dry_run and not (os.environ.get("OXP3_LOWPOWER_ASPM") or ASPM_TARGET):
+        for row in previous.get("changes") or []:
+            if row.get("id") == "aspm.policy" and row.get("applied") \
+                    and row.get("before") is not None:
+                ok, detail = write_value(row["path"], row["before"])
+                if ok:
+                    applied = [r for r in applied if r.get("id") != "aspm.policy"]
+                    applied.append(dict(row, applied=False, after=row["before"],
+                                        detail="reverted: ASPM is opt-in and not enabled"))
     state = {
         "schema": SCHEMA,
         "tool": PROG,

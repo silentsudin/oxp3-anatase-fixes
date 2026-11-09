@@ -99,8 +99,11 @@ class RgbdLifecycleTest(unittest.TestCase):
             self.clock.suspend(120.0)              # suspend: BOOTTIME only
             self.assertTrue(d.resume_step())
             self.assertFalse(d.resume_step())      # not reported twice
-        self.assertEqual(sched.call_count, 1)
-        self.assertEqual(sched.call_args.args[0], "resume detected")
+        # The immediate apply is followed by two delayed follow-ups (HHD redraws
+        # late), so at least one "resume detected" request is made.
+        self.assertGreaterEqual(sched.call_count, 1)
+        self.assertIn("resume detected",
+                      [c.args[0] for c in sched.call_args_list])
         self.assertTrue(any("resume detected: 120.0s" in m for m in self.logs),
                         self.logs)
 

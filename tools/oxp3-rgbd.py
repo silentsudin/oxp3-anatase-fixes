@@ -434,7 +434,19 @@ class RgbDaemon:
         if self.stop.wait(2.0):
             return True
         self.schedule("resume detected")
+        # HHD redraws its own default colour after the controller re-enumerates,
+        # which can happen several seconds after the RTC wake. Re-apply once more
+        # at 6 s and 15 s so the owner's frames win over that redraw.
+        for delay in (6.0, 15.0):
+            threading.Thread(target=self._late_resume_apply, args=(delay,),
+                             daemon=True).start()
         return True
+
+    def _late_resume_apply(self, delay: float) -> None:
+        if self.stop.wait(delay):
+            return
+        log(f"resume follow-up: re-applying after {delay:.0f}s (HHD redraws late)")
+        self.schedule(f"resume follow-up {delay:.0f}s")
 
     def resume_watcher(self) -> None:
         """CLOCK_BOOTTIME advances across suspend, CLOCK_MONOTONIC does not.
