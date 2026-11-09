@@ -2714,13 +2714,19 @@ def _verification_env(
     if user:
         env["USER"] = user
         env["LOGNAME"] = user
-    if uid is not None:
-        runtime = Path("/run/user/%d" % uid)
-        try:
-            if runtime.is_dir():
-                env["XDG_RUNTIME_DIR"] = str(runtime)
-        except OSError:
-            pass
+    # systemctl --user needs the user's runtime dir and session bus even when the
+    # harness is started from the plugin backend; without them the user units
+    # (home button, RGB keeper, speaker gain) read as "no user systemd instance".
+    runtime_uid = uid if uid is not None else os.geteuid()
+    try:
+        runtime = Path("/run/user/%d" % runtime_uid)
+        if runtime.is_dir():
+            env["XDG_RUNTIME_DIR"] = str(runtime)
+            bus = runtime / "bus"
+            if bus.exists():
+                env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=%s" % bus
+    except OSError:
+        pass
     return env
 
 
