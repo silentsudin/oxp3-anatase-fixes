@@ -72,6 +72,16 @@ The shared primitives live in [`tools/oxp3_lifecycle.py`](../tools/oxp3_lifecycl
    fails. A compositor that ignores the new device is outside our control
    (see §5).
 
+8. **A pinned node is a test seam, not discovery.** `oxp3-homebtn.py`,
+   `oxp3-led.py` and `oxp3-rgbd.py` accept `--device PATH`. A one-shot run
+   (`oxp3-led.py`, `oxp3-rgbd.py --once/--check`) uses the path verbatim; the
+   home-button daemon uses it for the first open and afterwards only the
+   identity captured from it, never a fresh scan, so a real `1a86:fe00`
+   interface cannot be opened by mistake. That is what lets the uhid
+   integration harness (`tests/integration/hid/`) exercise the real code paths
+   on a machine that also has the physical interface - see
+   [VALIDATION.md](VALIDATION.md).
+
 ### 1.2 `oxp3-homebtn.py` (hidraw reader → uinput)
 
 * **Reconnects to:** `/dev/hidrawN` of `1a86:fe00` without an input child,

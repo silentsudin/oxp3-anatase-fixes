@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -47,11 +48,15 @@ def main() -> int:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except ValueError as exc:
         fail("plugin.json is not valid JSON: %s" % exc)
-    for key in ("name", "author", "api_version"):
+    for key in ("name", "author", "version", "api_version"):
         if key not in manifest:
             fail("plugin.json has no %r" % key)
     if not isinstance(manifest.get("api_version"), int):
         fail("plugin.json api_version must be an integer")
+    if not isinstance(manifest.get("version"), str) or not re.match(
+        r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$", manifest["version"]
+    ):
+        fail("plugin.json version must be a x.y.z string")
 
     try:
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))

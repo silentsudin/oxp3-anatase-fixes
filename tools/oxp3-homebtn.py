@@ -34,6 +34,13 @@ Permission: the vendor hidraw node and /dev/uinput are root-only by
 default.  Install tools/oxp3-hid.rules once (sudo); the logged-in user
 then gets access through the uaccess ACL.  See
 docs/hw/home-button-leds.md.
+
+``--device PATH`` pins the node used for the first open (integration tests,
+debugging).  Reconnects then use only the identity captured from that node,
+never a discovery scan, so a real 1a86:fe00 interface cannot be picked up.
+``--uinput-name NAME`` renames the virtual keyboard it creates (the
+integration harness uses a test-specific name so it cannot be confused with
+the keyboard of a daemon that is already running).
 """
 
 from __future__ import annotations
@@ -140,11 +147,14 @@ class HomeButtonDaemon:
     """hidraw reader -> uinput emitter, with reconnect and health checks."""
 
     def __init__(self, buttons, *, keycode=None, exec_cmd=None, hold=0.0,
-                 intercept=False, debug=False, open_device=None,
+                 intercept=False, debug=False, device=None,
+                 uinput_name="OXP3 Home Button", open_device=None,
                  keyboard_factory=None, clock=time, select_fn=select.select,
                  health_interval: float = HEALTH_INTERVAL,
                  identity_probe=None, say=None, stop=None):
         self.buttons = set(buttons)
+        self.device = device
+        self.uinput_name = uinput_name
         self.keycode = keycode
         self.exec_cmd = exec_cmd
         self.hold = float(hold)
@@ -157,7 +167,7 @@ class HomeButtonDaemon:
         self.say = say or (lambda msg: print(msg, file=sys.stderr, flush=True))
         self.open_device = open_device or self._open_vendor
         self.keyboard_factory = keyboard_factory or (
-            lambda: UInputKeyboard("OXP3 Home Button", self.keycode))
+            lambda: UInputKeyboard(self.uinput_name, self.keycode))
 
         self.stop = stop if stop is not None else threading.Event()
         self.fd = None
@@ -182,16 +192,34 @@ class HomeButtonDaemon:
         # hidrawN, and a re-plug may move it, but vid/pid/phys survive.
         if self.identity is not None:
             node = life.find_hidraw(self.identity)
-        if node is None:
+            if node is None and self.device is None:
+                node = hid.find_vendor_hidraw()
+            if not node:
+                raise life.DeviceGone(
+                    "device with the recorded identity is not present")
+        elif self.device is not None:
+            # Pinned --device: exactly that node, and no scan fallback, so a
+            # real 1a86:fe00 interface can never be opened by mistake.
+            if not os.path.exists(self.device):
+                raise life.DeviceGone(
+                    f"{self.device} (explicit --device) is not present")
+            node = self.device
+        else:
             node = hid.find_vendor_hidraw()
-        if not node:
-            raise life.DeviceGone(
-                "1a86:fe00 vendor HID interface (usage page 0xFF00) not present")
-        flags = (os.O_WRONLY if self.intercept else os.O_RDONLY) | os.O_NONBLOCK
-        fd = os.open(node, flags)
+            if not node:
+                raise life.DeviceGone(
+                    "1a86:fe00 vendor HID interface (usage page 0xFF00) not present")
+
         ident = life.hidraw_identity(node)
         if ident is None:
+            if self.device is not None:
+                # vid/pid alone is shared with the real device; refuse it.
+                raise life.DeviceGone(
+                    f"{node}: no HID_NAME/HID_PHYS in uevent; refusing the "
+                    "vid:pid-only identity")
             ident = life.Identity("hidraw", hid.VID, hid.PID)
+        flags = (os.O_WRONLY if self.intercept else os.O_RDONLY) | os.O_NONBLOCK
+        fd = os.open(node, flags)
         return fd, node, ident
 
     def open(self) -> bool:
@@ -433,6 +461,10 @@ def main(argv=None):
                    help="max press length in s; 0 = wait for the device release")
     p.add_argument("--intercept", action="store_true",
                    help="ask the MCU to intercept extra buttons (experimental)")
+    p.add_argument("--device", metavar="PATH", default=None,
+                   help="pin the hidraw node for the first open (tests/debug)")
+    p.add_argument("--uinput-name", default="OXP3 Home Button",
+                   help="name of the virtual keyboard (default: OXP3 Home Button)")
     p.add_argument("--health", type=float, default=HEALTH_INTERVAL,
                    help="seconds between idle health checks (0 = off)")
     p.add_argument("--debug", action="store_true")
@@ -449,6 +481,8 @@ def main(argv=None):
         hold=args.hold,
         intercept=args.intercept,
         debug=args.debug,
+        device=args.device,
+        uinput_name=args.uinput_name,
         health_interval=args.health,
     )
 

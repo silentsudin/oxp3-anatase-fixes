@@ -146,6 +146,28 @@ class StatusAndEmitTest(unittest.TestCase):
             self.assertEqual(led.cmd_off(ns(sides=["top"]), True), 0)
         opener.assert_not_called()
 
+    def test_device_pins_the_node_and_skips_discovery(self):
+        with mock.patch.object(led, "warn_hhd"), \
+             mock.patch.object(hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(hid, "open_report", return_value=(42, "/dev/hidraw9")) as opener, \
+             mock.patch.object(hid, "send"), \
+             mock.patch.object(led.os, "close"), \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(led.cmd_solid(ns(colour="red", sides=["top"],
+                                             level="high", breath=False,
+                                             device="/dev/hidraw9"), False), 0)
+        scan.assert_not_called()
+        opener.assert_called_once_with(dev="/dev/hidraw9")
+
+    def test_status_uses_the_pinned_device(self):
+        buf = io.StringIO()
+        with mock.patch.object(hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(led, "hhd_rgb_mode", return_value=None), \
+             redirect_stdout(buf):
+            self.assertIsNone(led.cmd_status(ns(device="/dev/hidraw9"), False))
+        scan.assert_not_called()
+        self.assertIn("vendor interface : /dev/hidraw9", buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

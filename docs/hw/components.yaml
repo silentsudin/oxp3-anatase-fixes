@@ -840,23 +840,31 @@ components:
     summary: "A Decky Loader plugin and a headless CLI over one backend, showing live Mesa, XMX, sched_ext and hardware-fix status in the Steam Quick Access Menu."
     implementation:
       - tools/decky-oxp3-status
+      - tools/decky-oxp3-status/artifact.sha256
+      - tools/lib/decky_plugin.py
       - tools/oxp3-status.sh
     doc: docs/decky-plugin.md
-    root_required: "no"
+    root_required: "yes"
     install:
-      summary: "offline build + typecheck + bundle, then copy the packaged plugin into the Decky homebrew plugins directory"
-      entrypoint: "tools/decky-oxp3-status/build.sh --offline"
+      summary: "a deterministic plugin zip (built offline, or an existing one verified against the recorded sha256) installed into the root-owned Decky plugins directory, with the previous copy backed up"
+      entrypoint: "sudo tools/oxp3-hw-install.sh --decky"
+      steps:
+        - "add --restart-plugin-loader to restart plugin_loader.service now; otherwise the exact command is printed"
     verify:
       - id: decky.dir
-        expect: "the plugin directory has plugin.json, main.py and dist/"
+        expect: "plugin.json has the expected name/author/version/api_version, and main.py and dist/index.js are present"
       - id: decky.backend
         expect: "the backend imports in the plugin directory"
+      - id: decky.loaded
+        expect: "this boot's plugin_loader journal has a load line for oxp3-status, or UNKNOWN when the journal is unreadable"
       - id: decky.status
         expect: "the status backend agrees the machine is usable"
     dependencies: []
     caveats:
       - "read-only and offline by design; a missing component reports SKIP/warn"
       - "the panel and tools/oxp3-status.sh share main.py, so they cannot drift"
+      - "the plugin directory is root-owned (Decky's loader runs as root) and plugin_loader.service must restart to pick up a new plugin or a changed main.py"
+      - "replaced copies are backed up under ~/.local/state/oxp3-fixes/decky-backups; a directory without the .oxp3-managed marker is refused unless it is a recognisable copy of this plugin, which is backed up before it is replaced"
     last_validated:
       date: 2026-11-09
-      evidence: "docs/QA.md rows 9-12: offline npm ci, tsc, smoke, 60-check selftest, byte-identical 33,843 B zip"
+      evidence: "tests/unit/test_decky_plugin.py (43 unit tests) and tests/integration/decky/run.sh (43 --root assertions: install, backup on reinstall, uninstall, missing artifact, bad sha256, foreign directory); build.sh reproduces the 43,395 B zip sha256 be58c260; docs/QA.md rows 9-12 for the earlier build"

@@ -41,6 +41,34 @@ def args_for(config, **overrides) -> argparse.Namespace:
     return argparse.Namespace(**base)
 
 
+class DevicePinTest(unittest.TestCase):
+    """--device is authoritative and never falls back to a discovery scan."""
+
+    def test_pinned_device_skips_discovery(self):
+        args = args_for("/nonexistent", device="/dev/hidraw9")
+        with mock.patch.object(hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(rgbd.os.path, "exists", return_value=True):
+            daemon = rgbd.RgbDaemon(args)
+            self.assertEqual(daemon._discover(), "/dev/hidraw9")
+        scan.assert_not_called()
+
+    def test_missing_pinned_device_is_absent_not_discovered(self):
+        args = args_for("/nonexistent", device="/dev/hidraw9")
+        with mock.patch.object(hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(rgbd.os.path, "exists", return_value=False):
+            daemon = rgbd.RgbDaemon(args)
+            self.assertIsNone(daemon._discover())
+        scan.assert_not_called()
+
+    def test_without_device_it_discovers(self):
+        args = args_for("/nonexistent")
+        with mock.patch.object(hid, "find_vendor_hidraw",
+                               return_value="/dev/hidraw4") as scan:
+            daemon = rgbd.RgbDaemon(args)
+        scan.assert_called_once()
+        self.assertEqual(daemon._discover(), "/dev/hidraw4")
+
+
 class ConfigTest(unittest.TestCase):
     def setUp(self):
         self.tree = support.TmpTree()

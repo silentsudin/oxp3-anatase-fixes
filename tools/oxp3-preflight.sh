@@ -10,7 +10,7 @@
 #                                           one install path (repeatable; a
 #                                           comma list also works). Valid:
 #                                           volume leds rgb sleep bluetooth
-#                                           power imu audio
+#                                           power imu audio decky
 #   tools/oxp3-preflight.sh --user NAME     user whose session/units are checked
 #   tools/oxp3-preflight.sh --selftest      parser checks + fixture verdicts
 #   tools/oxp3-preflight.sh --fixtures DIR  run a fixture directory

@@ -351,6 +351,13 @@ suite_decky_package() {
     [ "$h1" = "$h2" ] || { printf 'FAIL package is not deterministic\n'; exit 1; }
 }
 
+suite_decky_install() {
+    local runner=$REPO/tests/integration/decky/run.sh
+    [ -x "$runner" ] || skip "tests/integration/decky/run.sh is missing"
+    need python3
+    exec "$runner"
+}
+
 suite_decky_selftest() {
     local dir=$REPO/tools/decky-oxp3-status
     [ -f "$dir/main.py" ] || skip "plugin main.py is missing"
@@ -565,6 +572,19 @@ suite_voltap_integration() {
     fi
     need python3
     "$REPO/tests/integration/volume/run.sh"
+}
+
+suite_hid_integration() {
+    [ -x "$REPO/tests/integration/hid/run.sh" ] \
+        || skip "tests/integration/hid/run.sh is missing"
+    # Integration suite: creates a virtual /dev/uhid device, runs the real home
+    # button / LED / RGB tools and needs root (or ACLs on /dev/uhid+/dev/uinput),
+    # so it is opt-in and never part of the default offline run.
+    if [ "${OXP3_REPO_TEST_INTEGRATION:-0}" != 1 ]; then
+        skip "opt-in integration test (virtual uhid device); set OXP3_REPO_TEST_INTEGRATION=1 to run"
+    fi
+    need python3
+    "$REPO/tests/integration/hid/run.sh"
 }
 
 suite_eq_model() {
@@ -929,6 +949,9 @@ def_suite decky-build full fast 600 0 \
 def_suite decky-package full fast 120 0 \
     "Decky plugin package: byte-identical zip on a second run" \
     "python3 tools/decky-oxp3-status/package.py (twice)"
+def_suite decky-install fast fast 120 0 \
+    "Decky plugin --root simulation: install, backup on reinstall, uninstall, refusal paths" \
+    "tests/integration/decky/run.sh"
 def_suite decky-selftest fast fast 120 0 \
     "Decky backend --selftest (synthetic /sys, /proc, HOME + stub verifier)" \
     "python3 tools/decky-oxp3-status/main.py --selftest"
@@ -980,6 +1003,9 @@ def_suite gamewrap fast fast 120 0 \
 def_suite voltap-integration fast medium 180 0 \
     "end-to-end volume daemon against a virtual uinput device (opt-in: OXP3_REPO_TEST_INTEGRATION=1)" \
     "OXP3_REPO_TEST_INTEGRATION=1 tests/integration/volume/run.sh"
+def_suite hid-integration fast medium 240 0 \
+    "end-to-end home button + LED/RGB tools on a virtual uhid device (opt-in: OXP3_REPO_TEST_INTEGRATION=1; needs root)" \
+    "sudo tests/integration/hid/run.sh"
 def_suite eq-model fast fast 60 0 \
     "speaker EQ biquad model table" \
     "python3 tools/audio/eq_response.py"

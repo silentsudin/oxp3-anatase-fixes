@@ -17,6 +17,33 @@ import support
 hid = support.load("oxp3_hid", "oxp3_hid.py")
 
 
+class VendorReportDescriptorTest(unittest.TestCase):
+    """The documented descriptor is the protocol contract the uhid harness uses."""
+
+    DOCUMENTED = bytes.fromhex(
+        "0600ff0901a101090215002600ff750895408106"
+        "090215002600ff750895409106"
+        "c0")
+
+    def test_exact_documented_bytes(self):
+        self.assertEqual(hid.vendor_report_descriptor(), self.DOCUMENTED)
+        self.assertEqual(hid.VENDOR_REPORT_DESCRIPTOR, self.DOCUMENTED)
+
+    def test_shape(self):
+        desc = hid.vendor_report_descriptor()
+        self.assertEqual(len(desc), 34)
+        self.assertIn(b"\x06\x00\xff", desc)     # usage page 0xFF00
+        self.assertNotIn(b"\x85", desc)            # no report ID item
+        self.assertEqual(desc.count(b"\x75\x08"), 2)
+        self.assertEqual(desc.count(b"\x95\x40"), 2)  # 64-byte reports
+        self.assertTrue(desc.endswith(b"\xc0"))
+
+    def test_helper_returns_a_copy(self):
+        first = hid.vendor_report_descriptor()
+        self.assertIsNot(first, hid.VENDOR_REPORT_DESCRIPTOR)
+        self.assertEqual(first, hid.vendor_report_descriptor())
+
+
 class FrameTest(unittest.TestCase):
     def test_v1_frame_envelope_and_size(self):
         for cid in (hid.CID_RGB, hid.CID_BUTTON, hid.CID_MAP, hid.CID_RUMBLE):
@@ -257,6 +284,23 @@ class DeviceDiscoveryTest(unittest.TestCase):
 
 
 class OpenAndSendTest(unittest.TestCase):
+    def test_explicit_device_is_opened_verbatim(self):
+        with mock.patch.object(hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(hid.os.path, "exists", return_value=True), \
+             mock.patch.object(hid.os, "open", return_value=7) as opener:
+            self.assertEqual(hid.open_report(dev="/dev/hidraw9"),
+                             (7, "/dev/hidraw9"))
+        scan.assert_not_called()
+        self.assertEqual(opener.call_args.args[0], "/dev/hidraw9")
+
+    def test_explicit_device_that_is_gone_is_a_clean_exit(self):
+        with mock.patch.object(hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(hid.os.path, "exists", return_value=False):
+            with self.assertRaises(SystemExit) as ctx:
+                hid.open_report(dev="/dev/hidraw9")
+        self.assertIn("does not exist", str(ctx.exception))
+        scan.assert_not_called()
+
     def test_open_report_without_device_exits_with_hint(self):
         with mock.patch.object(hid, "find_vendor_hidraw", return_value=None):
             with self.assertRaises(SystemExit) as ctx:

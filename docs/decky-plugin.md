@@ -244,10 +244,11 @@ cd tools/decky-oxp3-status
 ```
 
 `build.sh` writes `build/oxp3-status-<version>.zip` and prints its size and
-sha256. The current artifact is **43,386 bytes**, sha256
-`5d0ec4ef346beb40924d2fe06cbc4fb1c8b9d7207172110fce7a7343fc1e3866`
+sha256. The current artifact is **43,395 bytes**, sha256
+`be58c260b52986360df19bcd87cddb309357e9d0111ccc68133923044cdbd539`
 (deterministic: fixed zip timestamps, sorted entries; rebuilding from the same
-`src/` reproduces the same hash). The individual steps are also available as
+`src/` reproduces the same hash). `tools/decky-oxp3-status/artifact.sha256`
+records that digest for the installer's reuse path. The individual steps are also available as
 `npm run typecheck`, `npm run build`, `npm run smoke`, `npm run selftest` and
 `npm run package`.
 
@@ -256,28 +257,94 @@ The zip contains exactly the plugin root, which is the layout Decky Loader's
 
 | entry | purpose |
 |---|---|
-| `plugin.json` | manifest, `api_version: 1` |
+| `plugin.json` | manifest, `api_version: 1`, `version: 1.0.0` |
 | `main.py` | backend; the loader imports `Plugin` from it |
 | `dist/index.js` | rollup bundle loaded by the frontend (ESM, loader globals) |
 | `dist/index.js.map` | source map for debugging the panel |
 | `README.md` | operator notes |
 
-Install from the zip (privileged steps are listed, not run, by this repo's
-rules):
+### Install through the hardware installer (supported path)
 
-1. Decky → Settings → General → *Install Plugin from File* → pick
-   `build/oxp3-status-1.0.0.zip`; the loader unpacks it to
-   `~/homebrew/plugins/OXP3 Status` (or `oxp3-status`) and reloads.
-2. Or install by hand:
+`--decky` is a first-class component of `tools/oxp3-hw-install.sh` (included in
+`--all`) and is the only supported install path for a managed copy. The Decky
+plugins directory is root-owned because `plugin_loader.service` runs as root,
+so a plain user-level copy fails with `EACCES`; the installer writes it as root
+and leaves no root-owned file in the repo.
 
 ```sh
-rm -rf ~/homebrew/plugins/oxp3-status
-cp -r tools/decky-oxp3-status ~/homebrew/plugins/oxp3-status
+# build (node+npm) or reuse + verify the zip, back up the previous copy, install
+sudo tools/oxp3-hw-install.sh --decky
+
+# same, and restart plugin_loader.service now (only when the unit exists)
+sudo tools/oxp3-hw-install.sh --decky --restart-plugin-loader
+
+# no node/npm: install an existing zip, but only if it matches artifact.sha256
+sudo tools/oxp3-hw-install.sh --decky \
+  --decky-artifact tools/decky-oxp3-status/build/oxp3-status-1.0.0.zip
+```
+
+Behaviour:
+
+* **directory** — default `~/homebrew/plugins/oxp3-status`, resolved against the
+  invoking user's home (`/var/home/holzr/homebrew/plugins/oxp3-status` on the
+  validated device). `OXP3_DECKY_PLUGINS_DIR` overrides it (absolute, `~/...`,
+  `$HOME/...` or a path relative to the home); `--root DIR`/`OXP3_ROOT` places
+  it inside a simulation prefix.
+* **artifact** — if `node` and `npm` exist, `tools/decky-oxp3-status/build.sh
+  --offline` runs and its deterministic zip is installed (a digest difference
+  from the record is reported, because a changed source legitimately changes
+  it). Otherwise the newest `build/oxp3-status-*.zip` is used and **must** match
+  the sha256 in `tools/decky-oxp3-status/artifact.sha256`; a missing artifact or
+  a bad digest aborts before anything is written.
+* **validation** — the zip layout is exactly the plugin root, and the extracted
+  directory is checked for `plugin.json` (`name = "OXP3 Status"`,
+  `author = "silentsudin"`, `api_version = 1`, `version = x.y.z`), `main.py` and
+  `dist/index.js` (non-trivial and containing `definePlugin`) before success is
+  declared.
+* **backup** — an existing `oxp3-status` directory is copied to
+  `~/.local/state/oxp3-fixes/decky-backups/<UTC stamp>/oxp3-status` first; the
+  install then replaces it atomically. A directory carrying our
+  `.oxp3-managed` marker is ours; an unmarked hand copy of this plugin is
+  adopted (backed up first). A directory that is not this plugin is refused,
+  never overwritten.
+* **restart** — never automatic. Without `--restart-plugin-loader` the exact
+  command is printed; with it the unit is restarted only when
+  `plugin_loader.service` exists (and only as root). Decky's
+  *Settings → Developer → Reload plugins* re-reads the directory, but a changed
+  `main.py` still needs the service restart.
+
+An unmarked copy can also be installed from Decky: *Settings → General →
+Install Plugin from File* → `build/oxp3-status-1.0.0.zip`. That copy has no
+ownership marker, so the installer treats it as an adoptable hand copy (backed
+up, then replaced); `--uninstall --decky` deliberately refuses to delete it.
+
+### Verify and roll back
+
+```sh
+# installed? version, digest, marker and whether plugin_loader logged it
+tools/oxp3-hw-install.sh --status        # decky: installed=yes state=ok ... loader-log=loaded|not-logged|unreadable
+tools/oxp3-verify.sh                     # decky.dir, decky.backend, decky.loaded, decky.status
+sudo journalctl -u plugin_loader.service -b --no-pager | grep -i oxp3
+
+# remove exactly our directory (the marker is the ownership proof); backups stay
+sudo tools/oxp3-hw-install.sh --uninstall --decky
+# Decky -> Settings -> Developer -> Reload plugins, or:
 sudo systemctl restart plugin_loader.service
 ```
 
-When copying the directory by hand, `node_modules/`, `build/` and the test
-harness are not needed; `plugin.json`, `main.py` and `dist/` are.
+To roll back to the copy a reinstall replaced, use the newest backup (the
+directory name is the UTC stamp printed as `backup:` by the install):
+
+```sh
+backup=$(ls -1dt ~/.local/state/oxp3-fixes/decky-backups/*/oxp3-status | head -n 1)
+sudo rm -rf ~/homebrew/plugins/oxp3-status
+sudo cp -a "$backup" ~/homebrew/plugins/oxp3-status
+sudo systemctl restart plugin_loader.service
+```
+
+The offline `--root` simulation (`tests/integration/decky/run.sh`, suite
+`decky-install`) covers install, the backup on reinstall, uninstall, a missing
+artifact, a tampered digest and a foreign directory with the same name.
 
 `@decky/rollup` rewrites the `@decky/ui` imports of `src/index.tsx` to the
 loader-provided `DFL`/`SP_REACT`/`SP_JSX` globals (the same shape every
@@ -327,6 +394,10 @@ tools/oxp3-status.sh --strict        # exit code 2 while anything is warn
 # loader globals (react is a dev dependency only for this check)
 cd tools/decky-oxp3-status && npm run smoke
 
+# installer: resolution/validation unit tests, then the --root simulation
+python3 -m unittest discover -s tests/unit -p 'test_decky_plugin.py' -q
+tests/integration/decky/run.sh
+
 # manifests / wrapper
 python3 -m json.tool tools/decky-oxp3-status/plugin.json >/dev/null
 python3 -m json.tool tools/decky-oxp3-status/package.json >/dev/null
@@ -341,8 +412,9 @@ The last recorded run: `--selftest` 90/90 checks (including the stub-verifier
 fixtures for `run_verification_once`: pass, fail, skip, timeout, bad JSON,
 capped output, escalation refusal and busy), `--json` valid JSON, `--strict`
 exit 2, `smoke` loaded and rendered `dist/index.js` with the api handshake and
-drove the 30 backend verification checks, and the zip hash above was
-reproduced by the `--offline` build.
+drove the 30 backend verification checks, the zip hash above was reproduced by
+the `--offline` build, `test_decky_plugin.py` passed its 43 unit tests and
+`tests/integration/decky/run.sh` passed its 43 `--root` assertions.
 
 ### `--selftest`
 

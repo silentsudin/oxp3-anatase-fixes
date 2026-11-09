@@ -79,6 +79,24 @@ CID_BUTTON = 0xB2
 CID_MAP = 0xB4
 CID_RUMBLE = 0xB3
 
+# Report descriptor of the vendor collection (interface 1.2), byte for byte the
+# shape documented in docs/hw/home-button-leds.md: usage page 0xFF00, usage
+# 0x0001, 64-byte input and output reports, no report ID.  It is also what the
+# uhid integration harness (tests/integration/hid/) presents to the kernel, so
+# keep this list and the documentation in sync.
+VENDOR_REPORT_DESCRIPTOR = bytes.fromhex(
+    "0600ff0901a101090215002600ff750895408106"
+    "090215002600ff750895409106"
+    "c0"
+)
+
+
+def vendor_report_descriptor() -> bytes:
+    """A fresh copy of the documented 0xFF00 vendor report descriptor."""
+    # bytes(bytes) may return the same immutable object; go through bytearray
+    # so callers really get a private copy.
+    return bytes(bytearray(VENDOR_REPORT_DESCRIPTOR))
+
 # Side / zone ids accepted by the OXP3 RGB command.
 SIDE_NAMES = {
     "left_stick": 0x01,
@@ -251,19 +269,31 @@ def find_vendor_hidraw() -> str | None:
     return None
 
 
-def open_report(write: bool = True) -> tuple[int, str]:
-    dev = find_vendor_hidraw()
-    if not dev:
-        raise SystemExit("vendor HID interface (1a86:fe00, usage page 0xFF00) not found")
+def open_report(write: bool = True, dev: str | None = None) -> tuple[int, str]:
+    """Open the vendor hidraw node, or ``dev`` when one is given explicitly.
+
+    An explicit node is used verbatim and never replaced by a discovery scan.
+    The uhid integration harness pins its virtual node this way so the tools
+    can never open a real 1a86:fe00 interface by accident.
+    """
+    if dev:
+        node = dev
+        if not os.path.exists(node):
+            raise SystemExit(f"{node}: explicit --device node does not exist")
+    else:
+        node = find_vendor_hidraw()
+        if not node:
+            raise SystemExit(
+                "vendor HID interface (1a86:fe00, usage page 0xFF00) not found")
     flags = (os.O_WRONLY if write else os.O_RDONLY) | os.O_NONBLOCK
     try:
-        fd = os.open(dev, flags)
+        fd = os.open(node, flags)
     except PermissionError:
         raise SystemExit(
-            f"{dev}: permission denied. Install tools/oxp3-hid.rules "
+            f"{node}: permission denied. Install tools/oxp3-hid.rules "
             "(see docs/hw/home-button-leds.md)."
         )
-    return fd, dev
+    return fd, node
 
 
 def _write_frame(fd: int, frame: bytes) -> int:

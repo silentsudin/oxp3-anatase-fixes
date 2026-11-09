@@ -2555,21 +2555,89 @@ check_install() {
 }
 
 # ------------------------------------------------------------------ 11. decky
+decky_candidates() {
+    if [ -n "${OXP3_DECKY_PLUGINS_DIR:-}" ]; then
+        case $OXP3_DECKY_PLUGINS_DIR in
+            "~") printf '%s\n' "$HOME" ;;
+            "~/"*) printf '%s/%s\n' "$HOME" "${OXP3_DECKY_PLUGINS_DIR#\~/}" ;;
+            *) printf '%s\n' "$OXP3_DECKY_PLUGINS_DIR" ;;
+        esac
+    fi
+    printf '%s\n' "$HOME/homebrew/plugins/oxp3-status" "$HOME/homebrew/plugins/OXP3 Status"
+}
+
+decky_manifest_fields() { # FILE -> name, author, api_version, version (tab separated)
+    python3 - "$1" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(1)
+if not isinstance(data, dict):
+    sys.exit(1)
+print("%s\t%s\t%s\t%s" % (data.get("name", ""), data.get("author", ""),
+                          data.get("api_version", ""), data.get("version", "")))
+PY
+}
+
 check_decky() {
-    local dir="" d
-    for d in "$HOME/homebrew/plugins/oxp3-status" "$HOME/homebrew/plugins/OXP3 Status"; do
+    local dir="" d fields name author api version reason="" version_shown="-"
+    while IFS= read -r d; do
         [ -f "$d/plugin.json" ] && { dir=$d; break; }
-    done
+    done < <(decky_candidates)
 
     if [ -z "$dir" ]; then
-        record decky.dir decky "plugin installed" SKIP "not installed" "looked in ~/homebrew/plugins/oxp3-status and 'OXP3 Status'" "cp -r tools/decky-oxp3-status ~/homebrew/plugins/oxp3-status (plugin.json, main.py and dist/ are enough), then restart plugin_loader"
-        record decky.backend decky "backend importable" SKIP "not installed" "" "install the plugin, then: python3 -c 'import main' in the plugin dir"
+        record decky.dir decky "plugin installed" SKIP "not installed" \
+            "looked in ~/homebrew/plugins/oxp3-status and 'OXP3 Status' (or OXP3_DECKY_PLUGINS_DIR)" \
+            "sudo tools/oxp3-hw-install.sh --decky   # then: sudo systemctl restart plugin_loader.service"
+        record decky.backend decky "backend importable" SKIP "not installed" "" \
+            "install the plugin, then: python3 -c 'import main' in the plugin dir"
     else
-        if [ -f "$dir/main.py" ] && { [ -e "$dir/dist/index.js" ] || [ -d "$dir/dist" ]; }; then
-            record decky.dir decky "plugin installed" PASS "installed with bundle" "$dir" ""
+        if have python3; then
+            if ! fields=$(decky_manifest_fields "$dir/plugin.json"); then
+                reason="plugin.json is not valid JSON"
+            else
+                IFS=$'\t' read -r name author api version <<<"$fields"
+                if [ "$name" != "OXP3 Status" ]; then
+                    reason="plugin.json name is '$name' (expected 'OXP3 Status')"
+                elif [ "$author" != "silentsudin" ]; then
+                    reason="plugin.json author is '$author' (expected 'silentsudin')"
+                elif [ "$api" != "1" ]; then
+                    reason="plugin.json api_version is '$api' (expected 1)"
+                elif [ -z "$version" ]; then
+                    reason="plugin.json has no version"
+                fi
+            fi
         else
-            record decky.dir decky "plugin installed" FAIL "incomplete install" "$dir (need plugin.json, main.py, dist/)" "reinstall from build/oxp3-status-1.0.0.zip"
+            # No python3: validate the stable fields with grep. The version is shown only when a
+            # simple x.y.z string is present; decky.backend reports the missing interpreter.
+            if ! grep -q '"name"[[:space:]]*:[[:space:]]*"OXP3 Status"' "$dir/plugin.json"; then
+                reason="plugin.json does not name 'OXP3 Status' (python3 missing for full validation)"
+            elif ! grep -q '"author"[[:space:]]*:[[:space:]]*"silentsudin"' "$dir/plugin.json"; then
+                reason="plugin.json author is not 'silentsudin'"
+            elif ! grep -q '"api_version"[[:space:]]*:[[:space:]]*1' "$dir/plugin.json"; then
+                reason="plugin.json api_version is not 1"
+            fi
+            version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$dir/plugin.json" | head -n 1)
+            [ -n "$version" ] || reason=${reason:-"plugin.json has no version"}
         fi
+        if [ -z "$reason" ] && [ ! -f "$dir/main.py" ]; then
+            reason="main.py is missing"
+        fi
+        if [ -z "$reason" ] && [ ! -f "$dir/dist/index.js" ]; then
+            reason="dist/index.js is missing"
+        fi
+        if [ -z "$reason" ]; then
+            version_shown=${version:--}
+            record decky.dir decky "plugin installed" PASS \
+                "installed: version $version_shown" "$dir" ""
+        else
+            record decky.dir decky "plugin installed" FAIL "invalid install: $reason" \
+                "$dir" "sudo tools/oxp3-hw-install.sh --decky --restart-plugin-loader"
+        fi
+
         if ! have python3; then
             record decky.backend decky "backend importable" SKIP "python3 missing" "" ""
         else
@@ -2579,8 +2647,35 @@ check_decky() {
             if [ "$rc" -eq 0 ]; then
                 record decky.backend decky "backend importable" PASS "main.py imports" "$dir/main.py" ""
             else
-                record decky.backend decky "backend importable" FAIL "import failed (rc=$rc)" "$(tail_flat "$out" 2)" "cd '$dir' && python3 -c 'import main'"
+                record decky.backend decky "backend importable" FAIL "import failed (rc=$rc)" \
+                    "$(tail_flat "$out" 2)" "cd '$dir' && python3 -c 'import main'"
             fi
+        fi
+    fi
+
+    # Did plugin_loader log the plugin in this boot? Root owns the loader, so an unreadable
+    # journal is UNKNOWN (with the exact command), never a claim that it did not load.
+    if [ -z "$dir" ]; then
+        record decky.loaded decky "loader logged the plugin" SKIP "not installed" "" \
+            "sudo tools/oxp3-hw-install.sh --decky --restart-plugin-loader"
+    elif ! have journalctl; then
+        record decky.loaded decky "loader logged the plugin" UNKNOWN "journalctl missing" "" \
+            "install systemd; then: journalctl -u plugin_loader.service -b | grep -i oxp3"
+    else
+        run_tool decky-journal "$TOOL_TIMEOUT" journalctl -u plugin_loader.service -b \
+            --no-pager -n 4000
+        if [ "$RUN_RC" -ne 0 ]; then
+            record decky.loaded decky "loader logged the plugin" UNKNOWN \
+                "journal not readable (or plugin_loader.service absent)" \
+                "$(tail_flat "$RUN_OUT" 2)" \
+                "sudo journalctl -u plugin_loader.service -b --no-pager | grep -i oxp3"
+        elif grep -qiE 'oxp3[-_ ]?status' "$RUN_OUT"; then
+            record decky.loaded decky "loader logged the plugin" PASS \
+                "plugin_loader logged oxp3-status this boot" "$dir" ""
+        else
+            record decky.loaded decky "loader logged the plugin" SKIP \
+                "no load line for oxp3-status in this boot's journal" "" \
+                "sudo systemctl restart plugin_loader.service   # then re-run the verifier"
         fi
     fi
 
@@ -2930,7 +3025,7 @@ run_selftest() {
         aud.activate aud.dummy aud.eq aud.model aud.scripts aud.server \
         bat.behaviour bat.limit bat.threshold \
         bt.controller bt.diag bt.dracut bt.files bt.journal \
-        decky.backend decky.dir decky.status \
+        decky.backend decky.dir decky.loaded decky.status \
         dsp.hdr dsp.icc dsp.panel dsp.vibrance \
         fan.curvedup fan.savemode \
         gfx.mesa gfx.working gfx.xe gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc \

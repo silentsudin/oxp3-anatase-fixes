@@ -21,6 +21,7 @@ tools/oxp3-preflight.sh --json          # schema 1 report for machines
 tools/oxp3-preflight.sh --quiet         # only problems + verdict
 tools/oxp3-preflight.sh --strict        # exit 1 while any WARN remains
 tools/oxp3-preflight.sh --component volume
+# components: volume leds rgb sleep bluetooth power imu audio decky
 tools/oxp3-preflight.sh --user holzr    # whose session/units are checked (default: SUDO_USER)
 tools/oxp3-preflight.sh --selftest      # parser checks + seven fixture verdicts
 ```
@@ -84,7 +85,7 @@ what `--json` reports.
 | `core.root` | `EUID == 0`; otherwise a WARN asking for sudo (the installer re-runs it as root) | `sudo tools/oxp3-hw-install.sh <components>` |
 | `core.user` | a non-root user exists for the user-scope half | run from the desktop session, or `--user NAME` |
 | `core.repo-path` | no whitespace in the checkout path (unquoted `ExecStart`) | move the checkout |
-| `core.repo` | 10 required installer/doc files exist | re-clone/restore the checkout |
+| `core.repo` | 12 required installer/doc files exist | re-clone/restore the checkout |
 | `core.sudo` | root, or `sudo` on PATH | run as root or install sudo |
 
 ### directories (all are created by `install -D`; a missing one is a WARN, except `/etc/systemd/system`)
@@ -171,6 +172,7 @@ what `--json` reports.
 | `state.power` | powerctl + profile/resume units | `--power` |
 | `state.imu` | modprobe blacklist | `--imu` |
 | `state.audio` | EQ drop-in | `--audio` |
+| `state.decky` | `.oxp3-managed` marker + `plugin.json` in `~/homebrew/plugins/oxp3-status` | `sudo tools/oxp3-hw-install.sh --decky` |
 | `state.bt-initramfs` | firmware present without the dracut drop-in, or a load failure this boot | `sudo tools/oxp3-bt-firmware.sh`, then reboot |
 | `state.ostree-staged` | a staged rpm-ostree deployment (WARN: overlay writes would be lost) | reboot into it first |
 

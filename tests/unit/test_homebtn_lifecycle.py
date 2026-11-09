@@ -251,6 +251,76 @@ class DaemonTest(unittest.TestCase):
         self.assertFalse(d.watchdog())
         self.assertTrue(any("disappeared" in m for m in self.said), self.said)
 
+    # -- explicit --device (integration harness pin) ---------------------
+    def _pinned(self, device="/dev/hidraw7"):
+        return homebtn.HomeButtonDaemon(
+            {0x24}, keycode=homebtn.KEYS["homepage"], device=device,
+            clock=self.clock, select_fn=FakeSelect(),
+            say=self.said.append, stop=self.stop)
+
+    def test_pinned_device_is_opened_verbatim_without_a_scan(self):
+        fd = self.pipe()
+        d = self._pinned()
+        with mock.patch.object(homebtn.life, "hidraw_identity",
+                               return_value=VID_PID), \
+             mock.patch.object(homebtn.hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(homebtn.os.path, "exists", return_value=True), \
+             mock.patch.object(homebtn.os, "open", return_value=fd) as opener:
+            got_fd, node, ident = d._open_vendor()
+        self.assertEqual((got_fd, node), (fd, "/dev/hidraw7"))
+        self.assertIs(ident, VID_PID)
+        scan.assert_not_called()
+        self.assertEqual(opener.call_args.args[0], "/dev/hidraw7")
+
+    def test_pinned_device_that_is_gone_does_not_scan(self):
+        d = self._pinned()
+        with mock.patch.object(homebtn.hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(homebtn.os.path, "exists", return_value=False):
+            with self.assertRaises(life.DeviceGone):
+                d._open_vendor()
+        scan.assert_not_called()
+
+    def test_after_loss_only_the_recorded_identity_is_used(self):
+        # Once an identity exists, the pinned path is not trusted blindly (the
+        # node number may be recycled) and discovery is not used either.
+        d = self._pinned()
+        d.identity = VID_PID
+        fd = self.pipe()
+        with mock.patch.object(homebtn.life, "find_hidraw",
+                               return_value="/dev/hidraw9") as finder, \
+             mock.patch.object(homebtn.life, "hidraw_identity",
+                               return_value=VID_PID), \
+             mock.patch.object(homebtn.hid, "find_vendor_hidraw") as scan, \
+             mock.patch.object(homebtn.os.path, "exists", return_value=False), \
+             mock.patch.object(homebtn.os, "open", return_value=fd):
+            _fd, node, _ident = d._open_vendor()
+        self.assertEqual(node, "/dev/hidraw9")
+        finder.assert_called_once()
+        scan.assert_not_called()
+
+    def test_uinput_name_is_configurable(self):
+        with mock.patch.object(homebtn, "UInputKeyboard") as factory:
+            factory.return_value = FakeKeyboard()
+            d = homebtn.HomeButtonDaemon({0x24}, keycode=homebtn.KEYS["homepage"],
+                                         uinput_name="OXP3 Home Button (test)",
+                                         clock=self.clock, say=self.said.append,
+                                         stop=self.stop)
+            self.assertTrue(d.ensure_keyboard())
+        factory.assert_called_once_with("OXP3 Home Button (test)",
+                                        homebtn.KEYS["homepage"])
+
+    def test_identity_less_pinned_device_is_refused(self):
+        # The only remaining identity would be the shared vid:pid, which a real
+        # interface also has; the pinned path must not be used in that case.
+        fd = self.pipe()
+        d = self._pinned()
+        with mock.patch.object(homebtn.life, "hidraw_identity", return_value=None), \
+             mock.patch.object(homebtn.os.path, "exists", return_value=True), \
+             mock.patch.object(homebtn.os, "open", return_value=fd):
+            with self.assertRaises(life.DeviceGone) as ctx:
+                d._open_vendor()
+        self.assertIn("vid:pid", str(ctx.exception))
+
     def test_watchdog_is_quiet_when_identity_matches(self):
         fd = self.pipe()
         d = self.daemon(lambda: (fd, "/dev/hidraw7", VID_PID),

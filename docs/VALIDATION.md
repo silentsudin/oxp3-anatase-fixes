@@ -89,6 +89,52 @@ tears the daemon and every virtual device down, and leaves nothing running. The
 proven scenarios and results are recorded in
 [hw/volume-buttons.md](hw/volume-buttons.md#integration-test-the-daemon-against-a-virtual-device-proven-end-to-end).
 
+### Home button / LED integration harness (opt-in, virtual HID, needs root)
+
+`tests/integration/hid/` is the end-to-end complement to the unit tests of the
+home-button and RGB tools. It creates one virtual HID device through
+`/dev/uhid` with the documented vendor report descriptor (usage page `0xFF00`,
+no report id, 64-byte input+output reports) and the USB identity the tools look
+for (`1a86:fe00`), but an unmistakable test name/phys
+(`OXP3 uhid integration test …` / `phys-oxp3-uhid-integration-test`). The
+kernel publishes it as a normal `/dev/hidrawN` with no input child, exactly
+like interface `1.2` on the device.
+
+```sh
+# direct; root is required for /dev/uhid and /dev/uinput.  Exit 77 with this
+# same command when access is missing (the harness never runs sudo itself).
+sudo tests/integration/hid/run.sh
+sudo tests/integration/hid/run.sh --keep       # leave device + daemons for debugging
+sudo tests/integration/hid/run.sh --timeout 180
+
+# through the repository runner (skipped unless explicitly enabled)
+OXP3_REPO_TEST_INTEGRATION=1 tools/repo-test.sh --only hid-integration
+tools/repo-test.sh --integration
+make test-integration
+```
+
+It drives the **real tool processes** and asserts what reaches the kernel:
+
+| scenario | driven / asserted |
+|---|---|
+| descriptor parity | the kernel's `report_descriptor` equals `oxp3_hid.vendor_report_descriptor()`; no input child; identity rediscovery by name+phys picks the virtual node |
+| home button | real `oxp3-homebtn.py --device <node> --uinput-name "OXP3 Home Button (integration test)"`; inject the documented `0xB2` press/release; read back `KEY_HOMEPAGE` down/up from the uinput keyboard **the daemon created** (unique test name, so a daemon that is already running cannot be confused with it) |
+| LED | real `oxp3-led.py --device <node> solid ff6600 --sides top --level medium`; the `UHID_OUTPUT` bytes equal the encoder exactly (brightness frame, 18 RGB triplets, trailer) and equal the tool's own `send <hex>` lines |
+| rgbd | real `oxp3-rgbd.py --once --device <node> --config <tmp>` applies exactly the planned frames; `--check` names the virtual node and exits 0 |
+| reconnect | destroy the uhid device (daemon logs `device lost:` / `retrying in`), recreate it with the same identity → `reconnect #1 to <new node> (identity …)`, and a second injected press still becomes `KEY_HOMEPAGE` |
+
+Safety: the tools are pinned with `--device`, so their discovery scan never runs
+while a real `1a86:fe00` interface may be present; the harness asserts every
+node path in their logs and every `hidraw` fd of the daemon under test is one of
+its virtual nodes. It never writes to a real hidraw node or to persistent host
+state, and destroys the uhid device and kills the daemons in `finally`
+(SIGTERM/SIGINT included). `--keep` is the explicit debugging exception.
+
+Not covered by it (still needs the real device): the physical press path and MCU
+timing, the udev rule/ACL and USB sysfs identity (a uhid device has no USB
+port), real USB reset/suspend re-enumeration, and whether the firmware accepts
+the frames.
+
 ## 2. Exit codes and states
 
 | exit | meaning |
@@ -113,7 +159,7 @@ scheduler or adaptive TDP, and a plain game launch leaves no igdext trace.
 Default mode runs **72 checks** (measured 2026-11-09, including `preflight.verdict`).
 `--full` adds four (**76**); `--with-changes` adds two more (**78**). The opt-in rows
 (`vol.hold`, `led.write`, `life.sim`, `aud.activate` and `fan.savemode`) run only with
-`--full` / `--with-changes`; the harness declares **78** ids in total, which `--selftest`
+`--full` / `--with-changes`; the harness declares **79** ids in total, which `--selftest`
 asserts. The ids are stable (they are the `state` keys in `--json`).
 
 ### preflight (1)
@@ -254,8 +300,9 @@ The contract and the manual suspend/hotplug procedures are in
 
 | id | proves | how |
 |---|---|---|
-| `decky.dir` | the plugin is installed (files needed by the loader) | `~/homebrew/plugins/oxp3-status` or `…/OXP3 Status` with `plugin.json`, `main.py`, `dist/` |
+| `decky.dir` | the plugin is installed with the expected manifest and bundle | `~/homebrew/plugins/oxp3-status` or `…/OXP3 Status` (or `OXP3_DECKY_PLUGINS_DIR`) with `plugin.json` (`name=OXP3 Status`, `author=silentsudin`, `api_version=1`, `version=x.y.z`), `main.py` and `dist/index.js` |
 | `decky.backend` | the backend imports | `python3 -c 'import main'` in the plugin directory |
+| `decky.loaded` | `plugin_loader` logged the plugin this boot | `journalctl -u plugin_loader.service -b` grepped for `oxp3-status`; UNKNOWN when the journal is unreadable |
 | `decky.status` | the status backend agrees the machine is usable | `tools/oxp3-status.sh --json` `overall`; `warn` is reported, `fail` fails this check |
 
 ### deferred tooling risks (10, from UNIT-TESTS §5)
@@ -295,7 +342,7 @@ manifest and backup images. A `FAIL` is actionable (`adopt`), not a hardware def
 |---|---|
 | (preflight, every component) | `preflight.verdict` |
 | 1 volume rocker | `vol.unit`, `vol.grab`, `vol.topology`, `vol.holder`, `vol.hwdb`, (`vol.hold`) |
-| 2 LEDs / home button | `hid.rule`, `led.status`, `led.zones`, `hid.access`, `homebtn.unit`, `homebtn.mapping`, `homebtn.press`, (`led.write`) |
+| 2 LEDs / home button | `hid.rule`, `led.status`, `led.zones`, `hid.access`, `homebtn.unit`, `homebtn.mapping`, `homebtn.press`, (`led.write`), (`hid-integration` in repo-test) |
 | 2 RGB keeper | `rgbd.unit`, `rgbd.check` |
 | daemon lifecycle (DAEMONS.md) | `life.fd`, `life.reconnect`, (`life.sim`) |
 | 3 sleep / wake policy | `sleep.mem`, `sleep.stats`, `sleep.units`, `sleep.wakeup`, `sleep.trigger`, `sleep.audit`, (`sleep.measure`), (`sleep.suspend`) |
@@ -306,7 +353,7 @@ manifest and backup images. A `FAIL` is actionable (`adopt`), not a hardware def
 | 7 speaker EQ | `aud.scripts`, `aud.server`, `aud.eq`, `aud.dummy`, `aud.model`, (`aud.activate`), (`aud.graph` in `repo-test`) |
 | 8 display HDR / ICC / vibrance | `dsp.hdr`, `dsp.icc`, `dsp.panel`, `dsp.vibrance` |
 | 9 Mesa / XMX / sched_ext / xe | `gfx.mesa`, `gfx.xmx.driver`, `gfx.xmx.helper`, `gfx.xmx.igc`, `gfx.xmx.kernels`, `gfx.xmx.icd`, `gfx.xmx.trace`, `gfx.xe`, `gfx.working`, `sched.state`, `sched.scx`, `sched.unit` |
-| 10 Decky plugin | `decky.dir`, `decky.backend`, `decky.status` |
+| 10 Decky plugin | `decky.dir`, `decky.backend`, `decky.loaded`, `decky.status` |
 | (bonus) IMU | `imu.selftest`, `imu.iio` |
 | (deferred, UNIT-TESTS §5) | `hid.node`, `led.sides`, `rgbd.timing`, `pwr.ac`, `pwr.order`, `fan.curvedup`, `bat.limit`, `inst.paths`, (`fan.savemode`) |
 
@@ -446,7 +493,7 @@ Verbatim evidence (never overwritten, regenerate when the machine changes):
 
 * [`docs/state/verify-default-2026-11-09.txt`](state/verify-default-2026-11-09.txt) — 108 lines, the run above.
 * [`docs/state/verify-default-2026-11-09.json`](state/verify-default-2026-11-09.json) — `--json`, 55 checks (pre-deferred-risk inventory), schema 1, exit 1.
-* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 157).
+* [`docs/state/verify-selftest-2026-11-09.txt`](state/verify-selftest-2026-11-09.txt) — `selftest: 52 checks passed, 0 failed` (before the deferred-risk fixtures; the same command now prints 172).
 
 The snapshots above predate the three `life.*` rows: a host without the daemons now
 reports 72 checks in the default mode and adds the opt-in rows with `--full`/
@@ -456,14 +503,14 @@ until `--full`).
 ## 8. Offline validation performed (no root, no host change)
 
 * `bash -n tools/oxp3-verify.sh` and `sh -n tests/verify/run.sh`: clean.
-* `tools/oxp3-verify.sh --selftest`: **157 assertions / 0 failures** over the parsers
+* `tools/oxp3-verify.sh --selftest`: **172 assertions / 0 failures** over the parsers
   (`display-mode` ANSI output, `powerctl` domains/fan/profile, `status` indicators,
   `suspend_stats`, `bt --check`, `led status`, `rgbd --check`, `pactl` sinks,
   the two journals, `sleep-audit`), the ten deferred-risk probes -- HID candidate map
   and verdicts, dry-run frame counts, adaptive decision/AC verdict, per-domain limit
   ordering, curve summary, battery-limit dry run, install-common helper output, IIO
   primary/fallback map, rgbd timing -- the exit-code mapping, and a fixed inventory
-  check that the 78 declared check ids are exactly the documented set (no typos, no
+  check that the 79 declared check ids are exactly the documented set (no typos, no
   drops). New fixtures live under `tests/verify/fixtures/` (`hidraw/`, `iio/`,
   `adaptive-*.json`, `hid-verdict-*.txt`, `led-dry-*.txt`, `battery-limit-dry.json`,
   `powerctl-profile-*.json`, `curve-dup.json`, `rgbd-check-nojournal.txt`,

@@ -70,8 +70,8 @@ OK = "OK"
 WARN = "WARN"
 FAIL = "FAIL"
 
-COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "audio")
-ROOT_COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu")
+COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "audio", "decky")
+ROOT_COMPONENTS = ("volume", "leds", "rgb", "sleep", "bluetooth", "power", "imu", "decky")
 USER_COMPONENTS = ("leds", "rgb", "audio")
 DAEMON_COMPONENTS = ("volume", "leds", "rgb", "power")
 HID_COMPONENTS = ("leds", "rgb")
@@ -82,6 +82,7 @@ IMU_COMPONENTS = ("imu",)
 BT_COMPONENTS = ("bluetooth",)
 AUDIO_COMPONENTS = ("audio",)
 SLEEP_COMPONENTS = ("sleep",)
+DECKY_COMPONENTS = ("decky",)
 ALL = ("*",)
 
 SYSTEMD_MIN = 247  # ProtectProc=invisible, used by the shipped units
@@ -91,6 +92,8 @@ HHD_MIN = (4, 1, 12)  # the version the volume-rocker patches are written for
 REPO_REQUIRED = (
     "tools/oxp3-hw-install.sh",
     "tools/lib/install-common.sh",
+    "tools/lib/decky_plugin.py",
+    "tools/decky-oxp3-status/artifact.sha256",
     "tools/oxp3-voltap/install.sh",
     "tools/oxp3-power-install.sh",
     "tools/oxp3-bt-firmware.sh",
@@ -141,6 +144,10 @@ COMPONENT_FILES = {
     ),
     "imu": ("/etc/modprobe.d/oxp3-bmi160.conf",),
     "audio": ("{home}/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf",),
+    "decky": (
+        "{home}/homebrew/plugins/oxp3-status/plugin.json",
+        "{home}/homebrew/plugins/oxp3-status/.oxp3-managed",
+    ),
 }
 
 BT_CACHE_FILES = ("ibt-00a0-0291-iml.sfi", "ibt-00a0-0291-pci.sfi")
@@ -703,12 +710,12 @@ def check_core(ctx: Context) -> List[Check]:
             "no non-root user to own the user-scope units (audio, leds, rgb): %r"
             % ctx.user,
             "run the installer with sudo from your desktop session, or pass --user NAME",
-            USER_COMPONENTS,
+            USER_COMPONENTS + DECKY_COMPONENTS,
         ))
     else:
         out.append(ok("core.user", "core", "unprivileged target user",
                       "%s (uid %d, home %s)" % (ctx.user, entry[0], entry[1]),
-                      USER_COMPONENTS))
+                      USER_COMPONENTS + DECKY_COMPONENTS))
 
     if re.search(r"\s", ctx.repo):
         out.append(fail(
@@ -890,8 +897,9 @@ def check_tools(ctx: Context) -> List[Check]:
                        "install systemd-udev; rules cannot be reloaded by hand"))
     out.append(require("tool.systemd-hwdb", "systemd-hwdb", "systemd-hwdb",
                        ("volume",), "install systemd; the volume hwdb must compile"))
-    out.append(require("tool.python3", "python3", "python3", DAEMON_COMPONENTS,
-                       "install python3 (the daemons and oxp3-powerctl are Python)"))
+    out.append(require("tool.python3", "python3", "python3",
+                       DAEMON_COMPONENTS + DECKY_COMPONENTS,
+                       "install python3 (the daemons, oxp3-powerctl and the Decky installer helper are Python)"))
     if ctx.euid == 0:
         out.append(require("tool.runuser", "runuser", "runuser", USER_COMPONENTS,
                            "install util-linux (root uses runuser for the "

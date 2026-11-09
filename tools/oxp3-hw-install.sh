@@ -23,11 +23,15 @@
 #   rgb        this script: shared udev rule + user config/unit (tools/oxp3-rgbd.py)
 #   imu        this script: files/oxp3-bmi160.conf   (keeps the BMI260 driver bound)
 #   audio      tools/audio/install-user.sh           (speaker EQ, user scope)
+#   decky      this script: verified plugin zip -> ~/homebrew/plugins/oxp3-status
+#              (tools/lib/decky_plugin.py; backs up an existing copy first and
+#              restarts plugin_loader.service only when asked)
 #
 # Root model: the hardware components write to /etc, /usr/local/libexec and /sys, so they need
 # root.  The user-scope halves (home-button unit, RGB keeper, speaker EQ, status) are always run
-# as the *invoking* user - the one who called sudo - via runuser, never as root.  A dry run and
-# --status never need root.
+# as the *invoking* user - the one who called sudo - via runuser, never as root.  The Decky
+# plugin directory is root-owned because Decky's plugin_loader runs as root, so --decky also
+# needs root.  A dry run and --status never need root.
 #
 # Safety: no vendor blobs, no kernel or EC pokes beyond what each component's own installer does,
 # idempotent (re-running changes nothing it already applied), and --root=DIR installs everything
@@ -56,13 +60,15 @@ BATTERY_LIMIT=""
 BATTERY_BYPASS=""
 BT_ARGS=(--persist=items)
 POWER_ARGS=()
+DECKY_ARTIFACT=""
+DECKY_RESTART=0
 SELECTED=()
 TARGET_USER=""
 ORIG_ARGS=("$@")
 SUDO_SHIM_DIR=""
 
 # fixed component order: root-heavy first, user scope last
-ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio)
+ALL_COMPONENTS=(volume sleep bluetooth power imu leds rgb audio decky)
 
 say() { printf '\n== %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -73,9 +79,13 @@ usage() {
     cat <<'EOF'
 
 Options:
-  --all                     every component (volume sleep bluetooth power imu leds rgb audio)
-  --volume --leds --sleep --bluetooth --power --rgb --imu --audio
+  --all                     every component (volume sleep bluetooth power imu leds rgb audio decky)
+  --volume --leds --sleep --bluetooth --power --rgb --imu --audio --decky
                             select components (repeatable; --all selects every one)
+  --decky-artifact PATH     install this plugin zip instead of building one; it must match the
+                            sha256 recorded in tools/decky-oxp3-status/artifact.sha256
+  --restart-plugin-loader   after --decky, restart plugin_loader.service (root; only when the
+                            unit exists - otherwise the exact command is printed)
   --uninstall               remove the selected components (keeps user config unless --purge-config)
   --purge-config            with --uninstall: also remove ~/.config/oxp3-rgb.toml and oxp3-voltap.conf
   --status                  read-only state report, no root needed
@@ -193,6 +203,146 @@ needs_root_scope() {
     done
     return 1
 }
+
+# The Decky plugin lives under the desktop user's home, but Decky's plugin_loader runs as root
+# and owns ~/homebrew/plugins: resolving the invoking user is needed for the path (not for a
+# user unit), so it must happen for --decky as well as for the user-scope components.
+needs_target_user() {
+    needs_user_scope || component_selected decky
+}
+
+# ---------------------------------------------------------------------------------------------
+# Decky plugin (tools/lib/decky_plugin.py does resolution, validation and the file moves)
+# ---------------------------------------------------------------------------------------------
+DECKY_ARTIFACT_FROM_BUILD=0
+DECKY_HELPER="$repo/tools/lib/decky_plugin.py"
+DECKY_UNIT=plugin_loader.service
+
+decky_require_helper() {
+    command -v python3 >/dev/null 2>&1 || die "python3 is required for --decky (tools/lib/decky_plugin.py)"
+    [[ -f $DECKY_HELPER ]] || die "missing $DECKY_HELPER"
+}
+
+decky_helper() { python3 "$DECKY_HELPER" "$@"; }
+
+decky_home() { user_home "$TARGET_USER"; }
+
+decky_plugins_dir() {
+    decky_require_helper
+    local home override=()
+    home=$(decky_home)
+    [[ -n ${OXP3_DECKY_PLUGINS_DIR:-} ]] && override=(--plugins-dir "$OXP3_DECKY_PLUGINS_DIR")
+    decky_helper resolve --home "$home" ${PREFIX:+--root "$PREFIX"} ${override[@]+"${override[@]}"}
+}
+
+decky_state_dir() {
+    if [[ -n ${OXP3_STATE_DIR:-} ]]; then
+        printf '%s' "$OXP3_STATE_DIR"
+    else
+        printf '%s%s/.local/state/oxp3-fixes' "$PREFIX" "$(decky_home)"
+    fi
+}
+
+# Build with the repository's deterministic build when the toolchain exists; otherwise reuse an
+# existing zip, which must match the digest recorded in tools/decky-oxp3-status/artifact.sha256.
+decky_select_artifact() {
+    local z
+    if [[ -n $DECKY_ARTIFACT ]]; then
+        [[ -f $DECKY_ARTIFACT ]] || die "the --decky-artifact file does not exist: $DECKY_ARTIFACT"
+        printf '%s' "$DECKY_ARTIFACT"
+        return 0
+    fi
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+        say "Decky plugin: building the package (node $(node --version), npm $(npm --version))"
+        if "$repo/tools/decky-oxp3-status/build.sh" --offline; then
+            DECKY_ARTIFACT_FROM_BUILD=1
+            z=$(ls -1t "$repo"/tools/decky-oxp3-status/build/oxp3-status-*.zip 2>/dev/null | head -n 1) || true
+            [[ -n $z ]] || die "the plugin build produced no build/oxp3-status-*.zip"
+            printf '%s' "$z"
+            return 0
+        fi
+        warn "the plugin build failed; falling back to an existing verified artifact"
+    else
+        printf '  node/npm not found; reusing an existing verified plugin zip\n'
+    fi
+    z=$(ls -1t "$repo"/tools/decky-oxp3-status/build/oxp3-status-*.zip 2>/dev/null | head -n 1) || true
+    [[ -n $z ]] || die \
+        "no plugin artifact to reuse; build it on a host with node/npm (cd tools/decky-oxp3-status && ./build.sh --offline) and commit/copy build/oxp3-status-*.zip, or pass --decky-artifact PATH"
+    printf '%s' "$z"
+}
+
+# A reused zip must match the recorded digest; a freshly built one is verified structurally and
+# only reports a digest difference (a legitimate source change produces a new artifact).
+decky_verify_artifact() {
+    local artifact=$1 out args=(verify-artifact --repo "$repo" --artifact "$artifact")
+    (( DECKY_ARTIFACT_FROM_BUILD )) || args+=(--require-recorded)
+    if ! out=$(decky_helper "${args[@]}" 2>&1); then
+        printf '%s\n' "$out" >&2
+        if (( DECKY_ARTIFACT_FROM_BUILD )); then
+            die "the freshly built plugin artifact failed validation"
+        fi
+        die "the plugin artifact did not verify against the recorded sha256 (tools/decky-oxp3-status/artifact.sha256)"
+    fi
+    printf '%s\n' "$out" | sed 's/^/  /'
+}
+
+decky_loader_unit_exists() {
+    [[ -z $PREFIX ]] || return 1
+    command -v systemctl >/dev/null 2>&1 || return 1
+    systemctl cat "$DECKY_UNIT" >/dev/null 2>&1
+}
+
+# Never restarts anything by default: print the exact command.  --restart-plugin-loader is the
+# explicit opt-in (and still refuses when the unit does not exist).
+decky_restart_notice() {
+    if [[ -n $PREFIX ]]; then
+        printf '  restart required on the host after this --root simulation:\n'
+        printf '    sudo systemctl restart %s\n' "$DECKY_UNIT"
+        return 0
+    fi
+    if ! command -v systemctl >/dev/null 2>&1 || ! decky_loader_unit_exists; then
+        printf '  %s is not installed; no restart needed (is Decky Loader present?)\n' "$DECKY_UNIT"
+        return 0
+    fi
+    if (( ! DECKY_RESTART )); then
+        printf '  restart required so Decky Loader discovers the plugin:\n'
+        printf '    sudo systemctl restart %s\n' "$DECKY_UNIT"
+        printf '  (Decky -> Settings -> Developer -> Reload plugins re-reads the directory, but a\n'
+        printf '   changed main.py still needs the service restart)\n'
+        return 0
+    fi
+    if (( DRY_RUN )); then
+        printf '  [dry-run] systemctl restart %s\n' "$DECKY_UNIT"
+        return 0
+    fi
+    if (( EUID != 0 )); then
+        warn "--restart-plugin-loader needs root; run: sudo systemctl restart $DECKY_UNIT"
+        return 0
+    fi
+    if run systemctl restart "$DECKY_UNIT"; then
+        printf '  restarted %s\n' "$DECKY_UNIT"
+    else
+        warn "could not restart $DECKY_UNIT; run: sudo systemctl restart $DECKY_UNIT"
+    fi
+}
+
+# Did plugin_loader log this plugin?  Read-only; an unreadable journal is reported, not guessed.
+decky_loader_log() {
+    local out cmd=(journalctl -u "$DECKY_UNIT" -b --no-pager -n 2000)
+    [[ -n $PREFIX ]] && { printf 'n/a'; return 0; }
+    command -v journalctl >/dev/null 2>&1 || { printf 'no-journalctl'; return 0; }
+    command -v timeout >/dev/null 2>&1 && cmd=(timeout 10 "${cmd[@]}")
+    if ! out=$("${cmd[@]}" 2>/dev/null); then
+        printf 'unreadable'
+        return 0
+    fi
+    if grep -qiE 'oxp3[-_ ]?status' <<<"$out"; then
+        printf 'loaded'
+    else
+        printf 'not-logged'
+    fi
+}
+
 
 # As the invoking user (needed for --user systemctl/pactl/install into $HOME).  Never root.
 as_user_run() {
@@ -478,6 +628,68 @@ comp_audio_install() {
     fi
 }
 
+comp_decky_install() {
+    say "Decky status plugin (verified zip -> the Decky plugins directory)"
+    local target artifact out
+    target=$(decky_plugins_dir)
+    [[ -n $target ]] || die "could not resolve the Decky plugins directory"
+    printf '  plugin directory: %s\n' "$target"
+    if (( DRY_RUN )); then
+        if [[ -n $DECKY_ARTIFACT ]]; then
+            printf '  [dry-run] verify and install artifact: %s\n' "$DECKY_ARTIFACT"
+        else
+            printf '  [dry-run] build tools/decky-oxp3-status/build.sh --offline when node+npm exist,\n'
+            printf '            otherwise reuse a build/oxp3-status-*.zip verified against\n'
+            printf '            tools/decky-oxp3-status/artifact.sha256\n'
+        fi
+        printf '  [dry-run] back up an existing oxp3-status directory into %s/decky-backups/\n' "$(decky_state_dir)"
+        printf '  [dry-run] validate plugin.json (name/author/version/api_version) and dist/index.js\n'
+        decky_restart_notice
+        return 0
+    fi
+    artifact=$(decky_select_artifact)
+    printf '  artifact: %s\n' "$artifact"
+    decky_verify_artifact "$artifact"
+
+    local state args=(install --repo "$repo" --artifact "$artifact" --home "$(decky_home)")
+    [[ -n $PREFIX ]] && args+=(--root "$PREFIX")
+    [[ -n ${OXP3_DECKY_PLUGINS_DIR:-} ]] && args+=(--plugins-dir "$OXP3_DECKY_PLUGINS_DIR")
+    state=$(decky_state_dir)
+    [[ -n $state ]] && args+=(--state-dir "$state")
+    if ! out=$(decky_helper "${args[@]}" 2>&1); then
+        printf '%s\n' "$out" >&2
+        die "the Decky plugin was not installed (directory left as it was)"
+    fi
+    printf '%s\n' "$out" | sed 's/^/  /'
+    if (( EUID == 0 )) && [[ -z $PREFIX ]]; then
+        # the Decky plugins directory is normally root-owned; keep the state tree writable by the
+        # invoking user so a later unprivileged status/rollback can read the backups
+        chown -R "$TARGET_USER:$(id -gn "$TARGET_USER")" "$state/decky-backups" 2>/dev/null || true
+    fi
+    decky_restart_notice
+}
+
+comp_decky_uninstall() {
+    say "Decky status plugin"
+    local target out args=(uninstall --home "$(decky_home)")
+    target=$(decky_plugins_dir)
+    printf '  plugin directory: %s\n' "$target"
+    [[ -n $PREFIX ]] && args+=(--root "$PREFIX")
+    [[ -n ${OXP3_DECKY_PLUGINS_DIR:-} ]] && args+=(--plugins-dir "$OXP3_DECKY_PLUGINS_DIR")
+    if (( DRY_RUN )); then
+        printf '  [dry-run] verify %s/.oxp3-managed and remove %s\n' "$target" "$target"
+        decky_restart_notice
+        return 0
+    fi
+    if ! out=$(decky_helper "${args[@]}" 2>&1); then
+        printf '%s\n' "$out" >&2
+        die "refusing to remove the Decky plugin directory (see the message above)"
+    fi
+    printf '%s\n' "$out" | sed 's/^/  /'
+    printf '  backups of replaced copies stay in %s/decky-backups/\n' "$(decky_state_dir)"
+    decky_restart_notice
+}
+
 # ---------------------------------------------------------------------------------------------
 # components: uninstall
 # ---------------------------------------------------------------------------------------------
@@ -710,16 +922,18 @@ print_verify_hints() {
     component_selected imu && printf '  tools/oxp3-imu.py selftest\n'
     component_selected rgb && printf '  systemctl --user status oxp3-rgbd; tools/oxp3-rgbd.py --check\n'
     component_selected audio && printf '  pactl list sinks short | grep oxp3_speaker_eq; tools/audio/eq_response.py\n'
+    component_selected decky && printf '  tools/oxp3-hw-install.sh --status; tools/oxp3-verify.sh (decky.dir, decky.loaded)\n'
     printf '  tools/oxp3-status.sh          # the full read-only matrix (docs/INSTALL-HW.md)\n'
 }
 
 do_install_or_uninstall() {
     local action=$1
-    [[ ${#SELECTED[@]} -gt 0 ]] || die "no component selected; use --all or one of --volume --leds --sleep --bluetooth --power --rgb --imu --audio (see --help)"
+    [[ ${#SELECTED[@]} -gt 0 ]] || die "no component selected; use --all or one of --volume --leds --sleep --bluetooth --power --rgb --imu --audio --decky (see --help)"
 
     # user-scope target: only resolve when something needs it (audio is user-only; leds/rgb
-    # install a user unit and therefore also need it)
-    if needs_user_scope; then
+    # install a user unit and therefore also need it; decky needs the home that owns the
+    # root-owned Decky plugins directory)
+    if needs_target_user; then
         resolve_user
     fi
 
@@ -777,6 +991,19 @@ do_install_or_uninstall() {
 yes_no() { if [[ -e "$1" ]]; then printf yes; else printf no; fi; }
 prefixed_yes_no() { yes_no "$(p "$1")"; }
 
+decky_status_line() {
+    local line args
+    if ! command -v python3 >/dev/null 2>&1 || [[ ! -f $DECKY_HELPER ]]; then
+        printf 'state=unknown (python3/helper missing)'
+        return 0
+    fi
+    args=(status --home "$(decky_home)" --format line)
+    [[ -n $PREFIX ]] && args+=(--root "$PREFIX")
+    [[ -n ${OXP3_DECKY_PLUGINS_DIR:-} ]] && args+=(--plugins-dir "$OXP3_DECKY_PLUGINS_DIR")
+    line=$(decky_helper "${args[@]}" 2>/dev/null) || line='state=error (status failed)'
+    printf '%s' "$line"
+}
+
 print_status() {
     local home f n lim beh
     if [[ -z $TARGET_USER ]]; then
@@ -830,6 +1057,8 @@ print_status() {
         "$(sed -n 's/^[[:space:]]*effect[[:space:]]*=[[:space:]]*//p' "$PREFIX$home/.config/oxp3-rgb.toml" 2>/dev/null | head -1 | tr -d '"' | tr -d "'" | sed 's/[[:space:]]*$//')"
     printf '  audio:        eq-dropin=%s\n' \
         "$(yes_no "$PREFIX$home/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf")"
+    printf '  decky:        %s loader-log=%s\n' \
+        "$(decky_status_line)" "$(decky_loader_log)"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -843,7 +1072,7 @@ add_component() {
 
 while (( $# )); do
     case $1 in
-        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--imu|--audio)
+        --volume|--leds|--sleep|--bluetooth|--power|--rgb|--imu|--audio|--decky)
             add_component "${1#--}" ;;
         --all) for c in "${ALL_COMPONENTS[@]}"; do add_component "$c"; done ;;
         --uninstall|--remove) ACTION=uninstall ;;
@@ -851,6 +1080,10 @@ while (( $# )); do
         --dry-run|-n) DRY_RUN=1 ;;
         --force) FORCE=1 ;;
         --purge-config) PURGE_CONFIG=1 ;;
+        --decky-artifact) [[ $# -ge 2 ]] || die "--decky-artifact needs a zip path"
+                          DECKY_ARTIFACT=$2; shift ;;
+        --decky-artifact=*) DECKY_ARTIFACT=${1#*=} ;;
+        --restart-plugin-loader) DECKY_RESTART=1 ;;
         --root) [[ $# -ge 2 ]] || die "--root needs a directory"; PREFIX=${2%/}; shift
                 [[ -n $PREFIX ]] || die "--root=/ is not a simulation"; ;;
         --root=*) PREFIX=${1#*=}; PREFIX=${PREFIX%/}
@@ -892,6 +1125,20 @@ if [[ $ACTION != status ]]; then
     if (( IMU_RELOAD )); then
         component_selected imu || die "--imu-reload needs --imu"
     fi
+    if [[ -n $DECKY_ARTIFACT ]]; then
+        component_selected decky || die "--decky-artifact needs --decky"
+        [[ $ACTION == install ]] || die "--decky-artifact only applies to install, not --uninstall"
+        [[ -f $DECKY_ARTIFACT ]] || die "--decky-artifact file does not exist: $DECKY_ARTIFACT"
+    fi
+    if (( DECKY_RESTART )); then
+        component_selected decky || die "--restart-plugin-loader needs --decky"
+    fi
+fi
+
+# an environment prefix is the same simulation as --root (used by tests/scripts)
+if [[ -z $PREFIX && -n ${OXP3_ROOT:-} ]]; then
+    PREFIX=${OXP3_ROOT%/}
+    [[ -n $PREFIX ]] || die "OXP3_ROOT=/ is not a simulation"
 fi
 
 if [[ -n $PREFIX ]]; then

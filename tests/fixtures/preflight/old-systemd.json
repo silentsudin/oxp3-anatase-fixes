@@ -23,7 +23,8 @@
       "bluetooth",
       "power",
       "imu",
-      "audio"
+      "audio",
+      "decky"
     ]
   }
 }

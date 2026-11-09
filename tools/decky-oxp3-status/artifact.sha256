@@ -1,0 +1,12 @@
+# Recorded digest of the known-good deterministic plugin package.
+#
+# tools/decky-oxp3-status/build.sh writes build/oxp3-status-<version>.zip with
+# fixed timestamps and sorted entries, so rebuilding the same sources reproduces
+# this hash.  tools/oxp3-hw-install.sh --decky verifies a reused zip against this
+# value before installing it; a freshly built zip is installed as-is (a changed
+# source legitimately changes the digest) and only reports a mismatch.
+#
+# Regenerate after an intentional source change:
+#   cd tools/decky-oxp3-status && ./build.sh --offline
+#   sha256sum build/oxp3-status-*.zip   # then update the line below
+be58c260b52986360df19bcd87cddb309357e9d0111ccc68133923044cdbd539  oxp3-status-1.0.0.zip

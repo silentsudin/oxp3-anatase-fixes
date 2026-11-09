@@ -23,7 +23,7 @@ tools/repo-test.sh --full          # adds the C/Decky builds and libfprint synta
 tools/repo-test.sh --list          # inventory: mode, tier, timeout, description
 tools/repo-test.sh --json          # machine-readable result
 tools/repo-test.sh --only 'fp-*'   # only matching suites (repeatable glob)
-tools/repo-test.sh --integration   # opt-in integration suites (real daemon + uinput)
+tools/repo-test.sh --integration   # opt-in integration suites (real daemons + uinput/uhid)
 
 make test                          # == tools/repo-test.sh --fast
 make test-full                     # == tools/repo-test.sh --full
@@ -89,6 +89,7 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `fp-session-root` | fast | fast | 120 s | root + the BF63112 device (otherwise SKIP) | – (`--dry-run` only) |
 | `decky-build` | full | fast | 600 s | `node`, `npm`, `python3` | `node_modules/`, `dist/`, `build/` |
 | `decky-package` | full | fast | 120 s | `python3`, `dist/index.js` | `build/*.zip` |
+| `decky-install` | fast | fast | 120 s | `bash`, `python3`, a built plugin zip (otherwise SKIP) | private `$TMPDIR` |
 | `decky-selftest` | fast | fast | 120 s | `python3` | – |
 | `decky-cli` | fast | fast | 120 s | `python3` | `<log>/decky-cli.json` |
 | `verify-selftest` | fast | fast | 120 s | `bash` | – (private `$TMPDIR`) |
@@ -104,6 +105,7 @@ is the per-suite limit enforced with `timeout --kill-after=10`.
 | `hid-selftest` | fast | fast | 60 s | `python3` | – |
 | `unit` | fast | fast | 120 s | `python3` | – (synthetic sysfs/config fixtures in `$TMPDIR`) |
 | `voltap-integration` | fast | medium | 180 s | `python3-evdev`, `/dev/uinput` + readable event nodes | – (ephemeral uinput devices; opt-in `OXP3_REPO_TEST_INTEGRATION=1`, otherwise `SKIP`) |
+| `hid-integration` | fast | medium | 240 s | `python3`, root (or ACL) on `/dev/uhid` + `/dev/uinput` | – (ephemeral uhid device; opt-in `OXP3_REPO_TEST_INTEGRATION=1`, otherwise `SKIP`; exit 77 without access) |
 | `gamewrap` | fast | fast | 120 s | `python3` | – (synthetic HOME/config/panel state; stub commands) |
 | `eq-model` | fast | fast | 60 s | `python3` | – |
 | `firstrun` | fast | medium | 120 s | `python3`, `bash` | – (self-test in `$TMPDIR`; the dry run writes nothing) |
@@ -144,6 +146,15 @@ Areas and what is actually proven:
   `OXP3_REPO_TEST_INTEGRATION=1` and skips with the exact access command when
   `/dev/uinput` or the event nodes are not readable; it never touches a real
   input device (see [hw/volume-buttons.md](hw/volume-buttons.md)).
+* **home button / LED end to end** — opt-in `hid-integration`
+  (`tests/integration/hid/`): creates one virtual vendor HID device through
+  `/dev/uhid` with the documented `0xFF00` descriptor and drives the real
+  `oxp3-homebtn.py`, `oxp3-led.py` and `oxp3-rgbd.py` against it — `0xB2`
+  press/release → `KEY_HOMEPAGE` on the daemon's uinput keyboard, exact
+  `UHID_OUTPUT` bytes for a solid colour + brightness, and a destroy/recreate
+  reconnect by identity. Tools are pinned with `--device` so a real
+  `1a86:fe00` interface is never opened; root is needed and the suite skips
+  with the exact command otherwise (see [VALIDATION.md](VALIDATION.md)).
 * **fingerprint C** — the independent C implementation is compiled with
   `-std=gnu11 -Wall -Wextra -Werror` and run against the same 10 vectors
   (324 checks). `fp-syntax` compiles the libfprint driver against our clearly
@@ -375,7 +386,7 @@ Host (`anatase`, kernel `7.2.7-an28`, no root, `make`/`gcc`/`shellcheck` absent,
 | `tools/repo-test.sh --fast` | 36 rows: **29 pass, 0 fail, 7 skip**, exit 0, ≈ 88 s (`audio-eq-isolation` 28.1 s, `firstrun` 13.8 s, `health` 8.0 s, `cli-contracts` 6.7 s, `gen-docs` 5.2 s) |
 | `tools/repo-test.sh --only cli-contracts` | 1 row: 1 pass, exit 0, ≈ 6.7 s (`--only` selects only the matching suite) |
 | `tools/repo-test.sh --list` | 36 suites; 31 run in `--fast`, 36 in `--full` |
-| `tools/repo-test.sh --integration` | 1 row: 1 pass, exit 0, ≈ 17.7 s (real daemon + ephemeral uinput devices; the default run reports it as `SKIP`) |
+| `tools/repo-test.sh --integration` | 2 rows: 1 pass, 1 skip, exit 0, ≈ 9.9 s (real volume daemon + ephemeral uinput devices PASS; `hid-integration` SKIPs without root on this host, with the `sudo tests/integration/hid/run.sh` hint) |
 | `python3 -m unittest discover -s tests/unit -q` | `Ran 682 tests ... OK (skipped=1)`, ≈ 4.9 s |
 | `tools/repo-test.sh --only shellcheck` | 0 pass / 1 skip, exit 0 (reason: not installed) |
 | deliberately broken copy in `/tmp`, `--only fp-python` (earlier round) | 1 fail, exit 1, failing command + log path printed |

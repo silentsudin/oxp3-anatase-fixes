@@ -211,7 +211,8 @@ class RgbDaemon:
         # RTC across a suspend or an NTP step (CLOCK_REALTIME can).
         self.last_apply = 0.0
         self.last_error = None
-        self.dev_present = hid.find_vendor_hidraw() is not None
+        self.device = getattr(args, "device", None)
+        self.dev_present = self._discover() is not None
         self.hhd_journal_ok = False
         self._last_hhd_mode = None
         self._last_sched_log = 0.0
@@ -229,6 +230,19 @@ class RgbDaemon:
         self.threads = {}
 
     # -- helpers ---------------------------------------------------------
+
+    def _discover(self) -> str | None:
+        """The pinned ``--device`` node, or the discovered vendor interface.
+
+        A pinned node is authoritative: there is deliberately no fallback to a
+        discovery scan while it is set, so the integration harness can pin its
+        virtual uhid node while a real 1a86:fe00 interface is present.  A
+        pinned node that is gone is reported as absent (the retry/watchdog
+        paths then behave exactly as for an unplugged device).
+        """
+        if self.device:
+            return self.device if os.path.exists(self.device) else None
+        return hid.find_vendor_hidraw()
 
     def reload_config(self) -> bool:
         try:
@@ -277,7 +291,7 @@ class RgbDaemon:
             return False
         frames = build_frames(cfg)
         now = self.clock.monotonic()
-        dev = hid.find_vendor_hidraw()
+        dev = self._discover()
         if not dev:
             if self.last_apply == 0:
                 self._retry_after("vendor hidraw node not present", now)
@@ -435,7 +449,7 @@ class RgbDaemon:
 
     def device_watcher(self) -> None:
         while not self.stop.is_set():
-            dev = hid.find_vendor_hidraw()
+            dev = self._discover()
             present = dev is not None
             if present != self.dev_present:
                 self.dev_present = present
@@ -552,7 +566,7 @@ class RgbDaemon:
     def check(self) -> int:
         unit = self.args.hhd_unit
         ok = True
-        dev = hid.find_vendor_hidraw()
+        dev = self._discover()
         print(f"device        : {dev or 'NOT FOUND'}")
         if dev:
             st = os.stat(dev)
@@ -610,6 +624,8 @@ def main(argv=None) -> int:
     ap.add_argument("--once", action="store_true", help="apply once and exit")
     ap.add_argument("--check", action="store_true", help="print state and exit")
     ap.add_argument("--dry-run", action="store_true", help="print frames, never write")
+    ap.add_argument("--device", metavar="PATH", default=None,
+                    help="use this hidraw node instead of discovering 1a86:fe00")
     ap.add_argument("--watchdog", type=float, default=30.0,
                     help="seconds between unconditional re-applies (0 = off)")
     ap.add_argument("--reapply-delay", type=float, default=0.5,

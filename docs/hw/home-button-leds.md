@@ -280,6 +280,10 @@ cd /var/home/holzr/git/linux_scratch/oxp3-anatase-fixes/tools
 # what is where, and is the node accessible?
 ./oxp3-led.py status
 
+# pin a specific node instead of discovering 1a86:fe00 (tests/debugging);
+# oxp3-led.py, oxp3-rgbd.py and oxp3-homebtn.py all take --device PATH
+./oxp3-led.py --device /dev/hidraw9 solid ff0000
+
 # encoder self-check against frames captured from this machine
 ./oxp3-led.py selftest
 
@@ -314,7 +318,7 @@ Done without privileges:
 * `./oxp3-led.py --dry-run solid/effect/brightness` - frame layout is
   64 bytes, envelope and pad correct.
 * `./oxp3-homebtn.py` - creates the virtual keyboard successfully
-  (`/sys/class/input/input*/name` = "OXP3 Home Button TEST"), retries the
+  (`/sys/class/input/input*/name` = "OXP3 Home Button"), retries the
   hidraw open on `EACCES` until the udev rule is installed.
 * Device/interface/descriptor inventory as in section 1.
 
@@ -333,6 +337,55 @@ candidates are (a) a global enable the vendor utility sends during its
 own init, (b) a different side id outside `01..07`, or (c) the strip
 being wired to a separate MCU channel. `probe` distinguishes (b); (a)
 would need a USB capture on Windows.
+
+---
+
+## 7a. Integration harness (virtual HID, opt-in, root)
+
+`tests/integration/hid/` drives the **real** `tools/oxp3-homebtn.py`,
+`tools/oxp3-led.py` and `tools/oxp3-rgbd.py` against a virtual HID device that
+the harness creates through `/dev/uhid` with the exact descriptor from section 1
+(usage page `0xFF00`, no report id, 64-byte input+output reports). It uses the
+USB identity the tools look for (`1a86:fe00`) with an unmistakable test
+name/phys (`OXP3 uhid integration test …` / `phys-oxp3-uhid-integration-test`),
+so nothing on the real machine can be confused with it. The kernel exposes it
+as a normal `/dev/hidrawN` without an input child - the same shape as interface
+`1.2`.
+
+```sh
+sudo tests/integration/hid/run.sh                 # whole harness
+sudo tests/integration/hid/run.sh --keep          # keep device/daemons for debugging
+sudo tests/integration/hid/run.sh --timeout 180   # watchdog (default 120 s)
+OXP3_REPO_TEST_INTEGRATION=1 tools/repo-test.sh --only hid-integration
+```
+
+It proves, end to end:
+
+* **home button**: the daemon opens the pinned node, parses the documented
+  `0xB2` report and emits `KEY_HOMEPAGE` press/release on the uinput keyboard it
+  creates (unique test name `OXP3 Home Button (integration test)`, read back
+  through evdev);
+* **LED bytes**: `solid ff6600 --sides top --level medium` puts exactly the
+  brightness frame and the 18-triplet solid frame on the wire (`UHID_OUTPUT`),
+  byte-identical to the encoder and to the tool's own `send <hex>` output;
+* **rgbd**: `--once` applies exactly the planned frames and `--check` reports
+  the node;
+* **reconnect**: destroying the uhid device produces `device lost:` /
+  `retrying in`, recreating it gives `reconnect #1 to <new node> (identity …)`,
+  and the button still works afterwards.
+
+The tools are pinned with `--device`, so their discovery scan is never used
+while a real `1a86:fe00` interface is present; the harness also checks that every
+node path in the daemons' logs and every hidraw fd they hold is one of its own
+virtual nodes. It never writes to a real hidraw node, never runs sudo itself and
+tears everything down in a `finally` block (including on SIGTERM/SIGINT).
+Missing access skips with exit 77 and prints the `sudo` command.
+
+What still requires the real device: the physical home-button press and MCU
+timing; the udev rule/ACL and USB sysfs identity (a uhid device has no USB port
+or serial); real USB reset/suspend re-enumeration; and whether the firmware
+actually accepts the frames (the harness proves what we send, not how the LEDs
+look).
 
 ---
 

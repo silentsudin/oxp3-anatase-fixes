@@ -3,8 +3,9 @@
 This is the single install guide for the **hardware** work in this repository: volume rocker, home
 button + top LEDs, body RGB, suspend/resume wake policy, Bluetooth firmware, power envelope (PL1 /
 PL2 / PL4), fan, battery charge limit / charge-inhibit ("bypass"), adaptive TDP, IMU blacklist and
-the speaker EQ. The driver stack (kernel modules, Mesa, gamescope, XeSS, MangoHud, firmware RPMs)
-stays in [`oxp3-fixes-fast.sh`](../oxp3-fixes-fast.sh) / [`oxp3-fixes.sh`](../oxp3-fixes.sh).
+the speaker EQ, plus the optional Decky status plugin. The driver stack (kernel modules, Mesa,
+gamescope, XeSS, MangoHud, firmware RPMs) stays in
+[`oxp3-fixes-fast.sh`](../oxp3-fixes-fast.sh) / [`oxp3-fixes.sh`](../oxp3-fixes.sh).
 
 Nothing here was executed on the host while writing it. Every privileged command below is copy-paste
 material for you.
@@ -44,6 +45,7 @@ Why a separate entry point:
 | RGB | orchestrator + `tools/oxp3-hid.rules`, `tools/oxp3-rgbd.*` | root rule + user config/unit | yes |
 | IMU | orchestrator + `files/oxp3-bmi160.conf` | root (`/etc/modprobe.d`) | yes |
 | audio / EQ | `tools/audio/install-user.sh` | user (`~/.config/pipewire`) | yes |
+| Decky plugin | `tools/lib/decky_plugin.py` + `tools/decky-oxp3-status/` | root (the Decky plugins directory is root-owned) | plugin: yes, reinstalled after the next Decky update |
 
 ## 1. Prerequisites
 
@@ -85,6 +87,12 @@ tools/oxp3-preflight.sh
 #    sleep units, RGB keeper + config, speaker EQ, and (re)asserts LEDs + power units.
 sudo tools/oxp3-hw-install.sh --sleep --leds --power --rgb --audio
 
+# 2b. Decky status plugin (builds with node/npm, else reuses a zip verified against
+#     tools/decky-oxp3-status/artifact.sha256; restarts no service unless asked).
+sudo tools/oxp3-hw-install.sh --decky
+#    then, so Decky discovers it (or Decky -> Settings -> Developer -> Reload plugins):
+sudo systemctl restart plugin_loader.service
+
 # 3. state report + verification (see section 5)
 tools/oxp3-hw-install.sh --status
 tools/oxp3-status.sh
@@ -100,10 +108,11 @@ hhd volume-rocker patch and layers the Bluetooth firmware package. The `oxp3-vol
 cd /var/home/holzr/git/linux_scratch/oxp3-anatase-fixes
 
 sudo tools/oxp3-hw-install.sh --dry-run --all    # review the exact commands first
-sudo tools/oxp3-hw-install.sh --all              # volume sleep bluetooth power imu leds rgb audio
+sudo tools/oxp3-hw-install.sh --all              # volume sleep bluetooth power imu leds rgb audio decky
 ```
 
-`--all` includes the `oxp3-voltap` volume daemon and the standalone Bluetooth-firmware script.
+`--all` includes the `oxp3-voltap` volume daemon, the standalone Bluetooth-firmware script and the
+Decky status plugin.
 
 ### 2.3 Optional policy steps (not applied by `--all`)
 
@@ -140,6 +149,7 @@ sudo tools/oxp3-hw-install.sh --audio --audio-activate
 ```bash
 ./oxp3-fixes-fast.sh install          # driver stack for the new deployment (twice after a kernel change)
 sudo tools/oxp3-hw-install.sh --sleep --leds --power --rgb --audio   # idempotent re-assert
+sudo tools/oxp3-hw-install.sh --decky                                # rebuild the plugin for this checkout
 ```
 
 ### 2.5 After the reboot: one command for the whole evidence set
@@ -172,11 +182,14 @@ Every flag is repeatable and idempotent.
 | `--rgb` | shared HID rule, `~/.config/oxp3-rgb.toml` (if absent), user unit `oxp3-rgbd.service` | `--uninstall --rgb [--purge-config]` |
 | `--imu` | `/etc/modprobe.d/oxp3-bmi160.conf` (keeps BMI260 bound; read-only `oxp3-imu.py` needs no install) | `--uninstall --imu` |
 | `--audio` | `~/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf` | `--uninstall --audio` |
+| `--decky` | the OXP3 Status plugin under `~/homebrew/plugins/oxp3-status` with an `.oxp3-managed` marker; the previous copy is backed up first | `--uninstall --decky` |
 
 Other useful switches: `--dry-run` (print every command, change nothing), `--status` (read-only
 matrix), `--root DIR` (offline simulation), `--user NAME` (whose user-scope files are written;
 default `SUDO_USER`), `--bt-persist=items|omit|none`, `--bt-with-ddc`, `--bt-no-reload`,
-`--bt-from DIR`, `--imu-reload`, `--purge-config`.
+`--bt-from DIR`, `--imu-reload`, `--purge-config`, `--decky-artifact PATH` (install a specific
+plugin zip, verified against the recorded sha256), `--restart-plugin-loader` (restart
+`plugin_loader.service` after `--decky`; never automatic, and only when the unit exists).
 
 Known interaction: **do not run `--volume` together with the hhd volume-rocker patch** that
 `oxp3-fixes*.sh install` applies — both normalise the same key. Pick one; the orchestrator's
@@ -202,6 +215,9 @@ Known interaction: **do not run `--volume` together with the hhd volume-rocker p
 ~/.config/systemd/user/oxp3-rgbd.service
 ~/.config/oxp3-rgb.toml
 ~/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf
+~/.local/state/oxp3-fixes/decky-backups/<UTC stamp>/oxp3-status   (previous plugin copies)
+
+~/homebrew/plugins/oxp3-status/          (root-owned: plugin.json, main.py, dist/, .oxp3-managed)
 ```
 
 `/etc/oxp3/` (power profile, baseline, fan curve) and `/var/log/oxp3-adaptivetdp.jsonl` are created
@@ -313,6 +329,13 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 Verify rows with a backticked id are checks in `tools/oxp3-verify.sh` (`--json` for machines, `--full` for the invasive ones); `cmd:` rows are direct read-only commands. Every component below is installed through `tools/oxp3-hw-install.sh` unless its row in [`docs/hw/REGISTRY.md`](hw/REGISTRY.md) says otherwise.
 <!-- END GENERATED: install-verify -->
 
+The Decky status plugin is a diagnostics component, so it is not one of the hardware rows above.
+Its two checks are `decky.dir` (expected `plugin.json`, `main.py` and `dist/index.js`) and
+`decky.loaded` (this boot's `plugin_loader` journal has a load line for `oxp3-status`; UNKNOWN when
+the journal is unreadable). `tools/oxp3-hw-install.sh --status` prints the same state as one
+`decky:` line, and the offline `--root` suite is `tests/integration/decky/run.sh`
+(`tools/repo-test.sh --only decky-install`).
+
 ## 6. Uninstall
 
 ```bash
@@ -328,9 +351,11 @@ sudo tools/oxp3-hw-install.sh --uninstall --all
 
 Order: hardware first, driver stack second, then reboot. `--uninstall --all` keeps the user
 configuration (`~/.config/oxp3-rgb.toml`, `/etc/oxp3-voltap.conf`, `/etc/oxp3/`); add
-`--purge-config` to drop the two user/config files as well. What is *not* automatic: layered rpms
-(`oxp3-firmware`, `kmod-oxp3`) are removed by `oxp3-fixes-fast.sh uninstall` / `rpm-ostree uninstall`;
-the orchestrator warns if it sees them.
+`--purge-config` to drop the two user/config files as well. `--uninstall --decky` removes only the
+plugin directory whose `.oxp3-managed` marker names our plugin; a foreign or unmarked
+`oxp3-status` directory is refused, and the `decky-backups` copies are kept. What is *not*
+automatic: layered rpms (`oxp3-firmware`, `kmod-oxp3`) are removed by
+`oxp3-fixes-fast.sh uninstall` / `rpm-ostree uninstall`; the orchestrator warns if it sees them.
 
 The files the installers **modify in place** (`~/heroic-launch.sh`, a Heroic GamesConfig JSON,
 `/etc/dracut.conf.d/60-oxp3-bt-firmware.conf`, `/etc/modprobe.d/oxp3-bmi160.conf`, the hhd Python
@@ -360,6 +385,7 @@ an initramfs that already carries the firmware, manual EC limits) is in
 | adaptive TDP | `sudo systemctl disable --now oxp3-adaptivetdp` (SIGTERM restores the preset that was active when it started) |
 | IMU | `sudo rm -f /etc/modprobe.d/oxp3-bmi160.conf; sudo reboot` (or `sudo modprobe -r bmi260_i2c; sudo modprobe bmi160_i2c` to see the old misdetection again) |
 | audio | `tools/audio/eq-off.sh` (removes the drop-in, restores the hardware speaker as default) |
+| Decky plugin | `sudo tools/oxp3-hw-install.sh --uninstall --decky` (marker-checked; the `decky-backups` copies stay under `~/.local/state/oxp3-fixes/`), then `sudo systemctl restart plugin_loader.service`; a specific earlier copy is restored with `cp -a` from its backup (docs/decky-plugin.md) |
 
 ## 8. Interaction with the driver installers
 
@@ -393,9 +419,12 @@ an initramfs that already carries the firmware, manual EC limits) is in
 * `systemd-hwdb --root=<tmp> update` on the volume hwdb: compiles to `hwdb.bin`.
 * `tools/oxp3-hw-install.sh --dry-run --all`: prints the full command plan, exit 0, writes nothing.
 * Simulated install into `--root /tmp/oxp3-sim` (create the directory first; sleep, leds, rgb, imu,
-  audio), a second idempotent
+  audio, decky), a second idempotent
   run, then `--uninstall`: the expected files appear, stay unchanged, and are removed; user config is
-  kept. The component installers that write to `/` correctly report `[root-prefix] skipped`.
+  kept. The component installers that write to `/` correctly report `[root-prefix] skipped`. The
+  Decky half additionally covers install/status/reinstall-with-backup/uninstall, a missing artifact,
+  a tampered sha256 and a foreign directory with the same name (`tests/integration/decky/run.sh`,
+  suite `decky-install`).
 * `shellcheck` is not installed on this host; the scripts pass `bash -n` and the runtime paths above.
 
 ## 10. Open points

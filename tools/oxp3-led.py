@@ -22,6 +22,7 @@ Examples:
     oxp3-led.py off
     oxp3-led.py probe                         # light one id at a time
     oxp3-led.py selftest
+    oxp3-led.py --device /dev/hidraw9 solid ff0000   # pin a node (tests/debug)
 
 Permission: /dev/hidrawN of the vendor interface is root-only by default.
 Install tools/oxp3-hid.rules once (sudo) as described in
@@ -77,8 +78,8 @@ def level_value(text):
     return n
 
 
-def cmd_status(_args, _dry):
-    dev = hid.find_vendor_hidraw()
+def cmd_status(args, _dry):
+    dev = getattr(args, "device", None) or hid.find_vendor_hidraw()
     print(f"vendor interface : {dev or 'NOT FOUND'}")
     if dev:
         node = os.path.basename(dev)
@@ -114,12 +115,12 @@ def cmd_zones(_args, _dry):
     print(f"{hid.PRESET_CLASSIC_RGB!r} = OXP classic (solid, id 9)")
 
 
-def _emit(frames, dry, what):
+def _emit(frames, dry, what, device=None):
     echo_frames(frames, dry)
     if dry:
         return 0
     warn_hhd()
-    fd, _ = hid.open_report()
+    fd, _ = hid.open_report(dev=device)
     try:
         hid.send(fd, frames)
     finally:
@@ -138,7 +139,8 @@ def cmd_solid(args, dry):
         frames.append(hid.rgb_brightness(side, True, level))
         frames.append(maker(side, rgb))
     return _emit(frames, dry, f"set {args.colour}"
-                              f"{' (breathing)' if args.breath else ''} on sides {sides}")
+                              f"{' (breathing)' if args.breath else ''} on sides {sides}",
+                 getattr(args, "device", None))
 
 
 def cmd_brightness(args, dry):
@@ -148,13 +150,15 @@ def cmd_brightness(args, dry):
     else:
         level = level_value(args.level)
         frames = [hid.rgb_brightness(s, True, level) for s in sides]
-    return _emit(frames, dry, f"brightness {args.level} on sides {sides}")
+    return _emit(frames, dry, f"brightness {args.level} on sides {sides}",
+                 getattr(args, "device", None))
 
 
 def cmd_off(args, dry):
     sides = hid.parse_sides(args.sides)
     frames = [hid.rgb_off(s) for s in sides]
-    return _emit(frames, dry, f"off on sides {sides}")
+    return _emit(frames, dry, f"off on sides {sides}",
+                 getattr(args, "device", None))
 
 
 def cmd_effect(args, dry):
@@ -171,7 +175,8 @@ def cmd_effect(args, dry):
     label = args.name
     if kind == "solid":
         label += f" (solid {value[0]:02x}{value[1]:02x}{value[2]:02x})"
-    return _emit(frames, dry, f"preset {label} on sides {sides}")
+    return _emit(frames, dry, f"preset {label} on sides {sides}",
+                 getattr(args, "device", None))
 
 
 def cmd_probe(args, dry):
@@ -184,7 +189,7 @@ def cmd_probe(args, dry):
         for i, side in enumerate(sides):
             print(f"dry-run side {side}: {hid.rgb_solid(side, palette[i % len(palette)]).hex()}")
         return 0
-    fd, _ = hid.open_report()
+    fd, _ = hid.open_report(dev=getattr(args, "device", None))
     try:
         for i, side in enumerate(sides):
             colour = palette[i % len(palette)]
@@ -201,6 +206,8 @@ def cmd_probe(args, dry):
 def main(argv=None):
     p = argparse.ArgumentParser(description="OneXPlayer 3 body RGB control")
     p.add_argument("--dry-run", action="store_true", help="print frames, do not write")
+    p.add_argument("--device", metavar="PATH", default=None,
+                   help="use this hidraw node instead of discovering 1a86:fe00")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("status", help="show device, ids and zone ids")

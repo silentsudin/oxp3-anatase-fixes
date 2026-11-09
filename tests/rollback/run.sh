@@ -22,6 +22,15 @@ home=$prefix$user_home
 state=$home/.local/state/oxp3-fixes
 rbt=$repo/tools/oxp3-rollback.sh
 hw=$repo/tools/oxp3-hw-install.sh
+# The Decky component is part of the same --root simulation when a built plugin zip exists.
+decky_zip=$repo/tools/decky-oxp3-status/build/oxp3-status-1.0.0.zip
+decky_args=()
+decky_uninstall_args=()
+if [ -f "$decky_zip" ]; then
+    decky_args=(--decky --decky-artifact "$decky_zip")
+    decky_uninstall_args=(--decky)
+fi
+decky_plugin=$home/homebrew/plugins/oxp3-status
 fail=0
 ok()   { printf 'ok   %s\n' "$*"; }
 bad()  { printf 'FAIL %s\n' "$*"; fail=$((fail + 1)); }
@@ -65,7 +74,7 @@ check "verify lists the unbacked launcher" grep -q '^UNBACKED .*heroic-launch\.s
 check "verify lists the unbacked Heroic JSON" grep -q '^UNBACKED .*1423049311\.json$' "$tmp/verify-before.txt"
 
 # --- 2. install into the prefix (the hardware installer adopts the existing wiring) -----------
-if ! "$hw" --root "$prefix" --sleep --leds --rgb --imu --audio >"$tmp/install.log" 2>&1; then
+if ! "$hw" --root "$prefix" "${decky_args[@]+"${decky_args[@]}"}" --sleep --leds --rgb --imu --audio >"$tmp/install.log" 2>&1; then
     bad "hardware install into the prefix"
     sed 's/^/     /' "$tmp/install.log"
 else
@@ -73,6 +82,10 @@ else
 fi
 check "the install adopted the launcher wiring" grep -q 'adopting the existing Heroic launcher wiring' "$tmp/install.log"
 check "adoption created the manifest under the prefix" test -f "$state/manifest.tsv"
+if [ "${#decky_args[@]}" -gt 0 ]; then
+    check "the Decky plugin is installed in the prefix" test -f "$decky_plugin/plugin.json"
+    check "the Decky plugin carries our ownership marker" test -f "$decky_plugin/.oxp3-managed"
+fi
 
 # --- 3. perform the in-place edits (launcher wrapper + Heroic env cleanup) -------------------
 if ! "$rbt" apply --root "$prefix" --heroic-env-clean 1423049311 >"$tmp/apply.log" 2>&1; then
@@ -96,16 +109,20 @@ check_eq "verify after recording exits 0" 0 "$rc"
 # --- 4. a second install+apply must be idempotent (no new backup, same file list) ------------
 rows_before=$(wc -l <"$state/manifest.tsv")
 find "$prefix" -type f | sort >"$tmp/tree-before.txt"
-"$hw" --root "$prefix" --sleep --leds --rgb --imu --audio >/dev/null 2>&1
+"$hw" --root "$prefix" "${decky_args[@]+"${decky_args[@]}"}" --sleep --leds --rgb --imu --audio >/dev/null 2>&1
 "$rbt" apply --root "$prefix" --heroic-env-clean 1423049311 >/dev/null 2>&1
 rows_after=$(wc -l <"$state/manifest.tsv")
 check_eq "a second run does not add a backup" "$rows_before" "$rows_after"
 find "$prefix" -type f -not -path "$state/*" | sort >"$tmp/tree-after.txt"
 check_eq "a second run changes no installed file" \
     "$(grep -v "$state/" "$tmp/tree-before.txt")" "$(cat "$tmp/tree-after.txt")"
+if [ "${#decky_args[@]}" -gt 0 ]; then
+    check "the Decky reinstall backed up the previous copy" \
+        bash -c "ls -d '$state/decky-backups'/*/oxp3-status >/dev/null 2>&1"
+fi
 
 # --- 5. uninstall the hardware components ----------------------------------------------------
-if ! "$hw" --root "$prefix" --uninstall --sleep --leds --rgb --imu --audio >"$tmp/uninstall.log" 2>&1; then
+if ! "$hw" --root "$prefix" --uninstall "${decky_uninstall_args[@]+"${decky_uninstall_args[@]}"}" --sleep --leds --rgb --imu --audio >"$tmp/uninstall.log" 2>&1; then
     bad "hardware uninstall from the prefix"
     sed 's/^/     /' "$tmp/uninstall.log"
 else
@@ -114,6 +131,11 @@ fi
 check "the sleep units are gone" test ! -e "$prefix/etc/systemd/system/oxp3-sleep-wakeup.service"
 check "the IMU blacklist is gone" test ! -e "$prefix/etc/modprobe.d/oxp3-bmi160.conf"
 check "the speaker EQ drop-in is gone" test ! -e "$home/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf"
+if [ "${#decky_args[@]}" -gt 0 ]; then
+    check "the Decky plugin directory is gone" test ! -e "$decky_plugin"
+    check "the Decky backup survives the uninstall" \
+        bash -c "ls -d '$state/decky-backups'/*/oxp3-status >/dev/null 2>&1"
+fi
 
 # --- 6. restore every in-place edit ----------------------------------------------------------
 if ! "$rbt" restore --root "$prefix" >"$tmp/restore.log" 2>&1; then
