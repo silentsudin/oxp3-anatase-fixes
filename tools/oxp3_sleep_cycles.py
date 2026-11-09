@@ -2119,9 +2119,20 @@ def cmd_run(opts):
             boot_before = _now_ns(time.CLOCK_BOOTTIME)
             mono_before = _now_ns(time.CLOCK_MONOTONIC)
             wall_before = time.time()
-            cmd = ["rtcwake", "-m", "mem", "-s", str(opts.sleep_s), "-v"]
-            if rtc:
-                cmd += ["-d", rtc["name"]]
+            direct = bool(getattr(opts, "direct", False))
+            method = "rtcwake-direct" if direct else "logind"
+            cmd = []
+            if direct:
+                cmd = ["rtcwake", "-m", "mem", "-s", str(opts.sleep_s), "-v"]
+                if rtc:
+                    cmd += ["-d", rtc["name"]]
+            else:
+                # Arm the wake alarm only, then suspend through logind, which runs
+                # the sleep.target units (SD-reader park) and lets the EC/firmware
+                # see a normal OS-initiated suspend instead of a raw power-state write.
+                cmd = ["rtcwake", "-m", "no", "-s", str(opts.sleep_s), "-v"]
+                if rtc:
+                    cmd += ["-d", rtc["name"]]
             print("     %s" % " ".join(cmd))
             rc = None
             log = ""
@@ -2131,11 +2142,24 @@ def cmd_run(opts):
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=opts.sleep_s + 300,
+                    timeout=opts.sleep_s + 120,
                     check=False,
                 )
                 rc = proc.returncode
                 log = ((proc.stdout or "") + (proc.stderr or "")).strip()[-4000:]
+                if not direct:
+                    if rc != 0:
+                        raise OSError("could not arm the RTC alarm (%s)" % rc)
+                    suspend = subprocess.run(
+                        ["systemctl", "suspend"],
+                        capture_output=True,
+                        text=True,
+                        timeout=opts.sleep_s + 300,
+                        check=False,
+                    )
+                    rc = suspend.returncode
+                    log += ("\n[systemctl suspend] rc=%d\n%s"
+                            % (rc, ((suspend.stdout or "") + (suspend.stderr or "")).strip()[-2000:]))
             except subprocess.TimeoutExpired as exc:
                 log = "rtcwake timed out after %d s: %s" % (
                     opts.sleep_s + 300,
