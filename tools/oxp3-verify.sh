@@ -1086,6 +1086,27 @@ ensure_status_json() {
     return 1
 }
 
+status_field() { # dotted path -> scalar from the status JSON (file path or text)
+    local src=${STATUS_JSON:-}
+    [ -n "$src" ] && have python3 || return 1
+    python3 - "$1" "$src" <<'PY' 2>/dev/null
+import json, sys
+path = sys.argv[1].split(".")
+src = sys.argv[2]
+try:
+    cur = json.load(open(src, encoding="utf-8")) if src and not src.lstrip().startswith("{") else json.loads(src)
+except Exception:
+    raise SystemExit(1)
+for part in path:
+    if isinstance(cur, dict) and part in cur:
+        cur = cur[part]
+    else:
+        raise SystemExit(1)
+print(json.dumps(cur) if isinstance(cur, (dict, list)) else cur)
+PY
+}
+
+
 ind_state() { # status indicator state or empty
     [ -n "$STATUS_JSON" ] || return 1
     local line
@@ -3008,6 +3029,28 @@ print(((d.get("game") or {}).get("prefix") or ""))' 2>/dev/null)
         simple_ind gfx.xmx.igc xmx.igc graphics "IGC ocloc present" "" "launch with the XMX stack: tools/xmx-run.sh sets XMX_IGC_DIR ; docs/xess-xmx.md"
         simple_ind gfx.xmx.icd xmx.icd graphics "per-game XMX env" "" "launch with tools/xmx-run.sh or the xmx-enable.sh launch option ; docs/xess-xmx.md"
     fi
+    local xstate="" xev=""
+    xstate=$(status_field xess.state)
+    xev=$(status_field xess.evidence)
+    case ${xstate:-} in
+        xess-on-xmx)
+            record gfx.xmx.runtime graphics "XeSS runtime path" PASS \
+                "XMX active: the game mapped libxess and the XMX driver/shim is in the launch" \
+                "${xev:-libxess mapped + xmx driver}" "" ;;
+        xess-on-standard)
+            record gfx.xmx.runtime graphics "XeSS runtime path" FAIL \
+                "the game loads XeSS, but the XMX driver/shim is not part of this launch" \
+                "${xev:-libxess mapped without the XMX driver}" \
+                "launch through tools/xmx-run.sh, or enable the Steam launch option: tools/xmx-steam-enable.sh --appid <id>" ;;
+        xess-off)
+            record gfx.xmx.runtime graphics "XeSS runtime path" SKIP \
+                "the running game does not load XeSS (upscaler off or not supported)" "${xev:-}" "" ;;
+        no-game)
+            record gfx.xmx.runtime graphics "XeSS runtime path" SKIP "no game running" "${xev:-}" "" ;;
+        *)
+            record gfx.xmx.runtime graphics "XeSS runtime path" UNKNOWN \
+                "xess state missing from oxp3-status --json" "${xstate:-}" "tools/oxp3-status.sh --json" ;;
+    esac
     simple_ind gfx.xmx.kernels xmx.kernels graphics "kernel cache populated" "" "compile a kernel: tools/xmx-cm-compile-nodgrf.sh ; docs/xess-xmx.md"
 
     local ts tv
@@ -3674,7 +3717,7 @@ run_selftest() {
         dsp.hdr dsp.gamemodehdr dsp.icc dsp.panel dsp.vibrance \
         fan.curvedup fan.savemode \
         gfx.mesa gfx.gamescope gfx.working gfx.xe gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc \
-        gfx.xmx.icd gfx.xmx.kernels gfx.xmx.trace \
+        gfx.xmx.icd gfx.xmx.kernels gfx.xmx.runtime gfx.xmx.trace \
         hhd.busy hhd.grab hhd.unit \
         hid.access hid.node hid.rule \
         homebtn.mapping homebtn.press homebtn.unit \

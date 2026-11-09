@@ -89,6 +89,7 @@ components:
       entrypoint: "./oxp3-fixes-fast.sh install"
     verify:
       - id: gfx.gamescope
+      - id: gfx.xmx.runtime
       - id: gfx.mesa
         expect: "the host driver prefix matches the recorded build"
       - id: gfx.working

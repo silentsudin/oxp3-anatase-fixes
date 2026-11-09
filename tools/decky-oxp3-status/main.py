@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 
 # ---------------------------------------------------------------------------
 # Recorded expectations (docs/WORKING-BUILD-2026-11-08.md, docs/xess-xmx.md).
@@ -1939,6 +1939,8 @@ def collect_status(home_override: Optional[str] = None) -> Dict[str, Any]:
             "hostname": os.uname().nodename,
         },
         "game": sanitize_game(game),
+        # Runtime truth for XeSS/XMX: mapped libxess, mapped XMX driver, shim.
+        "xess": collect_xess(home),
         "env_sources": [
             {"name": src["name"], "live": src["live"], "keys": len(src["env"])}
             for src in sources
