@@ -42,7 +42,10 @@ if command -v podman >/dev/null 2>&1; then
   exec podman run --rm --security-opt label=disable \
     -v "$repo":/w:z -w /w/tools/fingerprint "$img" \
     sh -c "if [ -n '$pkg' ]; then dnf -y -q install $pkg >/dev/null || exit 3; fi; \
-           make proto-test"
+           make proto-test; \
+           if [ -f /usr/include/openssl/evp.h ]; then \
+             make session-syntax; \
+           else echo 'session-syntax: skipped (no openssl-devel in the image)'; fi"
 fi
 
 cat >&2 <<'EOF'

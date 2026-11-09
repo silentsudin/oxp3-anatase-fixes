@@ -43,6 +43,21 @@
 
 #include "bf63112_proto.h"
 
+/*
+ * The session layer (SM2/SM3/SM4 handshake, 0xA2) is implemented in
+ * bf63112_session_openssl.c and is OPT-IN: nothing there has run against the
+ * sensor yet, and it needs an OpenSSL with SM support.  Define
+ * BF63112_ENABLE_SESSION to compile the handshake into open(); the derived
+ * 16-byte SM4 key then lives in the device context, ready for the secure
+ * `0xB0`/`0xB1` frames once those payloads are decoded.
+ *
+ * The exact experiment plan (and what to do if the module rejects the
+ * handshake) is in docs/hw/fingerprint.md.
+ */
+#ifdef BF63112_ENABLE_SESSION
+#include "bf63112_session_openssl.h"
+#endif
+
 /* One spidev readback.  The answer to a query fits easily; GET_IMG chunks can
  * be up to 8140 bytes and would need a larger buffer (and a spidev bufsiz
  * change), which this driver does not use. */
@@ -76,6 +91,13 @@ struct _FpDeviceBf63112
   /* bookkeeping for the in-flight command, if any */
   FpiSsm *active_ssm;
   guint8 active_opcode;
+
+#ifdef BF63112_ENABLE_SESSION
+  /* ephemeral host SM2 keypair for this open, and the derived SM4 key */
+  Bf63112Keypair session_keypair;
+  Bf63112Session session;
+  gboolean session_ready;
+#endif
 };
 
 G_DECLARE_FINAL_TYPE (FpDeviceBf63112, fp_device_bf63112, FP, DEVICE_BF63112,
@@ -380,6 +402,70 @@ bf63112_parse_firmware (FpDeviceBf63112 *self, const guint8 *body, size_t len)
 
 /* --------------------------------------------------------------- FpDevice */
 
+#ifdef BF63112_ENABLE_SESSION
+static void
+bf63112_open_session_done (FpiSsm *ssm, FpDevice *dev, GError *error)
+{
+  FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
+  Bf63112Request *req = fpi_ssm_get_data (ssm);
+  int rc;
+
+  self->active_ssm = NULL;
+  if (error != NULL)
+    {
+      /* A failed handshake must not keep the device closed: queries and
+       * firmware/sensor info still work in plaintext, and the decisive
+       * question (does 0xB0 need the session?) is answered on hardware. */
+      fp_warn ("BF63112: session handshake transport failed: %s",
+               error->message);
+      g_error_free (error);
+      fpi_device_open_complete (dev, NULL);
+      return;
+    }
+
+  rc = bf63112_session_complete (&self->session, &self->session_keypair,
+                                 req->answer, req->answer_len);
+  if (rc != 0)
+    fp_warn ("BF63112: session handshake failed: %s",
+             bf63112_session_strerror (rc));
+  else
+    {
+      self->session_ready = TRUE;
+      fp_info ("BF63112: session established (SM2-ECDH + GM/T 0003 KDF + SM3 tag)");
+    }
+  fpi_device_open_complete (dev, NULL);
+}
+
+/* CMD_QUERY_ROOT_KEY: 65-byte payload 0x04 || host public key (X||Y). */
+static void
+bf63112_open_session_start (FpDevice *dev)
+{
+  FpDeviceBf63112 *self = FP_DEVICE_BF63112 (dev);
+  guint8 payload[BF63112_SESSION_REQUEST_LEN];
+  int rc;
+
+  rc = bf63112_keypair_generate (&self->session_keypair);
+  if (rc == 0)
+    rc = bf63112_rootkey_request (&self->session_keypair, payload);
+  if (rc != 0)
+    {
+      fp_warn ("BF63112: cannot start session: %s",
+               bf63112_session_strerror (rc));
+      bf63112_session_wipe (payload, sizeof payload);
+      fpi_device_open_complete (dev, NULL);
+      return;
+    }
+
+  bf63112_request_start (dev,
+                         bf63112_request_new (self,
+                                              BF63112_OP_QUERY_ROOT_KEY,
+                                              BF63112_PHASE_START, 0, payload,
+                                              sizeof payload),
+                         bf63112_open_session_done);
+  bf63112_session_wipe (payload, sizeof payload);
+}
+#endif /* BF63112_ENABLE_SESSION */
+
 static void
 bf63112_open_fw_done (FpiSsm *ssm, FpDevice *dev, GError *error)
 {
@@ -397,6 +483,14 @@ bf63112_open_fw_done (FpiSsm *ssm, FpDevice *dev, GError *error)
     {
       bf63112_parse_firmware (self, req->answer, req->answer_len);
     }
+
+#ifdef BF63112_ENABLE_SESSION
+  /* The vendor driver always runs 0xA2 right after the firmware query.  The
+   * completion of open() moves into the handshake callback so a refusal is
+   * reported but does not block the plaintext path. */
+  bf63112_open_session_start (dev);
+  return;
+#endif
   fpi_device_open_complete (dev, NULL);
 }
 

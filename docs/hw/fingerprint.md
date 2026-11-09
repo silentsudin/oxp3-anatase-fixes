@@ -12,14 +12,22 @@ libfprint 1.94.100, fprintd 1.94.5.
 
 ## Summary
 
-The sensor is **not USB at all**: it is a Betterlife module on the Intel LPSS
-SPI bus, enumerated by ACPI as `ACPI\BF63112` at `\_SB.PC00.SPI1.FPRT`
+On this unit the sensor is **not USB**: it is a Betterlife module on the Intel
+LPSS SPI bus, enumerated by ACPI as `ACPI\BF63112` at `\_SB.PC00.SPI1.FPRT`
 ("FPRT" = fingerprint reader target). Linux boots, the SPI controller works,
 and the sensor sits there with **no driver bound and no `spidev` node**, so
 neither `fprintd` nor anything else can talk to it. Windows drives it with a
-user-mode (UMDF2) WBDI driver that speaks a small framed command protocol over
-SPI; the module is **match-in-sensor** (it stores and compares templates
-itself, and it owns the matching algorithm).
+user-mode (UMDF2) WBDI driver that speaks a small framed command protocol; the
+module is **match-in-sensor** (it stores and compares templates itself, and it
+owns the matching algorithm).
+
+The vendor driver is not SPI-only: the *same DLL* also implements a full USB
+transport, selected at runtime by the device's hardware ID, for the SKU whose
+module is wired to USB (`USB\VID_347D&PID_0302/0304`). Our board's ACPI device
+never takes that branch. This matters for the protocol work below - see
+[`fingerprint-transport.md`](fingerprint-transport.md) for the per-SKU verdict
+and for the consequence that the framing recovered here belongs to the USB
+branch.
 
 The good news: the protocol is simple and we recovered its framing exactly
 (start byte, length, CRC-32, command block, 16-byte alignment), the full
@@ -193,7 +201,7 @@ Addresses are RVAs of that DLL; `1800xxxxx` = `0x180000000 + RVA`.
 | file (X64) | role | evidence |
 |---|---|---|
 | `BetterlifeFingerprintDevice.inf` | UMDF **2.15** function driver, no `.sys` | `UmdfLibraryVersion=2.15.0`, `ServiceBinary=%12%\UMDF\...`, `AddService=WUDFRd` |
-| `BetterlifeFingerprintDevice.dll` | the UMDF driver: SPB transport, framing, crypto, command state machines | 7 sections, WPP tracing, imports only `ntdll/KERNEL32/ADVAPI32/WppRecorderUM` |
+| `BetterlifeFingerprintDevice.dll` | the UMDF driver: **both** transports (USB and SPI/SPB, chosen at `EvtDevicePrepareHardware`), framing, crypto, command state machines; see [`fingerprint-transport.md`](fingerprint-transport.md) | 7 sections, WPP tracing, imports only `ntdll/KERNEL32/ADVAPI32/WppRecorderUM` |
 | `BetterlifeEngineAdapter.dll` | WBDI engine adapter (matching policy) | INF `EngineAdapterBinary` |
 | `BetterlifeSensorAdapter.dll` | WBDI sensor adapter (capture) | INF `SensorAdapterBinary` |
 | `BetterlifeStorageAdapter.dll` | WBDI storage adapter (template DB) | INF `StorageAdapterBinary`; also carries SM2/SM3 constants |
@@ -212,11 +220,21 @@ The driver never imports a crypto DLL: SM2/SM3/SM4 are statically linked from
 **GmSSL** (path strings `...\encrypt\gmssl\sm2_alg.c`, and the SM2 curve table
 exists in the image). That is the "SM3 layer".
 
-### Transport (proven)
+### Framing (proven) - recovered from the **USB** implementation
+
+> **Scope correction (2026-11-09).** Everything in this subsection is reachable
+> only from the driver's USB branch: `FUN_180004358`'s only transfer primitive
+> is `FUN_18001B6E4`, which writes to the USB out-pipe at device-context
+> `+0x118` through `WdfUsbTargetPipeWriteSynchronously`, and `FUN_18001AC60` is
+> the USB continuous-reader completion routine. The ACPI/SPI branch used on
+> this host (`FUN_180015acc`) never calls either and references neither CRC
+> table; it sends a one-byte selector plus payload and waits for its interrupt.
+> So: **the frame format below is real, but it is not yet proven to be the SPI
+> wire format.** See [`fingerprint-transport.md`](fingerprint-transport.md) §5.
 
 | fact | provenance |
 |---|---|
-| one `SPB` write per frame; target handle at device-context `+0x118`; 200 ms transfer timeout (constant `-2000000` in 100 ns units) | `FUN_18001B6E4` |
+| one USB bulk write per frame; out-pipe handle at device-context `+0x118`; 200 ms transfer timeout (constant `-2000000` in 100 ns units) | `FUN_18001B6E4` |
 | frame built from a descriptor: `+0x00` 16-byte nonce, `+0x10` opcode, `+0x11` phase, `+0x12` arg:u16, `+0x14` len:u32, `+0x18` data ptr, `+0x20` wait flag, `+0x24` secure-frame flag, `+0x2c` per-attempt ms, `+0x30` total ms | `FUN_1800028F8` (block builder), `FUN_180004358` (send/wait) |
 | CRC-32 (reflected `0xEDB88320`) over everything before the CRC; table at `0x180046030` | `FUN_180004358` |
 | retry loop: `ResetEvent`, send, `WaitForSingleObject(event, +0x2c)`, re-send until `+0x30` elapses | `FUN_180004358` |
@@ -227,49 +245,96 @@ exists in the image). That is the "SM3 layer".
 Per-command timeouts in the descriptor: 1000/2030 ms for ordinary queries,
 5000/10010 ms for the GET_IMG data phase, 2000/4016 ms for the vendor restore.
 
-### Session / root-key layer (proven enough to describe)
+### Session / root-key layer (proven)
 
-The layer exists and is **not** a fixed key or a DPAPI blob:
+The layer sits *above* the transport - the answer handler and the derive step
+are shared by both branches - so the crypto result below is transport
+independent. It exists, it is an ephemeral SM2 exchange, and it is now
+recovered down to the byte: no fixed key, no DPAPI blob, and no ambiguity left
+in the KDF or the tag. The Python implementation
+(`tools/fingerprint/fpbf63112/crypto.py`) reproduces it step by step and is
+vector-tested; the driver-side C equivalent is
+`tools/fingerprint/bf63112_session_openssl.c`, opt-in behind
+`BF63112_ENABLE_SESSION`.
 
 1. At open the driver runs `0xA0` (fw version) -> `0xA1` (scheme) ->
    **key generation** -> `0xA2` (root key) -> `0xC0` (UID) -> `0xC1` (sensor
    info) (`FUN_180019764`).
-2. `FUN_180007C28` generates an **SM2 key pair per open** (random scalar in
-   `[1, n-1]`, public point = scalar·G) into a 96-byte blob tagged `0x04` at
-   device-context `+0x16A78`; the private scalar sits at `+0x16AB9`.
+2. `FUN_180007C28` generates an **SM2 keypair per open**: a random scalar `d`
+   in `[1, n-1]` (retried while `d` is zero or `>= n`), `P = [d]G`; the key
+   blob is `tag 0x04 @+0 | X @+1 | Y @+0x21 | d @+0x41`, all 32-byte
+   big-endian (`FUN_180008024` serialises BIGNUM limbs big-endian), i.e. the
+   tag byte sits one byte before the 64-byte public point.
 3. `FUN_180001A3C` sends `0xA2` with a **65-byte** payload from that blob
-   (`1 tag + 64 bytes of the public point`).
-4. The answer handler `FUN_1800185A0` requires **≥ 0x71 bytes** and parses:
-   `status:u8 | device public point 64 B | SM3 tag 32 B | klen:u32 |
-   wrapped key`, i.e. the concrete offsets are `+0 / +1 / +0x41 / +0x61 / +0x65`
-   relative to the body.
-5. `FUN_180007AA0` loads the device point, multiplies by the driver's private
-   scalar, runs the GM/T 0003 KDF over the 64-byte shared point, XORs the
-   wrapped field, verifies the SM3 tag, and stores the resulting **16-byte key
-   at device-context `+0x16A58`**.
+   (`len = 0x41`) and sets the descriptor's **secure-frame flag** (`+0x24 = 1`).
+   The descriptor's 16-byte header is zero-filled there and the sender
+   (`FUN_180004358`) replaces it with 16 random bytes whenever the flag is set.
+4. The answer handler `FUN_1800185A0` requires **>= 0x71 bytes** and copies
+   `status:u8 @0 | device point 64 B @1 | SM3 tag 32 B @0x41 | klen:u32 LE
+   @0x61 | wrapped @0x65` (the vendor answer carries `klen = 0x10`).
+5. `FUN_180007AA0` loads the device point as a Jacobian point
+   (`FUN_180008ED8`), computes `S = [d]P_dev` (`FUN_1800091E4`: 256-step
+   double-and-add over the scalar's bits), converts to affine
+   (`FUN_180008F34`) and serialises the shared point as `X || Y` big-endian
+   (`FUN_1800093F8`) - a **64-byte** KDF input.
+6. **KDF** (`FUN_18000945C`): for `ctr = 1, 2, ...` compute
+   `SM3(S || BE32(ctr))`, take up to 32 bytes per block and stop at `klen`.
+   That is exactly the GM/T 0003.4 counter KDF, with the counter a 32-bit
+   big-endian integer starting at 1. An all-zero result is rejected
+   (`FUN_180007D08` returns "all zero" -> error).
+7. **Unwrap**: `key = mask xor wrapped`, in place (`FUN_180007A6C`), `klen`
+   bytes.
+8. **Tag**: `SM3(X || key || Y)` - X first, then the derived key, then Y (the
+   three `FUN_18000B544` updates in `FUN_180007AA0`) - compared with the
+   answer's 32-byte tag by `memcmp`. Only when it matches is the 16-byte key
+   stored at device-context `+0x16A58`.
 
 So the session key is an ephemeral ECDH result; there is no static secret to
-extract, and the only long-lived key material is inside the MCU. Nothing here
-is needed to *parse* traffic, but the vendor driver sets the secure-frame flag
-on `0xA2` and on every enrol/identify command, so a Linux driver that speaks
-plaintext may be refused for those opcodes. That is a hardware question, not a
-static one (see below).
+extract, and the only long-lived key material is inside the MCU.
 
-### The frame cipher (partial)
+**What is proven vs. assumed.** The chain above, the offsets, the KDF
+construction, the tag construction and the SM4 frame transform are proven from
+the driver's code, and the primitives are pinned to published GB/T vectors by
+the test suite (SM3 `abc` + the 64-byte vector, SM4 ECB, the GB/T 32918 sample
+keypair, KDF definition, ECDH symmetry). What remains *assumed* is only what
+static analysis cannot show:
 
-`FUN_18000CE30` is the **SM4** key schedule: it consumes the 16-byte key
-big-endian, XORs `FK` (`0xA3B1BAC6 0x56AA3350 0x677D9197 0xB27022DC`, stored
-byte-swapped at `0x46690`) and iterates 32 rounds with the `CK` table at
-`0x466A0`; the S-box is the standard SM4 S-box at `0x38550`. `FUN_18000B620`
-applies one block, `FUN_18000BFD0` loads an IV.
+* that the module accepts a **plaintext** `0xA2` - the vendor sends it as a
+  secure frame and, with no session key yet, that frame is transformed with the
+  all-zero initial key, which only works if the context is zeroed at open.
+  A live run settles it in one attempt;
+* that the device answers with `status = 0` and `klen = 16` (both are what the
+  vendor code path implies; the C module refuses anything else on purpose);
+* that the point it returns is on `sm2p256v1` - the Python decoder rejects
+  anything else loudly, which is itself a useful diagnostic;
+* whether the **SPI/SPB branch** applies the same secure-frame transform as the
+  USB branch that this was recovered from (see
+  [`fingerprint-transport.md`](fingerprint-transport.md) §5). A plaintext
+  driver does not need the transform at all, so this only matters once the
+  session is used for `0xB0`/`0xB1`.
 
-When the secure flag is set the sender randomises the 16-byte header, transforms
-the command block with SM4 in 16-byte blocks, and the receiver mirrors it,
-using the received header as the per-frame value. The **exact key/IV derivation
-is asymmetric** between the transmit and receive paths in this build (the
-sender re-keys from the transformed header, the receiver sets it as IV), so it
-is recorded as "SM4 over the command block, header = per-frame nonce" and not
-claimed further. A plaintext driver does not need it.
+### The frame cipher (proven for the USB branch)
+
+`FUN_180004358` (send) and `FUN_18001AC60` (receive) are symmetric after all -
+the earlier note that the two paths derived the per-frame value differently was
+a misreading of `FUN_18000BFD0`, which is the **SM4 decryption key schedule**
+(it writes the 32 round keys in reverse order), not an IV load:
+
+```
+H        = 16 random bytes per frame          (the header / nonce)
+H'       = SM4_encrypt (K_session, H)         (one ECB block)
+C_i      = SM4_encrypt_block (H', P_i)        for each 16-byte block
+receive:   P_i = SM4_decrypt_block (H', C_i)
+```
+
+`P` is the *aligned command block* (`0x4C op phase status arg len data pad`,
+`L - 20` bytes). The CRC-32 is computed over the **ciphertext**, which is why
+the receiver checks the CRC before it decrypts and why a secure frame cannot be
+structurally parsed until it has been deciphered. `FUN_18000CE30` is the
+encryption key schedule, `FUN_18000B620` one block, `FUN_18000B3B4`/`B4EC`/
+`B544` are SM3 final/init/update, and the module's S-box at `0x38550` matches
+GB/T 32907's S-box byte for byte. Both functions belong to the USB branch, so
+the SPI branch's use of the same transform is not proven (see above).
 
 ### Answer layouts (per command)
 
@@ -297,10 +362,13 @@ per-chunk sum field.
 * **Supported today: no.** No kernel driver, no libfprint driver, no udev
   binding, no `spidev` node. Biometric login on this unit is not possible and
   no amount of configuration changes that.
-* **Supportable: yes, with real work.** The transport is plain SPI, the frame
-  format is known, the command set is known, and libfprint already has both the
-  SPI transport and match-in-sensor driver archetypes (`fpi-spi-transfer.c`,
-  `elanspi`, `egismoc`/`focaltech_moc`).
+* **Supportable: yes, with real work.** The transport on this unit is plain
+  SPI, the command set is known, and libfprint already has both the SPI
+  transport and match-in-sensor driver archetypes (`fpi-spi-transfer.c`,
+  `elanspi`, `egismoc`/`focaltech_moc`). The frame format is known but was
+  recovered from the driver's **USB** branch and is not yet proven on the SPI
+  link - see [`fingerprint-transport.md`](fingerprint-transport.md) §5, which is
+  now a prerequisite, not a detail.
 * **Blocked by, in order:**
   1. **No driver exists** and the vendor publishes nothing - a BF63112 driver
      has to be written from scratch (see `tools/fingerprint/libfprint-bf63112.c`).
@@ -328,11 +396,15 @@ driver cannot start.
 | file | what it is |
 |---|---|
 | `tools/fingerprint/oxp3-fp-probe.py` | read-only userspace handshake: binds to `spidev`, builds the exact 41-byte query frame, sends the read-only opcodes (`fw`, `scheme`, `uid`, `info`, `count`), hexdumps the answer, refuses destructive opcodes. Stdlib only. |
-| `tools/fingerprint/fpbf63112/` | protocol library (stdlib only): frame build/parse, CRC-32, offset arithmetic, command table, GET_IMG reassembly, retry state machine |
-| `tools/fingerprint/tests/` | 111 unittest tests incl. fuzz/property round-trips, synthetic device transcripts and `test_driver_derived.py` (layouts recovered from the driver, synthetic vectors); shared frame vectors for the C implementation |
+| `tools/fingerprint/fpbf63112/` | protocol library (stdlib only): frame build/parse, CRC-32, offset arithmetic, command table, GET_IMG reassembly, retry state machine, `Session`/`open_session` |
+| `tools/fingerprint/fpbf63112/crypto.py` | session crypto (stdlib only): SM3, SM4 (ECB/CBC), SM2 over sm2p256v1, GM/T 0003 KDF, the 0xA2 handshake, the secure-frame transform, a bounded variant search, vector self-test and benchmark |
+| `tools/fingerprint/bf63112_session_openssl.c/.h` | the same handshake for the C driver via OpenSSL (EVP SM3/SM4 + `EC_POINT_mul` for the shared point), opt-in behind `BF63112_ENABLE_SESSION` |
+| `tools/fingerprint/tests/` | 172 unittest tests incl. fuzz/property round-trips, synthetic device transcripts, the SM2/SM3/SM4 vectors and a synthetic end-to-end handshake, and `test_driver_derived.py` (layouts recovered from the driver, synthetic vectors); shared frame vectors for the C implementation |
 | `tools/fingerprint/bf63112_proto.h/.c` | dependency-free C11 protocol core shared with the driver |
 | `tools/fingerprint/libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; enrol/verify/identify refuse with `NOT_SUPPORTED` until the payloads are decoded. Syntax-checked (`-Wall -Wextra -Werror`) against libfprint v1.94.9 headers; see `tools/fingerprint/README.md` |
 | `tools/fingerprint/README.md` | proven vs inferred vs unknown, test commands, privileged probe steps, upstreaming path |
+| `docs/hw/fingerprint-transport.md` | USB-vs-SPI transport RE: how the driver chooses, both stacks, per-SKU verdict, what each path needs |
+| `tools/fingerprint/usb_probe.py` | read-only 347D enumerator (pyusb if present, else sysfs); reports interfaces/endpoints/driver claim, sends no vendor command |
 | `docs/hw/fingerprint.md` | this document |
 
 The Python suite, the C tests and both driver syntax checks pass offline (see
@@ -436,9 +508,11 @@ what is left needs the hardware.
    as secure frames. A plaintext `0xB0` (enrol start) is the cheapest probe: a
    status byte other than 0 or a `0xAA` answer with an error body means the
    module wants the handshake first.
-4. ~~Session design~~ - **closed.** SM2 ECDH with a per-open ephemeral driver
-   key, GM/T 0003 KDF over the shared point, SM3 tag; derives a 16-byte SM4 key.
-   What stays open is only the exact SM4 chaining on the wire.
+4. ~~Session design~~ - **closed, including the frame cipher.** SM2 ECDH with a
+   per-open ephemeral driver key, GM/T 0003 KDF over the 64-byte shared point,
+   `SM3(X || key || Y)` tag, `key = KDF xor wrapped`, and SM4-ECB under
+   `H' = E_K(H)` for the secure frames. What stays open is only what needs the
+   module (see the session experiment below).
 5. **`BF63112:01` on SPI2** - present in ACPI, no controller instanced. Either
    an unpopulated second source or a phantom node; harmless, but a driver
    should match `BF63112:00`-style enumeration rather than assume one device.
@@ -480,6 +554,51 @@ this repo.
 4. **Enrol probe** (`0xB0`, phase 0, 1-byte payload): the decisive test for
    whether plaintext enrol is accepted. Expect a status byte; no template is
    created by a phase-0 start, and it can be abandoned without a cancel.
+
+### The session experiment, step by step (what only hardware can settle)
+
+Every step is read-only with respect to stored templates and firmware; `0xA2` is
+a key exchange. Nothing in this repo has been run against the sensor.
+
+1. **Prove the code offline first** (no device, no root):
+
+   ```sh
+   python3 tools/fingerprint/oxp3-fp-probe.py --crypto-selftest
+   python3 -m unittest discover -s tools/fingerprint/tests
+   ```
+
+   The self-test checks SM3 (`abc`, the 64-byte vector), SM4 (GB/T 32907 ECB),
+   the GB/T 32918 sample keypair and ECDH symmetry, then benchmarks 4 KiB.
+
+2. **Plaintext `0xA2`** once the transport answers a normal query:
+
+   ```sh
+   sudo tools/fingerprint/oxp3-fp-probe.py --session --raw-info
+   ```
+
+   In the answer, look for opcode `0xA2` with **>= 0x71** payload bytes and
+   check the 16-byte header: zero means the module answered in plaintext,
+   non-zero means it enciphered the answer. The probe prints the raw answer and
+   `Session` already tries to decipher a non-zero header with the initial key.
+
+3. **If the tag does not verify**, the probe runs the bounded variant search
+   (`crypto.search_variants`: 32 candidates - KDF over `X||Y` vs `X`, four tag
+   layouts, `klen` 16 vs 32) against the captured answer and names the first
+   matching parameter set. If nothing matches, keep the raw answer: that is
+   evidence the exchange is not the recovered one.
+
+4. **If a plaintext `0xA2` gets no answer at all**, try `--session-secure`: it
+   seals the request with the initial zero key exactly as `FUN_180004358`
+   would with an empty session slot.
+
+5. **Then the decisive command test**: a plaintext `0xB0` start. A status byte
+   other than 0 means the module wants the session (or an authenticated
+   frame); that is the point where the derived key has to be used for real.
+
+6. **Record** the raw answer, the firmware/sensor ids and the outcome. Any one
+   of these observations is worth more than another static pass: whether the
+   first `0xA2` had to be enciphered, the `klen` value, the tag variant, and
+   whether answers carry a non-zero header.
 
 Do **not** send `0xC2` (JTAG), `0xC3` (restore MCU) or `0xD0` (firmware
 update): all three are in the driver's table as vendor-only operations.

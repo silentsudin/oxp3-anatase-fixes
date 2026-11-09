@@ -14,13 +14,15 @@ See [`docs/hw/fingerprint.md`](../../docs/hw/fingerprint.md) for the hardware ev
 | path | what it is |
 |---|---|
 | `fpbf63112/protocol.py` | Python protocol library (stdlib only): frame build/parse, CRC-32, length/offset arithmetic, chunk sums, command table, image reassembly, retry state machine |
-| `tests/` | unittest suite (85 tests), synthetic fixtures, generated frame vectors, replay helpers |
+| `fpbf63112/crypto.py` | session crypto (stdlib only): SM3, SM4 (ECB/CBC), SM2 over sm2p256v1, GM/T 0003 KDF, the 0xA2 handshake, the secure-frame transform, a bounded variant search, `selftest()`/`benchmark()` |
+| `tests/` | unittest suite (172 tests), synthetic fixtures, generated frame vectors, replay helpers, the SM vector + handshake tests |
 | `tests/fixtures/*.json` | small device transcripts: clean answers, noise, truncation, bad CRC, wrong opcode, retry exhaustion, GET_IMG good/partial/bad-sum/retried/oversized |
 | `tests/vectors.json`, `tests/vectors.h` | one set of frame vectors shared by the Python and C implementations |
 | `tests/generate_fixtures.py` | regenerates all fixtures/vectors (checked in; a test fails if they drift) |
 | `bf63112_proto.h/.c` | dependency-free C11 protocol core (no allocation, `<stdint.h>` only) used by the driver and its tests |
 | `tests/test_proto.c` | C tests against the same vectors + rejection/scan/image paths |
-| `libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; enrol/verify refuse with `NOT_SUPPORTED` |
+| `libfprint-bf63112.c` | libfprint driver: transport, open/close, suspend/resume; the 0xA2 handshake is compiled in only with `BF63112_ENABLE_SESSION`; enrol/verify refuse with `NOT_SUPPORTED` |
+| `bf63112_session_openssl.c/.h` | the driver-side session crypto (OpenSSL EVP SM3/SM4 + `EC_POINT_mul`), compile-checked but not enabled by default |
 | `stub/` | **offline syntax-check shim only** - fake `fpi-*.h` + minimal GLib declarations, clearly marked "not libfprint"; never installed or linked |
 | `Makefile` | `py-test`, `proto-test`, `syntax`, `syntax-real` targets |
 | `tests/run-c-tests.sh`, `tests/check-libfprint.sh` | run the C targets here without a host compiler (ephemeral podman) |
@@ -84,7 +86,7 @@ The host has Python 3 but no C compiler and no `make`, so:
 ```sh
 # Python protocol + transcript + fuzz tests (this is the full behavioural suite)
 python3 -m unittest discover -s tools/fingerprint/tests -v
-#   -> Ran 85 tests ... OK
+#   -> Ran 172 tests ... OK
 
 # C protocol tests (same vectors, independent implementation)
 tools/fingerprint/tests/run-c-tests.sh
@@ -97,9 +99,18 @@ git clone --depth 1 --branch v1.94.9 \
 LIBFPRINT_SRC=/tmp/libfprint-1.94.9 tools/fingerprint/tests/check-libfprint.sh
 #   -> exit 0, -fsyntax-only with -Wall -Wextra -Werror
 
-# Driver against the offline shim headers (no libfprint/GLib at all):
+# Driver against the offline shim headers (no libfprint/GLib at all), plain
+# and with BF63112_ENABLE_SESSION:
 podman run --rm -v "$PWD":/w:z -w /w/tools/fingerprint \
   localhost/oxp3-fixes-build:f45 make syntax
+
+# The OpenSSL session module (needs openssl-devel; the image above has it):
+podman run --rm -v "$PWD":/w:z -w /w/tools/fingerprint \
+  localhost/oxp3-fixes-build:f45 make session-syntax
+#   -> session-syntax: OK (OpenSSL headers present)
+
+# Session crypto vectors + benchmark, no device involved:
+python3 tools/fingerprint/oxp3-fp-probe.py --crypto-selftest
 ```
 
 Locally (a machine with gcc + make): `make -C tools/fingerprint check` runs Python, C and the shim
@@ -143,6 +154,66 @@ tx = P.Transaction(P.Command.QUERY_SENSOR_INFO)       # resend-on-timeout state 
 
 Everything is stdlib-only; there is no hardware access in the library, which is why the tests can
 run anywhere. `P.DESTRUCTIVE_COMMANDS` is the set a tool must never send by accident.
+
+## The session layer (SM2/SM3/SM4)
+
+The module refuses nothing at the frame level, but enrol/identify are sent as "secure frames" by the
+vendor driver, so a driver eventually needs the session. It is fully implemented in
+`fpbf63112/crypto.py` (Python) and `bf63112_session_openssl.c` (C, opt-in):
+
+```python
+from fpbf63112 import protocol as P
+session = P.open_session(transport)           # 0xA2: SM2-ECDH -> GM/T 0003 KDF -> SM3 tag
+sealed = session.seal_frame(P.build_frame(P.Command.ENROLL_FINGERPRINT))
+```
+
+Recovered from `BetterlifeFingerprintDevice.dll` (proven; every step is in `docs/hw/fingerprint.md`):
+
+* per-open SM2 keypair, `0xA2` payload `04 || X || Y` (65 bytes);
+* answer `status:u8 | P_dev:64 | tag:32 | klen:u32 LE | wrapped` (>= `0x71` bytes);
+* shared point `S = d * P_dev` serialised as `X || Y` (64 bytes, big-endian);
+* `mask = KDF(S, klen)` with `SM3(S || BE32(ctr))`, `ctr = 1, 2, ...` (GM/T 0003.4), all-zero
+  rejected; `key = mask xor wrapped`;
+* `tag == SM3(X || key || Y)`;
+* secure frames: `H' = SM4_encrypt(key, H)` then blockwise `SM4` under `H'` (ECB, not CBC - the
+  receiver uses the SM4 *decryption* key schedule under the same `H'`).
+
+**Proven by the test suite** (no device):
+
+| vector | value |
+|---|---|
+| SM3 `abc` | `66c7f0f4…8f4ba8e0` (GB/T 32905) |
+| SM3 `abcd` x16 | `debe9ff9…9c0c5732` (GB/T 32905 appendix) |
+| SM4 ECB, key = plaintext | `681edf34…536e4246` (GB/T 32907 A.1) |
+| SM2 keypair `d -> P` | the published SM2 sample key (`09f9df31…2da9ad13`) |
+| KDF | equals the definition `SM3(S || BE32(1)) || SM3(S || BE32(2)) || …` |
+| handshake | synthetic device built from the same primitives: key + tag round-trip |
+
+Performance (this host, CPython 3.15, best of 8, 4 KiB): **SM3 4.8 ms** (0.86 MB/s),
+**SM4-ECB 2.1 ms** (1.9 MB/s), **SM2 keygen 1.3 ms**. `--crypto-selftest` prints these.
+
+**Assumed, not proven** (what a live session must settle): whether the module accepts a plaintext
+`0xA2` or wants the vendor's secure form (sealed with the all-zero initial key); that `klen` is 16
+and `status` 0; and whether the SPI/SPB branch uses the same secure-frame transform as the USB
+branch this was recovered from. `crypto.search_variants()` retries 32 bounded KDF/tag variants
+against one captured answer, and `oxp3-fp-probe.py --session` runs the whole experiment and prints
+the raw answer (never the key).
+
+### The C side and this host's OpenSSL
+
+`bf63112_session_openssl.c` uses `EVP_MD_fetch("SM3")` + `EVP_Digest*` for the hash and KDF,
+`EVP_CIPHER_fetch("SM4-ECB")` + `EVP_CIPHER_CTX_set_padding(0)` for the cipher, and the EC layer
+(`EC_GROUP_new_by_curve_name(NID_sm2)`, `EC_POINT_set_affine_coordinates`, `EC_POINT_mul`,
+`EC_POINT_get_affine_coordinates`, `BN_bn2binpad`) for the shared point - **not** `EVP_PKEY_derive`,
+because OpenSSL's SM2 ECDH returns only the 32-byte x coordinate while the vendor KDF and tag need
+all 64 bytes of `X || Y`. It is compile-checked with `-Wall -Wextra -Werror` against openssl-devel
+(`make session-syntax`), and it degrades to `-ENOTSUP` at run time on a provider without SM.
+
+**This host cannot run it**: OpenSSL 4.0.3 here is built with `OPENSSL_NO_SM2` and its default
+provider lists no SM3/SM4/SM2 (`openssl list -digest-algorithms` has no `SM3`, the `ecparam` list
+has no `sm2` curve). That is why the Python implementation is the reference and why the driver flag
+stays off: on Anatase the C path would need a provider that ships SM, or the Python-equivalent code
+in the driver.
 
 ## The libfprint driver
 
@@ -304,8 +375,12 @@ Nothing else is modified: no packages, no config, no firmware, no boot parameter
 3. Device-to-host answer framing: the 16-byte answer header and the exact body start are inferred.
 4. Sensor-info/firmware payload field layouts are inferred from handler reads, not verified.
 5. Whether answers echo phase/opcode is unverified (library defaults to opcode-only).
-6. Enrol/identify payloads, template handle/score format, SM3 session necessity: unknown.
-7. Whether GET_IMG has per-chunk checks besides the global 8-bit sum: conflicting notes.
-8. `BF63112:01` on SPI2: harmless phantom or second source; untested.
-9. The driver's retry timing (3 x 40 ms poll) is a guess; the Windows values are 1000/5000 ms per
-   attempt with GPIO-triggered completion.
+6. Enrol/identify payloads and template handle/score format: unknown. Whether the module *enforces*
+   the session for `0xB0`/`0xB1` is still a hardware question, but the session itself is implemented
+   and vector-tested now; see "The session layer" above.
+7. The session's assumed parts (plaintext vs secure `0xA2`, `klen`, the SPI branch's frame
+   transform) are listed in "The session layer" and in `docs/hw/fingerprint.md`.
+8. Whether GET_IMG has per-chunk checks besides the global 8-bit sum: conflicting notes.
+9. `BF63112:01` on SPI2: harmless phantom or second source; untested.
+10. The driver's retry timing (3 x 40 ms poll) is a guess; the Windows values are 1000/5000 ms per
+    attempt with GPIO-triggered completion.

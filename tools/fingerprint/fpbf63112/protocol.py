@@ -60,6 +60,8 @@ __all__ = [
     "ImageHeader", "ImageAssembler", "MAX_IMAGE_CHUNK",
     # session
     "Transaction", "TransactionState", "RetryPolicy",
+    # secure session (the SM2/SM3/SM4 handshake lives in .crypto)
+    "Session", "open_session", "SecureSession",
     # errors
     "ProtocolError", "FrameError", "TruncatedFrameError", "BadStartByteError",
     "LengthMismatchError", "BadLengthFieldError", "BadDataLengthError",
@@ -210,7 +212,7 @@ class ChunkSumMismatch(ImageError):
 
 
 class SessionError(ProtocolError):
-    """A transaction state machine was driven out of order."""
+    """A transaction or secure-session operation was driven out of order."""
 
 
 class ResponseMismatchError(SessionError):
@@ -1146,3 +1148,192 @@ class Transaction:
                            data=self.data, policy=self.policy,
                            check_phase=self.check_phase,
                            reserved=self.reserved)
+
+
+# --------------------------------------------------------------------------
+# The secure session: 0xA2 handshake and the SM4 frame transform
+# --------------------------------------------------------------------------
+#
+# The cryptography lives in :mod:`fpbf63112.crypto` (stdlib-only SM2/SM3/SM4
+# and the GM/T 0003 KDF); this module owns the *protocol* half: which frame to
+# send, how to read the answer, and how a secure frame is shaped.  The split
+# keeps the frame library importable (and cheap) for tools that never open a
+# session, and it keeps every hardware-free test able to substitute a fake
+# transport.
+
+def _crypto():
+    """Import :mod:`fpbf63112.crypto` lazily (keeps the frame layer light)."""
+    from . import crypto
+    return crypto
+
+
+#: What a transport must provide for :class:`Session`.  Deliberately tiny so
+#: the probe, a future driver and the offline tests can all satisfy it:
+#:
+#:   ``exchange(frame: bytes, *, timeout_ms: int) -> bytes``
+#:
+#: returning whatever came back on the bus (possibly junk or empty).  A
+#: transport that only has ``write``/``read`` can adapt trivially.
+TRANSPORT_METHOD = "exchange"
+
+
+@dataclass
+class Session:
+    """One secure-session bootstrap over a transport (the 0xA2 handshake).
+
+    ``transport`` is duck-typed (see :data:`TRANSPORT_METHOD`); it is ``None``
+    for the offline/synthetic use where a caller feeds the answer in through
+    :meth:`complete`.  Nothing here touches hardware by itself.
+
+    ``secure`` selects the frame form of the *request*: the vendor driver sets
+    the secure-frame flag on ``0xA2`` (``FUN_180001A3C`` writes ``1`` to the
+    descriptor's secure field) and, because no session key exists yet, that
+    frame is transformed with the initial key (all zeroes).  ``secure=False``
+    sends a plaintext request, which is the cheaper thing to try first on real
+    hardware and harmless either way - a key exchange neither writes nor
+    erases anything on the module.
+    """
+
+    transport: object | None = None
+    params: object | None = None            # crypto.SessionParams
+    keypair: object | None = None           # crypto.SM2Keypair
+    rng: object | None = None
+    secure: bool = False
+    initial_key: bytes = b"\x00" * 16
+    timeout_ms: int = 2000
+    attempt: int = field(init=False, default=0)
+    frame: bytes | None = field(init=False, default=None)
+    answer: "RootKeyAnswer | None" = field(init=False, default=None)
+
+    # ---- request ---------------------------------------------------------
+    def request_payload(self) -> bytes:
+        """The 65-byte payload: ``0x04`` plus the host SM2 point."""
+        crypto = _crypto()
+        if self.keypair is None:
+            self.keypair = crypto.SM2Keypair.generate(self.rng)
+        return crypto.build_rootkey_payload(self.keypair)
+
+    def request_frame(self) -> bytes:
+        """The complete 0xA2 request frame (secured if ``secure``)."""
+        crypto = _crypto()
+        frame = build_frame(Command.QUERY_ROOT_KEY, Phase.START, 0,
+                            self.request_payload())
+        self.frame = frame
+        if not self.secure:
+            return frame
+        return crypto.SecureSession(self.initial_key, self.rng).seal_frame(frame)
+
+    # ---- exchange --------------------------------------------------------
+    def send(self, frame: bytes | None = None) -> bytes:
+        """Send the request through the transport and return the raw answer."""
+        if self.transport is None:
+            raise SessionError(
+                "no transport: pass one to Session/open_session, or drive the "
+                "handshake with request_frame()/complete()")
+        frame = self.request_frame() if frame is None else frame
+        exchange = getattr(self.transport, TRANSPORT_METHOD, None)
+        if exchange is None:
+            raise SessionError(
+                f"transport lacks {TRANSPORT_METHOD}(); see TRANSPORT_METHOD")
+        self.attempt += 1
+        return exchange(frame, timeout_ms=self.timeout_ms)
+
+    def _answer_candidates(self, raw: bytes) -> list["Frame"]:
+        """Every plausible answer frame in a raw readback, plain or enciphered.
+
+        A secure answer still carries ``0xAA``, ``L`` and the CRC in the clear -
+        only its command block is ciphertext - so :func:`scan_frames` cannot
+        parse it before decryption.  This walker therefore tries the plaintext
+        parse first and the "decipher with the initial key, then parse" path
+        second, which is what lets one captured readback be diagnosed offline.
+        """
+        crypto = _crypto()
+        buf = bytes(raw)
+        out: list[Frame] = []
+        pos = 0
+        n = len(buf)
+        while pos < n:
+            if buf[pos] != SOF:
+                pos += 1
+                continue
+            if pos + FRAME_OVERHEAD > n:
+                break
+            total = struct.unpack_from("<I", buf, pos + FRAME_OFF_LEN)[0] + \
+                FRAME_OVERHEAD
+            if total < FRAME_MIN_SIZE or total > frame_size(MAX_DATA_LEN):
+                pos += 1
+                continue
+            if pos + total > n:
+                break
+            chunk = buf[pos:pos + total]
+            try:
+                out.append(parse_frame(chunk, require_magic=False))
+            except FrameError:
+                try:
+                    plain = crypto.SecureSession(
+                        self.initial_key, self.rng).open_frame(chunk)
+                    out.append(parse_frame(plain, require_magic=False))
+                except Exception:  # any failure means 'not this frame'
+                    pass
+            pos += total
+        return out
+
+    def parse_answer(self, raw: bytes) -> "RootKeyAnswer":
+        """Find and validate the 0xA2 answer inside a raw readback.
+
+        An answer whose 16-byte header is non-zero might be enciphered with the
+        initial key; :meth:`_answer_candidates` tries both and the first body
+        that parses wins, so the first live exchange is self-diagnosing
+        instead of guesswork.
+        """
+        for frame in self._answer_candidates(raw):
+            if frame.opcode != int(Command.QUERY_ROOT_KEY):
+                continue
+            try:
+                self.answer = RootKeyAnswer.parse(frame.body)
+            except ProtocolError:
+                continue
+            return self.answer
+        raise SessionError(
+            f"no valid {command_name(int(Command.QUERY_ROOT_KEY))} answer in "
+            f"{len(raw)}B")
+
+    def complete(self, raw: bytes):
+        """Parse an answer readback and derive the :class:`SecureSession`."""
+        crypto = _crypto()
+        answer = self.parse_answer(raw)
+        result = crypto.complete_handshake(self.keypair, answer,
+                                           self.params or crypto.PARAMS_RECOVERED)
+        if not result.tag_ok:
+            raise SessionError(
+                "SM3 tag mismatch: the module's answer was not accepted "
+                "(wrong KDF/tag variant, or a corrupted read)")
+        return crypto.SecureSession(result.key, self.rng)
+
+    # ---- convenience -----------------------------------------------------
+    def open_session(self):
+        """Generate the keypair, run one exchange and return the session."""
+        frame = self.request_frame()
+        return self.complete(self.send(frame))
+
+
+def open_session(transport=None, **kwargs):
+    """Establish a BF63112 secure session; convenience wrapper for :class:`Session`.
+
+    Example (the transport is the caller's business; see ``TRANSPORT_METHOD``)::
+
+        session = open_session(spi, timeout_ms=2000)
+        frame = session.seal_frame(build_frame(Command.ENROLL_FINGERPRINT))
+
+    Raises :class:`SessionError` when no valid answer arrives or the module's
+    SM3 tag does not verify - never returns a session with an unverified key.
+    """
+    return Session(transport=transport, **kwargs).open_session()
+
+
+def __getattr__(name: str):
+    """Lazily re-export :class:`fpbf63112.crypto.SecureSession` (PEP 562)."""
+    if name == "SecureSession":
+        from .crypto import SecureSession
+        return SecureSession
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

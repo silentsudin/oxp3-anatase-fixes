@@ -176,6 +176,13 @@ suite_fp_python() {
     python3 -m unittest discover -s tools/fingerprint/tests -q
 }
 
+# Session crypto vectors + a 4 KiB benchmark, no device, no root.
+suite_fp_crypto() {
+    need python3
+    cd "$REPO" || exit 1
+    python3 tools/fingerprint/oxp3-fp-probe.py --crypto-selftest
+}
+
 suite_fp_fixtures() {
     need python3
     cd "$REPO" || exit 1
@@ -203,11 +210,20 @@ suite_fp_syntax() {
     tool=$(c_toolchain) || skip "no C compiler and no local podman build image"
     case $tool in
         host)
-            make -C tools/fingerprint syntax ;;
+            make -C tools/fingerprint syntax
+            if [ -f /usr/include/openssl/evp.h ]; then
+                make -C tools/fingerprint session-syntax
+            else
+                echo "session-syntax: skipped (no openssl-devel on the host)"
+            fi ;;
         podman:*)
             img=${tool#podman:}
             podman run --rm --security-opt label=disable \
-                -v "$REPO":/w:z -w /w/tools/fingerprint "$img" make syntax ;;
+                -v "$REPO":/w:z -w /w/tools/fingerprint "$img" sh -c \
+                'make syntax; \
+                 if [ -f /usr/include/openssl/evp.h ]; then \
+                     make session-syntax; \
+                 else echo "session-syntax: skipped (no openssl-devel in image)"; fi' ;;
     esac
 }
 
@@ -632,8 +648,11 @@ def_suite python-compile fast fast 120 0 \
     "py_compile every tracked .py plus the extensionless oxp3-voltap" \
     "PYTHONPYCACHEPREFIX=<logs>/pycache python3 -m py_compile <files>"
 def_suite fp-python fast fast 120 0 \
-    "fingerprint protocol Python unittest suite (85 tests)" \
+    "fingerprint protocol + session crypto Python unittest suite (172 tests)" \
     "python3 -m unittest discover -s tools/fingerprint/tests -q"
+def_suite fp-crypto fast fast 120 0 \
+    "session crypto (SM2/SM3/SM4/KDF) against published vectors + benchmark" \
+    "python3 tools/fingerprint/oxp3-fp-probe.py --crypto-selftest"
 def_suite fp-fixtures fast fast 120 0 \
     "fingerprint fixture/vector drift, regenerated in memory" \
     "python3 -m unittest discover -s tools/fingerprint/tests -p test_generated_data.py -q"
@@ -641,8 +660,8 @@ def_suite fp-c-tests full fast 300 0 \
     "fingerprint C protocol tests (host cc or local podman image)" \
     "tools/fingerprint/tests/run-c-tests.sh"
 def_suite fp-syntax full fast 180 0 \
-    "compile-check the libfprint driver against our offline stub headers" \
-    "make -C tools/fingerprint syntax (or the same in the local podman image)"
+    "compile-check the libfprint driver (plain + BF63112_ENABLE_SESSION) and the OpenSSL session module" \
+    "make -C tools/fingerprint syntax session-syntax (or the same in the local podman image)"
 def_suite fp-libfprint full slow-network 900 1 \
     "compile-check the driver against a real libfprint v1.94.9 tree" \
     "tools/fingerprint/tests/check-libfprint.sh"

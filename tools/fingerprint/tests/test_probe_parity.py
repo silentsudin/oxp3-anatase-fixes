@@ -90,3 +90,119 @@ class TestProbeParity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProbeSessionPaths(unittest.TestCase):
+    """The probe's two new session entry points (``--crypto-selftest``,
+    ``--session``), driven offline against the synthetic device."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.probe = support.load_probe()
+
+    def test_crypto_selftest_passes(self):
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self.probe.crypto_selftest()
+        self.assertEqual(rc, 0)
+        text = buf.getvalue()
+        self.assertIn("all published vectors passed", text)
+        self.assertIn("SM3", text)
+        self.assertIn("ms", text)
+
+    @staticmethod
+    def _args(**kw):
+        import argparse
+
+        base = dict(session_rx=256, wait_ms=0, retries=4,
+                    raw_info=False, session_secure=False, session_timeout=200)
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_transport_reassembles_a_frame(self):
+        import support as S
+
+        frame = S.P.build_frame(0xA2, 0, 0, b"\x00" * 0xA1)
+        half = len(frame) // 2
+
+        class FakeSpi:
+            def __init__(self):
+                self.reads = 0
+
+            def transfer(self, tx, rx_len=None):
+                if rx_len is None:
+                    return b""
+                self.reads += 1
+                if self.reads == 1:
+                    return b"\xff\x00" + frame[:half]
+                if self.reads == 2:
+                    return frame[half:]
+                return b"\x00" * (rx_len or 0)
+
+        transport = self.probe.SpiTransport(FakeSpi(), rx_len=256, wait_ms=0,
+                                            retries=4)
+        self.assertEqual(transport.exchange(frame), frame)
+
+    def test_session_fails_safe_on_junk(self):
+        import contextlib
+        import io
+
+        class JunkSpi:
+            def transfer(self, tx, rx_len=None):
+                return b"\xff" * (rx_len or 64) if rx_len else b""
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self.probe.session_attempt(JunkSpi(), self._args())
+        self.assertEqual(rc, 1)
+        self.assertIn("FAILED", buf.getvalue())
+        self.assertIn("nothing on the module was changed", buf.getvalue())
+
+    def test_session_succeeds_against_the_synthetic_device(self):
+        import contextlib
+        import io
+
+        device = support.FakeRootKeyDevice(session_key=b"\xc3" * 16)
+
+        class DeviceSpi:
+            def transfer(self, tx, rx_len=None):
+                if rx_len is None:
+                    self.pending = device.exchange(bytes(tx))
+                    return b""
+                out = getattr(self, "pending", b"")
+                self.pending = b""
+                return out
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self.probe.session_attempt(DeviceSpi(), self._args())
+        self.assertEqual(rc, 0)
+        text = buf.getvalue()
+        self.assertIn("established", text)
+        self.assertIn("fingerprint", text)
+        # the key itself must never be printed
+        self.assertNotIn((b"\xc3" * 16).hex(), text)
+
+    def test_session_reports_a_tag_mismatch_and_offers_no_key(self):
+        import contextlib
+        import io
+
+        device = support.FakeRootKeyDevice(tamper_tag=True)
+
+        class DeviceSpi:
+            def transfer(self, tx, rx_len=None):
+                if rx_len is None:
+                    self.pending = device.exchange(bytes(tx))
+                    return b""
+                out = getattr(self, "pending", b"")
+                self.pending = b""
+                return out
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self.probe.session_attempt(DeviceSpi(), self._args())
+        self.assertEqual(rc, 1)
+        self.assertIn("FAILED", buf.getvalue())

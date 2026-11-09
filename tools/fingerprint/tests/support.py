@@ -173,3 +173,67 @@ def load_probe():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# --------------------------------------------------------------------------
+# The synthetic "device" half of the SM2/SM3/SM4 session handshake
+# --------------------------------------------------------------------------
+
+class FakeRootKeyDevice:
+    """A transport-shaped fake of the module's ``0xA2`` answer.
+
+    Built on our own crypto implementation, so it proves the handshake logic
+    and the wire layout (nothing more): the real firmware's behaviour is what a
+    live session has to establish.  ``exchange(frame, timeout_ms=...)`` matches
+    the ``protocol.TRANSPORT_METHOD`` contract.
+    """
+
+    def __init__(self, session_key=b"\x5a" * 16, params=None,
+                 device_keypair=None, secure_requests=False,
+                 secure_answers=False, status=0, tamper_tag=False,
+                 answer_override=None):
+        from fpbf63112 import crypto as C
+
+        self.crypto = C
+        self.session_key = session_key
+        self.params = params if params is not None else C.PARAMS_RECOVERED
+        self.device_keypair = device_keypair or C.SM2Keypair(0x1234)
+        self.secure_requests = secure_requests
+        self.secure_answers = secure_answers
+        self.status = status
+        self.tamper_tag = tamper_tag
+        self.answer_override = answer_override
+        self.requests = []
+
+    def exchange(self, frame, *, timeout_ms=1000):
+        C = self.crypto
+        self.requests.append(frame)
+        parsed = self.parse_request(frame)
+        payload = parsed.data
+        if not payload or payload[0] != 0x04 or len(payload) != 65:
+            raise AssertionError(f"unexpected 0xA2 payload {payload.hex()}")
+        host_point = C.sm2_decode_point(payload[1:])
+        shared = self.device_keypair.ecdh(host_point)
+        z = self.params.kdf_z(shared)
+        klen = self.params.key_len or len(self.session_key)
+        mask = C.sm3_kdf(z, klen)
+        wrapped = bytes(a ^ b for a, b in zip(mask, self.session_key[:klen]))
+        tag = C.session_tag(shared, self.session_key[:klen], self.params)
+        if self.tamper_tag:
+            tag = bytes([tag[0] ^ 0xFF]) + tag[1:]
+        body = P.RootKeyAnswer.build(self.device_keypair.public_bytes, tag,
+                                     wrapped, status=self.status)
+        if self.answer_override is not None:
+            body = self.answer_override
+        answer = P.build_frame(P.Command.QUERY_ROOT_KEY, 0, 0, body)
+        if self.secure_answers:
+            answer = C.SecureSession(b"\x00" * 16).seal_frame(answer)
+        return answer
+
+    def parse_request(self, frame):
+        if self.secure_requests:
+            from fpbf63112 import crypto as C
+
+            plain = C.SecureSession(b"\x00" * 16).open_frame(frame)
+            return P.parse_frame(plain)
+        return P.parse_frame(frame)

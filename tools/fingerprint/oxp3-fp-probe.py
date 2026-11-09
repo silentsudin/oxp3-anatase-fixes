@@ -37,6 +37,8 @@ partly inferred because only part of the device->host framing was recovered.
 import argparse
 import ctypes
 import fcntl
+import hashlib
+import os
 import struct
 import sys
 import time
@@ -178,6 +180,154 @@ def show_fw(body):
             f"variant={body[2]} mode={body[0]} raw={body[3:7].hex()}")
 
 
+# --------------------------------------------------------------- session crypto
+def _load_crypto():
+    """Import the session-crypto helper (same directory) on demand.
+
+    The read-only queries below need nothing but the standard library; only
+    ``--crypto-selftest`` and ``--session`` touch the SM2/SM3/SM4 module, so a
+    copy of this single file still works for bring-up.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from fpbf63112 import crypto
+    return crypto
+
+
+def _load_protocol():
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from fpbf63112 import protocol
+    return protocol
+
+
+class SpiTransport:
+    """The ``protocol.Session`` transport contract over an ``SpiDev``.
+
+    ``exchange()`` sends one frame and polls the readback until a complete
+    ``0xAA`` frame (``L + 5`` bytes) has arrived or the timeout expires.  The
+    module raises a GPIO we cannot see without the ACPI ``GpioInt``, so this
+    polls - the same compromise as :func:`query`.
+    """
+
+    def __init__(self, spi, rx_len=256, wait_ms=40, retries=8, verbose=False):
+        self.spi = spi
+        self.rx_len = rx_len
+        self.wait_ms = wait_ms
+        self.retries = retries
+        self.verbose = verbose
+        self.last_raw = b""
+
+    def exchange(self, frame, *, timeout_ms=2000):
+        if self.verbose:
+            print(f"    tx {len(frame):3d}B: {frame.hex(' ')}")
+        self.spi.transfer(frame)
+        deadline = time.monotonic() + max(timeout_ms, self.wait_ms) / 1000.0
+        buf = b""
+        tries = 0
+        while time.monotonic() < deadline and tries < max(self.retries, 1):
+            tries += 1
+            if self.wait_ms:
+                time.sleep(self.wait_ms / 1000.0)
+            chunk = self.spi.transfer(b"\x00" * self.rx_len, rx_len=self.rx_len)
+            if not chunk:
+                continue
+            if not buf:
+                start = chunk.find(bytes([SOF]))
+                if start < 0:
+                    continue
+                buf = chunk[start:]
+            else:
+                buf += chunk
+            if len(buf) >= 5:
+                need = struct.unpack_from("<I", buf, 1)[0] + 5
+                if len(buf) >= need:
+                    self.last_raw = buf[:need]
+                    return self.last_raw
+        self.last_raw = buf
+        return buf
+
+
+def crypto_selftest():
+    """``--crypto-selftest``: prove the SM2/SM3/SM4/KDF code, then benchmark."""
+    crypto = _load_crypto()
+    print("BF63112 session crypto self-test (stdlib only; no hardware involved)")
+    try:
+        results = crypto.selftest()
+    except crypto.CryptoError as exc:
+        print(f"  FAILED: {exc}")
+        return 1
+    for name in sorted(results):
+        value = results[name]
+        print(f"  ok  {name:<12} {value[:48]}{'...' if len(value) > 48 else ''}")
+    perf = crypto.benchmark()
+    size = perf["size_bytes"]
+    print(f"  benchmark on {size} B (best of 8 runs):")
+    print(f"    SM3  {perf['sm3_seconds'] * 1000:7.2f} ms  "
+          f"({perf['sm3_mbps']:.2f} MB/s)")
+    print(f"    SM4  {perf['sm4_seconds'] * 1000:7.2f} ms  "
+          f"({perf['sm4_mbps']:.2f} MB/s)")
+    print(f"    SM2 keygen {perf['sm2_keygen_seconds'] * 1000:.2f} ms")
+    print("  all published vectors passed")
+    return 0
+
+
+def session_attempt(spi, args):
+    """``--session``: one 0xA2 key exchange, then print the derived-key digest.
+
+    The session key itself is never printed - only a SHA-256 fingerprint - so a
+    pasted log cannot be replayed.  ``0xA2`` is a key exchange: it writes no
+    template, changes no mode and cannot brick the module.
+    """
+    crypto = _load_crypto()
+    protocol = _load_protocol()
+    transport = SpiTransport(spi, rx_len=args.session_rx, wait_ms=args.wait_ms,
+                             retries=args.retries, verbose=args.raw_info)
+    session = protocol.Session(transport=transport, secure=args.session_secure,
+                               timeout_ms=max(args.session_timeout, 100))
+    print(f"session: 0xA2 key exchange, {'secure' if args.session_secure else 'plaintext'}"
+          f" request, rx={args.session_rx}B, timeout={session.timeout_ms}ms")
+    try:
+        secure = session.open_session()
+    except (protocol.ProtocolError, crypto.CryptoError) as exc:
+        print(f"session: FAILED - {exc}")
+        raw = transport.last_raw
+        if raw:
+            print(f"session: raw answer ({len(raw)}B): {raw.hex(' ')}")
+            answer = _try_variant_search(crypto, protocol, session, raw)
+            if answer:
+                print(f"session: {answer}")
+        print("session: no key was accepted; nothing on the module was changed")
+        return 1
+    fingerprint = hashlib.sha256(secure.key).hexdigest()[:16]
+    print(f"session: established, key fingerprint sha256[:16]={fingerprint}")
+    print("session: this session object can now seal/unseal secure frames")
+    return 0
+
+
+def _try_variant_search(crypto, protocol, session, raw):
+    """Bounded offline retry of the KDF/tag variants against one captured answer."""
+    for frame in session._answer_candidates(raw):
+        if frame.opcode != int(protocol.Command.QUERY_ROOT_KEY):
+            continue
+        try:
+            answer = protocol.RootKeyAnswer.parse(frame.body)
+        except protocol.ProtocolError:
+            continue
+        hits = crypto.search_variants(session.keypair, answer)
+        if not hits:
+            return ("variant search: none of the bounded KDF/tag variants matched "
+                    "this answer (the module may use a different exchange)")
+        best = hits[0]
+        return (f"variant search: {len(hits)} match(es); first is "
+                f"kdf_input={best.params.kdf_input} "
+                f"tag_layout={best.params.tag_layout} "
+                f"klen={best.key_len} - re-run with that variant")
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("commands", nargs="*", help=", ".join(OPS))
@@ -193,7 +343,23 @@ def main():
     ap.add_argument("--arg", type=int, default=0)
     ap.add_argument("--data", default="", help="hex payload for --op")
     ap.add_argument("--raw-info", action="store_true", help="hexdump frames")
+    ap.add_argument("--crypto-selftest", action="store_true",
+                    help="prove SM2/SM3/SM4/KDF against published vectors and "
+                         "benchmark; needs no device and touches nothing")
+    ap.add_argument("--session", action="store_true",
+                    help="attempt the 0xA2 SM2 session handshake (read-only key "
+                         "exchange) and report the derived-key fingerprint")
+    ap.add_argument("--session-secure", action="store_true",
+                    help="send the 0xA2 request in the vendor's secure-frame "
+                         "form (SM4 with the initial zero key)")
+    ap.add_argument("--session-rx", type=int, default=256,
+                    help="readback bytes for --session (a 0xA2 answer needs ~153)")
+    ap.add_argument("--session-timeout", type=int, default=2000,
+                    help="--session answer timeout in ms")
     args = ap.parse_args()
+
+    if args.crypto_selftest:
+        return crypto_selftest()
 
     cmds = args.commands or (["raw"] if args.op is not None else ["info"])
 
@@ -205,6 +371,8 @@ def main():
 
     rc = 0
     try:
+        if args.session:
+            return session_attempt(spi, args)
         for cmd in cmds:
             if cmd == "raw":
                 op = args.op
