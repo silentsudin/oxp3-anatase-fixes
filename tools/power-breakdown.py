@@ -154,6 +154,16 @@ def rgb_state():
     return {k: v for k, v in (line.split("=", 1) for line in out.splitlines() if "=" in line) if k in keys}
 
 
+def aspm_active(text):
+    """The bracketed token in the ASPM policy file is the active policy."""
+    if not text:
+        return None
+    for tok in text.replace(",", " ").split():
+        if tok.startswith("[") and tok.endswith("]"):
+            return tok[1:-1]
+    return None
+
+
 def snapshot():
     bl = glob.glob("/sys/class/backlight/*")
     backlight = None
@@ -170,8 +180,10 @@ def snapshot():
                 break
     except Exception:
         pass
+    aspm_text = read("/sys/module/pcie_aspm/parameters/policy")
     return {
-        "aspm_policy": read("/sys/module/pcie_aspm/parameters/policy"),
+        "aspm_policy": aspm_text,
+        "aspm_active": aspm_active(aspm_text),
         "backlight": backlight,
         "fan_rpm": fan,
         "nvme": nvme_state(),
@@ -193,7 +205,10 @@ def nvme_ps_series(n: int):
                                  capture_output=True, text=True, timeout=5).stdout
             line = out.strip().splitlines()[-1] if out.strip() else ""
             if "Current value:" in line:
-                states.append(line.split("Current value:")[-1].strip())
+                val = line.split("Current value:")[-1].strip()
+                if val and not val.lower().startswith("0x"):
+                    val = "0x" + val
+                states.append(val)
         except Exception:
             return states
         time.sleep(1)
@@ -234,8 +249,8 @@ def hints(watts, snap):
         notes.append("backlight at %.0f%% of max: panel power scales with this on an OLED" % pct)
     if "pcie_aspm_policy" in snap:
         pass
-    if snap.get("aspm_policy") and "default" in snap["aspm_policy"]:
-        notes.append("PCIe ASPM is firmware default; a powersave A/B is possible (oxp3-lowpower / docs hw sleep-power R6)")
+    if snap.get("aspm_active") == "default":
+        notes.append("PCIe ASPM is active at 'default' (firmware); a powersave A/B is possible but sub-W and needs identical load")
     if snap.get("fan_rpm"):
         notes.append("fan at %s RPM: EC/fan curve, not a load indicator on its own" % snap["fan_rpm"])
     usb = snap.get("usb") or {}
