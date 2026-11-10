@@ -830,3 +830,20 @@ KDE: `kwriteconfig6 --file powerdevilrc --group Battery --key LidAction --delete
     both say yes here. The inactive/remote case (a script over ssh suspending the bag machine) still
     needs `auth_admin_keep` by design and is untested - do not widen the rule to `action.id`-only
     matching to "fix" it.
+
+## Where the non-CPU/GPU power goes (diagnostic)
+
+`tools/power-breakdown.py` (root, RAPL energy files are 0400) samples for N seconds and splits
+`psys` (whole platform at the input), `package-0` (core + uncore + dram), the subdomains, and
+`rest = psys - package` — display, SSD, WiFi/BT, USB, audio, fan, RGB, VRMs. It snapshots the state
+that can explain the rest (backlight %, fan RPM, NVMe PS/APST, WiFi power save, USB/PCI runtime
+status, HHD RGB) and writes JSON to `~/.local/state/oxp3-reports/power-<label>-<ts>.json`.
+
+```sh
+sudo tools/power-breakdown.py --seconds 30 --label idle
+# launch the game, then
+sudo tools/power-breakdown.py --seconds 30 --label gaming
+```
+
+Compare the two runs: a large `uncore`/`dram` share is memory/fabric work under the game (not a
+peripheral), while a large `rest` points at the panel, SSD or USB/RGB side.
