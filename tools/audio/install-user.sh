@@ -167,7 +167,6 @@ cat > "$unitdir/oxp3-audio-defaults.service" <<'UNIT'
 [Unit]
 Description=OneXPlayer 3: keep the internal microphone as the default source
 After=pipewire.service wireplumber.service
-PartOf=graphical-session.target
 
 [Service]
 # The EQ sink (and therefore its monitor source) can appear after login, and
@@ -186,6 +185,11 @@ if command -v systemctl >/dev/null 2>&1; then
     if systemctl --user daemon-reload >/dev/null 2>&1 &&
        systemctl --user enable oxp3-speaker-gain.service
     systemctl --user enable oxp3-speaker-gain.service oxp3-audio-defaults.service >/dev/null 2>&1; then
+        # A configured source that names the sink itself (from an earlier broken
+        # election) pins the monitor forever; drop just that line so WirePlumber
+        # recomputes from priority (mic 2000 > monitor 1500).
+        wpstate=${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/default-nodes
+        [ -f "$wpstate" ] && sed -i '/^default\.configured\.audio\.source=oxp3_speaker_eq\.sink$/d' "$wpstate" 2>/dev/null || true
         echo "enabled oxp3-speaker-gain.service (runs at login; the resume hook repeats it)"
     else
         echo "warning: could not enable oxp3-speaker-gain.service (no user bus?);" >&2
