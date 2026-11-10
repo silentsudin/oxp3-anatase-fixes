@@ -226,8 +226,8 @@ def battery():
 def hints(watts, snap):
     notes = []
     if watts.get("psys") and watts.get("package-0") and watts["psys"] < watts["package-0"] - 0.5:
-        notes.append("psys reads below package-0 here: that RAPL domain is not the platform input on this machine, "
-                     "so the rest figure must come from battery energy (run on battery)")
+        notes.append("psys reads below package-0 here: that RAPL domain is not the platform input on this machine; "
+                     "the rest figure comes from battery power_now (run on battery)")
     bl = snap.get("backlight") or {}
     if bl.get("brightness") and bl.get("max"):
         pct = 100.0 * bl["brightness"] / bl["max"]
@@ -285,8 +285,8 @@ def main() -> int:
         "watts": watts,
         "rest_psys_minus_package": (None if psys_invalid or psys is None or package is None
                                     else round(psys - package, 2)),
-        "rest_battery_minus_package": (None if total_w is None or package is None
-                                       else round(total_w - package, 2)),
+        "rest_battery_minus_package": (None if (battery_power_now or total_w) is None or package is None
+                                       else round((battery_power_now or total_w) - package, 2)),
         "gpu_est_w": (None if package is None else
                       round(package - sum(watts.get(k, 0) for k in ("core", "uncore", "dram")), 2)),
         "battery": bat,
@@ -306,12 +306,12 @@ def main() -> int:
         print("  %-14s %6.2f W  (package - core - uncore - dram)" % ("gpu (est)", rep["gpu_est_w"]))
     if rep["psys_invalid"]:
         print("  psys is IMPLAUSIBLE on this platform (below package): ignore psys/rest-from-psys")
+    if total_w is not None:
+        print("  %-14s %6.2f W  (energy delta; coarse, BMS quantised)" % ("battery total", total_w))
+    if battery_power_now is not None:
+        print("  %-14s %6.2f W  (power_now, used for rest)" % ("battery", battery_power_now))
     if rep["rest_battery_minus_package"] is not None:
         print("  %-14s %6.2f W  (battery - package)" % ("rest", rep["rest_battery_minus_package"]))
-    if total_w is not None:
-        print("  %-14s %6.2f W  (energy delta)" % ("battery total", total_w))
-    if battery_power_now is not None:
-        print("  %-14s %6.2f W  (power_now)" % ("battery", battery_power_now))
     ps = rep["nvme_power_states"]
     if ps:
         print("  nvme PS samples: %s" % ", ".join(str(x) for x in ps))
