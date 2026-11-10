@@ -24,12 +24,24 @@ import argparse
 import glob
 import json
 import os
+import pwd
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 
-REPORT_DIR = os.path.expanduser("~/.local/state/oxp3-reports")
+
+def report_dir() -> str:
+    """~ of the human who ran sudo, so the JSON is readable without root."""
+    user = os.environ.get("SUDO_USER") or os.environ.get("USER") or ""
+    home = None
+    try:
+        home = pwd.getpwnam(user).pw_dir if user else None
+    except KeyError:
+        home = None
+    if not home:
+        home = os.path.expanduser("~")
+    return os.path.join(home, "oxp3-reports")
 
 
 def read(path):
@@ -170,6 +182,16 @@ def snapshot():
     }
 
 
+def battery_energy():
+    """(energy_wh, status, monotonic) for the first discharging-capable battery."""
+    for d in glob.glob("/sys/class/power_supply/BAT*"):
+        e = read_int(os.path.join(d, "energy_now"))
+        if e is None:
+            continue
+        return (e / 1e6, read(os.path.join(d, "status")) or "", time.monotonic())
+    return None
+
+
 def battery():
     out = {}
     for d in glob.glob("/sys/class/power_supply/BAT*"):
@@ -185,11 +207,9 @@ def battery():
 
 def hints(watts, snap):
     notes = []
-    if watts.get("psys") and watts.get("package-0"):
-        rest = round(watts["psys"] - watts["package-0"], 2)
-        if rest > 8:
-            notes.append("rest %.1f W is high: the dominant candidates are the display panel, "
-                         "the SSD under load, WiFi/BT, USB devices, VRM losses and the RGB lighting" % rest)
+    if watts.get("psys") and watts.get("package-0") and watts["psys"] < watts["package-0"] - 0.5:
+        notes.append("psys reads below package-0 here: that RAPL domain is not the platform input on this machine, "
+                     "so the rest figure must come from battery energy (run on battery)")
     bl = snap.get("backlight") or {}
     if bl.get("brightness") and bl.get("max"):
         pct = 100.0 * bl["brightness"] / bl["max"]
@@ -216,33 +236,55 @@ def main() -> int:
     if not zones:
         print("no RAPL zones found", file=sys.stderr)
         return 3
+    bat_before = battery_energy()
     watts, err = sample(zones, args.seconds)
+    bat_after = battery_energy()
     if err:
         print("power-breakdown: " + err, file=sys.stderr)
         return 3
     snap = snapshot()
     bat = battery()
+    total_w = None
+    if bat_before is not None and bat_after is not None and bat_after[1] == "Discharging":
+        dt = max(bat_after[2] - bat_before[2], 1e-6)
+        total_w = round((bat_before[0] - bat_after[0]) / dt, 2)
+    psys = watts.get("psys")
+    package = watts.get("package-0")
+    psys_invalid = psys is not None and package is not None and psys < package - 0.5
     rep = {
         "schema": "oxp3-power-breakdown/1",
+        "battery_total_w": total_w,
+        "psys_invalid": psys_invalid,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "label": args.label,
         "seconds": args.seconds,
         "watts": watts,
-        "rest_psys_minus_package": round(watts.get("psys", 0) - watts.get("package-0", 0), 2),
+        "rest_psys_minus_package": (None if psys_invalid or psys is None or package is None
+                                    else round(psys - package, 2)),
+        "rest_battery_minus_package": (None if total_w is None or package is None
+                                       else round(total_w - package, 2)),
+        "gpu_est_w": (None if package is None else
+                      round(package - sum(watts.get(k, 0) for k in ("core", "uncore", "dram")), 2)),
         "battery": bat,
         "snapshot": snap,
         "hints": hints(watts, snap),
     }
-    os.makedirs(REPORT_DIR, exist_ok=True)
-    path = os.path.join(REPORT_DIR, "power-%s-%s.json" % (args.label, datetime.now().strftime("%Y%m%dT%H%M%S")))
+    os.makedirs(report_dir(), exist_ok=True)
+    path = os.path.join(report_dir(), "power-%s-%s.json" % (args.label, datetime.now().strftime("%Y%m%dT%H%M%S")))
     with open(path, "w") as f:
         json.dump(rep, f, indent=2)
     print("== power breakdown (%ss, %s)" % (args.seconds, args.label))
     for k in ("psys", "package-0", "core", "uncore", "dram"):
         if k in watts:
             print("  %-14s %6.2f W" % (k, watts[k]))
-    if "psys" in watts and "package-0" in watts:
-        print("  %-14s %6.2f W  (psys - package)" % ("rest", rep["rest_psys_minus_package"]))
+    if rep["gpu_est_w"] is not None:
+        print("  %-14s %6.2f W  (package - core - uncore - dram)" % ("gpu (est)", rep["gpu_est_w"]))
+    if rep["psys_invalid"]:
+        print("  psys is IMPLAUSIBLE on this platform (below package): ignore psys/rest-from-psys")
+    if rep["rest_battery_minus_package"] is not None:
+        print("  %-14s %6.2f W  (battery - package)" % ("rest", rep["rest_battery_minus_package"]))
+    if total_w is not None:
+        print("  %-14s %6.2f W" % ("battery total", total_w))
     for b, v in bat.items():
         if isinstance(v, dict) and v.get("power_now_w"):
             print("  battery %s   %6.2f W (%s)" % (b, v["power_now_w"], v.get("status")))
