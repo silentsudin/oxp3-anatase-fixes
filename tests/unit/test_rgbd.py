@@ -62,11 +62,16 @@ class DevicePinTest(unittest.TestCase):
 
     def test_without_device_it_discovers(self):
         args = args_for("/nonexistent")
-        with mock.patch.object(hid, "find_vendor_hidraw",
+        # rgbd imports its own oxp3_hid instance; patching the test's copy would
+        # leave the real discovery call in place (the vendor node is present here).
+        with mock.patch.object(rgbd.hid, "find_vendor_hidraw",
                                return_value="/dev/hidraw4") as scan:
             daemon = rgbd.RgbDaemon(args)
-        scan.assert_called_once()
-        self.assertEqual(daemon._discover(), "/dev/hidraw4")
+            # The assertion belongs inside the patch: _discover() outside it performs
+            # a real scan, so the test used to pass only while the vendor node happened
+            # to be /dev/hidraw4 on this host.
+            self.assertEqual(daemon._discover(), "/dev/hidraw4")
+        self.assertGreaterEqual(scan.call_count, 1)
 
 
 class ConfigTest(unittest.TestCase):

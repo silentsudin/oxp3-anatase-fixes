@@ -648,6 +648,18 @@ comp_sleep_install() {
     if [[ -x "$repo/tools/oxp3-nvme-suspend.sh" ]]; then
         run "$repo/tools/oxp3-nvme-suspend.sh" apply
     fi
+    # Body/light lighting stays powered through s2idle (vendor HID on USB). Dark it
+    # before sleep and let HHD restore the configured RGB after resume.
+    install_file 0755 "$repo/files/oxp3-led-sleep" "$(p /usr/local/libexec/oxp3-led-sleep)"
+    install_file 0755 "$repo/tools/oxp3-led.py" "$(p /usr/local/libexec/oxp3-led.py)"
+    install_file 0644 "$repo/tools/oxp3_hid.py" "$(p /usr/local/libexec/oxp3_hid.py)"
+    for x in oxp3-led-sleep-pre.service oxp3-led-sleep-post.service; do
+        install_file 0644 "$repo/files/$x" "$(p "/etc/systemd/system/$x")"
+    done
+    if [[ -z $PREFIX ]]; then
+        run systemctl daemon-reload
+        run systemctl enable oxp3-led-sleep-pre.service oxp3-led-sleep-post.service
+    fi
 }
 
 # The trigger half of --sleep: what makes a *request* reach the kernel at all.

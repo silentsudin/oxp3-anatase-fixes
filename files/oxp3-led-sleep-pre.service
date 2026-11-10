@@ -1,0 +1,11 @@
+[Unit]
+Description=OneXPlayer 3: turn the body/power lighting off before suspend
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/hw/home-button-leds.md
+Before=sleep.target
+After=multi-user.target
+RequiresMountsFor=/usr/local/libexec
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-led-sleep pre
+TimeoutStartSec=15s

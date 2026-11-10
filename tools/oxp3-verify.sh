@@ -2148,6 +2148,19 @@ SDSTATE
         fi
     fi
 
+    local ledsleep=/usr/local/libexec/oxp3-led-sleep
+    if [[ -x $ledsleep ]] && systemctl is-enabled --quiet oxp3-led-sleep-pre.service 2>/dev/null \
+       && systemctl is-enabled --quiet oxp3-led-sleep-post.service 2>/dev/null; then
+        record sleep.led sleep "lighting dark across suspend" PASS \
+            "body/power lighting disabled before sleep, HHD restores RGB after resume" \
+            "$ledsleep + oxp3-led-sleep-pre/post" ""
+    else
+        record sleep.led sleep "lighting dark across suspend" FAIL \
+            "the vendor lighting stays powered through s2idle (LED hooks missing or disabled)" \
+            "unit files: oxp3-led-sleep-pre/post; script: $ledsleep" \
+            "sudo tools/oxp3-hw-install.sh --sleep ; docs/hw/home-button-leds.md"
+    fi
+
     # ---- trigger: is there a path from "sleep" to /sys/power/state that does not
     # depend on a desktop session answering a key? Strictly read-only: the drop-in
     # file, its *parsed* form via systemd-analyze cat-config, the polkit rule, the
@@ -2749,6 +2762,24 @@ check_audio() {
         record aud.scripts audio "EQ on/off scripts" FAIL "EQ scripts missing or not executable" "$on $off" "restore tools/audio/ from git and chmod +x"
     fi
 
+    # aud.source: the default source must be a real input, not the EQ sink monitor.
+    # WirePlumber gives that monitor a high priority and it silently shadows the mic.
+    if ! have pactl; then
+        record aud.source audio "default microphone" SKIP "pactl unavailable" "" ""
+    else
+        local defsrc realmic
+        defsrc=$(pactl get-default-source 2>/dev/null || true)
+        realmic=$(pactl list short sources 2>/dev/null | awk '$2 ~ /^alsa_input/ && $2 !~ /monitor/ {print $2; exit}')
+        case $defsrc in
+            "" ) record aud.source audio "default microphone" FAIL "no default source" "" "tools/audio/oxp3-audio-defaults ; docs/hw/audio-microphone.md" ;;
+            *.monitor)
+                record aud.source audio "default microphone" FAIL \
+                    "default source is a monitor ($defsrc); apps see no microphone" "available input: ${realmic:-none}" \
+                    "tools/audio/oxp3-audio-defaults ; systemctl --user restart oxp3-audio-defaults ; docs/hw/audio-microphone.md" ;;
+            *) record aud.source audio "default microphone" PASS "$defsrc" "" "" ;;
+        esac
+    fi
+
     # aud.mic: is there a capture source with a real signal path?  The ALC245
     # internal microphone is a fixed codec pin (0x12), not a PCH DMIC, so the
     # question is exposure, not NHLT.  mic_diag.py only reads proc/sysfs/UCM.
@@ -2768,7 +2799,11 @@ check_audio() {
                     if [ "${mo:-false}" = true ]; then
                         record aud.mic audio "internal microphone exposed" FAIL "UCM override installed but the internal mic is still not exposed" "${ms:-?}" "${mh:-sudo tools/audio/internal-mic.sh undo ; docs/hw/audio-microphone.md}"
                     else
-                        record aud.mic audio "internal microphone exposed" SKIP "internal mic pin present; no always-available capture source (opt-in fix not installed)" "${ms:-?}" "${mh:-sudo tools/audio/internal-mic.sh install ; docs/hw/audio-microphone.md}"
+                        if [ -n "${realmic:-}" ]; then
+                            record aud.mic audio "internal microphone exposed" PASS "internal mic exposed as ${realmic}" "" ""
+                        else
+                            record aud.mic audio "internal microphone exposed" SKIP "internal mic pin present; no always-available capture source (opt-in fix not installed)" "${ms:-?}" "${mh:-sudo tools/audio/internal-mic.sh install ; docs/hw/audio-microphone.md}"
+                        fi
                     fi ;;
                 pch-dmic)
                     record aud.mic audio "internal microphone exposed" SKIP "this machine uses a PCH DMIC capture PCM, not the codec pin" "${ms:-?}" "docs/hw/audio-microphone.md" ;;
@@ -3716,7 +3751,7 @@ run_selftest() {
     if [ "$count" -ge 65 ]; then ST_PASS=$((ST_PASS + 1)); else ST_FAIL=$((ST_FAIL + 1)); printf 'FAIL inventory: only %s distinct declared checks\n' "$count"; fi
     local expected
     expected=$(printf '%s\n' \
-        aud.activate aud.dummy aud.eq aud.level aud.mic aud.model aud.scripts aud.server \
+        aud.activate aud.dummy aud.eq aud.level aud.mic aud.model aud.source aud.scripts aud.server \
         bat.behaviour bat.limit bat.threshold \
         bt.controller bt.diag bt.dracut bt.files bt.journal \
         decky.backend decky.dir decky.loaded decky.status \
@@ -3735,7 +3770,7 @@ run_selftest() {
         pwr.ac pwr.adaptive pwr.fan pwr.order pwr.pl1 pwr.profile pwr.rapl pwr.zones \
         rgbd.check rgbd.timing rgbd.unit \
         sched.scx sched.state sched.unit \
-        sleep.aspm sleep.audit sleep.measure sleep.mem sleep.mmcwake sleep.nvme sleep.nvmeacpi sleep.sdcard sleep.stats sleep.suspend sleep.trigger sleep.units sleep.wakeup \
+        sleep.aspm sleep.audit sleep.measure sleep.mem sleep.mmcwake sleep.led sleep.nvme sleep.nvmeacpi sleep.sdcard sleep.stats sleep.suspend sleep.trigger sleep.units sleep.wakeup \
         vol.grab vol.hold vol.hwdb vol.holder vol.topology vol.unit \
         | sort | uniq)
     t_eq "inventory/declared" "$expected" "$ids"

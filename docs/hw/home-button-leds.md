@@ -444,3 +444,20 @@ look).
 5. EC path: the body LEDs are on the HID MCU, not the EC. The EC side
    (`oxp-platform`) only exposes `tt_toggle` (turbo key) and the TDP
    mailbox used by `oxp3-tdp-sync`; no LED registers.
+
+## 9. Suspend: the lighting must not stay powered
+
+s2idle keeps the USB controller (and therefore the vendor HID at `1a86:fe00`) powered, and HHD enables the five RGB zones
+at boot without ever turning them off. The stick rings, top strip and the button lighting therefore stay lit through sleep,
+which is a real standby drain and is visible on the device.
+
+There is no LED class device and no kernel suspend hook for these zones, so the fix is a pair of systemd sleep hooks
+(`--sleep` installs them):
+
+* `oxp3-led-sleep-pre.service` (`Before=sleep.target`) runs `/usr/local/libexec/oxp3-led-sleep pre`, which sends the
+  vendor `off` frame for every zone with `oxp3-led.py off --sides all`;
+* `oxp3-led-sleep-post.service` (`After=suspend.target`, `WantedBy=suspend.target`) runs the `post` action: after a 2 s
+  settle it restarts HHD, which re-initialises the vendor HID and re-applies the RGB configuration it owns.
+
+`tools/oxp3-led.py --dry-run off` shows the frames without touching the hardware. If a specific zone turns out to be the
+one that must stay dark (or must stay lit), the zone list is one argument in `files/oxp3-led-sleep`.

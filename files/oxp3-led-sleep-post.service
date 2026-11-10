@@ -1,0 +1,13 @@
+[Unit]
+Description=OneXPlayer 3: restore the RGB after resume (restart HHD)
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/hw/home-button-leds.md
+After=suspend.target
+RequiresMountsFor=/usr/local/libexec
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-led-sleep post
+TimeoutStartSec=30s
+
+[Install]
+WantedBy=suspend.target

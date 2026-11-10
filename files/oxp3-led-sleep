@@ -1,0 +1,29 @@
+#!/bin/bash
+# Dark the OneXPlayer 3 body lighting across suspend, and let HHD restore it after.
+#
+# The stick rings / top strip / power-button light sit on the vendor HID (1a86:fe00),
+# which keeps its USB power in s2idle; HHD enables those zones at boot and never turns
+# them off, so they stay lit (and drain) through sleep. There is no LED class device and
+# no kernel suspend hook for them, so this runs as a pair of sleep hooks:
+#   pre  -> send the vendor "off" frame for every zone
+#   post -> restart HHD, which re-applies the configured RGB from its own state
+set -uo pipefail
+led=/usr/local/libexec/oxp3-led.py
+log() { logger -t oxp3-led-sleep "$*" 2>/dev/null || true; }
+case ${1:-} in
+    pre)
+        [ -x "$led" ] || { log "no $led"; exit 0; }
+        if python3 "$led" off --sides all >/dev/null 2>&1; then
+            log "body lighting off for suspend"
+        else
+            log "could not turn the body lighting off"
+        fi
+        ;;
+    post)
+        # HHD re-initialises the vendor HID (and the RGB settings it owns) on start.
+        sleep 2
+        systemctl try-restart hhd.service >/dev/null 2>&1 || true
+        log "HHD restarted after resume to restore the RGB"
+        ;;
+    *) echo "usage: $0 pre|post" >&2; exit 2 ;;
+esac

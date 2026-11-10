@@ -139,6 +139,9 @@ COMPONENT_FILES = {
         "/etc/udev/rules.d/99-oxp3-sleep-wakeup.rules",
         "/etc/systemd/logind.conf.d/60-oxp3-sleep.conf",
         "/etc/polkit-1/rules.d/49-oxp3-suspend.rules",
+        "/usr/local/libexec/oxp3-led-sleep",
+        "/etc/systemd/system/oxp3-led-sleep-pre.service",
+        "/etc/systemd/system/oxp3-led-sleep-post.service",
     ),
     "bluetooth": (
         "/usr/lib/firmware/updates/intel/ibt-00a0-0291-iml.sfi",

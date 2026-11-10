@@ -202,3 +202,15 @@ DMIC device entry.
   `/usr/share/alsa/ucm2/ucm.conf`.
 * Web sources are cited as data; the on-device evidence in §1 is what the diagnosis rests
   on.
+
+## The default source can be a monitor
+
+The speaker EQ chain creates `oxp3_speaker_eq.sink`; PipeWire also exposes that sink's monitor as an `Audio/Source`, and
+WirePlumber gives the monitor priority over the real codec input. The microphone then looks "disabled" to applications
+even though `HiFi__Mic1__source` exists and is unmuted, and `pactl get-default-source` returns
+`oxp3_speaker_eq.sink.monitor`.
+
+`tools/audio/install-user.sh` installs `oxp3-audio-defaults.service` (`~/.local/libexec/oxp3-audio-defaults`, after
+PipeWire/WirePlumber). It only acts when the default source is a monitor or empty: it sets
+`default.audio.source` metadata to the first real `alsa_input` source. A source the user picked is never overridden, and
+`oxp3-verify.sh` reports the state as `aud.source` (FAIL while a monitor is the default).

@@ -300,6 +300,7 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Suspend and wake policy | awaiting-install | `sleep.mmcwake` | no armed mmc wakeup bit; the measured mmc0 is a virtual source (no device link, wakeup_count=0) and is parked with the SD host | no |
 | Suspend and wake policy | awaiting-install | `sleep.sdcard` | the SD host is bound while awake and parked only across suspend; a leftover park (unbound, or state says unbound) fails, because the reader would be dead | no |
 | Suspend and wake policy | awaiting-install | `sleep.aspm` | pcie_aspm.policy selects powersave (the storage link is allowed to idle) | no |
+| Suspend and wake policy | awaiting-install | `sleep.led` | PASS in `tools/oxp3-verify.sh --json` | no |
 | Suspend and wake policy | awaiting-install | `sleep.nvmeacpi` | PASS in `tools/oxp3-verify.sh --json` | no |
 | Suspend and wake policy | awaiting-install | `sleep.nvme` | nvme_core.default_ps_max_latency_us > 0 and force_apst != Y, so APST is not disabled | no |
 | Suspend and wake policy | awaiting-install | `sleep.measure` | PASS at or below 1 %/h, WARN 1-2 %/h, FAIL above 2 %/h | no |
@@ -311,7 +312,8 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Speaker tuning (Harman APO) and gain staging | working | `aud.model` | the 8-band model table (loud profile, pre-gain -4 dB) | no |
 | Speaker tuning (Harman APO) and gain staging | working | `aud.level` | the ALSA speaker control is at maximum and the report gives the net headroom | no |
 | Speaker tuning (Harman APO) and gain staging | working | `aud.activate` | eq-on.sh activates the sink | no |
-| Internal microphone (ALC245 digital mic) | partial | `aud.mic` | the ALC245 pin 0x12 path is exposed as an always-available capture source (SKIP while the opt-in profile is not installed) | no |
+| Internal microphone (ALC245 digital mic) | partial | `aud.mic` | PASS in `tools/oxp3-verify.sh --json` | no |
+| Internal microphone (ALC245 digital mic) | partial | `aud.source` | the ALC245 pin 0x12 path is exposed as an always-available capture source (SKIP while the opt-in profile is not installed) | no |
 | Bluetooth firmware | awaiting-install | `bt.files` | both ibt-00a0-0291 iml/pci files in updates/intel | no |
 | Bluetooth firmware | awaiting-install | `bt.dracut` | /etc/dracut.conf.d/60-oxp3-bt-firmware.conf present | no |
 | Bluetooth firmware | awaiting-install | `bt.journal` | no 'Failed to load Intel firmware file' this boot | no |

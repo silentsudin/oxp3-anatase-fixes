@@ -181,9 +181,9 @@ report() {
 action=${1:-}
 case $action in
     -h|--help|help) usage; exit 0 ;;
-    apply|undo|report|status) ;;
+    apply|undo|sink|report|status) ;;
     "") usage; exit 2 ;;
-    *) warn "unknown action '$1' (apply|undo|report|status|--help)"; exit 2 ;;
+    *) warn "unknown action '$1' (apply|undo|sink|report|status|--help)"; exit 2 ;;
 esac
 shift
 
@@ -194,17 +194,13 @@ fi
 card=$(detect_card)
 case $action in
     apply) apply ;;
+    sink)  # one-shot loudness staging; NEVER called by the periodic service, so a
+           # volume change in Gamemode stays where the user put it
+           if command -v pactl >/dev/null 2>&1; then
+               pactl set-sink-volume oxp3_speaker_eq.sink 130% >/dev/null 2>&1 \
+                   && echo "oxp3-speaker-gain: sink volume set to 130% (+6.8 dB)" || true
+           fi ;;
     undo) undo ;;
     report|status) report "$@" ;;
 esac
 
-# The EQ chain's own -4 dB headroom needs the sink above 100% for loudness, and
-# WirePlumber can restore a low saved volume after a reboot; set it here so the
-# login unit and the resume hook converge on the loud profile every time.
-if command -v pactl >/dev/null 2>&1; then
-    sink=$(pactl get-default-sink 2>/dev/null || true)
-    if [ "$sink" = "oxp3_speaker_eq.sink" ] || pactl list short sinks 2>/dev/null | grep -q 'oxp3_speaker_eq.sink'; then
-        pactl set-sink-volume oxp3_speaker_eq.sink 130% >/dev/null 2>&1 \
-            && echo "oxp3-speaker-gain: sink volume set to 130% (+6.8 dB)" || true
-    fi
-fi

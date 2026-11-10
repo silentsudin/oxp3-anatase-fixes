@@ -162,11 +162,26 @@ echo "installed $dst ($profile profile, headroom $gain dB)"
 # Gain applier + boot unit (user scope; harmless when systemd --user is absent).
 install -m 0755 "$here/gain-stage.sh" "$libexec/oxp3-speaker-gain"
 install -m 0644 "$here/oxp3-speaker-gain.service" "$unitdir/oxp3-speaker-gain.service"
+install -m 0755 "$here/oxp3-audio-defaults" "$libexec/oxp3-audio-defaults"
+cat > "$unitdir/oxp3-audio-defaults.service" <<'UNIT'
+[Unit]
+Description=OneXPlayer 3: keep the internal microphone as the default source
+After=pipewire.service wireplumber.service
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/libexec/oxp3-audio-defaults
+
+[Install]
+WantedBy=default.target
+UNIT
 echo "installed $libexec/oxp3-speaker-gain and $unitdir/oxp3-speaker-gain.service"
 if command -v systemctl >/dev/null 2>&1; then
     if systemctl --user daemon-reload >/dev/null 2>&1 &&
        systemctl --user enable oxp3-speaker-gain.service
-    systemctl --user enable oxp3-speaker-gain.service >/dev/null 2>&1; then
+    systemctl --user enable oxp3-speaker-gain.service oxp3-audio-defaults.service >/dev/null 2>&1; then
         echo "enabled oxp3-speaker-gain.service (runs at login; the resume hook repeats it)"
     else
         echo "warning: could not enable oxp3-speaker-gain.service (no user bus?);" >&2
