@@ -1,0 +1,1 @@
+(standard input):[PASS ] sleep      sleep.led              body/power lighting disabled before sleep, HHD restores RGB after resume

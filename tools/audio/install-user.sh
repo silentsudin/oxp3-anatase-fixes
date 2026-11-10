@@ -170,9 +170,13 @@ After=pipewire.service wireplumber.service
 PartOf=graphical-session.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=%h/.local/libexec/oxp3-audio-defaults
+# The EQ sink (and therefore its monitor source) can appear after login, and
+# WirePlumber then re-elects it as the default source. Poll cheaply: the script
+# exits immediately unless the default source is a monitor or empty.
+Type=simple
+Restart=always
+RestartSec=5
+ExecStart=/bin/sh -c 'while :; do %h/.local/libexec/oxp3-audio-defaults; sleep 10; done' 
 
 [Install]
 WantedBy=default.target
