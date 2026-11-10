@@ -36,8 +36,17 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-CACHE="${OXP3_CACHE:-$HOME/.cache/oxp3-fixes}"
-MOK_DIR="${OXP3_MOK_DIR:-$HOME/.local/share/oxp3-fixes/mok}"
+# `sudo -i`-style root shells and plain `sudo ./script` both give HOME=/root while the
+# build artefacts live in the invoking user's home. Resolve the human's home first, so
+# `sudo ./oxp3-fixes-fast.sh install` finds the build it just made.
+if [[ ${EUID:-$(id -u)} -eq 0 && -n ${SUDO_USER:-} ]]; then
+    _human_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    [[ -n $_human_home ]] || _human_home=$HOME
+else
+    _human_home=$HOME
+fi
+CACHE="${OXP3_CACHE:-$_human_home/.cache/oxp3-fixes}"
+MOK_DIR="${OXP3_MOK_DIR:-$_human_home/.local/share/oxp3-fixes/mok}"
 OUT="$CACHE/out"
 ANATASE_REPO=https://github.com/anatase-org/anatase.git
 PATCHWORK_REPO=https://github.com/anatase-org/patchwork.git
