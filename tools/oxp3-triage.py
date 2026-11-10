@@ -58,7 +58,8 @@ REPO = Path(__file__).resolve().parent.parent
 # tools/decky-oxp3-status/main.py). They are *pinned* facts: a digest that does
 # not match is the finding, not a formatting difference.
 MESA_PREFIX = "ec418f04e589965a"
-XMX_DRIVER_PREFIX = "4b1d55ea9483417f"
+XMX_DRIVER_PREFIXES = ("d5e7d7677cc29882", "4b1d55ea9483417f")
+XMX_DRIVER_PREFIX = XMX_DRIVER_PREFIXES[0]
 XMX_HELPER_MARKER = "xmx-cm-compile-nodgrf"
 EXPECTED_KERNEL_PREFIX = "7.2.7-an28"
 
@@ -1923,8 +1924,8 @@ def xmx_driver_mismatch(f: Facts) -> Outcome:
     )
     if not bad_state and hash_value is None:
         return Outcome("unknown", "no driver digest in this bundle")
-    if hash_value and hash_value == XMX_DRIVER_PREFIX and not bad_state:
-        return Outcome("clear", "the driver digest is the recorded %s" % XMX_DRIVER_PREFIX)
+    if hash_value and hash_value in XMX_DRIVER_PREFIXES and not bad_state:
+        return Outcome("clear", "the driver digest is a recorded build (%s)" % hash_value)
     evidence = [f.ev_indicator("xmx.driver")] if indicator else []
     if check is not None:
         evidence.append(f.ev_check("gfx.xmx.driver"))
@@ -1933,7 +1934,7 @@ def xmx_driver_mismatch(f: Facts) -> Outcome:
         "The per-game XMX driver is not %s (got %s). XeSS initialisation fails or "
         "artefacts on a different build, and the game falls back to Off; the shim's CM "
         "path only works with the recorded release binary." % (
-            XMX_DRIVER_PREFIX, hash_value or "an unknown digest"),
+            "/".join(XMX_DRIVER_PREFIXES), hash_value or "an unknown digest"),
         [e for e in evidence if e],
         [Action("tools/xmx-enable.sh", "re-points VK_DRIVER_FILES at the recorded release "
                                        "driver and re-checks the digests", privileged=False)],

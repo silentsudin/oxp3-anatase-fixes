@@ -48,7 +48,7 @@ verification* refreshes them with the fresh result.
 | XeSS XMX | `XMX_IGC_DIR` | directory with `neo/bin/ocloc` |
 | XeSS XMX | `INTC_ALT_DRIVER_EXTENSIONS_PATH` | contains `igdext64.dll` |
 | XeSS XMX | `VKD3D_DISABLE_EXTENSIONS` | contains `VK_EXT_descriptor_buffer` |
-| XeSS XMX | `~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so` | prefix `4b1d55ea9483417f` |
+| XeSS XMX | `~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so` | prefix `d5e7d7677cc29882` (26.3.0; rc3 `4b1d55ea9483417f` accepted) |
 | XeSS XMX | `~/.cache/xess-xmx/kernels/*.cmk` | populated, no compile failures |
 | XeSS XMX | `igdext_trace.log` in the game prefix | present (tracing runs only) |
 | XeSS XMX | latest Cyberpunk `benchmarkResults/*/summary.json` | `upscalingType` / XeSS on |

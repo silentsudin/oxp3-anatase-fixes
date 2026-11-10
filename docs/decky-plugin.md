@@ -39,7 +39,7 @@ Design rules:
   "groups": [
     {"id": "xmx", "title": "XeSS XMX", "state": "warn", "indicators": [
       {"id": "xmx.driver", "label": "XMX driver build", "state": "ok",
-       "value": "4b1d55ea9483417f (match)", "detail": "path: ...", "source": "..."}
+       "value": "d5e7d7677cc29882 (match)", "detail": "path: ...", "source": "..."}
     ]}
   ],
   "notes": ["no live game process visible; ..."]
@@ -148,7 +148,7 @@ With no game running, the configured machine stack is reported as before.
 | `xmx.igc` | `XMX_IGC_DIR` | directory exists and contains `neo/bin/ocloc*` (IGC 2.10.10) |
 | `xmx.shim` | `INTC_ALT_DRIVER_EXTENSIONS_PATH` | `igdext64.dll` present |
 | `xmx.vkd3d` | `VKD3D_DISABLE_EXTENSIONS` | contains `VK_EXT_descriptor_buffer` |
-| `xmx.driver` | `~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so` | prefix `4b1d55ea9483417f` |
+| `xmx.driver` | `~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so` | prefix `d5e7d7677cc29882` (26.3.0; rc3 `4b1d55ea9483417f` accepted) |
 | `xmx.kernels` | `~/.cache/xess-xmx/kernels/*.cmk` + `~/.cache/xess-xmx/compile.log` | at least one kernel, no `FAILED` lines |
 | `xmx.trace` | `igdext_trace.log` under the known prefixes | present (freshness only downgrades to `warn`) |
 | `xmx.benchmark` | newest Cyberpunk `benchmarkResults/*/summary.json` | XeSS on in the summary |

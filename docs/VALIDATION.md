@@ -307,7 +307,7 @@ The contract and the manual suspend/hotplug procedures are in
 | id | proves | how |
 |---|---|---|
 | `gfx.mesa` | the host Mesa build is the recorded one | prefix `ec418f04e589965a` (`mesa.host`) |
-| `gfx.xmx.driver` | the XMX driver is the recorded one | prefix `4b1d55ea9483417f` (`xmx.driver`) |
+| `gfx.xmx.driver` | the XMX driver is the recorded one | prefix `d5e7d7677cc29882` (26.3.0; rc3 `4b1d55ea9483417f` also accepted) |
 | `gfx.xmx.helper` | the nodgrf compile helper is in the game env | `xmx.helper` |
 | `gfx.xmx.igc` | IGC/ocloc is present | `xmx.igc` |
 | `gfx.xmx.kernels` | the XMX kernel cache is populated | `xmx.kernels` (count > 0) |

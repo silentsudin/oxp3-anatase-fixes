@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 # ---------------------------------------------------------------------------
 # Recorded expectations (docs/WORKING-BUILD-2026-11-08.md, docs/xess-xmx.md).
@@ -42,7 +42,8 @@ HOST_DRIVER = "/usr/lib64/libvulkan_intel.so"
 HOST_DRIVER_PREFIX = "ec418f04e589965a"
 
 XMX_DRIVER_REL = ".cache/oxp3-fixes/xmx-driver/libvulkan_intel.so"
-XMX_DRIVER_PREFIX = "4b1d55ea9483417f"
+XMX_DRIVER_PREFIXES = ("d5e7d7677cc29882", "4b1d55ea9483417f")
+XMX_DRIVER_PREFIX = XMX_DRIVER_PREFIXES[0]
 XMX_ICD_REL = ".config/xess-xmx/icd-xmx.json"
 XMX_ENV_REL = ".config/xess-xmx/oxp3-env.sh"
 XMX_KERNEL_CACHE_REL = ".cache/xess-xmx/kernels"
@@ -1080,7 +1081,7 @@ def _mesa_indicators(
             if prefix == HOST_DRIVER_PREFIX:
                 parts.append("%s -> host driver %s" % (Path(lib).name, prefix))
                 state = "ok"
-            elif prefix == XMX_DRIVER_PREFIX:
+            elif prefix in XMX_DRIVER_PREFIXES:
                 parts.append("%s -> XMX driver %s" % (Path(lib).name, prefix))
                 state = "ok"
             elif prefix:
@@ -1193,7 +1194,7 @@ def _xmx_indicators(
                 same = os.path.realpath(lib) == os.path.realpath(str(xmx_driver))
             except OSError:
                 same = False
-            if same or sha256_prefix(lib) == XMX_DRIVER_PREFIX:
+            if same or sha256_prefix(lib) in XMX_DRIVER_PREFIXES:
                 points_to_driver = lib
         ok = points_to_icd or points_to_driver is not None
         items.append(

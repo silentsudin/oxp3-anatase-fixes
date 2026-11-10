@@ -40,7 +40,7 @@ Consequences worth knowing:
   installed" is an install step, not a defect; it is reported as `not-installed` and
   the precondition rules do not fire. The pre-install fixture asserts this.
 * **The pinned numbers live here too.** `ec418f04e589965a` (host Mesa),
-  `4b1d55ea9483417f` (XMX driver), `xmx-cm-compile-nodgrf` (the 128-GRF helper) and
+  `d5e7d7677cc29882` (XMX 26.3.0 driver; rc3 `4b1d55ea9483417f` accepted), `xmx-cm-compile-nodgrf` (the 128-GRF helper) and
   `7.2.7-an28` (the kernel) are the recorded values from
   [VALIDATION.md](VALIDATION.md). A digest that differs *is* the finding.
 * **It is not a substitute for the verifier.** The verifier proves presence on the live
@@ -104,7 +104,7 @@ notes                  : limits of the bundle (e.g. a missing session/power.txt)
                                 "confidence": "inferred|unknown",
                                 "sources": ["display/display.txt (...)", ...] },
                    "gpu": "...", "mesa": "ec418f04e589965a (match)",
-                   "xmx_driver": "4b1d55ea9483417f (match)",
+                   "xmx_driver": "d5e7d7677cc29882 (match)",
                    "cpu": "...", "battery": "...", "thermal": "...",
                    "boot": { "uptime_s": 42696.63, "boot_wall_utc": "...",
                              "journal_available": true, "git": {...},
@@ -191,7 +191,7 @@ microseconds from the platform PMC; `max_hw_sleep` is a ceiling, not a duration.
 | rule | sev | reads → conclusion |
 |---|---|---|
 | `xmx.ocloc-missing` | critical | `gfx/xmx.txt`, `status/status.json`, `verify_json` → no `ocloc` ⇒ every CM compile fails, XeSS aborts, the game silently resets upscaling to **Off**; `tools/xmx-enable.sh` refuses without it |
-| `xmx.driver-mismatch` | high | `status_json`, `verify_json`, `xmx` → the per-game driver is not `4b1d55ea9483417f` ⇒ XeSS init fails/artefacts and falls back to Off |
+| `xmx.driver-mismatch` | high | `status_json`, `verify_json`, `xmx` → the per-game driver is neither `d5e7d7677cc29882` nor `4b1d55ea9483417f` ⇒ XeSS init fails/artefacts and falls back to Off |
 | `xmx.helper-no-nodgrf` | high | `status_json`, `xmx`, `verify_json` → `ANV_CM_HELPER` is not the `xmx-cm-compile-nodgrf` helper ⇒ `-doubleGRF` (256-GRF) kernels, white-dot artefacts; clear the kernel cache after fixing |
 | `xmx.flatpak-helper` | medium | `status_json`, `xmx` → the Steam Flatpak override uses the old helper and has no `VK_DRIVER_FILES`/`INTC_ALT` ⇒ XMX cannot work through it (per-game launch options override it) |
 | `xmx.trace-absent` | low/medium | `status_json`, `verify_json`, `xmx` → no `igdext_trace.log` ⇒ the shim never loaded (or tracing was off); if `INTC_ALT_DRIVER_EXTENSIONS_PATH` is not in the collected env, the shim is only reachable through the launcher's per-game environment |
@@ -355,7 +355,7 @@ over-claiming, and that a bundle with no evidence produces `unknown` rather than
   `snapshot-*.txt`), which the tool reads as a `state-dir`. The first `--collect` drop
   should be triaged and (optionally) kept out of git, as `.gitignore` already does for
   `docs/state/firstrun-*/`.
-* **The rules pin today's documented behaviour.** `4b1d55ea9483417f`,
+* **The rules pin today's documented behaviour.** `d5e7d7677cc29882` (XMX 26.3.0) / `4b1d55ea9483417f` (rc3 rollback),
   `ec418f04e589965a`, the `xmx-cm-compile-nodgrf` marker, `7.2.7-an28`,
   `s2idle`/`HandlePowerKey` semantics: if a recorded value or a documented behaviour
   changes, the constant, [VALIDATION.md](VALIDATION.md) and the fixture must change

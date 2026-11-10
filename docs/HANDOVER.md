@@ -267,7 +267,7 @@ git diff --stat && tools/repo-test.sh --fast
 | 3 | Apply the licence choice (A3) and commit | S | none functional | removes the only DECISION PENDING in [`QA.md`](QA.md); makes reuse terms explicit |
 | 4 | Fix the two stale texts still visible: the Decky/status hint `"Flatpak Steam is not supported by the XMX project"` (`tools/decky-oxp3-status/main.py:1654`) contradicts [`hw/flatpak-xmx.md`](hw/flatpak-xmx.md); annotate `hw/gap-audit.md` §1 as superseded on the Bluetooth row | XS | none | stops new sessions re-learning the corrected facts |
 | 5 | Flatpak Steam end-to-end trace (needs one Proton prefix + one launch with `XESS_LOG=1`); decide native-only otherwise | M | low (user-space, `$HOME` only) | closes the last XMX open item; `gfx.xmx.trace`, `flatpak.steam_env` |
-| 6 | Port the CM series to whatever Mesa the installer pins and re-verify `gfx.xmx.driver` (`4b1d55ea` is pinned today) | M | medium (driver rebuild + re-measure) | XMX stops being `partial` in the registry sense |
+| 6 | ~~Port the CM series to whatever Mesa the installer pins~~ **done 2026-11-10**: Mesa 26.3.0 final + release CM + our perf patches (`d5e7d767`); 0212 stays main-only | M | done | XMX is pinned to the official release now |
 | 7 | SAGV: send the `intel_pmdemand` draft when the point→frequency mapping is measured | L-XL | high (kernel work, needs root reboots) | the one `blocked` component |
 | 8 | Re-assert the driver stack after the next Anatase update, twice if the kernel changed | S | low | keeps `working` components working ([`INSTALL-HW.md` §2.4](INSTALL-HW.md)) |
 

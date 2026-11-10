@@ -3091,11 +3091,11 @@ check_graphics() {
         xlib=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["ICD"]["library_path"])' "$xicd" 2>/dev/null || true)
         if [ -n "$xlib" ] && [ -r "$xlib" ]; then
             xhash=$(sha256sum "$xlib" 2>/dev/null | cut -c1-8)
-            if [ "$xhash" = 4b1d55ea ]; then
+            if [ "$xhash" = d5e7d767 ] || [ "$xhash" = 4b1d55ea ]; then
                 record gfx.xmx.icdpath graphics "XMX ICD points at the shipping driver" PASS "icd -> $xlib ($xhash)" "" ""
             else
                 record gfx.xmx.icdpath graphics "XMX ICD points at the shipping driver" FAIL \
-                    "ICD points at $xlib (sha ${xhash:-?}), not the verified 4b1d55ea build" "" \
+                    "ICD points at $xlib (sha ${xhash:-?}), not the verified 26.3.0 (d5e7d767) or rc3 (4b1d55ea) build" "" \
                     "tools/xmx-enable.sh enable --game <xess dir> --prefix <drive_c> ; docs/xess-xmx.md"
             fi
         else
@@ -3109,7 +3109,16 @@ check_graphics() {
     fi
 
     simple_ind gfx.mesa mesa.host graphics "host Mesa driver" "ec418f04e589965a" "restore the recorded build: sudo tools/oxp3-mesa-restore.sh restore ; or rebuild: ./oxp3-fixes-fast.sh build install ; docs/WORKING-BUILD-2026-11-08.md"
-    simple_ind gfx.xmx.driver xmx.driver graphics "XMX driver" "4b1d55ea" "rebuild the XMX driver: tools/build-xmx-driver.sh ; docs/xess-xmx.md"
+    local xdrv
+    xdrv=$(status_field xmx.driver 2>/dev/null || true)
+    case $xdrv in
+        *d5e7d767*|*4b1d55ea*) record gfx.xmx.driver graphics "XMX driver" PASS "$xdrv" "" "" ;;
+        ""|*none*|*no-game*)
+            record gfx.xmx.driver graphics "XMX driver" SKIP "no game running (the driver digest is reported in-game)" "" "docs/xess-xmx.md" ;;
+        *mismatch*|*warn*)
+            record gfx.xmx.driver graphics "XMX driver" FAIL "warn: $xdrv" "" "tools/build-xmx-driver-263.sh ; docs/xess-xmx.md" ;;
+        *) record gfx.xmx.driver graphics "XMX driver" SKIP "unexpected status: $xdrv" "" "docs/xess-xmx.md" ;;
+    esac
     if [ "$xess_game" -eq 0 ]; then
         record gfx.xmx.helper graphics "nodgrf helper" SKIP "the running game has no XeSS files (no libxess in its directory, maps or prefix)" "game: ${game_exe:-not detected}" "XMX only applies when a game loads libxess; docs/xess-xmx.md"
         record gfx.xmx.igc graphics "IGC ocloc present" SKIP "the running game has no XeSS files (no libxess in its directory, maps or prefix)" "game: ${game_exe:-not detected}" "docs/xess-xmx.md"

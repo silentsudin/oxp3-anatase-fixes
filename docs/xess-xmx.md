@@ -330,3 +330,35 @@ directory is missing, the check fails and the unit sets the **session** `VK_DRIV
 DP4a and the game looks unaccelerated even though the per-game ICD is fine. `tools/xmx-session-check-fix.sh` writes a
 drop-in that points the check at `~/.cache/oxp3-fixes/xmx-driver` and the per-game ICD, restarts the unit and prints the
 resulting `driver-status`. `gfx.xmx.icdpath` in `oxp3-verify.sh` covers the ICD itself.
+
+## Mesa 26.3.0 final XMX driver (2026-11-10)
+
+The XMX driver moved from 26.3.0-rc3 to the **official 26.3.0 release** with the same recipe, built by
+`tools/build-xmx-driver-263.sh`:
+
+    Mesa 26.3.0 tag
+    + xess-xmx release CM series (patches/mesa-26.3 from release >= 20261111)
+    + our five 26.3 backports (the one already upstream is skipped)
+    + our Intel perf patches 0200, 0201, 0206 and the ported 0207
+    + Anatase Mesa overrides (radv-defaults hunk stripped)
+
+Result: `~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so`, sha256 `d5e7d7677cc2988287ebf194309ce6a1fcb54cbd6ad081d7b40d1aba42187775`,
+`vulkaninfo` reports **Mesa 26.3.0**. The rc3 build (`4b1d55ea…`) is kept in
+`~/.cache/oxp3-fixes/xmx-driver-rc3/` for rollback; `gfx.xmx.*` and the Decky plugin accept both prefixes.
+
+`0212-anv-rt-tlas-tuning-from-rt-ref.patch` is **not portable** to 26.3: it depends on main-only RT refactors
+(`device->drirc.perf.rt_*`, `VK_INTERNAL_BUILD_TYPE_HPLOC`, the bvh_ts entry point) that the 26.3 branch does not have.
+0207 needed a small forward-port (its escape-hatch hunk sits next to main-only `nir_options_fs_single_prim`), kept in
+`patches/mesa-26.3/0207-…-26.3.patch`.
+
+The Intel fixes that landed between rc3 and 26.3.0 (five Jay compiler fixes, the ANV drirc entries for TLOU2 and Project
+Wingman, the intel/mda shader-dump changes) are all ancestors of the host main snapshot `ea40598a` (checked with
+`merge_base` against each cherry-picked upstream commit), so host 27.0-devel already has them.
+
+Build and install:
+
+    tools/build-xmx-driver-263.sh --release-dir ~/.local/share/xess-xmx-release/xess-xmx-linux-20261111 --install
+
+Rollback to rc3:
+
+    cp ~/.cache/oxp3-fixes/xmx-driver-rc3/libvulkan_intel.so ~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so

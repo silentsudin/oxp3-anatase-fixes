@@ -100,3 +100,4 @@ PY
 fi
 echo "build: artifact $artifact ($size bytes)"
 echo "build: sha256 $hash"
+printf '%s  %s\n' "$hash" "$(basename "$artifact")" > artifact.sha256
