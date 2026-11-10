@@ -15,3 +15,11 @@ Rebuild: `OXP3_MESA_REBUILD=1 ./oxp3-fixes-fast.sh build`; install: `sudo ./oxp3
 
 At boot `oxp3-mesa-keep.service` restores `host-5a75b6a4-libvulkan_intel.so` when the overlay cleared it; the previous
 `host-ec418f04` file remains as fallback/rollback.
+
+## First launch after a Mesa bump: CPU-bound shader rebuild
+
+Mesa keys its disk shader cache by the driver build, so installing `5a75b6a4` makes the previous `ec418f04` cache
+unusable. The first Hogwarts launch then compiles the game's Vulkan shaders with every core (package at PL1, ~30 W) for a
+few minutes and the `~/.cache/mesa_shader_cache` directories/index are written at that time; later launches are fast.
+This is the same one-time warm-up `BEST-CONFIG.md` records after every install, not a regression and not the XMX CM
+kernel compile: `~/.cache/xess-xmx/kernels` and `compile.log` do not change during it (the CM kernels stay cached).
