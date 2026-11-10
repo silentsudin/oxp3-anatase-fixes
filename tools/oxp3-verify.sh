@@ -2149,15 +2149,21 @@ SDSTATE
     fi
 
     local ledsleep=/usr/local/libexec/oxp3-led-sleep
+    local pre_wanted post_wanted
+    pre_wanted=$(systemctl show -p WantedBy oxp3-led-sleep-pre.service 2>/dev/null || true)
+    post_wanted=$(systemctl show -p WantedBy oxp3-led-sleep-post.service 2>/dev/null || true)
+    # is-enabled alone is not enough: a unit with Before=sleep.target but no
+    # WantedBy=sleep.target is "static" and never enters the sleep transaction.
     if [[ -x $ledsleep ]] && systemctl is-enabled --quiet oxp3-led-sleep-pre.service 2>/dev/null \
-       && systemctl is-enabled --quiet oxp3-led-sleep-post.service 2>/dev/null; then
+       && systemctl is-enabled --quiet oxp3-led-sleep-post.service 2>/dev/null \
+       && [[ $pre_wanted == *sleep.target* ]] && [[ $post_wanted == *suspend.target* ]]; then
         record sleep.led sleep "lighting dark across suspend" PASS \
             "body/power lighting disabled before sleep, HHD restores RGB after resume" \
             "$ledsleep + oxp3-led-sleep-pre/post" ""
     else
         record sleep.led sleep "lighting dark across suspend" FAIL \
             "the vendor lighting stays powered through s2idle (LED hooks missing or disabled)" \
-            "unit files: oxp3-led-sleep-pre/post; script: $ledsleep" \
+            "unit files: oxp3-led-sleep-pre/post (pre must be WantedBy=sleep.target); script: $ledsleep" \
             "sudo tools/oxp3-hw-install.sh --sleep ; docs/hw/home-button-leds.md"
     fi
 

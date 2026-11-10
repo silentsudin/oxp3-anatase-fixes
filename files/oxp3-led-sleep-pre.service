@@ -9,3 +9,6 @@ RequiresMountsFor=/usr/local/libexec
 Type=oneshot
 ExecStart=/usr/local/libexec/oxp3-led-sleep pre
 TimeoutStartSec=15s
+
+[Install]
+WantedBy=sleep.target
