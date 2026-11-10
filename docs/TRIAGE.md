@@ -39,7 +39,7 @@ Consequences worth knowing:
 * **Not installed ≠ broken.** A `SKIP` row from the verifier whose summary says "not
   installed" is an install step, not a defect; it is reported as `not-installed` and
   the precondition rules do not fire. The pre-install fixture asserts this.
-* **The pinned numbers live here too.** `ec418f04e589965a` (host Mesa),
+* **The pinned numbers live here too.** `5a75b6a44d285fd1` (host Mesa 2026-11-10; previous `ec418f04e589965a` accepted),
   `d5e7d7677cc29882` (XMX 26.3.0 driver; rc3 `4b1d55ea9483417f` accepted), `xmx-cm-compile-nodgrf` (the 128-GRF helper) and
   `7.2.7-an28` (the kernel) are the recorded values from
   [VALIDATION.md](VALIDATION.md). A digest that differs *is* the finding.
@@ -103,7 +103,7 @@ notes                  : limits of the bundle (e.g. a missing session/power.txt)
                                 "gamescope": "no evidence|mentioned in <file>:<line>",
                                 "confidence": "inferred|unknown",
                                 "sources": ["display/display.txt (...)", ...] },
-                   "gpu": "...", "mesa": "ec418f04e589965a (match)",
+                   "gpu": "...", "mesa": "5a75b6a44d285fd1 (match)",
                    "xmx_driver": "d5e7d7677cc29882 (match)",
                    "cpu": "...", "battery": "...", "thermal": "...",
                    "boot": { "uptime_s": 42696.63, "boot_wall_utc": "...",
@@ -195,7 +195,7 @@ microseconds from the platform PMC; `max_hw_sleep` is a ceiling, not a duration.
 | `xmx.helper-no-nodgrf` | high | `status_json`, `xmx`, `verify_json` → `ANV_CM_HELPER` is not the `xmx-cm-compile-nodgrf` helper ⇒ `-doubleGRF` (256-GRF) kernels, white-dot artefacts; clear the kernel cache after fixing |
 | `xmx.flatpak-helper` | medium | `status_json`, `xmx` → the Steam Flatpak override uses the old helper and has no `VK_DRIVER_FILES`/`INTC_ALT` ⇒ XMX cannot work through it (per-game launch options override it) |
 | `xmx.trace-absent` | low/medium | `status_json`, `verify_json`, `xmx` → no `igdext_trace.log` ⇒ the shim never loaded (or tracing was off); if `INTC_ALT_DRIVER_EXTENSIONS_PATH` is not in the collected env, the shim is only reachable through the launcher's per-game environment |
-| `env.mesa-mismatch` | medium | `status_json`, `verify_json`, `xmx` → the host driver is not `ec418f04e589965a` ⇒ the `/usr` overlay stack was wiped or re-layered (every Anatase update does this) |
+| `env.mesa-mismatch` | medium | `status_json`, `verify_json`, `xmx` → the host driver is neither `5a75b6a44d285fd1` nor `ec418f04e589965a` ⇒ the `/usr` overlay stack was wiped or re-layered (every Anatase update does this) |
 
 **Audio**
 
@@ -356,7 +356,7 @@ over-claiming, and that a bundle with no evidence produces `unknown` rather than
   should be triaged and (optionally) kept out of git, as `.gitignore` already does for
   `docs/state/firstrun-*/`.
 * **The rules pin today's documented behaviour.** `d5e7d7677cc29882` (XMX 26.3.0) / `4b1d55ea9483417f` (rc3 rollback),
-  `ec418f04e589965a`, the `xmx-cm-compile-nodgrf` marker, `7.2.7-an28`,
+  `5a75b6a44d285fd1`, the `xmx-cm-compile-nodgrf` marker, `7.2.7-an28`,
   `s2idle`/`HandlePowerKey` semantics: if a recorded value or a documented behaviour
   changes, the constant, [VALIDATION.md](VALIDATION.md) and the fixture must change
   together, otherwise the finding is wrong. That is intentional — it is how a

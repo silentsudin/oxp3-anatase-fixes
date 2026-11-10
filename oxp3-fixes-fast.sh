@@ -88,8 +88,8 @@ source "$install_common_lib"
 # Kept local: _mpick/build_mesa/install_mesa_fast/remove_mesa_fast are the podman/meson
 # pipeline that makes this script different from oxp3-fixes.sh (RPM packaging), so they are
 # not part of tools/lib/install-common.sh.
-MESA_COMMIT=ea40598a68bab5690e0d08f845e2776ef9be2db9     # Mesa main, 2026-11-05 (the tree every measured win used)
-MESA_VERSION="27.0.0~devel.20261105git${MESA_COMMIT:0:8}"  # no "^": Cargo.toml needs semver
+MESA_COMMIT=62b0e52f875e5cb37b38776908f1b8f85588b385     # Mesa main, 2026-11-10 15:36 UTC (bumped from ea40598a)
+MESA_VERSION="27.0.0~devel.20261110git${MESA_COMMIT:0:8}"  # no "^": Cargo.toml needs semver
 MESA_URL=https://gitlab.freedesktop.org/mesa/mesa/-/archive/$MESA_COMMIT/mesa-$MESA_COMMIT.tar.gz
 # i686 -devel packages the 32-bit build needs beyond the container's (dnf builddep is x86_64 only)
 MESA_I686_DEVEL="llvm-devel.i686 clang-devel.i686 spirv-llvm-translator-devel.i686 spirv-tools-devel.i686

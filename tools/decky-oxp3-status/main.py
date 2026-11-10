@@ -39,7 +39,8 @@ VERSION = "1.3.1"
 # Recorded expectations (docs/WORKING-BUILD-2026-11-08.md, docs/xess-xmx.md).
 # ---------------------------------------------------------------------------
 HOST_DRIVER = "/usr/lib64/libvulkan_intel.so"
-HOST_DRIVER_PREFIX = "ec418f04e589965a"
+HOST_DRIVER_PREFIXES = ("5a75b6a44d285fd1", "ec418f04e589965a")
+HOST_DRIVER_PREFIX = HOST_DRIVER_PREFIXES[0]
 
 XMX_DRIVER_REL = ".cache/oxp3-fixes/xmx-driver/libvulkan_intel.so"
 XMX_DRIVER_PREFIXES = ("d5e7d7677cc29882", "4b1d55ea9483417f")
@@ -1013,7 +1014,7 @@ def _mesa_indicators(
     items: List[Dict[str, Any]] = []
 
     host_prefix = sha256_prefix(DRIVER_PATH)
-    host_ok = host_prefix == HOST_DRIVER_PREFIX
+    host_ok = host_prefix in HOST_DRIVER_PREFIXES
     # A readable but different build is a degraded host (warn); a missing or
     # unreadable driver is the failure the docs describe.
     items.append(
@@ -1078,7 +1079,7 @@ def _mesa_indicators(
                 parts.append("%s (no library_path)" % item.get("icd"))
                 continue
             prefix = sha256_prefix(lib)
-            if prefix == HOST_DRIVER_PREFIX:
+            if prefix in HOST_DRIVER_PREFIXES:
                 parts.append("%s -> host driver %s" % (Path(lib).name, prefix))
                 state = "ok"
             elif prefix in XMX_DRIVER_PREFIXES:

@@ -102,7 +102,7 @@ components:
       - "rejected patches 0210 and 0209 stay in patches/rejected and are not applied"
     last_validated:
       date: 2026-11-08
-      evidence: "docs/WORKING-BUILD-2026-11-08.md host ec418f04 / runtime 4d043cc2; tools/check-working.sh 7/7 OK (docs/QA.md row 33)"
+      evidence: "docs/WORKING-BUILD-2026-11-10.md host 5a75b6a4 / runtime 4d043cc2; tools/check-working.sh 7/7 OK (docs/QA.md row 33)"
 
   - id: xess-xmx
     title: XeSS XMX

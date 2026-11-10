@@ -306,7 +306,7 @@ The contract and the manual suspend/hotplug procedures are in
 
 | id | proves | how |
 |---|---|---|
-| `gfx.mesa` | the host Mesa build is the recorded one | prefix `ec418f04e589965a` (`mesa.host`) |
+| `gfx.mesa` | the host Mesa build is the recorded one | prefix `5a75b6a44d285fd1` (`mesa.host`; previous `ec418f04e589965a` accepted) |
 | `gfx.xmx.driver` | the XMX driver is the recorded one | prefix `d5e7d7677cc29882` (26.3.0; rc3 `4b1d55ea9483417f` also accepted) |
 | `gfx.xmx.helper` | the nodgrf compile helper is in the game env | `xmx.helper` |
 | `gfx.xmx.igc` | IGC/ocloc is present | `xmx.igc` |
@@ -423,7 +423,7 @@ Representative passing lines:
 [PASS ] sleep      sleep.stats            last s2idle sleep 8.4s (success=1, fail=0)
 [PASS ] bluetooth  bt.controller          btmgmt sees the controller
 [PASS ] audio      aud.dummy              default sink: oxp3_speaker_eq.sink
-[PASS ] graphics   gfx.mesa               ec418f04e589965a (match)
+[PASS ] graphics   gfx.mesa               5a75b6a44d285fd1 (match)
 [PASS ] decky      decky.status           overall=ok (ok=25 warn=0 fail=0 unknown=0)
 ```
 

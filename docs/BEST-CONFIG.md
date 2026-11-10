@@ -124,7 +124,7 @@ Install (host and Flatpak runtime get the same driver):
     ./oxp3-fixes-fast.sh install --skip-gamescope --skip-mangohud --skip-kernel --skip-firmware --skip-xess --skip-extras
     sudo systemctl restart anatase-flatpak-extensions.service
 
-Verified state: host and runtime both `ec418f04e589965a…`, no `libexpat.so.1` in the runtime overrides, PL1 35 W,
+Verified state: host `5a75b6a44d285fd1…` (2026-11-10 bump), runtime still `4d043cc2…`, no `libexpat.so.1` in the runtime overrides, PL1 35 W,
 patched xe module loaded, `platform_profile=balanced`.
 
 Benchmark protocol: single runs of the Cyberpunk benchmark vary by ~10 % (47.9-53.2 today on identical builds), so
@@ -139,7 +139,7 @@ single-digit FPS and the CPU sits at 10-20 W while the GPU is mostly idle. Once 
 runs at full speed with no changes.
 
 Evidence (2026-11-08, Wukong benchmark tool, DX11/DXVK path):
-- After each install (ec418f04, 4d043cc2): first Gamemode run single-digit FPS.
+- After each install (5a75b6a4, 4d043cc2): first Gamemode run single-digit FPS.
 - A desktop run right after hit full speed (GPU 2300 MHz, core 3.8 W, pkg 25.6 W, GameThread ~300 %).
 - The next Gamemode run was fast again.
 - ~30,000 files under ~/.cache/mesa_shader_cache were rewritten within the preceding two hours.

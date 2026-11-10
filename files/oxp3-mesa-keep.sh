@@ -2,7 +2,7 @@
 # Restore the recorded known-good host Mesa and Flatpak runtime Mesa at boot.
 #
 # rpm-ostree clears the /usr overlay ("usroverlay") on every boot, so the patched
-# ec418f04 host libvulkan_intel.so installed there does not survive a reboot, and
+# host libvulkan_intel.so installed there does not survive a reboot, and
 # the Decky health line then reports a Mesa mismatch.  This runs before the
 # display manager, re-enters the usroverlay only when the digest differs, restores
 # the known-good binary, refreshes the Flatpak runtime override and restarts the
@@ -17,7 +17,8 @@ find_known() {
     return 1
 }
 kd=$(find_known) || { log "no known-good directory; nothing to do"; exit 0; }
-host_known=$kd/host-ec418f04-libvulkan_intel.so
+host_known=$kd/host-5a75b6a4-libvulkan_intel.so
+[ -e "$host_known" ] || host_known=$kd/host-ec418f04-libvulkan_intel.so
 runtime_known=$kd/runtime-4d043cc2-libvulkan_intel.so
 restore_host=0 restore_runtime=0
 want_host=$(sha256sum "$host_known" 2>/dev/null | cut -d' ' -f1)

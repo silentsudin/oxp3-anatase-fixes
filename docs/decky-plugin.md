@@ -126,7 +126,7 @@ Recorded expectations come from `docs/WORKING-BUILD-2026-11-08.md` and
 
 | id | probe | ok when |
 |---|---|---|
-| `mesa.host` | sha256 of `/usr/lib64/libvulkan_intel.so` | prefix `ec418f04e589965a` (our podman build) |
+| `mesa.host` | sha256 of `/usr/lib64/libvulkan_intel.so` | prefix `5a75b6a44d285fd1` (our 2026-11-10 podman build; previous `ec418f04e589965a` accepted) |
 | `mesa.env` / `mesa.env.vk_driver_files` | `VK_DRIVER_FILES` / `VK_ICD_FILENAMES` from the effective env | unset (system default), or resolves to the host or XMX driver |
 
 `fail` when the file is missing/unreadable; `warn` when a hash differs from the

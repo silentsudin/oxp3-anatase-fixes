@@ -64,7 +64,7 @@ Live evidence of the split (read-only, today): `rpm-ostree status --booted` list
 `LocalPackages: kmod-oxp3-7.2.7_an28.fc45.x86_64-202610292314, oxp3-firmware-1-202610292312` and
 `Initramfs: regenerate`; `modinfo -F filename xe` resolves to
 `/lib/modules/7.2.7-an28.fc45.x86_64/updates/.../xe.ko.xz`; the host Vulkan driver is
-`ec418f04e589965a` (Mesa 27.0.0-dev in the overlay) while the packaged `mesa-vulkan-drivers` is still
+`5a75b6a44d285fd1` (Mesa 27.0.0-dev in the overlay, main 62b0e52f; previous ec418f04 accepted) while the packaged `mesa-vulkan-drivers` is still
 26.2.4 — i.e. the overlay install is in effect on this boot.
 
 ## 2. State (generated from `components.yaml`; do not re-type facts here)

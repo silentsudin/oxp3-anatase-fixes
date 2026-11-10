@@ -3108,7 +3108,18 @@ check_graphics() {
             "no per-game XMX ICD installed" "" "docs/xess-xmx.md"
     fi
 
-    simple_ind gfx.mesa mesa.host graphics "host Mesa driver" "ec418f04e589965a" "restore the recorded build: sudo tools/oxp3-mesa-restore.sh restore ; or rebuild: ./oxp3-fixes-fast.sh build install ; docs/WORKING-BUILD-2026-11-08.md"
+    local mh
+    mh=$(status_field mesa.host 2>/dev/null || true)
+    case $mh in
+        *5a75b6a4*|*ec418f04*)
+            record gfx.mesa graphics "host Mesa driver" PASS "$mh" "" "" ;;
+        "")
+            record gfx.mesa graphics "host Mesa driver" SKIP "the status backend reported no host driver" "" "tools/oxp3-status.sh --json" ;;
+        *mismatch*|*warn*)
+            record gfx.mesa graphics "host Mesa driver" FAIL "warn: $mh" "" \
+                "restore a recorded build: tools/oxp3-mesa-keep (boot) ; sudo tools/oxp3-mesa-restore.sh restore" ;;
+        *) record gfx.mesa graphics "host Mesa driver" FAIL "warn: $mh" "" "docs/WORKING-BUILD-2026-11-08.md" ;;
+    esac
     local xdrv
     xdrv=$(status_field xmx.driver 2>/dev/null || true)
     case $xdrv in

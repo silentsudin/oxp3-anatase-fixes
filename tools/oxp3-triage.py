@@ -57,7 +57,8 @@ REPO = Path(__file__).resolve().parent.parent
 # Recorded constants from the rest of the repository (docs/VALIDATION.md,
 # tools/decky-oxp3-status/main.py). They are *pinned* facts: a digest that does
 # not match is the finding, not a formatting difference.
-MESA_PREFIX = "ec418f04e589965a"
+MESA_PREFIXES = ("5a75b6a44d285fd1", "ec418f04e589965a")
+MESA_PREFIX = MESA_PREFIXES[0]
 XMX_DRIVER_PREFIXES = ("d5e7d7677cc29882", "4b1d55ea9483417f")
 XMX_DRIVER_PREFIX = XMX_DRIVER_PREFIXES[0]
 XMX_HELPER_MARKER = "xmx-cm-compile-nodgrf"
@@ -2306,7 +2307,7 @@ def env_mesa_mismatch(f: Facts) -> Outcome:
         return Outcome("clear", "gfx.mesa passes (%s)" % check.get("summary"))
     if digest is None:
         return Outcome("unknown", "no host driver digest in this bundle")
-    if digest == MESA_PREFIX:
+    if digest in MESA_PREFIXES:
         return Outcome("clear", "the host driver is %s" % MESA_PREFIX)
     evidence = []
     if indicator is not None:
