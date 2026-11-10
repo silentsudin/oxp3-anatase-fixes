@@ -477,7 +477,14 @@ do_install() {
             echo "then run '$0 install' again - changes to the current /usr would be lost."
             return 0
         fi
-        hotfix_active || sudo rpm-ostree usroverlay --hotfix
+        # "Deployment is already in unlocked state" is a non-zero exit that still means
+        # the overlay is writable (the keep units race into it at boot). Ignore the
+        # status and decide by probing the filesystem.
+        hotfix_active || sudo rpm-ostree usroverlay --hotfix >/dev/null 2>&1 || true
+        if ! sudo install -m 000 /dev/null "/usr/.oxp3-rw-probe.$$" 2>/dev/null; then
+            die "the /usr overlay did not become writable (rpm-ostree usroverlay failed and /usr is read-only)"
+        fi
+        sudo rm -f "/usr/.oxp3-rw-probe.$$"
         if (( ${#rpms[@]} )); then
             say "gamescope / MangoHud / Mesa into the writable /usr overlay (sudo)"
             sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
