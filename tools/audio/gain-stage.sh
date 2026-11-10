@@ -112,6 +112,18 @@ apply() {
         return 0
     fi
     mkdir -p "$state_dir"
+    # The codec's Capture switch is off after UCM configures the card; PipeWire then
+    # presents an unmuted source that records pure zeros ("microphone disabled").
+    # Turning the hardware switch on is harmless for playback and never touches the
+    # user's PipeWire-level mute.
+    local m
+    for m in Capture Mic Mic1; do
+        if "$amixer_bin" -c "$card" sget "$m" 2>/dev/null | grep -q '\[off\]'; then
+            "$amixer_bin" -c "$card" sset "$m" cap >/dev/null 2>&1 \
+                && say "$m capture switch unmuted on card $card" \
+                || warn "could not unmute $m on card $card"
+        fi
+    done
     while IFS=$'\t' read -r c max vals; do
         [ -n "$c" ] || continue
         found=$((found + 1))

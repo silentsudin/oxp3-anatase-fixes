@@ -214,3 +214,15 @@ even though `HiFi__Mic1__source` exists and is unmuted, and `pactl get-default-s
 PipeWire/WirePlumber). It only acts when the default source is a monitor or empty: it sets
 `default.audio.source` metadata to the first real `alsa_input` source. A source the user picked is never overridden, and
 `oxp3-verify.sh` reports the state as `aud.source` (FAIL while a monitor is the default).
+
+## The codec Capture switch defaults to off
+
+UCM configures the card with the codec `Capture` switch **off**; PipeWire still exposes
+`HiFi__Mic1__source` unmuted, so recorders happily open it and capture pure zeros — the
+microphone looks "disabled" without any error. Turning the hardware switch on gives real
+samples (verified: 3 s capture, RMS ≈ 2492, peak 32647).
+
+`tools/audio/gain-stage.sh apply` now unmutes `Capture`/`Mic`/`Mic1` when it finds them
+off, and the login service re-applies it, so a UCM reset cannot silently mute the mic
+again. This is the hardware switch only; a user's PipeWire-level source mute is untouched.
+`oxp3-verify.sh` reports `aud.capture` (FAIL while the switch is off).

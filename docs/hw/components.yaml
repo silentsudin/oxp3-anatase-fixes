@@ -573,6 +573,7 @@ components:
         - "then, as the desktop user: systemctl --user restart pipewire wireplumber"
         - "undo: sudo tools/audio/internal-mic.sh undo"
     verify:
+      - id: aud.capture
       - id: aud.mic
       - id: aud.source
         expect: "the ALC245 pin 0x12 path is exposed as an always-available capture source (SKIP while the opt-in profile is not installed)"

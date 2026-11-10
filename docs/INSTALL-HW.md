@@ -312,6 +312,7 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Speaker tuning (Harman APO) and gain staging | working | `aud.model` | the 8-band model table (loud profile, pre-gain -4 dB) | no |
 | Speaker tuning (Harman APO) and gain staging | working | `aud.level` | the ALSA speaker control is at maximum and the report gives the net headroom | no |
 | Speaker tuning (Harman APO) and gain staging | working | `aud.activate` | eq-on.sh activates the sink | no |
+| Internal microphone (ALC245 digital mic) | partial | `aud.capture` | PASS in `tools/oxp3-verify.sh --json` | no |
 | Internal microphone (ALC245 digital mic) | partial | `aud.mic` | PASS in `tools/oxp3-verify.sh --json` | no |
 | Internal microphone (ALC245 digital mic) | partial | `aud.source` | the ALC245 pin 0x12 path is exposed as an always-available capture source (SKIP while the opt-in profile is not installed) | no |
 | Bluetooth firmware | awaiting-install | `bt.files` | both ibt-00a0-0291 iml/pci files in updates/intel | no |

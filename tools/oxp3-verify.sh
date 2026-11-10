@@ -2762,6 +2762,26 @@ check_audio() {
         record aud.scripts audio "EQ on/off scripts" FAIL "EQ scripts missing or not executable" "$on $off" "restore tools/audio/ from git and chmod +x"
     fi
 
+    # aud.capture: the codec's hardware Capture switch must be on. UCM configures the
+    # card with it off; PipeWire then shows an unmuted source that records pure zeros.
+    if ! have amixer; then
+        record aud.capture audio "codec capture switch" SKIP "amixer unavailable" "" ""
+    else
+        local capmix
+        capmix=$("${AMIXER:-amixer}" -c "${OXP3_AUDIO_CARD:-0}" sget Capture 2>/dev/null || true)
+        if [ -z "$capmix" ]; then
+            record aud.capture audio "codec capture switch" SKIP "no Capture control on card ${OXP3_AUDIO_CARD:-0}" "" ""
+        elif printf '%s\n' "$capmix" | grep -q '\[off\]'; then
+            record aud.capture audio "codec capture switch" FAIL \
+                "codec Capture switch is off; the mic records silence even though PipeWire shows it unmuted" \
+                "$(printf '%s\n' "$capmix" | tail -1)" \
+                "amixer -c ${OXP3_AUDIO_CARD:-0} sset Capture cap ; tools/audio/gain-stage.sh apply ; docs/hw/audio-microphone.md"
+        else
+            record aud.capture audio "codec capture switch" PASS "capture switch on" \
+                "$(printf '%s\n' "$capmix" | tail -1)" ""
+        fi
+    fi
+
     # aud.source: the default source must be a real input, not the EQ sink monitor.
     # WirePlumber gives that monitor a high priority and it silently shadows the mic.
     if ! have pactl; then
@@ -3751,7 +3771,7 @@ run_selftest() {
     if [ "$count" -ge 65 ]; then ST_PASS=$((ST_PASS + 1)); else ST_FAIL=$((ST_FAIL + 1)); printf 'FAIL inventory: only %s distinct declared checks\n' "$count"; fi
     local expected
     expected=$(printf '%s\n' \
-        aud.activate aud.dummy aud.eq aud.level aud.mic aud.model aud.source aud.scripts aud.server \
+        aud.activate aud.dummy aud.eq aud.level aud.capture aud.mic aud.model aud.source aud.scripts aud.server \
         bat.behaviour bat.limit bat.threshold \
         bt.controller bt.diag bt.dracut bt.files bt.journal \
         decky.backend decky.dir decky.loaded decky.status \
