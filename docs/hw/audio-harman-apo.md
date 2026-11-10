@@ -45,7 +45,7 @@ is brighter/harsher and has no speaker protection.
 5. [`tools/audio/oxp3-speaker-eq.conf`](../../tools/audio/oxp3-speaker-eq.conf)
    reproduces stage 1 as eight `bq_peaking` filters plus a static headroom stage
    (the peak boost of stage 1 is +7.74 dB @ 142 Hz). The installed default is the
-   **loud** profile (-4 dB headroom): together with the ALSA speaker control raised
+   **loud** profile (shelf +2.84 dB, includes the staging): together with the ALSA speaker control raised
    from 82 to 87/87 it is **+7.75 dB** louder than the old -8 dB/82-of-87 chain.
    `eq-on.sh --safe` selects the **safe** profile (-8 dB, no clipping at full
    scale). Measured in a real, hardware-free PipeWire 1.6.9 graph the chain
@@ -296,7 +296,7 @@ Net static gain versus a flat (bypassed) chain = ALSA attenuation + EQ headroom:
 | chain | ALSA | headroom | net | vs old |
 |---|---|---|---|---|
 | old default | -3.75 dB (82/87) | -8.0 dB | -11.75 dB | - |
-| **loud (new default)** | 0.00 dB (87/87) | -4.0 dB | **-4.00 dB** | **+7.75 dB** |
+| **loud (new default)** | 0.00 dB (87/87) | +2.84 dB (staging folded in) | **+2.84 dB** | **+14.59 dB** |
 | safe | 0.00 dB (87/87) | -8.0 dB | -8.00 dB | +3.75 dB |
 
 ### Which limiter is actually used: none
@@ -320,7 +320,7 @@ OneXPlayer 3 speaker level report (read-only)
   ALSA card 0:
     Speaker  87/87  100%   +0.00 dB  (at maximum)
   PipeWire sink oxp3_speaker_eq.sink: 100% 0.0 dB, unmuted
-  EQ: profile loud, headroom -4.0 dB, peak +3.74 dB @ 142 Hz
+  EQ: profile loud, shelf +2.84 dB, peak +10.58 dB @ 142 Hz
   net gain vs flat:            -4.00 dB
   net gain vs the old default: +7.75 dB  (old -11.75 dB)
   clipping margin at 0 dBFS:   -3.74 dB  CLIPS (documented loud-profile trade-off)

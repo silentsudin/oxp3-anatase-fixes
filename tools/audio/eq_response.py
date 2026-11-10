@@ -46,18 +46,23 @@ STAGE2 = [
 # noisegate is a gate, not a limiter), so static headroom replaces it.  Two
 # profiles are selectable:
 #
-#   loud  -4.0 dB  installed default.  +7.74 dB stage-1 peak minus 4 dB means a
-#                  0 dBFS 142 Hz tone still peaks at +3.74 dBFS, i.e. it clips;
-#                  that is the deliberate trade-off for the missing limiter.
+#   loud  +2.84 dB installed default.  This used to be a -4 dB shelf plus the EQ
+#                  sink at 130 % (+6.84 dB), i.e. the loudness lived in the sink
+#                  volume. That made Gamemode's own 100 % quieter and forced the
+#                  volume back up every 15 s. The +6.84 dB staging is folded into
+#                  the shelf now, so sink 100 % is the intended loudness and the
+#                  volume control stays user-owned. +7.74 dB stage-1 peak plus
+#                  2.84 dB still clips a 0 dBFS 142 Hz tone (deliberate, no limiter).
 #   safe  -8.0 dB  == -(the +7.74 dB peak of stage 1), so the chain cannot clip
-#                  at full scale.  tools/audio/eq-on.sh --safe selects it.
+#                  at full scale.  tools/audio/eq-on.sh --safe selects it; it does
+#                  not include the staging, so it is quieter than loud by design.
 #
 # The gains are the single source of truth: install-user.sh asks this file for
 # the headroom of the profile it installs, so the generated chain cannot drift
 # from the model.  If a real limiter is wanted, use EasyEffects' Limiter with
 # the vendor numbers (see docs/hw/audio-harman-apo.md).
 PROFILES = {
-    "loud": -4.0,
+    "loud": 2.84,
     "safe": -8.0,
 }
 DEFAULT_PROFILE = "loud"

@@ -149,7 +149,7 @@ class InstallerTest(unittest.TestCase):
     # ------------------------------------------------------------------ cases
     def test_print_profile(self):
         out = self.run_install("--print-profile").stdout.strip()
-        self.assertEqual(out, "loud -4")
+        self.assertEqual(out, "loud 2.84")
         out = self.run_install("--print-profile", "--safe").stdout.strip()
         self.assertEqual(out, "safe -8")
 
@@ -158,7 +158,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         text = self.conf.read_text()
         self.assertIn("# oxp3-profile: loud", text)
-        self.assertIn('"Freq" = 20000 "Q" = 0.7 "Gain" = -4', text)
+        self.assertIn('"Freq" = 20000 "Q" = 0.7 "Gain" = 2.84', text)
         self.assertIn(SINK, text)                  # node.target rewritten
         self.assertNotIn("HiFi__Speaker__sink\"\n", text.split("node.target")[0])
         self.assertTrue(self.unit.is_file())
@@ -178,7 +178,7 @@ class InstallerTest(unittest.TestCase):
         text = self.conf.read_text()
         self.assertIn("# oxp3-profile: safe", text)
         self.assertIn('"Freq" = 20000 "Q" = 0.7 "Gain" = -8', text)
-        self.assertNotIn('"Freq" = 20000 "Q" = 0.7 "Gain" = -4', text)
+        self.assertNotIn('"Freq" = 20000 "Q" = 0.7 "Gain" = 2.84', text)
 
     def test_reinstall_is_idempotent_and_keeps_one_backup_row(self):
         self.assertEqual(self.run_install().returncode, 0)

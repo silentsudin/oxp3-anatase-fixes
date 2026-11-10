@@ -54,14 +54,14 @@ LOUD_CONF = """
 filter.graph = {
     nodes = [
         { type = builtin name = headroom label = bq_lowshelf
-          control = { "Freq" = 20000 "Q" = 0.7 "Gain" = -4 } }
+          control = { "Freq" = 20000 "Q" = 0.7 "Gain" = 2.84 } }
         { type = builtin name = b1  label = bq_peaking
           control = { "Freq" = 80 "Q" = 0.7 "Gain" = -3 } }
     ]
 }
 """
 
-SAFE_CONF = LOUD_CONF.replace('"Gain" = -4', '"Gain" = -8')
+SAFE_CONF = LOUD_CONF.replace('"Gain" = 2.84', '"Gain" = -8')
 NO_CONF = LOUD_CONF.replace("name = headroom", "name = not_headroom")
 
 
@@ -142,7 +142,7 @@ class HeadroomParsersTest(unittest.TestCase):
         self.assertIsNone(level.parse_eq_headroom(""))
 
     def test_profile_names(self):
-        self.assertEqual(level.profile_for(-4.0), "loud")
+        self.assertEqual(level.profile_for(eq.PROFILES["loud"]), "loud")
         self.assertEqual(level.profile_for(-8.0), "safe")
         self.assertEqual(level.profile_for(-6.0), "custom")
         self.assertEqual(level.profile_for(None), "off")
@@ -155,15 +155,16 @@ class HeadroomParsersTest(unittest.TestCase):
 
 class ProfileModelTest(unittest.TestCase):
     def test_profiles_are_the_documented_numbers(self):
-        self.assertEqual(eq.PROFILES, {"loud": -4.0, "safe": -8.0})
+        self.assertEqual(eq.PROFILES, {"loud": 2.84, "safe": -8.0})
         self.assertEqual(eq.DEFAULT_PROFILE, "loud")
-        self.assertEqual(eq.PREGain_DB, -4.0)
+        self.assertEqual(eq.PREGain_DB, 2.84)
         self.assertEqual(eq.headroom_db("safe"), -8.0)
 
     def test_loud_peak_and_clipping(self):
         peak, trough, hz = eq.curve_extremes(pre=eq.PROFILES["loud"])
-        self.assertAlmostEqual(peak, 3.74, places=1)
-        self.assertLess(trough, -10.0)
+        # +7.74 dB stage-1 peak plus the folded +2.84 dB staging.
+        self.assertAlmostEqual(peak, 10.58, places=1)
+        self.assertLess(trough, -3.0)
         self.assertTrue(130.0 < hz < 155.0)
 
     def test_safe_profile_cannot_clip(self):
@@ -184,9 +185,9 @@ class ReportTest(unittest.TestCase):
         self.assertTrue(rep["at_max"])
         self.assertEqual(rep["alsa_db"], 0.0)
         self.assertEqual(rep["eq"]["profile"], "loud")
-        self.assertEqual(rep["eq"]["headroom_db"], -4.0)
-        self.assertEqual(rep["net_db"], -4.0)
-        self.assertEqual(rep["net_vs_old_db"], 7.75)
+        self.assertEqual(rep["eq"]["headroom_db"], 2.84)
+        self.assertEqual(rep["net_db"], 2.84)
+        self.assertEqual(rep["net_vs_old_db"], 14.59)
         self.assertLess(rep["eq"]["clip_margin_db"], 0.0)
         self.assertFalse(rep["eq"]["installed"] is False)
 
@@ -205,7 +206,7 @@ class ReportTest(unittest.TestCase):
         rep = level.build_report(0, [a, b], {}, LOUD_CONF)
         self.assertFalse(rep["at_max"])
         self.assertEqual(rep["alsa_db"], -3.75)
-        self.assertEqual(rep["net_db"], -7.75)
+        self.assertEqual(rep["net_db"], -0.91)
 
     def test_no_eq_installed(self):
         rep = level.build_report(0, [control(value=87)], {}, None)

@@ -3,8 +3,8 @@
 # changes: everything lands in ~/.config and ~/.local, and --undo puts back
 # exactly what was there.
 #
-#   install-user.sh               default profile (headroom -4 dB)
-#   install-user.sh --safe        safe profile (headroom -8 dB, cannot clip)
+#   install-user.sh               default profile (shelf +2.84 dB, includes staging)
+#   install-user.sh --safe        safe profile (shelf -8 dB, cannot clip, quieter)
 #   install-user.sh --undo        restore the previous drop-in and remove our files
 #   install-user.sh --print-profile   print "<profile> <headroom_db>" and exit
 #
@@ -57,7 +57,7 @@ esac
 
 headroom_of() {
     case $1 in
-        loud) printf '%s' "-4" ;;
+        loud) printf '%s' "2.84" ;;
         safe) printf '%s' "-8" ;;
         *) echo "install-user.sh: unknown profile '$1' (loud|safe)" >&2; exit 2 ;;
     esac
@@ -148,7 +148,7 @@ tmp=$dst.tmp.$$
 {
     printf '# oxp3-profile: %s (headroom %s dB)\n' "$profile" "$gain"
     sed -e "s|^\( *node.target *= *\).*|\1\"$sink\"|" \
-        -e "s|\(\"Freq\" = 20000 \"Q\" = 0.7 \"Gain\" = \)-[0-9.]*|\1$gain|" \
+        -e "s|\(\"Freq\" = 20000 \"Q\" = 0.7 \"Gain\" = \)-\?[0-9.]*|\1$gain|" \
         "$here/oxp3-speaker-eq.conf"
 } >"$tmp"
 if ! grep -q "\"Gain\" = $gain" "$tmp"; then
