@@ -182,6 +182,24 @@ def snapshot():
     }
 
 
+def nvme_ps_series(n: int):
+    """Current NVMe power state over a few seconds (root: nvme admin passthrough)."""
+    if subprocess.run(["sh", "-c", "command -v nvme"], capture_output=True).returncode != 0:
+        return []
+    states = []
+    for _ in range(n):
+        try:
+            out = subprocess.run(["nvme", "get-feature", "-f", "0x02", "/dev/nvme0"],
+                                 capture_output=True, text=True, timeout=5).stdout
+            line = out.strip().splitlines()[-1] if out.strip() else ""
+            if "Current value:" in line:
+                states.append(line.split("Current value:")[-1].strip())
+        except Exception:
+            return states
+        time.sleep(1)
+    return states
+
+
 def battery_energy():
     """(energy_wh, status, monotonic) for the first discharging-capable battery."""
     for d in glob.glob("/sys/class/power_supply/BAT*"):
@@ -247,13 +265,19 @@ def main() -> int:
     total_w = None
     if bat_before is not None and bat_after is not None and bat_after[1] == "Discharging":
         dt = max(bat_after[2] - bat_before[2], 1e-6)
-        total_w = round((bat_before[0] - bat_after[0]) / dt, 2)
+        # energy_now is Wh, dt is seconds: convert to W.
+        total_w = round((bat_before[0] - bat_after[0]) * 3600.0 / dt, 2)
+    bat_now = battery()
+    pn = [v.get("power_now_w") for v in bat_now.values()
+          if isinstance(v, dict) and v.get("power_now_w")]
+    battery_power_now = round(sum(pn), 2) if pn else None
     psys = watts.get("psys")
     package = watts.get("package-0")
     psys_invalid = psys is not None and package is not None and psys < package - 0.5
     rep = {
         "schema": "oxp3-power-breakdown/1",
         "battery_total_w": total_w,
+        "battery_power_now_w": battery_power_now,
         "psys_invalid": psys_invalid,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "label": args.label,
@@ -267,6 +291,7 @@ def main() -> int:
                       round(package - sum(watts.get(k, 0) for k in ("core", "uncore", "dram")), 2)),
         "battery": bat,
         "snapshot": snap,
+        "nvme_power_states": nvme_ps_series(8),
         "hints": hints(watts, snap),
     }
     os.makedirs(report_dir(), exist_ok=True)
@@ -284,7 +309,12 @@ def main() -> int:
     if rep["rest_battery_minus_package"] is not None:
         print("  %-14s %6.2f W  (battery - package)" % ("rest", rep["rest_battery_minus_package"]))
     if total_w is not None:
-        print("  %-14s %6.2f W" % ("battery total", total_w))
+        print("  %-14s %6.2f W  (energy delta)" % ("battery total", total_w))
+    if battery_power_now is not None:
+        print("  %-14s %6.2f W  (power_now)" % ("battery", battery_power_now))
+    ps = rep["nvme_power_states"]
+    if ps:
+        print("  nvme PS samples: %s" % ", ".join(str(x) for x in ps))
     for b, v in bat.items():
         if isinstance(v, dict) and v.get("power_now_w"):
             print("  battery %s   %6.2f W (%s)" % (b, v["power_now_w"], v.get("status")))
