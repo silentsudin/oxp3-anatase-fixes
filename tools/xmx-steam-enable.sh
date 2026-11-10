@@ -48,7 +48,7 @@ enable_one() { # <appid> ; 0 enabled/skipped, 1 error
     prefix=$lib/compatdata/$id/pfx/drive_c
     [ -d "$prefix" ] || { echo "  $id: prefix missing (launch it once first)"; return 1; }
     localcfg=$(localconfig) || { echo "  $id: no localconfig.vdf (launch Steam once)"; return 1; }
-    envs="VK_DRIVER_FILES=$HOME/.config/xess-xmx/icd-xmx.json VK_ICD_FILENAMES=$HOME/.config/xess-xmx/icd-xmx.json ANV_CM_KERNEL_DIR=$HOME/.cache/xess-xmx/kernels XMX_IGC_DIR=$HOME/.local/share/xess-xmx/igc ANV_CM_HELPER=$repo/tools/xmx-cm-compile-nodgrf.sh VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer INTC_ALT_DRIVER_EXTENSIONS_PATH=$HOME/.local/share/xess-xmx"
+    envs="VK_DRIVER_FILES=$HOME/.config/xess-xmx/icd-xmx.json VK_ICD_FILENAMES=$HOME/.config/xess-xmx/icd-xmx.json ANV_CM_KERNEL_DIR=$HOME/.cache/xess-xmx/kernels XMX_IGC_DIR=$HOME/.local/share/xess-xmx/igc ANV_CM_HELPER=$repo/tools/xmx-cm-compile-nodgrf.sh VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer INTC_ALT_DRIVER_EXTENSIONS_PATH=$HOME/.local/share/xess-xmx force_vk_vendor=0"
     echo "  $id: $install"
     echo "        xess: $xess_dir"
     if (( dry )); then echo "        [dry-run] would enable"; return 0; fi

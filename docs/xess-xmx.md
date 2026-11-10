@@ -322,3 +322,11 @@ Measured (Cyberpunk, XeSS Auto, IGC 2.10.10, fresh kernel cache):
 
 Root cause of the entire artifact saga: CM kernels compiled with `-doubleGRF` (256-register codegen) on Xe3. The 128-GRF
 codegen is both correct and faster. Fixed in the compiler helper, not in Mesa.
+
+### `xess-xmx-check` falls back to stock Mesa
+
+The release's `xess-xmx-check.service` tests `~/.local/share/xess-xmx/lib/libvulkan_intel.so`. If the package's `lib/`
+directory is missing, the check fails and the unit sets the **session** `VK_DRIVER_FILES` to the stock ICDs, so XeSS runs
+DP4a and the game looks unaccelerated even though the per-game ICD is fine. `tools/xmx-session-check-fix.sh` writes a
+drop-in that points the check at `~/.cache/oxp3-fixes/xmx-driver` and the per-game ICD, restarts the unit and prints the
+resulting `driver-status`. `gfx.xmx.icdpath` in `oxp3-verify.sh` covers the ICD itself.
