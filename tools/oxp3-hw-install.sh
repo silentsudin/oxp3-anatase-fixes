@@ -648,17 +648,15 @@ comp_sleep_install() {
     if [[ -x "$repo/tools/oxp3-nvme-suspend.sh" ]]; then
         run "$repo/tools/oxp3-nvme-suspend.sh" apply
     fi
-    # Body/light lighting stays powered through s2idle (vendor HID on USB). Dark it
-    # before sleep and let HHD restore the configured RGB after resume.
-    install_file 0755 "$repo/files/oxp3-led-sleep" "$(p /usr/local/libexec/oxp3-led-sleep)"
-    install_file 0755 "$repo/tools/oxp3-led.py" "$(p /usr/local/libexec/oxp3-led.py)"
-    install_file 0644 "$repo/tools/oxp3_hid.py" "$(p /usr/local/libexec/oxp3_hid.py)"
-    for x in oxp3-led-sleep-pre.service oxp3-led-sleep-post.service; do
-        install_file 0644 "$repo/files/$x" "$(p "/etc/systemd/system/$x")"
-    done
-    if [[ -z $PREFIX ]]; then
+    # The power LED is deliberately left on through suspend: that is how the device
+    # behaves in Windows, and turning the lighting off was dropped as unwanted.
+    # Remove hooks that an earlier build installed.
+    if [[ -z $PREFIX && -e /etc/systemd/system/oxp3-led-sleep-pre.service ]]; then
+        run systemctl disable --now oxp3-led-sleep-pre.service oxp3-led-sleep-post.service
+        run rm -f /etc/systemd/system/oxp3-led-sleep-pre.service /etc/systemd/system/oxp3-led-sleep-post.service \
+            /usr/local/libexec/oxp3-led-sleep
         run systemctl daemon-reload
-        run systemctl enable oxp3-led-sleep-pre.service oxp3-led-sleep-post.service
+        printf '  removed the previous LED suspend hooks (lighting stays on, as in Windows)\n'
     fi
 }
 
