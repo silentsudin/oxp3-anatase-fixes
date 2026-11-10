@@ -462,3 +462,22 @@ flash.
 5. The managed layer's real IL is obfuscated (decoy RVAs). If a future
    vendor build ships unobfuscated metadata, the per-device command builder
    can be read directly; today the JS profile + live frames are sufficient.
+
+## Left-stick zone desync with HHD (and the reconciler)
+
+HHD applies its handheld RGB to the five vendor zones, but when the emulated Steam controller takes LED control it stops
+applying that colour. On this device the left-stick zone (`0x01`) then keeps its previous firmware effect/colour while the
+other zones follow HHD — the "left stick is not in sync with HHD" symptom.
+
+There is no LED class device and no HHD API to apply a colour to one zone, so the `rgb` component installs a small reconciler
+(`oxp3-rgb-sync.service`, runs as root, `After=hhd.service`): it reads HHD's live state with `hhdctl get`, converts the
+configured solid colour with the same HSB formula HHD uses, and re-sends **only zone `0x01`** when that colour changes. The
+other four zones remain HHD-owned.
+
+Scope and limits:
+
+* static `solid` mode only; hardware effect/animation modes are left alone because a static frame cannot reproduce their
+  temporal state;
+* it does not read the LEDs back, so "sync" means "HHD's configured solid colour is applied to zone 1", not a feedback loop;
+* `oxp3-verify.sh` reports `rgb.sync` (PASS while running, SKIP when not installed, FAIL when enabled but dead);
+* `--rgb-daemon` does not install it — the per-zone daemon owns the zones in that mode.

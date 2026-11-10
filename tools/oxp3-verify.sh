@@ -1695,6 +1695,24 @@ print(oxp3_hid.find_vendor_hidraw() or "")' "$REPO/tools" 2>/dev/null) || hsel="
         fi
     fi
 
+    # rgb.sync: HHD owns the zones, but the left stick needs the reconciler when
+    # controller emulation takes LED control.
+    if ! systemctl list-unit-files hhd.service >/dev/null 2>&1; then
+        record rgb.sync rgb "left-stick RGB follows HHD" SKIP "HHD not installed" "" ""
+    elif systemctl is-enabled --quiet oxp3-rgb-sync.service 2>/dev/null; then
+        if systemctl is-active --quiet oxp3-rgb-sync.service 2>/dev/null; then
+            record rgb.sync rgb "left-stick RGB follows HHD" PASS \
+                "reconciler running (mirrors HHD's colour onto zone 0x01 only)" "" ""
+        else
+            record rgb.sync rgb "left-stick RGB follows HHD" FAIL \
+                "oxp3-rgb-sync is enabled but not running" "" "sudo systemctl restart oxp3-rgb-sync ; journalctl -u oxp3-rgb-sync -b"
+        fi
+    else
+        record rgb.sync rgb "left-stick RGB follows HHD" SKIP \
+            "reconciler not installed (HHD-only RGB still works for the other zones)" "" \
+            "sudo tools/oxp3-hw-install.sh --rgb ; docs/hw/rgb-coverage.md"
+    fi
+
     # Deferred risk (docs/UNIT-TESTS.md section 5): the rgbd journal watcher,
     # its settle window and the debounce are event-driven. The one precondition
     # that is observable read-only is whether the hhd journal is readable at
@@ -3775,7 +3793,7 @@ run_selftest() {
         life.fd life.reconnect life.sim \
         preflight.verdict \
         pwr.ac pwr.adaptive pwr.fan pwr.order pwr.pl1 pwr.profile pwr.rapl pwr.zones \
-        rgbd.check rgbd.timing rgbd.unit \
+        rgbd.check rgbd.timing rgbd.unit rgb.sync \
         sched.scx sched.state sched.unit \
         sleep.aspm sleep.audit sleep.measure sleep.mem sleep.mmcwake sleep.nvme sleep.nvmeacpi sleep.sdcard sleep.stats sleep.suspend sleep.trigger sleep.units sleep.wakeup \
         vol.grab vol.hold vol.hwdb vol.holder vol.topology vol.unit \

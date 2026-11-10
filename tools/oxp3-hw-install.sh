@@ -758,6 +758,15 @@ comp_rgb_install() {
                 as_user_run "$repo/tools/oxp3-rgb-handback.sh" || warn "rgb handback failed; run tools/oxp3-rgb-handback.sh"
             fi
         fi
+        # HHD stops applying the handheld colour to the left-stick zone (0x01) once
+        # the emulated controller takes LED control; mirror just that zone.
+        if [[ -z $PREFIX ]]; then
+            install_file 0755 "$repo/tools/oxp3-rgb-sync.py" "$(p /usr/local/libexec/oxp3-rgb-sync)"
+            install_file 0644 "$repo/files/oxp3-rgb-sync.service" "$(p /etc/systemd/system/oxp3-rgb-sync.service)"
+            run systemctl daemon-reload
+            run systemctl enable --now oxp3-rgb-sync.service
+            printf '  oxp3-rgb-sync: mirrors HHD colour onto the left-stick zone only\n'
+        fi
         return 0
     fi
     local home dst
@@ -1183,6 +1192,11 @@ comp_rgb_uninstall() {
     local home cfg
     say "body RGB keeper"
     remove_user_unit oxp3-rgbd.service
+    if [[ -z $PREFIX ]]; then
+        run systemctl disable --now oxp3-rgb-sync.service 2>/dev/null || true
+        run rm -f "$(p /etc/systemd/system/oxp3-rgb-sync.service)" "$(p /usr/local/libexec/oxp3-rgb-sync)"
+        run systemctl daemon-reload
+    fi
     if (( PURGE_CONFIG )); then
         home=$(user_home "$TARGET_USER")
         cfg="$PREFIX$home/.config/oxp3-rgb.toml"

@@ -403,6 +403,7 @@ components:
     verify:
       - id: rgbd.unit
         expect: "oxp3-rgbd.service active and ~/.config/oxp3-rgb.toml present"
+      - id: rgb.sync
       - id: rgbd.check
         expect: "PASS config parses (5 zones, N frames)"
       - id: rgbd.timing

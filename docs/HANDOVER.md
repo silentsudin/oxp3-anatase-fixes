@@ -91,9 +91,9 @@ Counted from the `state:` field of each component in `docs/hw/components.yaml`.
 
 | volatile fact | value | how this number was obtained |
 |---|---|---|
-| checks declared by `tools/oxp3-verify.sh` | **94** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
+| checks declared by `tools/oxp3-verify.sh` | **95** ids | counted from its `record`/`simple_ind` lines, the same extraction the harness uses for its inventory; the default-run pass/fail/skip split is host data, not a repository fact |
 | suites in `tools/repo-test.sh` | **34** (**32** in `--fast`, **34** in `--full`) | parsed from the `def_suite` registrations and their mode column |
-| tests in `tests/unit` | **990** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
+| tests in `tests/unit` | **995** | run `python3 -m unittest discover -s tests/unit -q` and parse `Ran N tests` (the same discovery `tools/repo-test.sh` uses) |
 <!-- END GENERATED: handover-state -->
 
 The full matrix with summaries, implementation paths, install entrypoints, verify ids and caveats is

@@ -1,0 +1,16 @@
+[Unit]
+Description=OneXPlayer 3: mirror HHD's handheld colour onto the left-stick RGB zone
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/hw/rgb-coverage.md
+After=hhd.service
+Wants=hhd.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=3
+ExecStart=/usr/local/libexec/oxp3-rgb-sync
+# hhdctl needs the HHD API socket; the vendor hidraw node is root-only.
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -127,6 +127,8 @@ COMPONENT_FILES = {
     ),
     "rgb": (
         "/etc/udev/rules.d/90-oxp3-hid.rules",
+        "/etc/systemd/system/oxp3-rgb-sync.service",
+        "/usr/local/libexec/oxp3-rgb-sync",
         "{home}/.config/oxp3-rgb.toml",
         "{home}/.config/systemd/user/oxp3-rgbd.service",
     ),

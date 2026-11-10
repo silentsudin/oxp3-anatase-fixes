@@ -286,6 +286,7 @@ Manual install steps, opt-out flags, uninstall and per-component rollback are in
 | Home button and top LEDs | awaiting-install | `homebtn.press` | this boot's user journal has listening and pressed lines | no |
 | Home button and top LEDs | awaiting-install | `led.write` | one solid frame is accepted by the device | no |
 | Body RGB zones | awaiting-install | `rgbd.unit` | oxp3-rgbd.service active and ~/.config/oxp3-rgb.toml present | no |
+| Body RGB zones | awaiting-install | `rgb.sync` | PASS in `tools/oxp3-verify.sh --json` | no |
 | Body RGB zones | awaiting-install | `rgbd.check` | PASS config parses (5 zones, N frames) | no |
 | Body RGB zones | awaiting-install | `rgbd.timing` | the hhd journal is readable (the settle/debounce watcher path) and the example config encodes frames | no |
 | Daemon lifecycle (suspend/hotplug) | awaiting-install | `life.fd` | every inspectable active daemon holds its device fd (the root daemon degrades to SKIP) | no |
