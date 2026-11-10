@@ -123,6 +123,7 @@ components:
       entrypoint: "./oxp3-fixes-fast.sh install"
     verify:
       - id: gfx.xmx.driver
+      - id: gfx.xmx.icdpath
         expect: "the XMX driver build prefix matches the recorded one"
       - id: gfx.xmx.helper
         expect: "the nodgrf compile helper is in the game environment"

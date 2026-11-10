@@ -3061,7 +3061,7 @@ check_display() {
 check_graphics() {
     if ! ensure_status_json; then
         local id
-        for id in gfx.mesa gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc gfx.xmx.kernels gfx.xmx.icd gfx.xmx.trace gfx.xe gfx.working sched.state sched.scx sched.unit; do
+        for id in gfx.mesa gfx.xmx.driver gfx.xmx.icdpath gfx.xmx.helper gfx.xmx.igc gfx.xmx.kernels gfx.xmx.icd gfx.xmx.trace gfx.xe gfx.working sched.state sched.scx sched.unit; do
             record "$id" graphics "graphics status unavailable" SKIP "oxp3-status.sh --json unavailable" "" "tools/oxp3-status.sh --json (needs python3)"
         done
         return 0
@@ -3082,6 +3082,30 @@ check_graphics() {
         prefix=$(status_field game.prefix 2>/dev/null || true)
         [ -n "$prefix" ] && [ -d "$prefix/drive_c" ] && \
             find "$prefix/drive_c" -maxdepth 6 -iname 'igdext*.dll' -print -quit 2>/dev/null | grep -q . && xess_game=1
+    fi
+
+    # gfx.xmx.icdpath: the per-game ICD must point at the shipping XMX driver, not a
+    # reproduction build; this was silently wrong and forced games onto the wrong driver.
+    local xicd=${HOME:-/root}/.config/xess-xmx/icd-xmx.json xlib="" xhash=""
+    if [ -r "$xicd" ]; then
+        xlib=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["ICD"]["library_path"])' "$xicd" 2>/dev/null || true)
+        if [ -n "$xlib" ] && [ -r "$xlib" ]; then
+            xhash=$(sha256sum "$xlib" 2>/dev/null | cut -c1-8)
+            if [ "$xhash" = 4b1d55ea ]; then
+                record gfx.xmx.icdpath graphics "XMX ICD points at the shipping driver" PASS "icd -> $xlib ($xhash)" "" ""
+            else
+                record gfx.xmx.icdpath graphics "XMX ICD points at the shipping driver" FAIL \
+                    "ICD points at $xlib (sha ${xhash:-?}), not the verified 4b1d55ea build" "" \
+                    "tools/xmx-enable.sh enable --game <xess dir> --prefix <drive_c> ; docs/xess-xmx.md"
+            fi
+        else
+            record gfx.xmx.icdpath graphics "XMX ICD points at the shipping driver" FAIL \
+                "ICD library_path is missing or unreadable: ${xlib:-none}" "" \
+                "tools/xmx-enable.sh enable --game <xess dir> --prefix <drive_c> ; docs/xess-xmx.md"
+        fi
+    else
+        record gfx.xmx.icdpath graphics "XMX ICD points at the shipping driver" SKIP \
+            "no per-game XMX ICD installed" "" "docs/xess-xmx.md"
     fi
 
     simple_ind gfx.mesa mesa.host graphics "host Mesa driver" "ec418f04e589965a" "restore the recorded build: sudo tools/oxp3-mesa-restore.sh restore ; or rebuild: ./oxp3-fixes-fast.sh build install ; docs/WORKING-BUILD-2026-11-08.md"
@@ -3782,7 +3806,7 @@ run_selftest() {
         decky.backend decky.dir decky.loaded decky.status \
         dsp.hdr dsp.gamemodehdr dsp.icc dsp.panel dsp.vibrance \
         fan.curvedup fan.savemode \
-        gfx.mesa gfx.gamescope gfx.working gfx.xe gfx.xmx.driver gfx.xmx.helper gfx.xmx.igc \
+        gfx.mesa gfx.gamescope gfx.working gfx.xe gfx.xmx.driver gfx.xmx.icdpath gfx.xmx.helper gfx.xmx.igc \
         gfx.xmx.icd gfx.xmx.kernels gfx.xmx.runtime gfx.xmx.trace \
         hhd.busy hhd.grab hhd.unit \
         hid.access hid.node hid.rule \

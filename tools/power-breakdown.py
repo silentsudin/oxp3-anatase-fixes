@@ -253,6 +253,13 @@ def hints(watts, snap):
         notes.append("PCIe ASPM is active at 'default' (firmware); a powersave A/B is possible but sub-W and needs identical load")
     if snap.get("fan_rpm"):
         notes.append("fan at %s RPM: EC/fan curve, not a load indicator on its own" % snap["fan_rpm"])
+    ac = bat.get("ac_online")
+    status = (bat.get("BAT0") or {}).get("status")
+    if ac == "1" and status != "Discharging":
+        notes.append("on AC: battery power_now is 0 and any 'total' here excludes the adapter; "
+                     "a USB-C meter's 20 W would include charging and VRM losses")
+    elif status == "Charging":
+        notes.append("battery is CHARGING: wall/input power = system + charge power; do not read it as system draw")
     usb = snap.get("usb") or {}
     active = [v for v in usb.values() if v.get("runtime") == "active" and not v.get("id", "").startswith("1d6b:")]
     if active:
