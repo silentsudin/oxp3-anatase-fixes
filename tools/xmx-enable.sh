@@ -13,7 +13,6 @@ cache=${OXP3_CACHE:-$HOME/.cache/oxp3-fixes}
 # the mesa-mmx build is a source-reproduction artefact that fails XeSS init.
 driver=$cache/xmx-driver/libvulkan_intel.so
 [ -e "$driver" ] || driver=$cache/mesa-xmx/usr/local/lib64/libvulkan_intel.so
-[ -e "$driver" ] || { echo "error: no XMX driver; build one: tools/build-xmx-driver.sh" >&2; exit 1; }
 envf=$HOME/.config/xess-xmx/oxp3-env.sh
 action=${1:-}; shift || true
 game= prefix= fallback=0
