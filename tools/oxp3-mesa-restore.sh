@@ -17,6 +17,12 @@ known=$HOME/.cache/oxp3-fixes/known-good/host-current
 [[ -e $known ]] || known=$(ls -t /var/home/holzr/.cache/oxp3-fixes/known-good/host-*-libvulkan_intel.so 2>/dev/null | head -1)
 target=/usr/lib64/libvulkan_intel.so
 have() { sha256sum "$target" 2>/dev/null | cut -d' ' -f1; }
+# Record the symlink the keep unit and preflight follow (the installer creates it
+# on a full install; restoring an older cache must not leave it missing).
+kd=$(dirname "$known")
+if [[ -d $kd && $(basename "$known") != host-current ]]; then
+    ln -sfn "$(basename "$known")" "$kd/host-current" 2>/dev/null || true
+fi
 case ${1:-status} in
     -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac

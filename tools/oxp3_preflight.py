@@ -162,10 +162,10 @@ COMPONENT_FILES = {
     "gfx": (
         "/etc/systemd/system/oxp3-mesa-keep.service",
         "/usr/local/libexec/oxp3-mesa-keep",
-        "{home}/.cache/oxp3-fixes/known-good/host-ec418f04-libvulkan_intel.so",
+        "{home}/.cache/oxp3-fixes/known-good/host-current",
     ),
     "xmx": (
-        "{home}/.local/share/xess-xmx-release",
+        "{home}/.local/share/xess-xmx",
         "{home}/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so",
         "{home}/.config/xess-xmx",
     ),

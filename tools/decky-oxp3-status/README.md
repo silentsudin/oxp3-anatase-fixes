@@ -41,7 +41,7 @@ verification* refreshes them with the fresh result.
 
 | group | what it checks | expected |
 |---|---|---|
-| Mesa driver | `/usr/lib64/libvulkan_intel.so` sha256 | prefix `ec418f04e589965a` |
+| Mesa driver | `/usr/lib64/libvulkan_intel.so` sha256 | prefix `5a75b6a44d285fd1` (previous `ec418f04e589965a` accepted) |
 | Mesa driver | `VK_DRIVER_FILES` / `VK_ICD_FILENAMES` override | unset, or points at a known driver |
 | XeSS XMX | `VK_DRIVER_FILES` → `~/.config/xess-xmx/icd-xmx.json` (or the driver directly) | XMX ICD |
 | XeSS XMX | `ANV_CM_HELPER` | contains `xmx-cm-compile-nodgrf` (128-GRF) |
