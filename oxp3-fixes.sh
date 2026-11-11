@@ -33,8 +33,16 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-CACHE="${OXP3_CACHE:-$HOME/.cache/oxp3-fixes}"
-MOK_DIR="${OXP3_MOK_DIR:-$HOME/.local/share/oxp3-fixes/mok}"
+if [[ ${EUID:-$(id -u)} -eq 0 && -n ${SUDO_USER:-} ]]; then
+    _human_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    [[ -n $_human_home ]] || _human_home=$HOME
+else
+    _human_home=$HOME
+fi
+CACHE="${OXP3_CACHE:-$_human_home/.cache/oxp3-fixes}"
+MOK_DIR="${OXP3_MOK_DIR:-$_human_home/.local/share/oxp3-fixes/mok}"
+[[ ${EUID:-$(id -u)} -eq 0 && -n ${SUDO_USER:-} ]] && export HOME=$_human_home
+OXP3_XMX_DRIVER_HOOK=build_xmx_driver
 OUT="$CACHE/out"
 ANATASE_REPO=https://github.com/anatase-org/anatase.git
 PATCHWORK_REPO=https://github.com/anatase-org/patchwork.git
@@ -82,8 +90,8 @@ source "$install_common_lib"
 # ---------------------------------------------------------------------------------------------
 # Kept local: build_mesa()/mesa_rpms() are the RPM pipeline that makes this script different
 # from oxp3-fixes-fast.sh (podman/meson), so they are not part of tools/lib/install-common.sh.
-MESA_COMMIT=ea40598a68bab5690e0d08f845e2776ef9be2db9     # Mesa main, 2026-11-05 (the tree every measured win used)
-MESA_VERSION="27.0.0~devel.20261105git${MESA_COMMIT:0:8}"  # no "^": Cargo.toml needs semver
+MESA_COMMIT=62b0e52f875e5cb37b38776908f1b8f85588b385     # Mesa main, 2026-11-10 15:36 UTC (bumped from ea40598a)
+MESA_VERSION="27.0.0~devel.20261110git${MESA_COMMIT:0:8}"  # no "^": Cargo.toml needs semver
 MESA_URL=https://gitlab.freedesktop.org/mesa/mesa/-/archive/$MESA_COMMIT/mesa-$MESA_COMMIT.tar.gz
 # i686 -devel packages the 32-bit build needs beyond the container's (dnf builddep is x86_64 only)
 MESA_I686_DEVEL="llvm-devel.i686 clang-devel.i686 spirv-llvm-translator-devel.i686 spirv-tools-devel.i686
@@ -226,6 +234,44 @@ XESS_ZIP_SHA=b195b7a9247e429ae2583528110b033de26f97e99d561b6a8b586b50497843d2
 XESS_DLLS="igdext64.dll|580ddcce0929fb8942062cd2a7413d9c6ec44ebfb2eacd40ff2f2a3ab16b39ec ControlLib.dll|b57c70cf7cbfc38d2f929a552dab69195c9ca04d249f1201960a752c5c53598c"
 # under home: the Steam Flatpak and the game's container both see it
 XESS_PKG=${OXP3_XESS_DIR:-$HOME/.local/share/xess-xmx}
+
+# Build the XMX driver (Mesa 26.3.0 final + vendored CM + our patches) and write the
+# per-game ICD/environment; the fast variant has the same hook.
+build_xmx_driver() {
+    local script=$here/tools/build-xmx-driver-263.sh
+    [[ -x $script ]] || { echo "  no $script; XMX driver not built"; return 0; }
+    say "XMX driver: Mesa 26.3.0 final + CM + our patches (podman)"
+    "$script" --install || { echo "  WARNING: XMX driver build failed; per-game XMX stays unavailable"; return 0; }
+    mkdir -p "$HOME/.config/xess-xmx"
+    printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s","api_version":"1.4.0"}}\n' \
+        "$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so" > "$HOME/.config/xess-xmx/icd-xmx.json"
+    "$here/tools/xmx-write-env.sh" >/dev/null 2>&1 || true
+}
+
+# Per-game XMX: do not run the package's session-wide install.sh (gamescope must stay on
+# the host Mesa for PQ HDR).
+install_xess() {
+    [[ -d $OUT/xess-xmx ]] || die "missing $OUT/xess-xmx - run '$0 build' first"
+    rm -rf "$XESS_PKG"; mkdir -p "$XESS_PKG"
+    rsync -a --exclude /lib/ "$OUT/xess-xmx/" "$XESS_PKG/"
+    seed_xess_compiler
+    if ! ls "$XESS_PKG"/igc/neo/bin/ocloc* >/dev/null 2>&1; then
+        if [[ -x $XESS_PKG/tools/get-igc.sh ]]; then
+            ( cd "$XESS_PKG" && bash tools/get-igc.sh ) | sed 's/^/  /' || warn "IGC fetch failed; run tools/get-igc.sh"
+        else
+            warn "no tools/get-igc.sh in $XESS_PKG; IGC is required for XMX kernels"
+        fi
+    fi
+    mkdir -p "$HOME/.config/xess-xmx"
+    printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s","api_version":"1.4.0"}}\n' \
+        "$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so" > "$HOME/.config/xess-xmx/icd-xmx.json"
+    "$here/tools/xmx-write-env.sh" >/dev/null 2>&1 || true
+    if [[ ${EUID:-$(id -u)} -eq 0 && -n ${SUDO_USER:-} ]]; then
+        chown -R "$SUDO_USER": "$XESS_PKG" "$HOME/.config/xess-xmx" 2>/dev/null || true
+    fi
+    echo "  per-game XMX env written; no session-wide VK_DRIVER_FILES"
+    echo "  run tools/xmx-steam-enable.sh --all (or --appid <id>) to put it into a game's LaunchOptions"
+}
 
 # ---------------------------------------------------------------------------------------------
 # kernel: xe, iwlwifi and btintel modules with our patches, for the installed Anatase kernel
@@ -371,6 +417,17 @@ FLATPAK_MESA_SKIP='libvulkan_(radeon|panfrost|nouveau|freedreno|asahi|powervr_me
 
 # Kept local: here the file list comes from the distro Mesa RPMs; the fast variant installs its
 # own built driver and expat. Only remove_flatpak_mesa/refresh_flatpak_runtime are shared.
+# The boot keep unit restores known-good copies; a fresh install must record them.
+record_known_good() { # <host|runtime> <driver file>
+    local kind=$1 file=$2 hash kg="$CACHE/known-good"
+    [ -e "$file" ] || return 0
+    hash=$(sha256sum "$file" | cut -c1-16)
+    sudo mkdir -p "$kg"
+    sudo install -m 0644 "$file" "$kg/$kind-$hash-libvulkan_intel.so"
+    sudo ln -sfn "$kind-$hash-libvulkan_intel.so" "$kg/$kind-current"
+    echo "  known-good $kind Mesa recorded: $kind-$hash-libvulkan_intel.so"
+}
+
 install_flatpak_mesa() {
     [[ -d $FLATPAK_RT/overrides ]] || { echo "  no Anatase Flatpak runtime overrides - Steam keeps Anatase's Mesa"; return 0; }
     local pkgs list
@@ -383,6 +440,7 @@ install_flatpak_mesa() {
         sudo tar -C "$FLATPAK_RT/overrides" -xf - --transform 's,^usr/,,'
     sed 's,^/usr/,,' <<<"$list" | sudo tee "$FLATPAK_MESA_LIST" >/dev/null
     echo "  $(wc -l <<<"$list") Mesa files in the Steam Flatpak runtime overrides"
+    record_known_good runtime "$FLATPAK_RT/overrides/lib64/libvulkan_intel.so"
     refresh_flatpak_runtime
 }
 
@@ -477,11 +535,16 @@ do_install() {
             echo "then run '$0 install' again - changes to the current /usr would be lost."
             return 0
         fi
-        hotfix_active || sudo rpm-ostree usroverlay --hotfix
+        hotfix_active || sudo rpm-ostree usroverlay --hotfix >/dev/null 2>&1 || true
+        if ! sudo install -m 000 /dev/null "/usr/.oxp3-rw-probe.$$" 2>/dev/null; then
+            die "the /usr overlay did not become writable (rpm-ostree usroverlay failed and /usr is read-only)"
+        fi
+        sudo rm -f "/usr/.oxp3-rw-probe.$$"
         if (( ${#rpms[@]} )); then
             say "gamescope / MangoHud / Mesa into the writable /usr overlay (sudo)"
             sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
             rpm -q gamescope mangohud mesa-vulkan-drivers | sed 's/^/  /'
+            (( SKIP_MESA )) || record_known_good host /usr/lib64/libvulkan_intel.so
             if (( !SKIP_MESA )); then
                 say "Mesa for the Steam Flatpak (sudo)"
                 install_flatpak_mesa

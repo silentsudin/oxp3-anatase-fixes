@@ -80,7 +80,7 @@ What moved, and with which patch:
   remaining 7.7 %.
 
 Measurement provenance: the "after" figures were taken on a Mesa **main-27** tree at commit
-`ea40598`, which is now the tree the installer pins. This repository now builds **the same main commit** (`ea40598`), so the figures above are what
+`ea40598`, which was the tree the installer pinned at the time. The installer now pins main `62b0e52f` (2026-11-10); the figures above are what
 the installer targets. The 26.3 branch was retired after it measured 4 % slower in raster and
 8.6 % in mesh even with the patches ported.
 
