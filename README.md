@@ -149,7 +149,21 @@ never uses sudo; `install`/`uninstall` ask for it.
 # reboot, enrol the key in the blue MOK manager screen
 ```
 
-**Install (full stack):**
+**Install (one entry point, two runs):**
+
+```sh
+./oxp3-install.sh             # build + stage kernel modules/firmware (+ queues the MOK key)
+systemctl reboot              # enrol the key in the blue MOK manager if it asked
+./oxp3-install.sh             # overlay stack + hardware fixes + verification
+```
+
+`oxp3-install.sh` detects the phase from the live system (booted deployment, staged
+deployment, MOK enrolment state), so re-running it is safe. `--status` shows what it
+would do, `--dry-run` prints every command, `--uninstall` reverses the install, and
+`--skip-build/--skip-hw/--skip-mok/--skip-verify` opt out of a step. Behind it are the
+same scripts as below; run those directly if you want to drive each stage yourself.
+
+**Install (manual, full stack):**
 
 ```sh
 ./oxp3-fixes.sh build         # builds gamescope, Mesa (x86_64+i686), MangoHud, XeSS, modules, firmware
