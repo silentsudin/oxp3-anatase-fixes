@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for the undo state in tools/lib/install-common.sh and tools/oxp3-rollback.sh.
 
 The library documents that sourcing it has no side effects; every test here runs it (or the

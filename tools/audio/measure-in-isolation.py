@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Measure the OneXPlayer 3 Harman EQ filter chain in a throw-away PipeWire graph.
 
 This is the measurement half of ``tools/audio/test-isolation.sh``.  The shell

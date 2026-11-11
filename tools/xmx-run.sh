@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # xmx-run.sh -- <command...> : run a game with the XMX environment sourced.
 # Example: tools/xmx-run.sh -- tools/cp2077-direct.sh -benchmark
 set -eu

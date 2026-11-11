@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-rgbd - keep the OneXPlayer 3 body RGB at *our* settings.
 
 Why this exists

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for the sleep-cycle harness analyser (tools/oxp3_sleep_cycles.py).
 
 The harness exists to turn "the device stays warm and drains" into a number:

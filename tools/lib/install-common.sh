@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # tools/lib/install-common.sh - the build/install helpers shared by oxp3-fixes.sh and
 # oxp3-fixes-fast.sh. Sourced by both; it holds every helper that was byte-identical in the two
 # installers, so a fix to the shared path is made once. The two scripts keep their own

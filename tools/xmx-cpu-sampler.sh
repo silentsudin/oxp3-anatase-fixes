@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # xmx-cpu-sampler.sh [--seconds N] [--wait M] : record what burns CPU when a game starts.
 #
 # XMX compiles CM kernels with ocloc on first use (a real CPU burst). This waits for

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Turn the OneXPlayer 3 speaker EQ on: install the filter-chain drop-in, restart the
 # user PipeWire/WirePlumber services once, wait for the sink and make it the default.
 # No root.  Reversible with eq-off.sh.

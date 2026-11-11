@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Build the Decky "install from file" zip for the OXP3 Status plugin.
 
 Zip layout (plugin root at the archive root, which is what Decky Loader's

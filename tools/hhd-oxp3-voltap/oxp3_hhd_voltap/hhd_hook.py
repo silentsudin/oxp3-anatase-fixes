@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The one narrow hook into HHD's controller pipeline.
 
 HHD's public plugin API (``hhd.plugins``, group ``hhd.plugins``) gives a

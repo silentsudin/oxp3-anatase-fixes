@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // oxp3-vibrance.fx - saturation / vibrance shader for the OneXPlayer 3 panel.
 //
 // Part of oxp3-anatase-fixes.  Our own code; no third-party shader text.

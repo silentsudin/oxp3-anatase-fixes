@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-imu.py - read-only IMU (Bosch BMI260 on ACPI 10EC5280) diagnostics for the OneXPlayer 3.
 
 The IMU is an IIO device (`i2c-10EC5280:00`, driver `bmi260_core`, label

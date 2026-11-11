@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Restore the recorded known-good host Mesa (libvulkan_intel.so with the Anatase
 # XMX patches) after an rpm-ostree update or reboot replaced it with the stock
 # distribution build.

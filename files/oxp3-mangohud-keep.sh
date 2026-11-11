@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Install the patched MangoHud (Intel iGPU power/temperature + RAPL CPU power)
 # from the locally built oxp3 RPMs into the writable /usr overlay, and do it
 # again on every boot because rpm-ostree clears that overlay.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # oxp3-speaker-gain - put the OneXPlayer 3 speaker volume control at maximum and
 # remember what it was, so the change is reversible.
 #

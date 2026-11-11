@@ -1,10 +1,11 @@
 # Provenance and licensing — what this repository is made of
 
 Date: **2026-11-09**. Scope: every tracked file, the licence application tooling, and the evidence
-that the "our own work only" rule has been enforced. This document records **provenance, not a
-licence choice**. No repository-wide licence is asserted here; `LICENSE` does not exist in this
-checkout and only the owner can choose one. Until then, default copyright applies and reuse terms
-are ambiguous, which is exactly the decision this page prepares.
+that the "our own work only" rule has been enforced. The owner chose **MIT** on 2026-11-11:
+`LICENSE` covers our own code, scripts, units, tests and documentation, while the files under
+`patches/` stay under their upstream licences (kernel GPL-2.0-only, hhd LGPL-2.1-or-later,
+gamescope BSD-2-Clause, Mesa/MangoHud/xess-xmx MIT). `NOTICE` records the exceptions; this page
+still describes provenance, not legal advice.
 
 Related: [QA.md](QA.md) check 23 (the pending decision), [MAINTAINABILITY.md](MAINTAINABILITY.md)
 section 8, `tools/apply-license.py` (apply one choice) and `tools/provenance-audit.py` (re-run the

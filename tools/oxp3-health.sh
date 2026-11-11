@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # oxp3-health - one read-only command that answers "can I install / is it
 # working / what is left", without the 70-row wall of PASS lines.
 #

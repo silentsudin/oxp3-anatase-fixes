@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: MIT
 """End-to-end integration test for tools/oxp3-voltap against virtual devices.
 
 Why this exists

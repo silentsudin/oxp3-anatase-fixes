@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # End-to-end integration test for tools/oxp3-voltap against virtual uinput
 # devices.  Opt-in: it creates ephemeral devices and runs the real daemon.
 #

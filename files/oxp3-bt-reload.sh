@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Reload the Intel CNVi Bluetooth driver after the real root is up.
 # btintel_pcie has no MODULE_FIRMWARE() entries, so dracut cannot copy the
 # firmware into the initramfs; the probe before switch_root fails with ENOENT.

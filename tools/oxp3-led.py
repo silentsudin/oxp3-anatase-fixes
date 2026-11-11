@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-led - colour / brightness / preset control for OneXPlayer 3 body RGB.
 
 The OXP3 body lighting (stick rings, G-key zone, top strip, controller

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for tools/oxp3-gamewrap.sh and its decision core.
 
 Everything runs against a synthetic HOME, config, panel-state file and stub

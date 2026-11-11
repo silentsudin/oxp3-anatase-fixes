@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # Launch Heroic (Flatpak) from a Steam non-Steam shortcut, in Game Mode.
 #
 # Forwards SteamAppId/SteamGameId (which Steam's own hrun shim does) so UMU can

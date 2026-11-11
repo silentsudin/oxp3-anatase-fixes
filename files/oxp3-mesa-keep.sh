@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Restore the recorded known-good host Mesa and Flatpak runtime Mesa at boot.
 #
 # rpm-ostree clears the /usr overlay ("usroverlay") on every boot, so the patched

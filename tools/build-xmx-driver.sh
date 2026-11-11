@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # build-xmx-driver.sh - build the CM-enabled (XeSS XMX) Mesa driver used by the xess-xmx path.
 # Mesa main (ea40598) + our perf patches + the C-for-Metal series ported to main
 # (patches/xess-main/0101-anv-cm-kernel-injection-for-main-27.patch), Wayland WSI, static expat.

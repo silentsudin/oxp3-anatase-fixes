@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-adaptivetdp - opt-in adaptive TDP for the OneXPlayer 3 ("OXP3").
 
 Moves the package power limits between the three vendor presets (quiet /

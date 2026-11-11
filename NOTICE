@@ -1,0 +1,21 @@
+oxp3-anatase-fixes
+==================
+
+Original code, scripts, units, tests and documentation in this repository are
+licensed under the MIT License; see LICENSE.
+
+Files under patches/ are derived from other projects and remain under their
+upstream licences. They are NOT relicensed by the repository-level MIT grant:
+
+  patches/kernel/**            Linux kernel, GPL-2.0-only
+  patches/hhd/**               hhd, LGPL-2.1-or-later
+  patches/gamescope/**         gamescope, BSD-2-Clause (Callaway-BSD)
+  patches/mangohud/**          MangoHud, MIT
+  patches/mesa/**,             Mesa, MIT
+  patches/mesa-26.3*/**        Mesa + xess-xmx CM series, MIT
+  patches/xess-*/**            xess-xmx-linux, MIT
+  patches/spirv-translator/**  SPIRV-LLVM-Translator, Apache-2.0 WITH LLVM-exception
+
+The pinned vendor files (firmware, Windows DLLs, microcode) are not stored in
+this repository; they are downloaded at build time and verified by SHA-256.
+See docs/PROVENANCE.md for the policy and audit.

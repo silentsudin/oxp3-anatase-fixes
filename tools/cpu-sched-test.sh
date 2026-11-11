@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # cpu-sched-test.sh <tag> - apply one existing scheduler configuration, measure gaming performance AND
 # efficiency, then restore. Candidates are shipped sched_ext schedulers (scx 1.1.3) plus EPP/governor variants.
 #

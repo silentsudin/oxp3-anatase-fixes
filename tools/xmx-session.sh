@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Make the XeSS XMX Vulkan driver the default for games in the desktop session.
 #
 # Without this, games use /usr/lib64/libvulkan_intel.so (the patched host Mesa) and

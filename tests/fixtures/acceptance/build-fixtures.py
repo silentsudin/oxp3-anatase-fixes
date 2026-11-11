@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Build the synthetic evidence bundles used by tools/oxp3_acceptance.py --selftest.
 
 The bundles are internally consistent but synthetic: they never claim to describe

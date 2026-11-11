@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Decompile functions matching an optional regex into a text file. Our own helper (oxp3-anatase-fixes).
 //@category oxp3
 import ghidra.app.script.GhidraScript;

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # oxp3-firstrun - one-shot first-run checklist and redacted evidence collector.
 #
 # Run this once after the post-install reboot. Without arguments it prints the

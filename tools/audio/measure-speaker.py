@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Speaker tuning measurement helper for the OneXPlayer 3 (our own tooling).
 
 Two jobs:

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # rapl-power: publish coarse RAPL power for unprivileged readers (the MangoHud overlay).
 #
 # The powercap energy_uj counters are root-only since CVE-2020-8694 (PLATYPUS), a side

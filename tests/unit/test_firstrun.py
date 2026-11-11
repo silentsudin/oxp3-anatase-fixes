@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for tools/oxp3_firstrun.py (the first-run evidence collector).
 
 Two seams are exercised with synthetic fixtures and stub commands, exactly like the

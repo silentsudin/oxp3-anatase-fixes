@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/oxp3-powerctl.py.
 
 Covers the pure logic (time-window parsing, fan curve, battery behaviour

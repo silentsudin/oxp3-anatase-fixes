@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * OXP3 Status - Decky Loader Quick Access Menu panel.
  *

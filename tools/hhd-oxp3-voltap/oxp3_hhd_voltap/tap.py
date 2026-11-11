@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Tap normalisation for the ONEXPLAYER 3 volume rocker, as an HHD filter.
 
 This is the same state machine that ``tools/oxp3-voltap`` uses in front of

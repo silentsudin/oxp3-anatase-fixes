@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for the goal-level acceptance evaluator.
 
 ``tools/oxp3-acceptance.sh`` has two halves: a live collector (verify, health and

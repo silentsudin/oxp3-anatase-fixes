@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # End-to-end integration test for the OXP3 home button and LED/RGB tools
 # against a virtual vendor HID device created through /dev/uhid.
 #

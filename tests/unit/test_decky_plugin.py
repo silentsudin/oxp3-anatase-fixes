@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/lib/decky_plugin.py (path resolution, manifest/artifact validation,
 ownership classification and the install/uninstall file moves).
 

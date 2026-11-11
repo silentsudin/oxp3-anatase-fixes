@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-voltap install / uninstall / status.
 #
 # This script never calls sudo: run it as root yourself (the exact command is

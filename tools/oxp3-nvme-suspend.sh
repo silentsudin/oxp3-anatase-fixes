@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # s2idle resume fix for the Predator GM7 / Biwin 1dee:1602 NVMe.
 #
 # That drive does not come back from s2idle through the ACPI simple-suspend path

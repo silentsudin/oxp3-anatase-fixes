@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """oxp3-hhd-voltap - volume rocker tap normalisation as an HHD plugin.
 
 Registered in the ``hhd.plugins`` entry-point group.  HHD's contract is::

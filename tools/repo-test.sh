@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # repo-test - one entrypoint for every offline check in this repository.
 #
 #   tools/repo-test.sh                 fast checks only: no network, no builds

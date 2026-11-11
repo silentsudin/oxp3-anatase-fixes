@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-sleep-wakeup: apply the OneXPlayer 3's bag-safe wake-source policy.
 #
 # s2idle itself works on this device (the platform advertises low-power S0 idle and

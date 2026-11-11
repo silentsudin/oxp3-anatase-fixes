@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Extract the OneXPlayer 3 speaker tuning from the Harman GA18v3 parameter file.
 
 Everything here is *our* parser for data the user already owns on disk; no vendor

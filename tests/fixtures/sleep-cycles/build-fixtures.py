@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate the synthetic sleep-cycle captures under this directory.
 
 The captures mirror what ``tools/oxp3_sleep_cycles.py`` writes as

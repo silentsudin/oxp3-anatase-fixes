@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/audio/level-report.py and the EQ headroom profiles.
 
 Everything is a pure function over synthetic `amixer`/`pactl`/conf text, so no

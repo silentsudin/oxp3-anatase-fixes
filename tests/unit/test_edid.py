@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/display/oxp3-edid.py.
 
 The EDID blob is built here from scratch (our own synthetic bytes, not a

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Install, verify and remove the OXP3 Status Decky plugin.
 
 Why this module exists

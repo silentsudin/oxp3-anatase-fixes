@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # Verify the installed system still matches the recorded working build of 2026-11-09.
 fail=0
 ok() { printf 'OK       %s\n' "$1"; }

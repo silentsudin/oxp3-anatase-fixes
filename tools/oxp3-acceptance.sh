@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # oxp3-acceptance - judge the six goal items from evidence, not memory.
 #
 #   tools/oxp3-acceptance.sh                 evaluate now, human report (read-only)

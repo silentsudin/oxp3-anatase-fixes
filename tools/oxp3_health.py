@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-health - one read-only command for "can I install / is it working / what is left".
 
 The three questions used to need three commands (``oxp3-preflight.sh``,

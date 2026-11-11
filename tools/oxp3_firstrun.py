@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-firstrun - one-shot first-run evidence collector for the OneXPlayer 3 fixes.
 
 The owner reboots once after installing the hardware fixes; this tool is the single

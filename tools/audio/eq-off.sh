@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Turn the OneXPlayer 3 speaker EQ off: drop the filter-chain config, restart the
 # user audio services and put the hardware Speaker sink back as default.
 # No root.  This is also the full rollback (nothing outside ~/.config is touched).

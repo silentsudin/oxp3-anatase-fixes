@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-tdp-sync: keep the MSR package power limit 1 (PL1) equal to the MMIO one.
 #
 # Panther Lake has two package-0 power limit interfaces: the MSR (intel-rapl:0) and the MMIO

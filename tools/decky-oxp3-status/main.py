@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-status - read-only status checks for the OneXPlayer 3 "Anatase" fixes.
 
 One implementation, two consumers:

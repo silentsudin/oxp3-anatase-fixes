@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # build-xmx-driver-263.sh - build the XMX (C-for-Metal) ANV driver on Mesa 26.3.0 final.
 #
 # Recipe (the 4b1d55ea rc3 build, moved to the official 26.3.0 release):

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Recover the HHD-emulated controller after the oxp3-voltap grab incident.
 # Stops and disables our legacy daemon, restarts HHD, waits for the controller and reports.
 set -uo pipefail

@@ -220,8 +220,10 @@ backed up and restored by `tools/oxp3-rollback.sh restore`. Details: [docs/ROLLB
 
 ## Licence and provenance
 
-No repository-wide licence has been chosen yet (the owner's decision); until a `LICENSE` exists,
-default copyright applies. The provenance rule is in force: only our own code, documentation and
-derived data are tracked, with **no vendor binaries, firmware blobs or decompiled listings**;
-vendor files are fetched at build/install time and pinned by SHA-256. See
+The repository is **MIT** licensed (see [LICENSE](LICENSE)) for our own code, scripts, units, tests
+and documentation. Patches under `patches/` are derived from other projects and stay under their
+upstream licences (kernel GPL-2.0, hhd LGPL-2.1+, gamescope BSD-2-Clause, Mesa/MangoHud/xess-xmx
+MIT); [NOTICE](NOTICE) lists the exceptions. The provenance rule is unchanged: only our own code,
+documentation and derived data are tracked, with **no vendor binaries, firmware blobs or
+decompiled listings**; vendor files are fetched at build/install time and pinned by SHA-256. See
 [docs/PROVENANCE.md](docs/PROVENANCE.md).

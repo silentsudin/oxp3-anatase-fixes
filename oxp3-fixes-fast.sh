@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # FAST variant of oxp3-fixes.sh. Everything is the same code (kernel modules, firmware, gamescope,
 # MangoHud, XeSS, extras, rapl-power); only Mesa differs: it is built with podman/meson from the
 # pinned main tree + patches/mesa instead of the RPM pipeline, and installed into the /usr overlay

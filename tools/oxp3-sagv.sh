@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-sagv.sh -- SAGV / QCLK-GV ("memory frequency point") status and measurement for the
 # OneXPlayer 3 (Panther Lake, Arc B390, xe driver).
 #

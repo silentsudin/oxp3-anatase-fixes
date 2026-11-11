@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # display-mode - HDR, wide-colour-gamut and display-profile control for the OXP3
 # eDP panel under KDE Plasma 6 (KWin 6.7), entirely in userspace.
 #

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for the pure tap state machine in tools/oxp3-voltap/oxp3-voltap.
 
 The daemon wrapper needs /dev/input and /dev/uinput; the Tapper class does not,

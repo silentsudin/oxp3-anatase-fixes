@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Shared helpers for the offline unit suite in tests/unit/.
 
 Everything here is hardware-free: modules are loaded straight from tools/ by

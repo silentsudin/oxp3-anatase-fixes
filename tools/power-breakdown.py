@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Power breakdown: platform total, package, and the "everything else" rest.
 
 The RAPL energy files are root-only, so run this with sudo. It samples for N

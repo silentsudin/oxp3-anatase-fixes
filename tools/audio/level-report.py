@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Read-only loudness report for the OneXPlayer 3 speaker chain (our own code).
 
 It answers the owner's question "how much level is the chain throwing away?"

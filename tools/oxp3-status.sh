@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # oxp3-status - headless status report for the OneXPlayer 3 "Anatase" fixes.
 #
 # The exact same checks as the Decky Quick Access Menu plugin

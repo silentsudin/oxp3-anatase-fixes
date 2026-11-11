@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # cm-compile.sh <kernel.spv> <options.txt> <out.cmk>
 # Compiles one XeSS CM kernel (SPIR-V + the compile options the shim recorded) for the local Intel GPU with the bundled
 # IGC/ocloc. Called by the driver at run time (ANV_CM_HELPER, default <package>/tools/cm-compile.sh) as `/bin/sh

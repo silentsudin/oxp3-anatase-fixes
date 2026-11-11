@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/oxp3-led.py: CLI frame assembly, dry-run output and
 the small validation helpers. Nothing is written to a device."""
 

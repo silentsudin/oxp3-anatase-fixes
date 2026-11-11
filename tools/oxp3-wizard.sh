@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # oxp3-wizard - guided, resumable hardware validation that needs eyes and hands.
 #
 #   tools/oxp3-wizard.sh                       run every phase interactively (resumable)

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # test-in-container.sh - run the isolated Harman-EQ validation in a container.
 #
 # Use this when the host lacks part of the toolchain (on Anatase: sox and

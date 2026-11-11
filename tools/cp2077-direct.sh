@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Launch Cyberpunk 2077 through Proton directly, without Heroic/umu in between.
 # Use as a Steam non-Steam shortcut so Gamemode launches it with the Steam environment
 # but without Heroic's flatpak + umu layers on top (which cost ~15 W of CPU here).

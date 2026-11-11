@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Lifecycle tests for tools/oxp3-homebtn.py: fake device fds (pipes), fake
 uinput keyboards and a fake clock. No /dev/hidraw, no /dev/uinput, no root.
 

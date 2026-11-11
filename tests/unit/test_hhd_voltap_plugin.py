@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for tools/hhd-oxp3-voltap (the HHD plugin).
 
 Two layers, no HHD and no hardware required:

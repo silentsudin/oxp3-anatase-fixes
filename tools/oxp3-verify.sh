@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-verify - prove every OneXPlayer 3 hardware fix end-to-end, in one command.
 #
 # This is the post-reboot acceptance harness for the fixes in docs/INSTALL-HW.md:

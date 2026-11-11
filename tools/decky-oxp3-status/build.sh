@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # Build, verify and package the OXP3 Status Decky plugin.
 #
 #   ./build.sh            install deps (npm ci), typecheck, build, smoke test,

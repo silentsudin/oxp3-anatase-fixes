@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Decky Loader evaluates a plugin's dist/index.js as a classic script and takes
 // the completion value as the plugin module. @decky/rollup emits an ES module
 // (ending in `export { index as default };`), which this loader rejects with

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # ghidra-pod.sh <agent-name> <binary> [symbol-regex]
 # Isolated headless Ghidra per agent: private project dir + decompilation text dump.
 # Never touches the shared Ghidra bridge; safe to run many in parallel.

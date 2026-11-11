@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for tools/oxp3_preflight.py (the preflight validator).
 
 Every probe is a pure function over a ``FixtureHost``: no host sysfs, no

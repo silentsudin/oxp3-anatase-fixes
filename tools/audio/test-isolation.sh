@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # test-isolation.sh - prove the Harman EQ filter chain in a real, isolated
 # PipeWire graph without touching the live audio session.
 #

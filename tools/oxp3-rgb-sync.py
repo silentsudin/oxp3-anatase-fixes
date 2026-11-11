@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Keep the left-stick RGB zone (0x01) in sync with HHD's handheld colour.
 
 HHD applies its handheld RGB to the five vendor zones, but when the emulated

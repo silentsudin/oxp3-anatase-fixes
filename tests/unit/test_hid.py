@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/oxp3_hid.py: frame encoding, parsing and io helpers.
 
 The encoder is checked against the 64-byte frames captured from HHD on this

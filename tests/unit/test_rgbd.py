@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/oxp3-rgbd.py: TOML config parsing, frame planning and
 the --check/--once exit codes. No hidraw device and no HHD are required."""
 

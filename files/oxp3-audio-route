@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-audio-route: put the OneXPlayer 3 back on its speakers after a boot or resume.
 #
 # While the Realtek ALC245 powers up, its jack detection reports headphones for a moment.

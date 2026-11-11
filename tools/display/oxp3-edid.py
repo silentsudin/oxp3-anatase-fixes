@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-edid - decode the OneXPlayer 3 panel EDID and report its HDR/colour capability.
 
 Why this exists

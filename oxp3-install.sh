@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-install.sh - one entry point for a complete OneXPlayer 3 Anatase install.
 #
 #   ./oxp3-install.sh            # build, stage kernel modules/firmware, or finish after reboot

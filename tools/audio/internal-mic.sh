@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # OXP3-ONEXPLAYER3-MIC
 #
 # internal-mic.sh - expose the OneXPlayer 3 internal microphone as an

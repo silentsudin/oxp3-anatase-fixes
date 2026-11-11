@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # oxp3-vibrance - install/verify the OXP3 saturation shader and print the exact
 # per-game launch settings for the OneXPlayer 3 on Anatase.
 #

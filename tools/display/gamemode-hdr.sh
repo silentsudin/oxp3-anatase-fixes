@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Enable HDR/PQ output in the Gamemode session, persistently.
 #
 # The stock launcher starts gamescope without --hdr-enabled, so Gamemode output is

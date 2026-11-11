@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/oxp3-rgb-sync.py: HHD state -> left-stick RGB."""
 
 from __future__ import annotations

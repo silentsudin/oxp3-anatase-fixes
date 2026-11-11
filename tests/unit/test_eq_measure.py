@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for the isolated-graph measurement maths.
 
 The measurements in tools/audio/measure-in-isolation.py are pure Python

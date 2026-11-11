@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for the pure helpers in tools/lib/install-common.sh.
 
 The library documents that sourcing it has no side effects; everything here

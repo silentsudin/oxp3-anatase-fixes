@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # tests/integration/decky/run.sh - offline --root simulation of the Decky plugin component.
 #
 # Exercises the real tools/oxp3-hw-install.sh --decky path into a scratch prefix (no root,

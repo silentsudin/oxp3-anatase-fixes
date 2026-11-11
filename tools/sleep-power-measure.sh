@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # sleep-power-measure.sh -- measure what the OneXPlayer 3 actually burns in s2idle.
 #
 # The complaint this answers is "suspend is inefficient: the device stays warm and the

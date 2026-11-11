@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Lifecycle tests for tools/oxp3-rgbd.py.
 
 Covers the three fixes that are specific to the RGB keeper:

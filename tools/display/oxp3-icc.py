@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-icc - describe this panel to KWin colour management as an ICC v2 profile.
 
 Why this exists

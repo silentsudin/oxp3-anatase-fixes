@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Build the synthetic first-run bundles used by tests/unit/test_triage.py.
 
 The fixtures are committed, so this script is not run by the test suite: it is the

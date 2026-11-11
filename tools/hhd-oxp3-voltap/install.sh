@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-hhd-voltap installer - own files only, into a prefix that survives
 # rpm-ostree updates (/usr/local is /var/usrlocal on Anatase).
 #

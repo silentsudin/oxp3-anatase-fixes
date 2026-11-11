@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Biquad response of the reproduced OneXPlayer 3 speaker chain (our own code).
 
 The band table below is what tools/audio/apo_extract.py reads out of the vendor

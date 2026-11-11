@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """cli-contracts - systematic CLI contract checks for every tool in this repo.
 
 The offline suites test what each tool *does*; this tool tests how every tool

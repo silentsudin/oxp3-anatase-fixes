@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # tests/preflight/run.sh - the fixture runner for tools/oxp3-preflight.sh.
 #
 #   tests/preflight/run.sh            parser selftest + every fixture verdict

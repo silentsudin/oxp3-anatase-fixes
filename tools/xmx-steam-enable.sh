@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # xmx-steam-enable.sh --appid <id> | --all [--dry-run]
 #
 # Enable the XeSS XMX path for native Steam titles. For each game that actually

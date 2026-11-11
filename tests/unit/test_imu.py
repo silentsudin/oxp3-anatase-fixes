@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/oxp3-imu.py: the pure SI/HHD-exposure helpers and the
 sysfs readers, using a synthetic IIO device instead of the BMI260."""
 

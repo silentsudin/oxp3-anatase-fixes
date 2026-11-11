@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # xmx-enable.sh enable|disable --game <dir with the game exe> --prefix <drive_c> [--force-fallback]
 # Enables the XeSS XMX path (xess-xmx-linux) for one game on this driver stack:
 #  * swaps the game's XeSS libraries for Intel SDK 3.0.2 ones (games older than XeSS 2.0.2.68 need that)

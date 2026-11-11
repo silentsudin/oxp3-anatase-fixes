@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Hand the OXP3 RGB zones back to HHD (the default owner) and stop our per-zone
 # daemon from re-applying its config over HHD's colours.
 #

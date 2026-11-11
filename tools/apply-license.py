@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """apply-license - apply ONE licence decision to the repository, reviewably.
 
 This tool does not choose a licence and does not grant rights by itself.  The

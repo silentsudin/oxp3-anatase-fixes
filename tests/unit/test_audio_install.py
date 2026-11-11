@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/audio/install-user.sh and tools/audio/gain-stage.sh.
 
 The installer is user-scope, so it can be exercised end-to-end in a throw-away

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Report imported power/sleep APIs and the internal functions that call them.
 // Our own helper (oxp3-anatase-fixes); used to check whether a vendor binary does any
 // system-suspend / EC power programming of its own, or only millisecond delay sleeps.

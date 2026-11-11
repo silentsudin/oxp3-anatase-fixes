@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-acceptance - evaluate the six goal items from evidence, not memory.
 
 The sleep/volume/LED/Decky work is spread over a component registry,

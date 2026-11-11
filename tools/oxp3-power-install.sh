@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-power-install: install/remove oxp3-powerctl, oxp3-adaptivetdp and their
 # systemd units.
 #

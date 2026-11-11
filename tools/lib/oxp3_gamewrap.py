@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3_gamewrap - compose every per-game graphics feature into one launch.
 
 This is the single place where the OneXPlayer 3 launch features are decided:

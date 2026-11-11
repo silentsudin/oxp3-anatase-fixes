@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """mic_diag - read-only diagnosis of the OneXPlayer 3 internal microphone path.
 
 The internal microphone is *not* a PCH DMIC on this machine: the ALC245 pin

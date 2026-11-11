@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Install the OneXPlayer 3 speaker chain in the *user* scope.  No root, no host
 # changes: everything lands in ~/.config and ~/.local, and --undo puts back
 # exactly what was there.

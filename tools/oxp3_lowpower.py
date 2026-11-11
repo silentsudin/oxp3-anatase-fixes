@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-lowpower - close the remaining s2idle drain on the OneXPlayer 3.
 
 The measured facts this policy is built on (docs/hw/sleep-power.md, section R6)

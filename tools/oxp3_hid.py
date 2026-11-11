@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """OneXPlayer 3 (ONEXPLAYER 3, "OXP3") vendor-HID helpers.
 
 The OXP3 exposes three USB HID interfaces on 1a86:fe00 (WCH/QinHeng

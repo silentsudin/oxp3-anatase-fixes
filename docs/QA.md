@@ -33,7 +33,7 @@ No `sudo`, no reboot, no host configuration change, no privileged write was perf
 `PASS (expected exit N)` rows are checks whose tool deliberately exits non-zero on this host (SAGV probe,
 Bluetooth diagnosis, `--strict` with warnings); the exit code was the documented, correct one.
 The one pending item is the licence-header/top-level-licence gap (check 23): the repair is written,
-validated and waiting for the owner's licence choice, so it is no longer a FAIL. No functional test
+validated and the owner chose MIT on 2026-11-11, so it is no longer a FAIL. No functional test
 failed. *(The audit round below re-measured the tree at a later revision; where its counts differ from
 the table, the audit figures are newer.)*
 
@@ -168,8 +168,8 @@ paths are fixed and covered by behavioural tests.
    then `--check` with the same arguments (idempotent), review `git diff`, and commit. Patches keep
    their upstream licences and are out of scope. Copy validation: MIT+exception wrote 70 headers and
    `LICENSE`, both `--check` runs exited 0 with an unchanged tree, byte-diff showed only the added
-   SPDX lines and shebang/docstring positions were preserved. Until the owner decides, default copyright applies and reuse
-   terms are ambiguous even though every file is our own work.
+   SPDX lines and shebang/docstring positions were preserved. The owner chose MIT on 2026-11-11; the files under `patches/` keep their upstream licences (see
+   `NOTICE`).
 2. **Root-only checks intentionally not executed.** RAPL writes/readback, `oxp3-fan-curve` manual PWM,
    real suspend (`sleep-power-measure.sh suspend`), `oxp3-voltap selftest`, Bluetooth module reload
    and the real installer are all unverified here by the no-sudo rule.

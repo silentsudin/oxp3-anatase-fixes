@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3_preflight - read-only prerequisite validator for the OneXPlayer 3 fixes.
 
 The hardware installers in this repository write to /etc, /usr/local, udev,

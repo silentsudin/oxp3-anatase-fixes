@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # sleep-cycle-test - drive N real s2idle cycles, guarantee a wake, attribute it,
 # and turn sleep efficiency into a number.
 #

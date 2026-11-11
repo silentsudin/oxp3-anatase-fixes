@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline CLI contracts for entry points whose failure was invisible in the
 normal suites.
 

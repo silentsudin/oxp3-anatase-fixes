@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # oxp3-rollback - the undo half of the host edits this repository makes.
 #
 # The installers create files (units, rules, binaries) and remove them again on uninstall.

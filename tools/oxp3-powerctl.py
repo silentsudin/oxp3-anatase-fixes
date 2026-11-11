@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-powerctl - power envelope and fan control for the OneXPlayer 3 ("OXP3").
 
 Everything this tool does is userspace and reversible: it writes the same

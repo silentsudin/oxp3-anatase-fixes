@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # Offline unit tests for tools/oxp3-verify.sh: every parser against our own
 # synthetic fixtures in tests/verify/fixtures. No hardware, no root, no network.
 #

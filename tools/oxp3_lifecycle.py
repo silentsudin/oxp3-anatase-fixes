@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3_lifecycle - suspend/hotplug survival helpers shared by our daemons.
 
 The three long-running tools (oxp3-homebtn.py, oxp3-rgbd.py, oxp3-voltap)

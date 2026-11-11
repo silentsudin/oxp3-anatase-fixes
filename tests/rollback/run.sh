@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # tests/rollback/run.sh - offline round-trip for the undo story, under a --root prefix.
 #
 # Installs the hardware components into a scratch prefix (no root, no systemd, no udev), edits

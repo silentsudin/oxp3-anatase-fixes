@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for the s2idle low-power policy (tools/oxp3_lowpower.py).
 
 Every decision is a pure function over a synthetic sysfs tree, so the policy can

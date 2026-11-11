@@ -264,7 +264,7 @@ git diff --stat && tools/repo-test.sh --fast
 |---|---|---|---|---|
 | 1 | Run A1, then re-record `docs/state/` snapshots | S | low (reboot) | the installable components leave `awaiting-install` (plus `sched-ext` if `scx_cosmos` is installed); the recorded harness failures clear |
 | 2 | Run A2 transcripts and update `components.yaml` `last_validated` | S-M | low (physical) | turns "waiting for install" into "validated on device"; `sleep.suspend`, `vol.hold`, `led.write` |
-| 3 | Apply the licence choice (A3) and commit | S | none functional | removes the only DECISION PENDING in [`QA.md`](QA.md); makes reuse terms explicit |
+| 3 | ~~Apply the licence choice (A3) and commit~~ — done 2026-11-11: MIT `LICENSE` + `NOTICE` exceptions | S | none functional | removes the only DECISION PENDING in [`QA.md`](QA.md); makes reuse terms explicit |
 | 4 | Fix the two stale texts still visible: the Decky/status hint `"Flatpak Steam is not supported by the XMX project"` (`tools/decky-oxp3-status/main.py:1654`) contradicts [`hw/flatpak-xmx.md`](hw/flatpak-xmx.md); annotate `hw/gap-audit.md` §1 as superseded on the Bluetooth row | XS | none | stops new sessions re-learning the corrected facts |
 | 5 | Flatpak Steam end-to-end trace (needs one Proton prefix + one launch with `XESS_LOG=1`); decide native-only otherwise | M | low (user-space, `$HOME` only) | closes the last XMX open item; `gfx.xmx.trace`, `flatpak.steam_env` |
 | 6 | ~~Port the CM series to whatever Mesa the installer pins~~ **done 2026-11-10**: Mesa 26.3.0 final + release CM + our perf patches (`d5e7d767`); 0212 stays main-only | M | done | XMX is pinned to the official release now |

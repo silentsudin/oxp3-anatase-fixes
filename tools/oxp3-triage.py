@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-triage - turn an oxp3-firstrun evidence bundle into a ranked diagnosis.
 
 ``tools/oxp3-firstrun.sh --collect`` produces a directory of evidence. Reading it

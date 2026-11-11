@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: MIT
 """Create one virtual vendor HID device through /dev/uhid and speak to it.
 
 Why this exists

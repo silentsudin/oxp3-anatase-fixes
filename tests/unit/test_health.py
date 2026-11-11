@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for the health front-end's aggregation and verdict logic.
 
 ``tools/oxp3-health.sh`` composes four existing reporters.  The interesting part

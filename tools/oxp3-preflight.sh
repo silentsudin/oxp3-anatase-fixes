@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-preflight.sh - refuse a half-install: check every prerequisite the
 # OneXPlayer 3 installers in this repository rely on, before anything is written.
 #

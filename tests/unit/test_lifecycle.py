@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for tools/oxp3_lifecycle.py.
 
 The module is the shared suspend/hotplug core of oxp3-homebtn.py,

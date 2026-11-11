@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Front end for the repository checks described in docs/TESTING.md.
 # Plain POSIX make: every target is a one-line recipe, no GNU functions.
 #

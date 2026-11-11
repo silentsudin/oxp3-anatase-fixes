@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-hw-install.sh - one entry point for every OneXPlayer 3 hardware fix in this repo.
 #
 # Each component keeps its own installer/tool; this script only orchestrates them, so a single

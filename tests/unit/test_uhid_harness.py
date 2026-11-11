@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline unit tests for the uhid integration harness helpers.
 
 Everything asserted here is hardware-free: the uhid wire format is packed and

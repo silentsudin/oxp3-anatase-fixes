@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """oxp3-homebtn - turn the OneXPlayer 3 home button into KEY_HOMEPAGE.
 
 The OXP3 home button is *not* part of any evdev keyboard on Linux: the

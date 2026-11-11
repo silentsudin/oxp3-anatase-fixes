@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for the suspend *trigger* policy (files/logind-oxp3.conf,
 files/49-oxp3-suspend.rules) and for the way it is installed and checked.
 

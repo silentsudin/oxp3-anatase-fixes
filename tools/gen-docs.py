@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """gen-docs - generate the OneXPlayer 3 component tables from one data file.
 
 docs/hw/components.yaml is the single source of truth for per-component facts

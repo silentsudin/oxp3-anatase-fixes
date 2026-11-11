@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-sleep-log: ask the platform after every resume what actually woke it.
 #
 # Installed as /usr/lib/systemd/system-sleep/oxp3-sleep-log, so systemd runs it as root

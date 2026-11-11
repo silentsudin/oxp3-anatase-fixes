@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Keep the internal microphone selectable as the default source.
 #
 # The speaker EQ chain exposes its sink monitor as a PipeWire source; WirePlumber

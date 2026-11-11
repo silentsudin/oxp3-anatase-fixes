@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Offline tests for tools/oxp3-triage.py (the evidence-bundle diagnosis tool).
 
 The fixtures under tests/fixtures/firstrun/ are synthetic but internally consistent

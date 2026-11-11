@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # xmx-session-check-fix.sh - make the xess-xmx release session checker validate the
 # driver this repo actually uses.
 #

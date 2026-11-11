@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # oxp3-gamewrap.sh - one entry point that composes every graphics feature we
 # support for a game launch: XeSS XMX env, gamescope HDR flags, vibrance
 # (gamescope ReShade or vkBasalt) and MangoHud, with everything else passed

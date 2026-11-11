@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Install the patched gamescope (PQ HDR on the AMS881KB01 OLED) into the writable
 # /usr overlay, and re-apply it on every boot because rpm-ostree clears the overlay.
 #

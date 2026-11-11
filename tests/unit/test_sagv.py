@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Behavioural tests for tools/oxp3-sagv.sh.
 
 The tool is deliberately read-only; these tests pin its documented exit codes

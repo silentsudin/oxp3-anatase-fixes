@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """provenance-audit - classify every tracked file and scan for copied vendor material.
 
 The repository promises that it contains our own code, documentation and

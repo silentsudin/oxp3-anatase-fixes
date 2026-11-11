@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * Headless load/render smoke test for the built plugin.
  *

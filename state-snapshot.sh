@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Dump the environment that affects game performance, so a quoted benchmark can be reproduced.
 # Also reports the state of every hardware fix (units, udev rules, firmware, power/battery, RGB),
 # so a "works on my machine" report carries the exact install state with it.

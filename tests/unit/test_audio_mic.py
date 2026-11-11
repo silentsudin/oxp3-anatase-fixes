@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Unit tests for the internal-microphone diagnosis (tools/audio/mic_diag.py).
 
 Everything here is synthetic: a fake /proc/asound tree (cards, devices and the

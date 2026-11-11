@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """sleep-cycle-test backend - drive N s2idle cycles, attribute the wake, report drain/hour.
 
 This is the engine behind ``tools/sleep-cycle-test.sh``.  It exists because the

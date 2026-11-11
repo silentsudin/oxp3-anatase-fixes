@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Write ~/.config/xess-xmx/oxp3-env.sh for the host Steam path.
 #
 # tools/xmx-enable.sh writes this file only when it swaps a specific game's XeSS

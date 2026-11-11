@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # tests/wizard/run.sh - offline end-to-end tests for tools/oxp3-wizard.sh.
 #
 # Everything runs in --simulate mode with a private state dir: no device access,

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Report and repair the HHD-emulated controller in Gamemode.
 # status: read-only report. --xbox: switch HHD to the uinput (Xbox 360) output, which
 # always presents an input node Steam/SDL detect. --steam: switch back to hori_steam.

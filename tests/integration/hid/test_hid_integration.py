@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: MIT
 """End-to-end integration test for the OXP3 home button and LED tools.
 
 Why this exists

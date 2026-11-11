@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Restore OneXPlayer 3 support on Anatase after an update:
 #   - gamescope: PQ HDR on the SDC AMS881KB01 OLED (no black screens, correct peak brightness)
 #   - Mesa:      26.3 branch (Jay shader compiler on Xe3, ANV fixes) from Anatase's packaging

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # oxp3-flatpak-xmx.sh - make XeSS XMX work for games started by the *Flatpak* Steam, with no filesystem
 # expansion of the sandbox and no change to the Flatpak installation itself.
 #

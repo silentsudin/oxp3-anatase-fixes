@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # oxp3-bt-firmware.sh - verify/install the Intel CNVi Bluetooth firmware for the
 # OneXPlayer 3 (Panther Lake, `btintel_pcie` on PCI 0000:00:14.7 [8086:e476]).
 #
