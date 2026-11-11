@@ -5,7 +5,8 @@ quoted, capture `./state-snapshot.sh` (driver hashes, PL1, profile, kernel modul
 
 ## Best known state (~04:10-04:14 on 2026-11-08)
 
-- Driver: `mesa-build/install-shiprt/usr/local` (Mesa 27.0.0-deve; main + 0205 HPLOC + 0211 with the tuning
+- Driver: `mesa-build/install-shiprt/usr/local` at the time (historical; current builds live in
+  `~/.cache/oxp3-fixes/mesa-fast/usr/local`) (Mesa 27.0.0-deve; main + 0205 HPLOC + 0211 with the tuning
   knobs ANV_BVH_TS / ANV_ENCODE_* / ANV_MORTON_KVS), sha256 of libvulkan_intel.so
   `2517930b40d9093486705d84880ebe9b50f4e18f86a5d524dfe3830f25516e5c`, 24066304 bytes. Installed into the host
   `/usr/lib64` overlay AND the org.anatase.Platform Flatpak runtime overrides together with the bundled

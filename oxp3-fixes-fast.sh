@@ -116,11 +116,9 @@ MESA_BUILD_DIR="${OXP3_MESA_BUILD:-}"
 MESA_BACKUP=/usr/local/share/oxp3-fixes-fast
 
 _mpick() {
-    local built="$CACHE/mesa-fast/usr/local" legacy="$HOME/git/linux_scratch/mesa-build/install-shiprt/usr/local"
+    local built="$CACHE/mesa-fast/usr/local"
     if [[ -n $MESA_BUILD_DIR && -x $MESA_BUILD_DIR/lib64/libvulkan_intel.so ]]; then return 0; fi
-    if [[ -x $built/lib64/libvulkan_intel.so ]]; then MESA_BUILD_DIR=$built
-    elif [[ -x $legacy/lib64/libvulkan_intel.so ]]; then MESA_BUILD_DIR=$legacy
-    fi
+    if [[ -x $built/lib64/libvulkan_intel.so ]]; then MESA_BUILD_DIR=$built; fi
 }
 
 # Build the XMX driver (Mesa 26.3.0 final + release CM + our patches) and write the
