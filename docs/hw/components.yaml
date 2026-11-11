@@ -58,7 +58,7 @@ components:
     root_required: "yes"
     install:
       summary: "Anatase's gamescope rebuilt with patches/gamescope and installed into the writable /usr overlay"
-      entrypoint: "./oxp3-fixes-fast.sh install"
+      entrypoint: "./oxp3-install.sh"
       steps:
         - "rebuild after every Anatase update; the overlay install is lost on the next deployment"
     verify:
@@ -77,7 +77,7 @@ components:
     state: working
     group: driver-stack
     headline: true
-    summary: "Mesa main at the pinned commit (ea40598): Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling, the Panther Lake hang fix, HPLOC TLAS, mesh fixes and fewer per-frame driver ioctls (patches/mesa 0200/0201/0205/0206/0207/0208/0211) - the tree every measured win used."
+    summary: "Mesa main at the current pin (62b0e52f): Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling, the Panther Lake hang fix, HPLOC TLAS, mesh fixes and fewer per-frame driver ioctls (patches/mesa 0200/0201/0206/0207/0212)."
     implementation:
       - patches/mesa
       - oxp3-fixes-fast.sh
@@ -86,7 +86,7 @@ components:
     root_required: "yes"
     install:
       summary: "Anatase's Mesa package rebuilt at the pinned main commit with patches/mesa (x86_64 + i686), same overlay"
-      entrypoint: "./oxp3-fixes-fast.sh install"
+      entrypoint: "./oxp3-install.sh"
     verify:
       - id: gfx.gamescope
       - id: gfx.xmx.runtime
@@ -106,21 +106,22 @@ components:
 
   - id: xess-xmx
     title: XeSS XMX
-    state: partial
+    state: working
     group: driver-stack
     headline: true
-    summary: "XeSS SR/FG on the Arc XMX units instead of DP4a for native Steam and Heroic; the shim, ControlLib and compiler install, but the driver CM patches are parked on Mesa 26.3 while the installer pins main. Flatpak Steam has its own deployment (docs/hw/flatpak-xmx.md) and is not trace-verified yet."
+    summary: "XeSS SR/FG on the Arc XMX units instead of DP4a for native Steam and Heroic, with a dedicated Mesa 26.3.0 driver (release CM patches + our perf patches) selected per game; the host stays on Mesa main so gamescope/HDR use the fast driver. The package shim, ControlLib and IGC compiler are installed per game. Flatpak Steam has its own deployment (docs/hw/flatpak-xmx.md)."
     implementation:
       - patches/xess-26.3
-      - patches/xess-main
+      - patches/mesa-26.3
+      - tools/build-xmx-driver-263.sh
       - tools/lib/install-common.sh
       - tools/oxp3-flatpak-xmx.sh
       - oxp3-fixes-fast.sh
     doc: docs/xess-xmx.md
     root_required: "yes"
     install:
-      summary: "shim, ControlLib and IGC compiler installed by the driver installer into the Steam Flatpak environment"
-      entrypoint: "./oxp3-fixes-fast.sh install"
+      summary: "Mesa 26.3.0 XMX driver built and installed per game, shim/ControlLib/IGC staged, per-game ICD and launch options written"
+      entrypoint: "./oxp3-install.sh (hardware step runs tools/oxp3-hw-install.sh --xmx)"
     verify:
       - id: gfx.xmx.driver
       - id: gfx.xmx.icdpath
@@ -138,7 +139,6 @@ components:
     dependencies:
       - mesa
     caveats:
-      - "XMX is unavailable until the 26.3 driver CM patches are ported to Mesa main"
       - "gfx.xmx.trace SKIPs unless an igdext trace was produced for that launch"
       - "Flatpak Steam: env must come from per-game launch options, the shim must be copied into the game prefix, and the kernel cache lives in ~/.cache/xess-xmx; see docs/hw/flatpak-xmx.md (no permission change needed, trace pending)"
     last_validated:
@@ -159,7 +159,7 @@ components:
     root_required: "yes"
     install:
       summary: "Anatase's MangoHud rebuilt with patches/mangohud, same overlay"
-      entrypoint: "./oxp3-fixes-fast.sh install"
+      entrypoint: "./oxp3-install.sh"
     verify:
       - command: "rpm -q mangohud"
         expect: "mangohud-0.8.4 or newer with the .oxp3 build date"
@@ -185,10 +185,10 @@ components:
     root_required: "yes"
     install:
       summary: "built for the installed kernel, signed with your MOK, layered as kmod-oxp3 with a regenerated initramfs"
-      entrypoint: "./oxp3-fixes-fast.sh install"
+      entrypoint: "./oxp3-install.sh"
       steps:
         - "run install twice after a kernel change: the first run stages modules/firmware and asks for a reboot"
-        - "./oxp3-fixes-fast.sh mok-setup once, to enrol the module signing key"
+        - "./oxp3-install.sh queues the MOK key once; enrol it in the firmware screen"
     verify:
       - id: gfx.xe
         expect: "modinfo -F filename xe resolves under updates/"
@@ -213,7 +213,7 @@ components:
     root_required: "yes"
     install:
       summary: "layered as oxp3-firmware together with the modules, in /usr/lib/firmware/updates"
-      entrypoint: "./oxp3-fixes-fast.sh install"
+      entrypoint: "./oxp3-install.sh"
     verify:
       - command: "rpm -q oxp3-firmware"
         expect: "oxp3-firmware-<version> layered in the booted deployment"
@@ -241,7 +241,7 @@ components:
     root_required: "yes"
     install:
       summary: "/usr/local/libexec plus a system unit, installed by the driver installer"
-      entrypoint: "./oxp3-fixes-fast.sh install"
+      entrypoint: "./oxp3-install.sh"
     verify:
       - id: pwr.rapl
         expect: "rapl-power.service publishes the CPU/GPU/dram/psys values"
@@ -254,7 +254,7 @@ components:
 
   - id: sched-ext
     title: sched_ext (scx_cosmos)
-    state: awaiting-install
+    state: working
     group: driver-stack
     headline: true
     summary: "scx_cosmos measured +4.8% Cyberpunk average and +5.7% FPS/W over EEVDF with GravityMark unchanged; the gaming-scheduler unit is installed by the fast installer."
@@ -267,7 +267,7 @@ components:
     root_required: "yes"
     install:
       summary: "installed and enabled by the fast installer when scx_cosmos is present, with an EEVDF fallback"
-      entrypoint: "./oxp3-fixes-fast.sh install"
+      entrypoint: "./oxp3-install.sh"
     verify:
       - id: sched.state
         expect: "sched_ext state is enabled"

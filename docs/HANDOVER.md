@@ -77,16 +77,16 @@ unit-test run. Change the source, then `tools/gen-docs.py --write`; never edit t
 State roll-up and the volatile counts this page used to re-type. Every value below is
 computed by `tools/gen-docs.py` from the named source; **do not hand-edit this block**.
 
-**25 components**: **10** `working`, **4** `partial`, **1** `blocked`, **2** `not-a-gap`, **8** `awaiting-install`.
+**25 components**: **12** `working`, **3** `partial`, **1** `blocked`, **2** `not-a-gap`, **7** `awaiting-install`.
 Counted from the `state:` field of each component in `docs/hw/components.yaml`.
 
 | state | components (doc link) |
 |---|---|
-| `working` (10) | gamescope ([hdr-vibrance](hw/hdr-vibrance.md)), mesa ([BEST-CONFIG](BEST-CONFIG.md)), mangohud ([BEST-CONFIG](BEST-CONFIG.md)), kernel-modules ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), firmware ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), rapl-power ([sagv](hw/sagv.md)), audio ([audio-harman-apo](hw/audio-harman-apo.md)), power ([power-fan](hw/power-fan.md)), display ([hdr-vibrance](hw/hdr-vibrance.md)), decky ([decky-plugin](decky-plugin.md)) |
-| `partial` (4) | xess-xmx ([xess-xmx](xess-xmx.md)), audio-mic ([audio-microphone](hw/audio-microphone.md)), fan ([power-fan](hw/power-fan.md)), battery ([battery-tdp](hw/battery-tdp.md)) |
+| `working` (12) | gamescope ([hdr-vibrance](hw/hdr-vibrance.md)), mesa ([BEST-CONFIG](BEST-CONFIG.md)), xess-xmx ([xess-xmx](xess-xmx.md)), mangohud ([BEST-CONFIG](BEST-CONFIG.md)), kernel-modules ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), firmware ([WORKING-BUILD-2026-11-08](WORKING-BUILD-2026-11-08.md)), rapl-power ([sagv](hw/sagv.md)), sched-ext ([cpu-sched](cpu-sched.md)), audio ([audio-harman-apo](hw/audio-harman-apo.md)), power ([power-fan](hw/power-fan.md)), display ([hdr-vibrance](hw/hdr-vibrance.md)), decky ([decky-plugin](decky-plugin.md)) |
+| `partial` (3) | audio-mic ([audio-microphone](hw/audio-microphone.md)), fan ([power-fan](hw/power-fan.md)), battery ([battery-tdp](hw/battery-tdp.md)) |
 | `blocked` (1) | sagv ([sagv](hw/sagv.md)) |
 | `not-a-gap` (2) | imu ([camera-imu](hw/camera-imu.md)), camera ([camera-imu](hw/camera-imu.md)) |
-| `awaiting-install` (8) | sched-ext ([cpu-sched](cpu-sched.md)), volume ([volume-buttons](hw/volume-buttons.md)), leds ([home-button-leds](hw/home-button-leds.md)), rgb ([rgb-coverage](hw/rgb-coverage.md)), daemons ([DAEMONS](DAEMONS.md)), sleep ([sleep-power](hw/sleep-power.md)), bluetooth ([bluetooth](hw/bluetooth.md)), adaptive-tdp ([battery-tdp](hw/battery-tdp.md)) |
+| `awaiting-install` (7) | volume ([volume-buttons](hw/volume-buttons.md)), leds ([home-button-leds](hw/home-button-leds.md)), rgb ([rgb-coverage](hw/rgb-coverage.md)), daemons ([DAEMONS](DAEMONS.md)), sleep ([sleep-power](hw/sleep-power.md)), bluetooth ([bluetooth](hw/bluetooth.md)), adaptive-tdp ([battery-tdp](hw/battery-tdp.md)) |
 | **total** (25) | every component in the data file; add a component there, not here |
 
 | volatile fact | value | how this number was obtained |
