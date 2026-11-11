@@ -7,8 +7,16 @@ check() { # <label> <expected-prefix> <file>
     if [ -e "$3" ] && [ "$(sha256sum "$3" | cut -c1-16)" = "$2" ]; then ok "$1"; else bad "$1"; fi
 }
 RT=/run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable
+# Host/runtime may be the same build now (install_flatpak_mesa copies the host driver
+# into the runtime overrides); accept the recorded runtime-only build as well.
+host16=$( [ -e /usr/lib64/libvulkan_intel.so ] && sha256sum /usr/lib64/libvulkan_intel.so | cut -c1-16 )
 check "host driver 5a75b6a4" 5a75b6a44d285fd1 /usr/lib64/libvulkan_intel.so
-check "runtime driver 4d043cc2" 4d043cc2851a11fd "$RT/files/lib64/libvulkan_intel.so"
+rt16=$( [ -e "$RT/files/lib64/libvulkan_intel.so" ] && sha256sum "$RT/files/lib64/libvulkan_intel.so" | cut -c1-16 )
+if [ "$rt16" = "4d043cc2851a11fd" ] || { [ -n "$host16" ] && [ "$rt16" = "$host16" ]; }; then
+    ok "runtime driver ${rt16}"
+else
+    bad "runtime driver ${rt16:-missing} (expected 4d043cc2 or the host build)"
+fi
 OV=/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides
 [ -e "$OV/lib64/libexpat.so.1" ] && bad "runtime override ships libexpat.so.1" || ok "no expat override in runtime"
 [ -e "$OV/lib64/libvulkan_intel.so" ] && ok "runtime override present" || bad "runtime override missing"
