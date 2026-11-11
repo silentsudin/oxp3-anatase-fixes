@@ -10,10 +10,10 @@
 #
 # Usage: sudo tools/oxp3-mesa-restore.sh status|restore
 set -uo pipefail
-known=$HOME/.cache/oxp3-fixes/known-good/host-5a75b6a4-libvulkan_intel.so
-[ -e "$known" ] || known=$HOME/.cache/oxp3-fixes/known-good/host-ec418f04-libvulkan_intel.so
-[[ -r $known ]] || known=/var/home/holzr/.cache/oxp3-fixes/known-good/host-5a75b6a4-libvulkan_intel.so
-[[ -e $known ]] || known=/var/home/holzr/.cache/oxp3-fixes/known-good/host-ec418f04-libvulkan_intel.so
+known=$HOME/.cache/oxp3-fixes/known-good/host-current
+[ -e "$known" ] || known=$(ls -t "$HOME/.cache/oxp3-fixes/known-good"/host-*-libvulkan_intel.so 2>/dev/null | head -1)
+[[ -r $known ]] || known=/var/home/holzr/.cache/oxp3-fixes/known-good/host-current
+[[ -e $known ]] || known=$(ls -t /var/home/holzr/.cache/oxp3-fixes/known-good/host-*-libvulkan_intel.so 2>/dev/null | head -1)
 target=/usr/lib64/libvulkan_intel.so
 have() { sha256sum "$target" 2>/dev/null | cut -d' ' -f1; }
 case ${1:-status} in

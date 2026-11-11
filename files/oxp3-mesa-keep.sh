@@ -17,9 +17,10 @@ find_known() {
     return 1
 }
 kd=$(find_known) || { log "no known-good directory; nothing to do"; exit 0; }
-host_known=$kd/host-5a75b6a4-libvulkan_intel.so
-[ -e "$host_known" ] || host_known=$kd/host-ec418f04-libvulkan_intel.so
-runtime_known=$kd/runtime-4d043cc2-libvulkan_intel.so
+host_known=$kd/host-current
+[ -e "$host_known" ] || host_known=$(ls -t "$kd"/host-*-libvulkan_intel.so 2>/dev/null | head -1)
+runtime_known=$kd/runtime-current
+[ -e "$runtime_known" ] || runtime_known=$(ls -t "$kd"/runtime-*-libvulkan_intel.so 2>/dev/null | head -1)
 restore_host=0 restore_runtime=0
 want_host=$(sha256sum "$host_known" 2>/dev/null | cut -d' ' -f1)
 want_runtime=$(sha256sum "$runtime_known" 2>/dev/null | cut -d' ' -f1)

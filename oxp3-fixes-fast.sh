@@ -47,6 +47,9 @@ else
 fi
 CACHE="${OXP3_CACHE:-$_human_home/.cache/oxp3-fixes}"
 MOK_DIR="${OXP3_MOK_DIR:-$_human_home/.local/share/oxp3-fixes/mok}"
+# User-scoped installs (XMX package, env files, Decky) must land in the human's home.
+[[ ${EUID:-$(id -u)} -eq 0 && -n ${SUDO_USER:-} ]] && export HOME=$_human_home
+OXP3_XMX_DRIVER_HOOK=build_xmx_driver
 OUT="$CACHE/out"
 ANATASE_REPO=https://github.com/anatase-org/anatase.git
 PATCHWORK_REPO=https://github.com/anatase-org/patchwork.git
@@ -117,6 +120,19 @@ _mpick() {
     if [[ -x $built/lib64/libvulkan_intel.so ]]; then MESA_BUILD_DIR=$built
     elif [[ -x $legacy/lib64/libvulkan_intel.so ]]; then MESA_BUILD_DIR=$legacy
     fi
+}
+
+# Build the XMX driver (Mesa 26.3.0 final + release CM + our patches) and write the
+# per-game ICD/environment. Runs during `build` as the invoking user.
+build_xmx_driver() {
+    local script=$here/tools/build-xmx-driver-263.sh
+    [[ -x $script ]] || { echo "  no $script; XMX driver not built"; return 0; }
+    say "XMX driver: Mesa 26.3.0 final + CM + our patches (podman)"
+    "$script" --install || { echo "  WARNING: XMX driver build failed; per-game XMX stays unavailable"; return 0; }
+    mkdir -p "$HOME/.config/xess-xmx"
+    printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s","api_version":"1.4.0"}}\n' \
+        "$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so" > "$HOME/.config/xess-xmx/icd-xmx.json"
+    "$here/tools/xmx-write-env.sh" >/dev/null 2>&1 || true
 }
 
 build_mesa() {
@@ -192,6 +208,15 @@ install_mesa_fast() {
         echo "/usr/lib64/$f" | sudo tee -a "$manifest" >/dev/null
     done
     echo "  $(grep -c . "$manifest") Mesa file(s) into /usr/lib64 (stock in $MESA_BACKUP/stock)"
+    # The boot keep unit can only restore what is recorded here; a fresh install used
+    # to have no known-good copy and silently fell back to stock after the first reboot.
+    local h hash kg="$CACHE/known-good"
+    h=$(dirname "$src") # $CACHE/mesa-fast/usr/local/lib64/libvulkan_intel.so -> lib64
+    hash=$(sha256sum "$src/libvulkan_intel.so" | cut -c1-16)
+    sudo mkdir -p "$kg"
+    sudo install -m 0644 "$src/libvulkan_intel.so" "$kg/host-$hash-libvulkan_intel.so"
+    sudo ln -sfn "host-$hash-libvulkan_intel.so" "$kg/host-current"
+    echo "  known-good host Mesa recorded: host-$hash-libvulkan_intel.so"
 }
 
 remove_mesa_fast() {
@@ -204,6 +229,35 @@ remove_mesa_fast() {
     done < <(sudo cat "$manifest")
     sudo rm -f "$manifest"
     echo "  stock driver restored"
+}
+
+# Install the XMX stack per game instead of the package's session-wide install.sh:
+# a session VK_DRIVER_FILES would put gamescope/desktop on the 26.3 CM driver and
+# break PQ HDR. The shim/IGC live in the user's package; the driver and ICD are
+# already in place from the build phase.
+install_xess() {
+    [[ -d $OUT/xess-xmx ]] || die "missing $OUT/xess-xmx - run '$0 build' first"
+    rm -rf "$XESS_PKG"; mkdir -p "$XESS_PKG"
+    rsync -a --exclude /lib/ "$OUT/xess-xmx/" "$XESS_PKG/"
+    seed_xess_compiler
+    # Fresh installs have no seed in ~/Downloads: fetch IGC/ocloc the same way the
+    # upstream install.sh would (the CM helper cannot work without it).
+    if ! ls "$XESS_PKG"/igc/neo/bin/ocloc* >/dev/null 2>&1; then
+        if [[ -x $XESS_PKG/tools/get-igc.sh ]]; then
+            ( cd "$XESS_PKG" && bash tools/get-igc.sh ) | sed 's/^/  /' || warn "IGC fetch failed; XMX kernels cannot compile until tools/get-igc.sh runs"
+        else
+            warn "no tools/get-igc.sh in $XESS_PKG; XMX kernels cannot compile without IGC"
+        fi
+    fi
+    mkdir -p "$HOME/.config/xess-xmx"
+    printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s","api_version":"1.4.0"}}\n' \
+        "$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so" > "$HOME/.config/xess-xmx/icd-xmx.json"
+    "$here/tools/xmx-write-env.sh" >/dev/null 2>&1 || true
+    if [[ ${EUID:-$(id -u)} -eq 0 && -n ${SUDO_USER:-} ]]; then
+        chown -R "$SUDO_USER": "$XESS_PKG" "$HOME/.config/xess-xmx" 2>/dev/null || true
+    fi
+    echo "  per-game XMX env written; no session-wide VK_DRIVER_FILES (gamescope keeps the host driver)"
+    echo "  run tools/xmx-steam-enable.sh --all (or --appid <id>) to put it into a game's LaunchOptions"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -392,6 +446,11 @@ install_flatpak_mesa() {
         sudo rm -f "$FLATPAK_RT/overrides/lib64/libexpat.so.1"
         echo "  driver is self-contained (static expat): no runtime expat override needed"
     fi
+    local hash kg="$CACHE/known-good"
+    hash=$(sha256sum "$src/libvulkan_intel.so" | cut -c1-16)
+    sudo mkdir -p "$kg"
+    sudo install -m 0644 "$src/libvulkan_intel.so" "$kg/runtime-$hash-libvulkan_intel.so"
+    sudo ln -sfn "runtime-$hash-libvulkan_intel.so" "$kg/runtime-current"
     printf '%s' "$list" | sudo tee "$FLATPAK_MESA_LIST" >/dev/null
     refresh_flatpak_runtime
 }

@@ -515,6 +515,9 @@ build_xess() {
         [[ $(sha256sum "$stage/$name" | cut -d' ' -f1) == "$sha" ]] || die "$name in the release zip has an unexpected checksum"
     done
     echo "  $stage"
+    if [[ -n ${OXP3_XMX_DRIVER_HOOK:-} ]]; then
+        "$OXP3_XMX_DRIVER_HOOK"
+    fi
 }
 
 # Intel's compiler as get-igc.sh would fetch it (IGC 2.10.10, ocloc 25.18.1), from an earlier package

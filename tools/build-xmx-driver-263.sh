@@ -3,7 +3,7 @@
 #
 # Recipe (the 4b1d55ea rc3 build, moved to the official 26.3.0 release):
 #   Mesa 26.3.0 tag
-#   + the xess-xmx release's CM series (patches/mesa-26.3 of release >= 20261111)
+#   + the xess-xmx 20261111 CM series, vendored in patches/mesa-26.3
 #   + our five 26.3 backports (patches/mesa-26.3-backports; the one already upstream is skipped)
 #   + our Intel perf patches that apply to 26.3: 0200, 0201, 0206 and the ported 0207
 #     (0212 depends on main-only RT refactors and is not portable to 26.3)
@@ -13,8 +13,7 @@
 # With --install it becomes ~/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so, the old one is
 # kept in ~/.cache/oxp3-fixes/xmx-driver-rc3 (instant rollback).
 #
-# The CM patches come from the upstream release package (not vendored here); point
-# --release-dir at an unpacked xess-xmx-linux release >= 20261111.
+# Everything is in this repo; no upstream release archive is needed.
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
 cache=${OXP3_CACHE:-$HOME/.cache/oxp3-fixes}
@@ -34,13 +33,9 @@ while [ $# -gt 0 ]; do
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
-if [ -z "$release" ]; then
-    for d in "$HOME"/.local/share/xess-xmx-release/xess-xmx-linux-*; do
-        [ -d "$d/patches/mesa-26.3" ] && release=$d
-    done
-fi
-[ -n "$release" ] && [ -d "$release/patches/mesa-26.3" ] || {
-    echo "error: pass --release-dir <unpacked xess-xmx-linux >= 20261111> (it holds patches/mesa-26.3)" >&2; exit 2; }
+# The CM series is vendored in patches/mesa-26.3 (release 20261111); --release-dir is
+# only needed to compare against a different upstream release.
+
 command -v podman >/dev/null || { echo "error: podman is required" >&2; exit 2; }
 mkdir -p "$cache/mesa"
 [ -s "$tarball" ] || curl -sfL --retry 3 -o "$tarball" "$url" || { echo "download failed: $url" >&2; exit 1; }
@@ -50,7 +45,6 @@ tar xzf "$tarball" -C "$work" --strip-components=1
 cd "$work"
 git init -q .; git add -A; git -c user.email=x@x -c user.name=x commit -qm base
 apply() { git apply -p1 "$1" 2>/dev/null || { echo "error: patch does not apply: $1" >&2; exit 1; }; }
-for f in "$release"/patches/mesa-26.3/*.patch; do apply "$f"; done
 for f in "$repo"/patches/mesa-26.3-backports/*.patch; do
     if git apply --check -R -p1 "$f" 2>/dev/null; then echo "already in $tag: $(basename "$f")"; else apply "$f"; fi
 done
