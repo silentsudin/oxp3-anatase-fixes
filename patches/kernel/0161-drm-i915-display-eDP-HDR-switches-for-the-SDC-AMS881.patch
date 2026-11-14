@@ -18,29 +18,23 @@ source changes instead of kprobes:
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- drivers/gpu/drm/i915/display/intel_ddi.c            |  4 +++-
- drivers/gpu/drm/i915/display/intel_display_params.c |  8 ++++++++
- drivers/gpu/drm/i915/display/intel_display_params.h |  2 ++
- drivers/gpu/drm/i915/display/intel_hdmi.c           | 13 +++++++++++++
- 4 files changed, 26 insertions(+), 1 deletion(-)
-
 diff --git a/drivers/gpu/drm/i915/display/intel_ddi.c b/drivers/gpu/drm/i915/display/intel_ddi.c
-index 95008e0c0e..8c3b505eff 100644
+index 02a53c984..50378f25e 100644
 --- a/drivers/gpu/drm/i915/display/intel_ddi.c
 +++ b/drivers/gpu/drm/i915/display/intel_ddi.c
-@@ -470,7 +470,9 @@ void intel_ddi_set_dp_msa(const struct intel_crtc_state *crtc_state,
- 	 * YCBCR 420, HDR BT.2020 signals we should program MSA MISC1 fields
- 	 * which indicate VSC SDP for the Pixel Encoding/Colorimetry Format.
+@@ -472,7 +472,9 @@ void intel_ddi_set_dp_msa(const struct intel_crtc_state *crtc_state,
+ 	 * Only set the delegation bit when the content needs it and
+ 	 * the sink advertises support.
  	 */
--	if (intel_dp_needs_vsc_sdp(crtc_state, conn_state))
-+	if (intel_dp_needs_vsc_sdp(crtc_state, conn_state) &&
+-	if (intel_dp_needs_vsc_colorimetry(crtc_state, conn_state))
++	if (intel_dp_needs_vsc_colorimetry(crtc_state, conn_state) &&
 +	    (display->params.edp_msa_vsc_colorimetry ||
 +	     !intel_crtc_has_type(crtc_state, INTEL_OUTPUT_EDP)))
  		temp |= DP_MSA_MISC_COLOR_VSC_SDP;
  
  	intel_de_write(display, TRANS_MSA_MISC(display, cpu_transcoder),
 diff --git a/drivers/gpu/drm/i915/display/intel_display_params.c b/drivers/gpu/drm/i915/display/intel_display_params.c
-index ca0ef466bb..dfdf3c5747 100644
+index ca0ef466b..dfdf3c574 100644
 --- a/drivers/gpu/drm/i915/display/intel_display_params.c
 +++ b/drivers/gpu/drm/i915/display/intel_display_params.c
 @@ -127,6 +127,14 @@ intel_display_param_named_unsafe(enable_dc_balance, bool, 0400,
@@ -59,7 +53,7 @@ index ca0ef466bb..dfdf3c5747 100644
  	"Replace PSR VBT parameters by the safest and not optimal ones. This "
  	"is helpful to detect if PSR issues are related to bad values set in "
 diff --git a/drivers/gpu/drm/i915/display/intel_display_params.h b/drivers/gpu/drm/i915/display/intel_display_params.h
-index 16759e94c0..40ce4dc0cd 100644
+index 16759e94c..40ce4dc0c 100644
 --- a/drivers/gpu/drm/i915/display/intel_display_params.h
 +++ b/drivers/gpu/drm/i915/display/intel_display_params.h
 @@ -48,6 +48,8 @@ struct drm_printer;
@@ -72,10 +66,10 @@ index 16759e94c0..40ce4dc0cd 100644
  	param(bool, enable_psr2_sel_fetch, true, 0400) \
  	param(int, enable_dmc_wl, -1, 0400) \
 diff --git a/drivers/gpu/drm/i915/display/intel_hdmi.c b/drivers/gpu/drm/i915/display/intel_hdmi.c
-index b9d11fb855..cb3d9db5e6 100644
+index 291811b6b..7831fd229 100644
 --- a/drivers/gpu/drm/i915/display/intel_hdmi.c
 +++ b/drivers/gpu/drm/i915/display/intel_hdmi.c
-@@ -557,6 +557,19 @@ void hsw_write_infoframe(struct intel_encoder *encoder,
+@@ -568,6 +568,19 @@ void hsw_write_infoframe(struct intel_encoder *encoder,
  
  	intel_de_write(display, ctl_reg, val);
  	intel_de_posting_read(display, ctl_reg);
