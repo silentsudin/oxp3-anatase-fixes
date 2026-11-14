@@ -9,7 +9,7 @@ RUN dnf -y install --setopt=install_weak_deps=False \
         dnf-plugins-core rpm-build rpmdevtools git-core redhat-rpm-config \
         python3-rpmautospec forge-srpm-macros \
         bc bison flex elfutils-libelf-devel openssl-devel openssl dwarves perl kmod \
-        rsync zstd xz cpio rust rust-src bindgen-cli clang lld llvm which wget \
+        rsync zstd xz cpio rust rust-src rustfmt bindgen-cli clang lld llvm which wget \
  && dnf -y install --skip-unavailable --setopt=install_weak_deps=False \
         glibc-devel.x86_64 libstdc++-devel.x86_64 libstdc++-static.x86_64 libatomic.x86_64 \
         libgcc.x86_64 vulkan-loader-devel.x86_64 wayland-devel.x86_64 libX11-devel.x86_64 \

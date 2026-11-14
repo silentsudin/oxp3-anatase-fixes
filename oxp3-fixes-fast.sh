@@ -124,10 +124,20 @@ _mpick() {
 # Build the XMX driver (Mesa 26.3.0 final + release CM + our patches) and write the
 # per-game ICD/environment. Runs during `build` as the invoking user.
 build_xmx_driver() {
-    local script=$here/tools/build-xmx-driver-263.sh
+    local script=$here/tools/build-xmx-driver-263.sh drv key
     [[ -x $script ]] || { echo "  no $script; XMX driver not built"; return 0; }
-    say "XMX driver: Mesa 26.3.0 final + CM + our patches (podman)"
-    "$script" --install || { echo "  WARNING: XMX driver build failed; per-game XMX stays unavailable"; return 0; }
+    drv="$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so"
+    key=$( { sha256sum "$script" 2>/dev/null || true
+             find "$here/patches/mesa-26.3" "$here/patches/mesa-26.3-backports" -type f -print 2>/dev/null | sort | xargs -r sha256sum
+             sha256sum "$here"/patches/mesa/0200*.patch "$here"/patches/mesa/0201*.patch "$here"/patches/mesa/0206*.patch 2>/dev/null || true
+           } | sha256sum | cut -c1-32 )
+    if cache_valid xmx-driver "$key" && [[ -f $drv ]]; then
+        echo "  XMX driver: build cached (${key:0:8})"
+    else
+        say "XMX driver: Mesa 26.3.0 final + CM + our patches (podman)"
+        "$script" --install || { echo "  WARNING: XMX driver build failed; per-game XMX stays unavailable"; return 0; }
+        cache_store xmx-driver "$key"
+    fi
     mkdir -p "$HOME/.config/xess-xmx"
     printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s","api_version":"1.4.0"}}\n' \
         "$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so" > "$HOME/.config/xess-xmx/icd-xmx.json"

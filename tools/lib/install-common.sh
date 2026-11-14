@@ -89,6 +89,56 @@ say() { printf '\n== %s\n' "$*"; }
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# Run one long build command with a visible heartbeat instead of a silent screen.
+# The command's output goes to <log>; a ticker shows elapsed time and the last log line.
+# Without a terminal (CI, pipes, tool calls) it behaves like a plain redirect, so logs stay clean.
+progress_run() { # <label> <log> <command...>
+    local label=$1 log=$2; shift 2
+    if [[ ! -t 2 ]]; then
+        "$@" > "$log" 2>&1
+        return $?
+    fi
+    local start=$SECONDS pid rc elapsed line bar lastline=""
+    "$@" > "$log" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        elapsed=$(( SECONDS - start ))
+        line=$(tail -n 1 "$log" 2>/dev/null | tr '\r' ' ' | tr -s ' ')
+        bar=""
+        if [[ $line =~ \[[[:space:]]*([0-9]+)/([0-9]+)\] ]]; then
+            local done=${BASH_REMATCH[1]} total=${BASH_REMATCH[2]} pct filled fill
+            (( total > 0 )) && pct=$(( done * 100 / total )) || pct=0
+            filled=$(( pct / 5 ))
+            fill=$(printf '%*s' "$filled" '' | tr ' ' '#')
+            bar=$(printf '[%-20s] %3d%% ' "$fill" "$pct")
+        fi
+        if [[ $line != "$lastline" ]]; then
+            lastline=$line
+            line=$(printf '%s' "$line" | cut -c1-100)
+        else
+            line=""
+        fi
+        printf '\r\033[K   [%3d:%02d] %s%s%s' \
+            $(( elapsed / 60 )) $(( elapsed % 60 )) "$bar" "$label" "${line:+ - $line}" >&2
+        sleep 5
+    done
+    if wait "$pid"; then rc=0; else rc=$?; fi
+    printf '\r\033[K' >&2
+    return "$rc"
+}
+
+# Per-component build cache: <OUT>/.cache/<name> holds the hash of every input that changes the
+# produced RPMs. A rerun with the same inputs skips the expensive build but never reuses output
+# from different patches, packaging or container image.
+cache_valid() { # <name> <key>
+    local f="$OUT/.cache/$1"
+    [[ -f $f && $(<"$f") == "$2" ]]
+}
+cache_store() { # <name> <key>
+    mkdir -p "$OUT/.cache"
+    printf '%s\n' "$2" > "$OUT/.cache/$1"
+}
+
 # The Anatase kernel in the current deployment (not necessarily the booted one).
 anatase_kver() { rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | head -1; }
 
@@ -460,7 +510,15 @@ fetch_anatase() {
 # build_card <name> <patch-line-regex> <patch files...>
 build_card() {
     local name=$1 anchor=$2; shift 2
-    local top="$CACHE/rpmbuild/$name" spec
+    local top="$CACHE/rpmbuild/$name" spec key
+    key=$( { git -C "$CACHE/anatase" rev-parse HEAD 2>/dev/null || true
+             find "$CACHE/anatase/cards/gaming/$name" -type f -print 2>/dev/null | sort | xargs -r sha256sum
+             sha256sum "$@" 2>/dev/null || true
+             sha256sum "$here/container/Containerfile" 2>/dev/null || true
+           } | sha256sum | cut -c1-32 )
+    if cache_valid "$name" "$key" && compgen -G "$OUT/$name-*.rpm" >/dev/null; then
+        echo "  $name: build cached (${key:0:8})"; return 0
+    fi
     rm -rf "$top"; mkdir -p "$top/SOURCES"
     cp -r "$CACHE/anatase/cards/gaming/$name/." "$top/SOURCES/"
     spec="$top/SOURCES/$name.spec"
@@ -480,14 +538,16 @@ build_card() {
     ctr spectool -g -C "$top/SOURCES" "$spec" >/dev/null
     ctr_root dnf -y -q builddep "$spec" >/dev/null 2>&1 || ctr_root dnf -y builddep --skip-unavailable "$spec" | tail -3
     say "$name $ver: x86_64"
-    ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3.$STAMP" -bb "$spec" > "$top/build.log" 2>&1 ||
+    progress_run "$name $ver: x86_64 build" "$top/build.log" \
+        ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3.$STAMP" -bb "$spec" ||
         { tail -30 "$top/build.log"; die "$name x86_64 build failed (full log: $top/build.log)"; }
     say "$name $ver: i686"
-    ctr bash -c "export PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/usr/share/pkgconfig; setarch i686 rpmbuild --target i686 --nodeps --define '_topdir $top' --define 'dist .fc$FEDORA.oxp3.$STAMP' -bb '$spec'" \
-        > "$top/build-i686.log" 2>&1 ||
+    progress_run "$name $ver: i686 build" "$top/build-i686.log" \
+        ctr bash -c "export PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/usr/share/pkgconfig; setarch i686 rpmbuild --target i686 --nodeps --define '_topdir $top' --define 'dist .fc$FEDORA.oxp3.$STAMP' -bb '$spec'" ||
         { tail -30 "$top/build-i686.log"; die "$name i686 build failed (full log: $top/build-i686.log)"; }
     rm -f "$OUT/$name"-*.rpm
     find "$top/RPMS" -name "$name-$ver-*.rpm" ! -name '*debug*' -exec cp {} "$OUT/" \;
+    cache_store "$name" "$key"
     ls "$OUT/$name"-*.rpm
 }
 
@@ -497,7 +557,11 @@ build_card() {
 # ---------------------------------------------------------------------------------------------
 
 build_xess() {
-    local dl="$CACHE/xess" stage="$OUT/xess-xmx" zip src entry name sha
+    local dl="$CACHE/xess" stage="$OUT/xess-xmx" zip src entry name sha key
+    key=$(printf '%s\n' "$XESS_COMMIT" "$XESS_ZIP_SHA" "$XESS_DLLS" | sha256sum | cut -c1-32)
+    if cache_valid xess "$key" && [[ -d $stage ]]; then
+        echo "  XeSS XMX: build cached (${key:0:8})"
+    else
     mkdir -p "$dl"
     say "XeSS XMX: fork ${XESS_COMMIT:0:8} + release DLLs"
     zip="$dl/${XESS_ZIP_URL##*/}"
@@ -516,6 +580,8 @@ build_xess() {
         [[ $(sha256sum "$stage/$name" | cut -d' ' -f1) == "$sha" ]] || die "$name in the release zip has an unexpected checksum"
     done
     echo "  $stage"
+    cache_store xess "$key"
+    fi
     if [[ -n ${OXP3_XMX_DRIVER_HOOK:-} ]]; then
         "$OXP3_XMX_DRIVER_HOOK"
     fi
@@ -575,9 +641,38 @@ xmx_override_file() { echo "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak/overrid
 
 # Apply patches/kernel/*.patch in order. A patch Anatase already carries is skipped, one that
 # neither applies nor is already there stops the build. Prints the number applied.
+# A backport can already be in the base kernel while changes around it make `git apply -R`
+# fail (7.3.4 carries several 7.2.7 backports). Treat the patch as present when the first
+# distinctive added line is already in its target file; these are our own, uniquely worded
+# patches, so this is not ambiguous.
+patch_body_present() {
+    local src=$1 p=$2 file line
+    file=$(sed -n 's|^+++ b/||p' "$p" | head -1)
+    [[ -n $file && -r $src/$file ]] || return 1
+    # Check several distinctive added lines: later backports (e.g. the shrinker series) often
+    # change a signature the first line happens to be, while the body is unmistakably present.
+    while IFS= read -r line; do
+        [[ -n $line ]] || continue
+        grep -Fq -- "$line" "$src/$file" 2>/dev/null && return 0
+    done < <(awk '/^\+[^+]/ {
+        s = substr($0, 2)
+        if (length(s) > 18 && (s ~ /\(/ || s ~ /=/)) { print s; n++; if (n == 8) exit }
+    }' "$p")
+    return 1
+}
+
 apply_kernel_patches() {
     local src=$1 p n=0 skipped=()
     for p in "$here"/patches/kernel/*.patch; do
+        # A rerun against a cached source tree must recognise commits it already made even
+        # when later patches changed the reverse-apply context. Subject match is sufficient
+        # here: these are our own, uniquely named commits.
+        local subj
+        subj=$(sed -n 's/^Subject: \(\[PATCH[^]]*\] \)\{0,1\}//p' "$p" | head -1)
+        if git -C "$src" log --all --format=%s 2>/dev/null | grep -Fqx -- "$subj"; then
+            skipped+=( "$(basename "$p")" )
+            continue
+        fi
         if git -C "$src" -c user.name=oxp3-fixes -c user.email=oxp3-fixes@localhost am -q -3 "$p" >/dev/null 2>&1; then
             # git am succeeds without a commit when the change is already there
             if [[ $(git -C "$src" log -1 --format=%s) == "$(sed -n 's/^Subject: \(\[PATCH[^]]*\] \)\{0,1\}//p' "$p" | head -1)"* ]]; then
@@ -587,9 +682,23 @@ apply_kernel_patches() {
             fi
         else
             git -C "$src" am --abort >/dev/null 2>&1 || true
+            rm -rf "$src/.git/rebase-apply"
             if git -C "$src" apply --check -R "$p" >/dev/null 2>&1; then
                 skipped+=( "$(basename "$p")" )
+            elif patch_body_present "$src" "$p"; then
+                skipped+=( "$(basename "$p")" )
+            # --3way needs the patch's original blobs; a shallow Anatase clone often lacks
+            # them even when the plain context applies (e.g. 0107 on 7.3.4). Try the plain
+            # mailbox application before declaring the patch stale.
+            elif git -C "$src" -c user.name=oxp3-fixes -c user.email=oxp3-fixes@localhost am -q "$p" >/dev/null 2>&1; then
+                if [[ $(git -C "$src" log -1 --format=%s) == "$(sed -n 's/^Subject: \(\[PATCH[^]]*\] \)\{0,1\}//p' "$p" | head -1)"* ]]; then
+                    n=$((n + 1))
+                else
+                    skipped+=( "$(basename "$p")" )
+                fi
             else
+                git -C "$src" am --abort >/dev/null 2>&1 || true
+                rm -rf "$src/.git/rebase-apply"
                 die "kernel patch $(basename "$p") doesn't apply to this kernel - it needs updating"
             fi
         fi
@@ -607,6 +716,16 @@ build_kmods() {
     [[ -r $MOK_DIR/MOK.key && -r $MOK_DIR/MOK.der ]] ||
         die "MOK key not found in $MOK_DIR (see README: Secure Boot key), or use --skip-kernel"
     src="$CACHE/kernel/src-$tag"; kb="$CACHE/kernel/build-$tag"
+
+    local key
+    key=$( { echo "$tag $kver"
+             sha256sum "$here"/patches/kernel/*.patch 2>/dev/null || true
+             printf '%s\n' "${KMODS[@]}"
+             sha256sum "$cfg" "$MOK_DIR/MOK.der" "$here/container/Containerfile" 2>/dev/null || true
+           } | sha256sum | cut -c1-32 )
+    if cache_valid "$KMOD_NAME" "$key" && compgen -G "$OUT/$KMOD_NAME-*.rpm" >/dev/null; then
+        echo "  kernel $kver: build cached (${key:0:8})"; return 0
+    fi
 
     say "kernel $kver: source (anatase-org/patchwork tag $tag)"
     if [[ ! -d $src/.git ]]; then
@@ -645,9 +764,10 @@ build_kmods() {
     # but the running kernel lacks shows up here instead of as a module that won't load.
     [[ -r /usr/lib/modules/$kver/symvers.xz ]] || die "no /usr/lib/modules/$kver/symvers.xz"
     xz -dc "/usr/lib/modules/$kver/symvers.xz" > "$kb/Module.symvers"
-    ctr bash -c "cd '$src' && make -s O='$kb' KERNELRELEASE='$kver' olddefconfig &&
+    progress_run "kernel $kver: modules" "$kb/build.log" \
+        ctr bash -c "cd '$src' && make -s O='$kb' KERNELRELEASE='$kver' olddefconfig &&
         make -s O='$kb' KERNELRELEASE='$kver' -j\$(nproc) modules_prepare $make_m" \
-        > "$kb/build.log" 2>&1 || { tail -30 "$kb/build.log"; die "module build failed (full log: $kb/build.log)"; }
+        || { tail -30 "$kb/build.log"; die "module build failed (full log: $kb/build.log)"; }
     local undef; undef=$(grep -E 'modpost: ".*" \[.*\] undefined!' "$kb/build.log" || true)
     [[ -z $undef ]] || { echo "$undef" | head -20; die "modules need kernel symbols $kver doesn't export"; }
 
@@ -712,6 +832,7 @@ EOF
         { tail -20 "$top/build.log"; die "kmod packaging failed"; }
     rm -f "$OUT"/kmod-oxp3-*.rpm
     find "$top/RPMS" -name "$KMOD_NAME-*.rpm" -exec cp {} "$OUT/" \;
+    cache_store "$KMOD_NAME" "$key"
     ls "$OUT/$KMOD_NAME"-*.rpm
 }
 
@@ -728,7 +849,13 @@ sys_fw_sha() {
 }
 
 build_firmware() {
-    local stage="$CACHE/firmware/stage" entry path url sha kind f files=()
+    local stage="$CACHE/firmware/stage" entry path url sha kind f files=() key
+    key=$( { printf '%s\n' "${FIRMWARE[@]}"; echo "skip_dmc=$SKIP_DMC"
+             sha256sum "$here/container/Containerfile" 2>/dev/null || true
+           } | sha256sum | cut -c1-32 )
+    if cache_valid "$FW_NAME" "$key"; then
+        echo "  firmware: build cached (${key:0:8})"; return 0
+    fi
     rm -rf "$stage"; mkdir -p "$stage" "$CACHE/firmware/dl"
     say "firmware: pinned files"
     for entry in "${FIRMWARE[@]}"; do
@@ -755,7 +882,7 @@ build_firmware() {
         files+=( "$path" ); echo "  $path"
     done
     rm -f "$OUT/$FW_NAME"-*.rpm
-    if (( ${#files[@]} == 0 )); then echo "  nothing newer than Anatase's firmware"; return 0; fi
+    if (( ${#files[@]} == 0 )); then echo "  nothing newer than Anatase's firmware"; cache_store "$FW_NAME" "$key"; return 0; fi
 
     local top="$CACHE/rpmbuild/$FW_NAME" rel; rel=$(date +%Y%m%d%H%M)
     rm -rf "$top"; mkdir -p "$top/SOURCES" "$top/SPECS"
@@ -787,6 +914,7 @@ EOF
     ctr rpmbuild --define "_topdir $top" -bb "$top/SPECS/$FW_NAME.spec" > "$top/build.log" 2>&1 ||
         { tail -20 "$top/build.log"; die "firmware packaging failed"; }
     find "$top/RPMS" -name "$FW_NAME-*.rpm" -exec cp {} "$OUT/" \;
+    cache_store "$FW_NAME" "$key"
     ls "$OUT/$FW_NAME"-*.rpm
 }
 

@@ -28,7 +28,7 @@ and 26 + 11 = 37. Both numbers describe the same code; this table is the complet
 
 ### Moved (37, now defined once in `tools/lib/install-common.sh`)
 
-`say`, `die`, `anatase_kver`, `ctr`, `ctr_root`, `ensure_container`, `fetch_anatase`,
+`say`, `die`, `progress_run`, `anatase_kver`, `ctr`, `ctr_root`, `ensure_container`, `fetch_anatase`,
 `build_card`, `build_xess`, `seed_xess_compiler`, `install_xess`, `uninstall_xess`, `status_xess`,
 `xmx_override_file`, `apply_kernel_patches`, `build_kmods`, `ucode_rev`, `sys_fw`, `sys_fw_sha`,
 `build_firmware`, `do_build`, `mok_cn`, `mok_usage_ok`, `mok_trusted`, `do_mok_setup`,
@@ -104,7 +104,10 @@ takes it itself; no function here creates, waits for or removes one.
 
 **Logging.** `say()` prints `"\n== <message>"` to stdout as a phase heading; `die()` prints
 `"error: <message>"` to stderr and exits 1; helpers print indented detail to stdout and warnings to
-stderr. Nothing is written to a file or syslog from the library.
+stderr. `progress_run` is the one interactive helper: it redirects one long build to its log and
+prints an elapsed-time heartbeat with the last log line to stderr while a terminal is attached
+(plain redirect without a TTY, so CI logs stay clean). Nothing is written to a file or syslog
+from the library.
 
 ## 4. Before / after size
 

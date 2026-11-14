@@ -103,7 +103,15 @@ MESA_I686_DEVEL="llvm-devel.i686 clang-devel.i686 spirv-llvm-translator-devel.i6
     xz-devel.i686 ncurses-devel.i686 libuuid-devel.i686 libclc22-devel.i686"
 
 build_mesa() {
-    local top="$CACHE/rpmbuild/mesa" spec tarball="$CACHE/mesa/mesa-$MESA_COMMIT.tar.gz"
+    local top="$CACHE/rpmbuild/mesa" spec tarball="$CACHE/mesa/mesa-$MESA_COMMIT.tar.gz" key
+    key=$( { echo "$MESA_VERSION $MESA_COMMIT"
+             find "$CACHE/anatase/cards/drivers/mesa" -type f -print 2>/dev/null | sort | xargs -r sha256sum
+             sha256sum "$here"/patches/mesa/*.patch 2>/dev/null || true
+             sha256sum "$here/container/Containerfile" 2>/dev/null || true
+           } | sha256sum | cut -c1-32 )
+    if cache_valid mesa "$key" && compgen -G "$OUT/mesa-*.rpm" >/dev/null; then
+        echo "  mesa: build cached (${key:0:8})"; return 0
+    fi
     rm -rf "$top"; mkdir -p "$top/SOURCES" "$CACHE/mesa"
     cp -r "$CACHE/anatase/cards/drivers/mesa/." "$top/SOURCES/"
     spec="$top/SOURCES/mesa.spec"
@@ -163,12 +171,11 @@ if '01-radv-performance.conf' not in s and os.environ.get('OXP3_HAS_RADV_PERF', 
 s, n = re.subn(r'(?m)^%global with_panfrost\s+1$', '%undefine with_panfrost', s)
 if n != 1:
     sys.exit("mesa.spec: expected one with_panfrost global")
-# the panfrost Vulkan driver comes in through with_vulkan_hw (broadcom/freedreno/panfrost/
-# imagination). Its kraid Rust compiler needs the same crate wrap, so drop that set; this is an
-# Intel machine and the intel_platform_vulkan driver is separate.
-# with_vulkan_hw is also used in a bare %if, so it cannot be undefined; set it to 0 and empty the
-# driver list it feeds, which is what actually pulls in the panfrost Vulkan driver.
-s, n = re.subn(r'(?m)^%global with_vulkan_hw\s+1$', '%global with_vulkan_hw 0', s)
+# Keep with_vulkan_hw enabled: the spec's %files sections gate libvulkan_intel/amd/asahi and
+# the Vulkan ICDs on it, so setting it to 0 builds those files but leaves them unpackaged.
+# The panfrost/kraid Rust compiler comes from extra_platform_vulkan, which is emptied below
+# (and with_panfrost is undefined); with_nvk is undefined for the same reason.
+s, n = re.subn(r'(?m)^%global with_vulkan_hw\s+[01]$', '%global with_vulkan_hw 1', s)
 s, n = re.subn(r'(?m)^%global with_nvk .*$', '%undefine with_nvk', s)
 if n != 1:
     sys.exit("mesa.spec: expected one with_nvk global")
@@ -178,6 +185,22 @@ if n != 1:
 s, n = re.subn(r'(?m)^%global extra_platform_vulkan .*$', '%global extra_platform_vulkan %{nil}', s)
 if n != 1:
     sys.exit("mesa.spec: expected one extra_platform_vulkan global")
+# Dropping extra_platform_vulkan leaves the Vulkan drivers it would have built out of the
+# package, but the spec lists their files unconditionally under the x86 arch block. Remove
+# those file entries because this machine builds only swrast/amd/intel/intel_hasvk/asahi
+# (plus dzn); the panfrost/powervr Rust kernels are deliberately not built.
+for block in (
+    "%{_libdir}/libvulkan_broadcom.so\n%{_datadir}/vulkan/icd.d/broadcom_icd.*.json\n%{_datadir}/drirc.d/00-v3dv-defaults.conf\n",
+    "%{_libdir}/libvulkan_freedreno.so\n%{_datadir}/vulkan/icd.d/freedreno_icd.*.json\n%{_datadir}/drirc.d/00-turnip-defaults.conf\n",
+    "%{_libdir}/libvulkan_panfrost.so\n%{_datadir}/vulkan/icd.d/panfrost_icd.*.json\n%{_datadir}/drirc.d/00-panvk-defaults.conf\n",
+    "%{_libdir}/libvulkan_powervr_mesa.so\n%{_datadir}/vulkan/icd.d/powervr_mesa_icd.*.json\n%{_datadir}/drirc.d/00-pvr-defaults.conf\n",
+):
+    s, n = re.subn(re.escape(block), "", s)
+    if n != 1:
+        sys.exit("mesa.spec: expected one dropped-driver file block")
+# with_vulkan_hw also builds zink's VA-API driver; the spec only lists zink_dri.so.
+rep("%{_libdir}/dri/zink_dri.so\n%{_datadir}/drirc.d/00-zink-defaults.conf\n",
+    "%{_libdir}/dri/zink_dri.so\n%{_libdir}/dri/zink_drv_video.so\n%{_datadir}/drirc.d/00-zink-defaults.conf\n")
 # i686: no rusticl/NVK (no i686 Rust std), and meson must use the 32-bit llvm-config
 # (Fedora installs it as /usr/lib/llvmNN/bin/llvm-config)
 rep('%global vulkan_drivers ', '%ifarch %{ix86}\n%undefine with_opencl\n%undefine with_nvk\n%endif\n\n%global vulkan_drivers ')
@@ -201,14 +224,16 @@ EOF
     ctr_root dnf -y -q install --skip-unavailable $MESA_I686_DEVEL >/dev/null 2>&1 || true
 
     say "mesa $MESA_VERSION: x86_64 (20-30 min)"
-    ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3.$STAMP" -bb "$spec" > "$top/build.log" 2>&1 ||
+    progress_run "mesa $MESA_VERSION: x86_64 build" "$top/build.log" \
+        ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3.$STAMP" -bb "$spec" ||
         { tail -30 "$top/build.log"; die "mesa x86_64 build failed (full log: $top/build.log)"; }
     say "mesa $MESA_VERSION: i686 (20-30 min)"
-    ctr bash -c "export PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/usr/share/pkgconfig; setarch i686 rpmbuild --target i686 --nodeps --define '_topdir $top' --define 'dist .fc$FEDORA.oxp3.$STAMP' -bb '$spec'" \
-        > "$top/build-i686.log" 2>&1 ||
+    progress_run "mesa $MESA_VERSION: i686 build" "$top/build-i686.log" \
+        ctr bash -c "export PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/usr/share/pkgconfig; setarch i686 rpmbuild --target i686 --nodeps --define '_topdir $top' --define 'dist .fc$FEDORA.oxp3.$STAMP' -bb '$spec'" ||
         { tail -30 "$top/build-i686.log"; die "mesa i686 build failed (full log: $top/build-i686.log)"; }
     rm -f "$OUT"/mesa-*.rpm
     find "$top/RPMS" -name 'mesa-*.rpm' ! -name '*debug*' ! -name '*-devel-*' -exec cp {} "$OUT/" \;
+    cache_store mesa "$key"
     ls "$OUT"/mesa-*.rpm
 }
 
@@ -239,10 +264,20 @@ XESS_PKG=${OXP3_XESS_DIR:-$HOME/.local/share/xess-xmx}
 # Build the XMX driver (Mesa 26.3.0 final + vendored CM + our patches) and write the
 # per-game ICD/environment; the fast variant has the same hook.
 build_xmx_driver() {
-    local script=$here/tools/build-xmx-driver-263.sh
+    local script=$here/tools/build-xmx-driver-263.sh drv key
     [[ -x $script ]] || { echo "  no $script; XMX driver not built"; return 0; }
-    say "XMX driver: Mesa 26.3.0 final + CM + our patches (podman)"
-    "$script" --install || { echo "  WARNING: XMX driver build failed; per-game XMX stays unavailable"; return 0; }
+    drv="$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so"
+    key=$( { sha256sum "$script" 2>/dev/null || true
+             find "$here/patches/mesa-26.3" "$here/patches/mesa-26.3-backports" -type f -print 2>/dev/null | sort | xargs -r sha256sum
+             sha256sum "$here"/patches/mesa/0200*.patch "$here"/patches/mesa/0201*.patch "$here"/patches/mesa/0206*.patch 2>/dev/null || true
+           } | sha256sum | cut -c1-32 )
+    if cache_valid xmx-driver "$key" && [[ -f $drv ]]; then
+        echo "  XMX driver: build cached (${key:0:8})"
+    else
+        say "XMX driver: Mesa 26.3.0 final + CM + our patches (podman)"
+        "$script" --install || { echo "  WARNING: XMX driver build failed; per-game XMX stays unavailable"; return 0; }
+        cache_store xmx-driver "$key"
+    fi
     mkdir -p "$HOME/.config/xess-xmx"
     printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s","api_version":"1.4.0"}}\n' \
         "$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so" > "$HOME/.config/xess-xmx/icd-xmx.json"
