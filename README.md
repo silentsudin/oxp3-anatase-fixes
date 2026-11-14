@@ -5,8 +5,8 @@ Everything needed to make a **OneXPlayer 3** (Intel Panther Lake, Arc B390, `xe`
 can actually deliver, usable controls/audio/sleep, real XeSS XMX upscaling, and a live status panel.
 
 The repo rebuilds Anatase's own packages from source and adds a small, reviewable patch set; no
-vendor binaries are vendored and every change is reversible. It is maintained against Anatase
-"rolling" on OXP3.
+vendor binaries are vendored and every change is reversible. It is validated on the **Anatase
+Stable** channel for OXP3 (see the required version below).
 
 **Install in two commands:**
 
@@ -71,8 +71,54 @@ bluetooth/IMU edge cases are documented. See [docs/hw/README.md](docs/hw/README.
 
 ## Install
 
+### Required Anatase version
+
+Use **Anatase Stable `20261109.7`** (release `stable-20261109.7`, published 2026-11-12), image:
+
+```
+i.anatase.org/anatase:stable
+sha256:8069bddc50d12483cf25a3bb2e1b04c2d628912aa1864f18b0604d4b8c1c3c86
+```
+
+This is the version the current kernel/firmware and package patches are verified against. A newer
+Stable release should work, but re-run the installer after updating and check
+`tools/check-working.sh`.
+
+Check what you are on:
+
+```sh
+cat /etc/os-release | grep -E '^(NAME|VERSION)='
+rpm-ostree status --booted | grep -E 'Version|Digest|Unverified'
+```
+
+#### Install Anatase (new device)
+
+1. Download the **Stable installation ISO** from <https://anatase.org/#download> (8 GB+ USB stick).
+2. Flash it with balenaEtcher/Rufus (Windows), KDE ISO Image Writer (Linux), or Ventoy.
+3. Boot the stick, enrol the **Anatase MOK key** when Secure Boot asks (a keyboard is required on
+   OXP3), then run **Install Anatase**. Use *Share Disk* for dual-boot or *Use the entire drive* for
+   a dedicated install.
+4. After the first boot, run the commands above and make sure the Stable channel/version matches.
+
+#### Update an existing Anatase install
+
+```sh
+sudo bootc update
+systemctl reboot
+```
+
+To move a different channel/rebase onto Stable:
+
+```sh
+sudo bootc switch i.anatase.org/anatase:stable
+systemctl reboot
+```
+
+Do not use the Testing/Rolling channel with this repo; the exact kernel and package pins matter.
+
 ### Requirements
-- A **OneXPlayer 3** running Anatase (rpm-ostree, Fedora-based), fully updated and rebooted.
+- A **OneXPlayer 3** running the Stable Anatase version above (rpm-ostree/bootc, Fedora-based),
+  fully updated and rebooted.
 - `podman`, `git`, ~8 GB free disk and network for the first build.
 - A normal user account with `sudo` (run the script as that user, not as root).
 - Optional: Decky Loader (for the status plugin), Steam (for XMX launch options and the plugin).
@@ -107,6 +153,28 @@ Secure Boot stays enabled.
 This installs the overlay stack (gamescope, Mesa, MangoHud, XMX env), applies the hardware fixes
 (volume/LEDs/RGB/sleep/Bluetooth/power/IMU/audio/Decky), and runs the verification suite.
 
+#### Harman APO speaker tuning (the only prompt)
+
+During the audio step the installer asks:
+
+```text
+Path to the Harman APO files (folder, .zip or GA18v3.reg) [~/Downloads/Harmon APO]:
+leave blank to skip the vendor EQ:
+```
+
+Point it at the **Harman APO files you downloaded** — the extracted vendor folder, a `.zip` of that
+folder, or just `GA18v3.reg`. **No Windows installation is required.** The installer:
+
+1. SHA-256-checks the files against the validated OneXPlayer 3 package:
+   `GA18v3.reg 32cfd82c…`, `AudioEFXService64.exe e4c28d17…`, `AudioEFXAPO64.dll 72e65578…`;
+2. extracts them only on your machine under
+   `~/.local/state/oxp3/audio/harman/`;
+3. generates the speaker EQ from your own extracted preset and installs it.
+
+Leave the prompt blank to keep the recorded reproduction. For automation, add
+`--harman PATH` to the **second** run (or to the first, which remembers it for the second);
+`--harman-force` accepts a different vendor revision, and `--no-harman` skips without prompting.
+
 Then leave and re-enter **Gamemode** once.
 
 ### Post-install
@@ -137,6 +205,9 @@ minutes); later launches are normal. Enable XeSS in the game's own graphics menu
 | `--skip-mok` | install without kernel modules (no signing key) |
 | `--uninstall` | remove everything and restore backed-up files |
 | `--force` | recreate/queue the MOK key |
+| `--harman PATH` | use downloaded Harman APO folder/zip/reg (remembered across runs) |
+| `--harman-force` | accept an unvalidated Harman vendor revision |
+| `--no-harman` | skip the vendor EQ prompt |
 
 Prefer driving each stage yourself? The underlying commands are still documented in
 [docs/INSTALL-HW.md](docs/INSTALL-HW.md) and `./oxp3-fixes.sh --help`.

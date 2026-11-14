@@ -68,6 +68,9 @@ BT_ARGS=(--persist=items)
 POWER_ARGS=()
 DECKY_ARTIFACT=""
 DECKY_RESTART=0
+HARMAN_PATH=""
+NO_HARMAN=0
+HARMAN_FORCE=0
 VOLUME_MODE=plugin
 SELECTED=()
 TARGET_USER=""
@@ -110,6 +113,9 @@ Options:
                             installers that write to / are skipped, systemd/udev are not run)
   --user NAME               user whose user-scope files are installed/removed (default: SUDO_USER)
   --audio-activate          after --audio, run tools/audio/eq-on.sh (restarts the user PipeWire)
+  --harman PATH             use the user's downloaded Harman APO folder/zip/GA18v3.reg
+  --harman-force            accept an unvalidated Harman vendor revision
+  --no-harman               skip the vendor EQ without prompting
   --imu-reload              after --imu, reload bmi160_i2c/bmi260_i2c now instead of next boot
   --fan-curve               pass --fan-curve to tools/oxp3-power-install.sh (opt-in fan daemon)
   --adaptive-tdp            pass --adaptive-tdp to tools/oxp3-power-install.sh (installed inactive)
@@ -783,7 +789,11 @@ comp_rgb_install() {
 
 comp_audio_install() {
     say "speaker EQ (user scope, no root)"
-    as_user_run "$repo/tools/audio/install-user.sh"
+    local args=()
+    [ -n "$HARMAN_PATH" ] && args+=(--harman "$HARMAN_PATH")
+    (( HARMAN_FORCE )) && args+=(--harman-force)
+    (( NO_HARMAN )) && args+=(--no-harman)
+    as_user_run "$repo/tools/audio/install-user.sh" "${args[@]}"
     if (( AUDIO_ACTIVATE )) && [[ -z $PREFIX ]]; then
         as_user_run "$repo/tools/audio/eq-on.sh" ||
             warn "the EQ drop-in is installed; run tools/audio/eq-on.sh after logging in"
@@ -1477,6 +1487,10 @@ while (( $# )); do
         --user) [[ $# -ge 2 ]] || die "--user needs a name"; TARGET_USER=$2; shift ;;
         --user=*) TARGET_USER=${1#*=} ;;
         --audio-activate) AUDIO_ACTIVATE=1 ;;
+        --harman) [[ $# -ge 2 ]] || die "--harman needs a path"; HARMAN_PATH=$2; shift ;;
+        --harman=*) HARMAN_PATH=${1#*=} ;;
+        --no-harman) NO_HARMAN=1 ;;
+        --harman-force) HARMAN_FORCE=1 ;;
         --imu-reload) IMU_RELOAD=1 ;;
         --fan-curve) POWER_ARGS+=(--fan-curve) ;;
         --adaptive-tdp) POWER_ARGS+=(--adaptive-tdp) ;;

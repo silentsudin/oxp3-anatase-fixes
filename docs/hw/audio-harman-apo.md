@@ -245,6 +245,23 @@ with stage 2 enabled.
 
 Install / switch (user scope, no root, no host changes):
 
+The installer can use the user's own downloaded vendor package instead of the
+recorded reproduction.  It prompts for the folder, `.zip` or `GA18v3.reg` (or
+pass `--harman`); no Windows install is required if the downloaded APO package
+contains `GA18v3.reg`.
+
+```bash
+tools/audio/install-user.sh --harman "/path/to/Harmon APO"   # folder or GA18v3.reg
+tools/audio/install-user.sh                                   # prompts for the path
+tools/audio/install-user.sh --harman-force ...                # unvalidated vendor revision
+```
+
+The importer verifies SHA-256 against the validated OneXPlayer 3 package
+(`GA18v3.reg 32cfd82c…`, `AudioEFXService64.exe e4c28d17…`,
+`AudioEFXAPO64.dll 72e65578…`), extracts to
+`~/.local/state/oxp3/audio/harman/`, and generates the drop-in from it.  With
+`--no-harman` (or a blank prompt) it falls back to the recorded reproduction.
+
 ```bash
 tools/audio/install-user.sh          # loud default (-4 dB) + ALSA gain + boot unit
 tools/audio/install-user.sh --safe   # same, safe -8 dB profile

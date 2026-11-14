@@ -8,6 +8,11 @@
 #   install-user.sh --safe        safe profile (shelf -8 dB, cannot clip, quieter)
 #   install-user.sh --undo        restore the previous drop-in and remove our files
 #   install-user.sh --print-profile   print "<profile> <headroom_db>" and exit
+#   install-user.sh --harman PATH     use the user's own Harman APO folder/GA18v3.reg
+#   install-user.sh                   (interactive) prompts for the Harman path
+#   install-user.sh --no-harman       use the recorded reproduction without a prompt
+#   install-user.sh --harman-force    accept an unvalidated vendor revision (hash check)
+#   install-user.sh --dry-run         verify/extract and print what would be installed
 #
 # What it installs:
 #   ~/.config/pipewire/pipewire.conf.d/51-oxp3-speaker-eq.conf   the chain
@@ -32,6 +37,10 @@ backup=$statedir/51-oxp3-speaker-eq.conf.bak
 
 profile=loud
 action=install
+harman_path=${OXP3_HARMAN_PATH:-}
+harman_force=0
+no_harman=0
+dry_run=0
 while [ "$#" -gt 0 ]; do
     case $1 in
         --loud) profile=loud ;;
@@ -41,6 +50,11 @@ while [ "$#" -gt 0 ]; do
             shift
             [ "$#" -gt 0 ] || { echo "install-user.sh: --profile needs a value" >&2; exit 2; }
             profile=$1 ;;
+        --harman) shift; harman_path=${1:-} ;;
+        --harman=*) harman_path=${1#--harman=} ;;
+        --harman-force) harman_force=1 ;;
+        --no-harman) no_harman=1 ;;
+        --dry-run) dry_run=1 ;;
         --undo) action=undo ;;
         --print-profile) action=print-profile ;;
         -h|--help)
@@ -79,6 +93,38 @@ model_headroom() {
 if [ "$action" = print-profile ]; then
     gain=$(model_headroom "$profile")
     printf '%s %s\n' "$profile" "$gain"
+    exit 0
+fi
+
+template=$here/oxp3-speaker-eq.conf
+if [ "$action" = install ] && (( ! no_harman )); then
+    if [ -z "$harman_path" ] && [ -t 0 ]; then
+        default_harman=""
+        for d in "$HOME/Downloads/Harmon APO" "$HOME/Downloads/oxp3/Harmon APO" \
+                 "$HOME/Downloads/oxp3/harmon" "$HOME/.local/share/oxp3-fixes/harman"; do
+            [ -d "$d" ] && { default_harman=$d; break; }
+        done
+        printf 'Harman APO folder or GA18v3.reg%s: ' "${default_harman:+ [$default_harman]}"
+        IFS= read -r answer || answer=""
+        if [ -z "$answer" ]; then harman_path=$default_harman; else harman_path=$answer; fi
+    fi
+    if [ -n "$harman_path" ]; then
+        import_args=(--path "$harman_path" --profile "$profile")
+        (( harman_force )) && import_args+=(--force)
+        if bash "$here/harman-import.sh" "${import_args[@]}"; then
+            template=$statedir/harman/oxp3-speaker-eq.generated.conf
+        else
+            echo "install-user.sh: Harman import failed; refusing to install a different EQ" >&2
+            exit 1
+        fi
+    else
+        echo "warning: no Harman APO supplied; using the recorded reproduction in tools/audio/oxp3-speaker-eq.conf" >&2
+        echo "  next time: tools/audio/install-user.sh --harman '/path/to/Harmon APO'" >&2
+    fi
+fi
+
+if [ "$action" = install ] && (( dry_run )); then
+    echo "dry-run: would install from $template"
     exit 0
 fi
 
@@ -121,7 +167,7 @@ fi
 gain=$(model_headroom "$profile")
 mkdir -p "$confdir" "$unitdir" "$libexec" "$statedir"
 
-sink=$(pactl list sinks short 2>/dev/null | awk '/HiFi__Speaker__sink/ {print $2; exit}')
+sink=$(pactl list sinks short 2>/dev/null | awk '/HiFi__Speaker__sink/ {print $2; exit}' || true)
 if [ -z "${sink:-}" ]; then
     echo "warning: no HiFi__Speaker__sink found; keeping the name baked into the config" >&2
     sink="alsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Speaker__sink"
@@ -150,7 +196,7 @@ tmp=$dst.tmp.$$
     printf '# oxp3-profile: %s (headroom %s dB)\n' "$profile" "$gain"
     sed -e "s|^\( *node.target *= *\).*|\1\"$sink\"|" \
         -e "s|\(\"Freq\" = 20000 \"Q\" = 0.7 \"Gain\" = \)-\?[0-9.]*|\1$gain|" \
-        "$here/oxp3-speaker-eq.conf"
+        "$template"
 } >"$tmp"
 if ! grep -q "\"Gain\" = $gain" "$tmp"; then
     rm -f "$tmp"

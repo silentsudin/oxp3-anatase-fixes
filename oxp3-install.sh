@@ -13,7 +13,7 @@
 # enrolment + reboot, and the next run continues.
 #
 # Options: --dry-run  --status  --skip-build  --skip-hw  --skip-mok  --skip-verify
-#          --uninstall  --force
+#          --uninstall  --force  --harman PATH|--harman-force|--no-harman
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -24,6 +24,7 @@ out=$cache/out
 mok_dir=${OXP3_MOK_DIR:-$HOME/.local/share/oxp3-fixes/mok}
 
 DRY=0 SKIP_BUILD=0 SKIP_HW=0 SKIP_MOK=0 SKIP_VERIFY=0 FORCE=0 ACTION=install
+HARMAN_PATH=${OXP3_HARMAN_PATH:-} NO_HARMAN=0 HARMAN_FORCE=0
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
 warn() { printf '   warning: %s\n' "$*" >&2; }
@@ -37,8 +38,8 @@ usage() {
     exit 2
 }
 
-for arg in "$@"; do
-    case $arg in
+while (( $# )); do
+    case $1 in
         --dry-run) DRY=1 ;;
         --status) ACTION=status ;;
         --uninstall) ACTION=uninstall ;;
@@ -47,10 +48,21 @@ for arg in "$@"; do
         --skip-mok) SKIP_MOK=1 ;;
         --skip-verify) SKIP_VERIFY=1 ;;
         --force) FORCE=1 ;;
+        --harman) [[ $# -ge 2 ]] || { echo "--harman needs a path" >&2; usage; }; HARMAN_PATH=$2; shift ;;
+        --harman=*) HARMAN_PATH=${1#*=} ;;
+        --no-harman) NO_HARMAN=1 ;;
+        --harman-force) HARMAN_FORCE=1 ;;
         -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *) echo "unknown option: $arg" >&2; usage ;;
+        *) echo "unknown option: $1" >&2; usage ;;
     esac
+    shift
 done
+
+# Remember a path supplied on the first (pre-reboot) run; the second run then
+# does not prompt again.
+if [ -n "$HARMAN_PATH" ] && [ -e "$HARMAN_PATH" ]; then
+    mkdir -p "$state_dir"; printf '%s\n' "$(readlink -f -- "$HARMAN_PATH")" >"$state_dir/harman-path" 2>/dev/null || true
+fi
 
 [[ $ACTION == install ]] && (( EUID != 0 )) || true
 
@@ -100,6 +112,45 @@ show_status() {
     info "build artifacts: $(have_artifacts && echo present || echo missing) ($out)"
     info "Steam library: $(steam_present && echo present || echo missing)"
     [[ -x $here/tools/check-working.sh ]] && { $here/tools/check-working.sh 2>/dev/null | tail -n +1 | head -12; }
+}
+
+# ---- Harman APO input (user-owned files; no vendor data in the repo) ---------------
+harman_default() {
+    local d
+    for d in "$HOME/Downloads/Harmon APO" "$HOME/Downloads/harmon apo" \
+             "$HOME/Downloads/oxp3/Harmon APO" "$HOME/Downloads/oxp3/harmon"; do
+        [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+    done
+    for d in "$HOME"/Downloads/*Harmon* "$HOME"/Downloads/*harman* "$HOME"/Downloads/*APO*.zip; do
+        [ -e "$d" ] && { printf '%s' "$d"; return 0; }
+    done
+    return 1
+}
+ask_harman() {
+    local default answer
+    (( NO_HARMAN )) && return 0
+    if [ -z "$HARMAN_PATH" ] && [ -f "$state_dir/harman-path" ]; then
+        HARMAN_PATH=$(<"$state_dir/harman-path")
+    fi
+    if [ -n "$HARMAN_PATH" ] && [ -e "$HARMAN_PATH" ]; then return 0; fi
+    if (( ! DRY )) && [ -t 0 ] && [ -t 1 ]; then
+        default=$(harman_default || true)
+        while :; do
+            printf '\nPath to the Harman APO files (folder, .zip or GA18v3.reg)%s\n' \
+                "${default:+ [$default]}"
+            printf 'leave blank to skip the vendor EQ: '
+            IFS= read -r answer || answer=""
+            [ -z "$answer" ] && answer=$default
+            if [ -z "$answer" ]; then NO_HARMAN=1; return 0; fi
+            if [ -e "$answer" ]; then
+                HARMAN_PATH=$(readlink -f -- "$answer")
+                mkdir -p "$state_dir"; printf '%s\n' "$HARMAN_PATH" >"$state_dir/harman-path"
+                return 0
+            fi
+            echo "not found: $answer (try again, or blank to skip)" >&2
+        done
+    fi
+    NO_HARMAN=1
 }
 
 # ---- uninstall ---------------------------------------------------------------------
@@ -172,7 +223,23 @@ run sudo "$here/oxp3-fixes.sh" install || die "install failed"
 
 if (( ! SKIP_HW )); then
     say "hardware fixes (volume, LEDs/RGB, suspend, Bluetooth, power, IMU, audio, XMX, Decky)"
-    run sudo "$here/tools/oxp3-hw-install.sh" --all --audio-activate --restart-plugin-loader \
+    ask_harman
+    hw_args=(--all --audio-activate --restart-plugin-loader)
+    if [ -n "$HARMAN_PATH" ] && [ -e "$HARMAN_PATH" ]; then
+        if (( DRY )); then
+            info "[dry-run] import Harman APO: $HARMAN_PATH"
+        else
+            import_args=(--path "$HARMAN_PATH" --profile loud)
+            (( HARMAN_FORCE )) && import_args+=(--force)
+            "$here/tools/audio/harman-import.sh" "${import_args[@]}" ||
+                die "the Harman APO import failed (hash or format); fix the path, add --harman-force for another vendor revision, or use --no-harman"
+        fi
+        hw_args+=(--harman "$HARMAN_PATH")
+        (( HARMAN_FORCE )) && hw_args+=(--harman-force)
+    else
+        hw_args+=(--no-harman)
+    fi
+    run sudo "$here/tools/oxp3-hw-install.sh" "${hw_args[@]}" \
         || warn "hardware installer reported a problem; see the lines above"
 fi
 
