@@ -34,7 +34,7 @@ run() {
 }
 
 usage() {
-    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+    awk 'NR > 1 && /^set -uo pipefail/ { exit } NR > 1 && /^#/ { sub(/^# ?/, ""); print }' "$0"
     exit 2
 }
 
@@ -52,7 +52,7 @@ while (( $# )); do
         --harman=*) HARMAN_PATH=${1#*=} ;;
         --no-harman) NO_HARMAN=1 ;;
         --harman-force) HARMAN_FORCE=1 ;;
-        -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) awk 'NR > 1 && /^set -uo pipefail/ { exit } NR > 1 && /^#/ { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage ;;
     esac
     shift

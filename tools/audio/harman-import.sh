@@ -15,7 +15,14 @@ while [ "$#" -gt 0 ]; do
         --force) force=1 ;;
         --profile) shift; profile=${1:-loud} ;;
         --profile=*) profile=${1#--profile=} ;;
-        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) cat <<'EOF'
+Usage: harman-import.sh [--path PATH] [--profile loud|safe] [--force]
+
+PATH may be a downloaded Harman APO folder, a .zip of it, or GA18v3.reg.
+The files are SHA-256 checked against the validated OneXPlayer 3 package.
+--force accepts a different vendor revision.
+EOF
+            exit 0 ;;
         *) echo "harman-import.sh: unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
