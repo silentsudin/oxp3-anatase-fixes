@@ -122,7 +122,7 @@ Do not use the Testing/Rolling channel with this repo; the exact kernel and pack
 - `podman`, `git`, ~8 GB free disk and network for the first build.
 - A normal user account with `sudo` (run the script as that user, not as root).
 - Optional: Decky Loader (for the status plugin), Steam (for XMX launch options and the plugin).
-- Secure Boot: the script queues a **Machine Owner Key** and asks you to enrol it once.
+- Secure Boot: the script queues a **Machine Owner Key** and asks you to choose a one-time MOK password and enrol it once.
 
 ### Step 1 — first run
 
@@ -135,14 +135,48 @@ cd oxp3-anatase-fixes
 It checks the machine, creates/queues the MOK key, builds gamescope/Mesa/MangoHud/XMX/kernel
 modules/firmware, and stages the kernel modules + firmware.
 
-### Step 2 — reboot and enrol
+### Step 2 — set the MOK password, reboot and enrol
+
+The first run creates and queues a **Machine Owner Key (MOK)** for signing the kernel modules. If
+the key is not enrolled yet, `mok-setup` prints:
+
+```text
+Enrolling: choose a one-time password, then reboot and in MokManager pick
+Enroll MOK -> Continue -> Yes -> enter the password.
+input password:
+input password again:
+```
+
+**This password is new and chosen by you here** — it is not your Linux login password and it is not
+stored anywhere. Type the same one twice; remember it for the reboot. If that prompt never appears,
+the key is already enrolled and you can skip this enrolment.
 
 ```sh
 systemctl reboot
 ```
 
-In the blue **MOK manager**: *Enroll MOK* → the OXP3 key → *Continue* → *Yes* → password.
-Secure Boot stays enabled.
+At the blue **MOK Manager** screen:
+
+1. *Enroll MOK*
+2. select the OXP3 key (`CN = OXP3 module signing CA (<your user>)`)
+3. *Continue* → *Yes*
+4. enter the **same one-time password you set above**
+5. reboot
+
+Secure Boot stays enabled after this. If the MOK Manager does not appear, Secure Boot is off or the
+key was already enrolled. The private key stays at
+`~/.local/share/oxp3-fixes/mok/MOK.key` — keep it private and never commit it.
+
+Verify after logging in:
+
+```sh
+mokutil --test-key ~/.local/share/oxp3-fixes/mok/MOK.der   # "is already enrolled"
+tools/check-working.sh                                     # kernel module/driver rows
+```
+
+If you lose the password, the key is still usable for a future module build but cannot be enrolled
+in that boot: run `sudo mokutil --import ~/.local/share/oxp3-fixes/mok/MOK.der` to queue it again
+with a new one-time password.
 
 ### Step 3 — second run
 
