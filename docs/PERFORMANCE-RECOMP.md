@@ -69,6 +69,12 @@ Exec=/path/to/oxp3-anatase-fixes/tools/recomp-gamescope.sh -- --desktop
 Type=Application
 ```
 
+## CPU/hybrid-scheduler follow-up
+
+The separate CPU-side test plan (P/E/LPE placement, EPP, scx_cosmos vs EEVDF/LAVD, affinity and
+IRQ steering) is parked in [PERFORMANCE-CPU-SCHED.md](PERFORMANCE-CPU-SCHED.md). It has not been
+validated; the Brilliant Diamond/Unity evidence is the reason it is worth returning to.
+
 ## Why not just change the desktop scale?
 
 Changing KWin to 100% fixes the logical resolution but makes the whole desktop too small and does
