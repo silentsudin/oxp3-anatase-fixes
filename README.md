@@ -62,6 +62,12 @@ much faster and you normally run the script only after an Anatase update.</small
   Quick Access Menu, plus one-click JSON reports.
 - `tools/oxp3-health.sh` — “can I install / is it working / what is left” in one read-only command.
 
+### Recomp Launcher games
+Games launched from RecompLauncher run against the **scaled desktop** (KWin scale 1.7 gives a
+1129x706 logical display), so they render at that size and KWin upscales them. Use
+`tools/recomp-gamescope.sh` to run the launcher inside gamescope at the native 1920x1200@144 mode;
+the reason and evidence are in [docs/PERFORMANCE-RECOMP.md](docs/PERFORMANCE-RECOMP.md).
+
 ### Known gaps
 SAGV/memory-frequency switching has no Linux control; Flatpak Steam has its own XMX deployment;
 bluetooth/IMU edge cases are documented. See [docs/hw/README.md](docs/hw/README.md) and
