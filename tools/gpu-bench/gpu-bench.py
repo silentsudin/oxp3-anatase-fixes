@@ -393,12 +393,19 @@ def bench_ai(outdir):
     res = {"status": "ok", "tests": {}}
     devices = ["NPU", "CPU"] + (["GPU"] if (TOOLS / "neo").exists() else [])
     extra = {"OCL_ICD_VENDORS": str(TOOLS / "neo" / "vendors")} if (TOOLS / "neo").exists() else None
+    cpu_aff = os.environ.get("OXP3_AI_CPU_AFFINITY", "")
+    cpu_pin = os.environ.get("OXP3_AI_CPU_PIN", "1") != "0"
     for model in ("add", "conv"):
         for device in devices:
             key = f"{model}-{device}"
-            r = run([str(bench), "-m", str(models / f"{model}.xml"), "-d", device,
-                     "-niter", "100", "-api", "sync"], timeout=180,
-                    env=extra, log_path=outdir / f"ai-{key}.txt")
+            cmd = [str(bench), "-m", str(models / f"{model}.xml"), "-d", device,
+                   "-niter", "100", "-api", "sync"]
+            if device == "CPU" and cpu_pin:
+                cmd += ["-hint", "none", "-pin", "YES"]
+            if device == "CPU" and cpu_aff and shutil.which("taskset"):
+                cmd = ["taskset", "-c", cpu_aff] + cmd
+            r = run(cmd, timeout=180, env=extra,
+                    log_path=outdir / f"ai-{key}.txt")
             def num(pat):
                 m = re.search(pat, r["output"])
                 return float(m.group(1)) if m else None
@@ -407,6 +414,8 @@ def bench_ai(outdir):
                 "throughput_fps": num(r"Throughput:\s*([0-9.]+)"),
                 "median_ms": (lambda m: (float(m.group(1)) / 1000.0 if m.group(2) == "us" else float(m.group(1))) if m else None)(re.search(r"Median:\s*([0-9.]+)\s*(us|ms)", r["output"])),
                 "first_inference_ms": num(r"First inference took\s*([0-9.]+)\s*ms"),
+                "cpu_affinity": cpu_aff if device == "CPU" else None,
+                "cpu_pinned": bool(device == "CPU" and cpu_pin),
                 "rc": r["rc"], "output": r["output"][-2000:]}
     (outdir / "ai.json").write_text(json.dumps(res, indent=2))
     return res

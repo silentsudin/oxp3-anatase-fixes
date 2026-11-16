@@ -508,3 +508,23 @@ OpenVINO NPU/CPU/GPU, and VK-GL-CTS.  One run produced:
 Artifacts: `results/gpu-bench-20261116-complete/`.  The remaining gap list is
 dominated by deliberately unimplemented FP8/bf8 coopmat variants and the stock
 rusticl FP16 omission (fixed by the packaged Mesa patch).
+
+## Optimization: OpenVINO CPU thread pinning
+
+`benchmark_app` on CPU defaults to a thread pool spanning P+E+LP-E cores; on this
+hybrid CPU the LP-E cores become synchronization tail latencies.  With the UI
+requirement `-hint none`, adding **`-pin YES`** produced a repeatable win:
+
+| model | default CPU | `-hint none` | `-hint none -pin YES` |
+|---|---:|---:|---:|
+| add | ~102k FPS | ~100k FPS | **~159-171k FPS** |
+| conv | ~4.26k FPS | ~3.45k FPS | **~6.1-6.7k FPS** |
+
+That is ~1.2x on the tiny add graph and ~1.8-1.9x on the conv graph, verified
+over repeated runs.  The harness now applies `-hint none -pin YES` to CPU tests
+(disable with `OXP3_AI_CPU_PIN=0`; an external `taskset` can be requested with
+`OXP3_AI_CPU_AFFINITY`).
+
+For deployment this maps to an OpenVINO `NUM_STREAMS`/thread-affinity policy or a
+cpuset that excludes LP-E for latency-sensitive inference; pinning to only P+E
+(0-9) was less consistent than OpenVINO's own pinning.
