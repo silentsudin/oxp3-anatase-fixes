@@ -233,3 +233,26 @@ Caveats:
   the next rescan (up to 60 s); the proc-connector usually catches it immediately.
 - If the oneshot ever fails, `sudo systemctl restart intel_lpmd-preconfig` re-applies
   the state; `PROCESS-PRECONFIG` is not persisted in lpmd itself, only in the unit.
+
+## Confirmed result on Brilliant Diamond (2026-11-16)
+
+User report after the `CpuGroups` + model `ClassDefaults` fix: **massive performance
+improvement** in the Brilliant Diamond recomp.
+
+One caveat observed on the next launch: lpmd was demonstrably active (background
+daemons such as `dbus-broker`, `accounts-daemon`, `chronyd` were on `10-13`), but the
+new game instance (`Dpr.exe`, 80 threads) still had `Cpus_allowed_list: 0-13`, with the
+main thread at 66 % on cpu5 and GPU at 47 %/683 MHz.  So per-launch auto-attach is not
+yet reliable for this user-service process, even though the class/cpuset config is
+correct and a restart rebinds it.
+
+If a launch comes up unbound:
+
+```sh
+sudo intel_lpmd_control ADD-PROCESS Dpr.exe GameProfileMixed 1
+taskset -pc "$(pgrep -x Dpr.exe)"
+```
+
+or restart `intel_lpmd` after the game is running (the init scan binds existing PIDs).
+The remaining work is making the proc-connector/periodic-rescan path catch this
+process reliably on every launch.
