@@ -1,3 +1,6 @@
+    <!-- Anti-cheat titles and the runtime/overlay processes they depend on are
+         deliberately left on all CPUs (0-13).  Restricting them to P+E has
+         crashed Elden Ring at startup (EAC/Proton/MangoHud). -->
     <Process>
         <Name>eldenring.exe</Name>
         <ActiveCores>0-13</ActiveCores>
@@ -15,6 +18,41 @@
     </Process>
     <Process>
         <Name>easyanticheat*</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>mangoapp</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>mangohud</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>gamescope</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>pressure-vessel</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>pv-adverb</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>bwrap</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>wineserver</Name>
         <ActiveCores>0-13</ActiveCores>
         <Classification>custom_profile_0</Classification>
     </Process>

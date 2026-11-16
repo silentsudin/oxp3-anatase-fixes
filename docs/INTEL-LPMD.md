@@ -342,3 +342,21 @@ sudo systemctl restart intel_lpmd-preconfig
 ```
 
 Also try without MangoHud: `mangoapp` aborted (SIGABRT) around the same period.
+
+## ER still crashed: exempt the runtime, not just the game
+
+Stopping lpmd made Elden Ring start, so the crash is from a process lpmd binds, not
+necessarily `eldenring.exe`.  The exemption fragment now also leaves the launch
+infrastructure on all CPUs:
+
+```text
+mangoapp, mangohud, gamescope, pressure-vessel, pv-adverb, bwrap, wineserver
+```
+
+`mangoapp` had already aborted with SIGABRT in the same period; MangoHud and the
+pressure-vessel/bwrap runtime are the prime suspects for an EAC/Proton crash when
+pinned.  `eldenring.exe`, `start_protected*` and the EAC processes keep their 0-13
+exemption.
+
+If it still crashes with these in place, test with MangoHud disabled (`MANGOHUD=0`
+or no overlay) before blaming lpmd itself.
