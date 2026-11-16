@@ -165,3 +165,44 @@ Artifacts: `results/gpu-bench-20261116-opencl/`.
   `-benchmark 1 -close 1 -times <file>` and it enumerates the B390 under
   `gamescope --backend headless`, but the scene did not finish within the first
   headless attempt; it remains an optional graphics/RT test.
+
+## Validated Mesa fix: iris FP16 for rusticl
+
+`clinfo` on stock Mesa 26.2.6 showed **no `cl_khr_fp16`** and clpeak's OpenCL half
+tests were unsupported, while Vulkan had full FP16 cooperative matrix.  Root cause:
+`iris_init_shader_caps()` never set `caps->fp16`, so rusticl's
+`fp16_supported()` (device.rs: `self.shader_caps().fp16`) returned false and the
+extension was hidden.
+
+Patch `patches/mesa/0215-iris-enable-fp16-for-rusticl.patch` adds:
+
+```c
+caps->fp16 = true;
+```
+
+Validated with a Mesa 27.0.0-devel build (`-Dgallium-rusticl=true`, iris/llvmpipe)
+and a custom rusticl ICD:
+
+```text
+cl_khr_fp16 0x400000 (1.0.0)
+half        1 / 1 (cl_khr_fp16)
+```
+
+clpeak OpenCL on the patched driver:
+
+```text
+half     : 10.78 TFLOPS
+half2    :  9.94 TFLOPS
+half4    : 11.25 TFLOPS
+half8    : 11.23 TFLOPS
+half16   :  9.24 TFLOPS
+```
+
+That is ~1.8-2x the FP32 OpenCL result (~5.9 TFLOPS) and confirms the hardware path.
+Evidence: `results/gpu-bench-20261116-opencl/clpeak-fp16-patched-rusticl.json`,
+`clinfo-patched-rusticl.txt`.
+
+Note: the test used the user-space libclc shim, and rusticl warns that upstream
+(non-Mesa-patched) libclc may have bugs; the capability itself is fixed by the iris
+cap.  This patch should go through the normal Mesa package/overlay build for a
+system-wide install.

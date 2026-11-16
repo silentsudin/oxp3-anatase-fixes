@@ -1,0 +1,12 @@
+--- a/src/gallium/drivers/iris/iris_screen.c
++++ b/src/gallium/drivers/iris/iris_screen.c
+@@ -206,6 +206,9 @@
+       caps->indirect_const_addr = true;
+ 
+       caps->integers = true;
++      /* OpenCL/rusticl needs this to advertise cl_khr_fp16; the Intel
++       * compiler supports half-precision on all supported Gfx versions. */
++      caps->fp16 = true;
+       caps->max_texture_samplers = IRIS_MAX_SAMPLERS;
+       caps->max_sampler_views = IRIS_MAX_TEXTURES;
+       caps->max_shader_images = IRIS_MAX_IMAGES;
