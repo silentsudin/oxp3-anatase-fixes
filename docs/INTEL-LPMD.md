@@ -180,3 +180,26 @@ So "mixed" was never P+E in this release.  The installer now overrides them in
 
 It also restarts `intel_lpmd-preconfig.service` after restarting lpmd (the oneshot is
 already active/exited, so `enable --now` alone did not re-enter PROCESS-PRECONFIG).
+
+## Fourth test: the model config wins over the user overlay
+
+Even with the user `<ClassDefaults>` override and explicit `<CpuGroups>`, the game
+still attached to `2-13`.  The precedence chain is:
+
+```text
+system process_cpuset.xml  <  user process_cpuset_user.xml  <  model intel_lpmd_config_F6_M204.xml
+```
+
+and the model file contains its own `<ClassDefaults>`:
+
+```xml
+<GameProfileMixed><Cores>ActiveEcores, ActiveLcores</Cores></GameProfileMixed>
+<GameProfileGPU>  <Cores>ActiveEcores, ActiveLcores</Cores></GameProfileGPU>
+```
+
+which overrides both lower layers.  `tools/install-intel-lpmd.sh` now rewrites those
+two model entries to `ActivePcores, ActiveEcores` after installing the configs (the
+installer re-copies the upstream data on every run, so this has to happen after the
+copy).
+
+Expected end state for a `game_profile_mixed` title: `Cpus_allowed_list: 0-9`.

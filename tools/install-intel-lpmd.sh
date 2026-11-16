@@ -98,6 +98,22 @@ open(p, 'w').write(s)
 PY
 done
 
+say "overriding the model ClassDefaults (P+E for game classes)"
+if (( ! dry )); then
+    python3 - "$confdir/intel_lpmd_config_F6_M204.xml" <<'PY'
+import re, sys
+p = sys.argv[1]
+try:
+    s = open(p).read()
+except FileNotFoundError:
+    sys.exit(0)
+for cls in ("GameProfileGPU", "GameProfileMixed"):
+    s = re.sub(r'(<%s>.*?<Cores>)[^<]*(</Cores>)' % cls,
+               r'\g<1>ActivePcores, ActiveEcores\g<2>', s, count=1, flags=re.S)
+open(p, 'w').write(s)
+PY
+fi
+
 say "seeding game classifications"
 if (( ! dry )); then
     python3 - "$confdir/process_cpuset_user.xml" "$games" <<'PY'
