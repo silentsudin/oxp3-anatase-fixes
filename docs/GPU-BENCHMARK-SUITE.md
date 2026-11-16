@@ -233,3 +233,37 @@ So the GPU encoders are already 1.5-2x the CPU x265 path; the actionable gap was
 purely the missing oneVPL GPU runtime package, not the driver.
 
 Artifacts: `results/gpu-bench-20261116-media/`.
+
+## AI / NPU: device enumerates, runtime stack is the blocker
+
+OpenVINO 2026.4.1 installed in a Python 3.12 venv; stock `Core().available_devices`
+was only `['CPU']`.
+
+User-space extraction of the missing runtime packages changed that:
+
+```text
+oneapi-level-zero (libze_loader) + intel-npu-driver (libze_intel_npu)
+-> available_devices = ['CPU', 'NPU']
+   NPU: Intel(R) AI Boost
+```
+
+But every `benchmark_app -d NPU` compile fails, even for a trivial single `Add`
+model, with:
+
+```text
+Level0 pfnCreate2 result: ZE_RESULT_ERROR_UNSUPPORTED_FEATURE (0x78000003)
+```
+
+The NPU kernel driver is loaded (`intel_vpu`, `/dev/accel/accel0`) and firmware is
+installed, so this is a **user-space NPU driver/firmware/OpenVINO version mismatch**,
+not a missing device.  It needs the system `intel-npu-driver` matched to the kernel
+and firmware; the extracted 1.32.0 runtime is not sufficient.
+
+The **GPU** path through Level Zero is also blocked: the system has no
+`intel-level-zero` package, and the extracted 26.35 runtime aborts inside
+`zello_world`/`command_stream_receiver` on this B390.  OpenVINO therefore only
+offers CPU here; the Intel GPU plugin reports "no supported devices".
+
+Status: benchmarks and probes are ready; AI GPU/NPU measurement waits on a working
+Level Zero/NPU stack.  The CPU reference (tiny models) is measurable:
+`benchmark_app -d CPU` gives thousands of FPS on the toy graphs.
