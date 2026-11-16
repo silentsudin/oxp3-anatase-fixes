@@ -8,7 +8,7 @@
  
  typedef struct {
     /* Vector type that holds the elements packed. */
-@@ -227,6 +228,44 @@
+@@ -227,6 +228,47 @@
     info->packing_factor = packing_factor;
  }
  
@@ -20,7 +20,10 @@
 +cmat_wants_ptx_layout(const struct glsl_cmat_description *desc,
 +                      enum glsl_matrix_layout layout)
 +{
-+   return debug_get_bool_option("INTEL_COOPMAT_PTX", false) &&
++   /* Default on: the 16x8x16 f16 shape only exists because of this patch, and
++ * its lowering needs the PTX/console fragment order.  INTEL_COOPMAT_PTX=0
++ * keeps the old native-order load/store for A/B testing. */
++   return debug_get_bool_option("INTEL_COOPMAT_PTX", true) &&
 +          desc->element_type == GLSL_TYPE_FLOAT16 && desc->rows == 16 &&
 +          (desc->cols == 16 || desc->cols == 8) &&
 +          layout == GLSL_MATRIX_LAYOUT_ROW_MAJOR;
@@ -53,7 +56,7 @@
  static void
  lower_cmat_load_store(nir_builder *b, nir_intrinsic_instr *intrin,
                        struct lower_cmat_state *state)
-@@ -246,6 +285,81 @@
+@@ -246,6 +288,81 @@
     const unsigned ptr_comp_width = glsl_get_bit_size(pointer->type);
     const unsigned ptr_num_comps = glsl_get_vector_elements(pointer->type);
  
@@ -135,7 +138,7 @@
     /* The stride is given in number of elements of the pointed type, which
      * doesn't necessarily match the matrix element type, so we need to adjust
      * it considering it may be a vector and have a different bit-width.
-@@ -761,6 +875,131 @@
+@@ -761,6 +878,131 @@
     }
  }
  
@@ -267,7 +270,7 @@
  static nir_def *
  lower_cmat_instr(nir_builder *b, nir_instr *instr, void *_state)
  {
-@@ -868,17 +1107,36 @@
+@@ -868,17 +1110,36 @@
           }
        }
  
