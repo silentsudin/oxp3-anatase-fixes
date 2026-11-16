@@ -20,8 +20,10 @@ run by the harness.
 |---|---:|---:|---:|
 | add | ~102k FPS | 159-171k FPS | +1.2x |
 | conv | ~3.5k FPS | 6.1-6.7k FPS | +1.8-1.9x |
+| convbig (512x512, 64 filters) | ~27.7 FPS | 65-70 FPS | +2.4-2.5x |
 
-Harness now applies this by default; `OXP3_AI_CPU_PIN=0` disables it.
+The larger convbigg case confirms this is not a tiny-model artifact.  Harness now
+applies pinning by default; `OXP3_AI_CPU_PIN=0` disables it.
 Commit `f481b3c`.  For deployment use an OpenVINO thread-affinity policy or a
 cpuset; pinning to all P+E externally was less consistent than OpenVINO's pinning.
 

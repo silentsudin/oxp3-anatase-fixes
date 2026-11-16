@@ -18,6 +18,17 @@ g = helper.make_graph([helper.make_node("Add", ["x", "c"], ["y"])], "add", [x], 
 m = helper.make_model(g, opset_imports=[helper.make_opsetid("", 13)], producer_name="oxp3-bench")
 onnx.checker.check_model(m); onnx.save(m, out / "add.onnx")
 
+# convbig: [1,3,512,512] -> [1,64,512,512]
+w = (rng.standard_normal((64, 3, 3, 3)).astype(np.float32) * 0.1)
+b = np.zeros(64, dtype=np.float32)
+x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3, 512, 512])
+y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 64, 512, 512])
+nodes = [helper.make_node("Conv", ["x", "W", "B"], ["c"], kernel_shape=[3, 3], pads=[1, 1, 1, 1]),
+         helper.make_node("Relu", ["c"], ["y"])]
+g = helper.make_graph(nodes, "convbig", [x], [y], [numpy_helper.from_array(w, "W"), numpy_helper.from_array(b, "B")])
+m = helper.make_model(g, opset_imports=[helper.make_opsetid("", 13)], producer_name="oxp3-bench")
+onnx.checker.check_model(m); onnx.save(m, out / "convbig.onnx")
+
 # conv: [1,3,224,224] -> [1,8,224,224]
 w = (rng.standard_normal((8, 3, 3, 3)).astype(np.float32) * 0.1)
 b = np.zeros(8, dtype=np.float32)
@@ -31,7 +42,7 @@ onnx.checker.check_model(m); onnx.save(m, out / "conv.onnx")
 
 import openvino as ov
 core = ov.Core()
-for name in ("add", "conv"):
+for name in ("add", "conv", "convbig"):
     model = core.read_model(out / f"{name}.onnx")
     ov.save_model(model, out / f"{name}.xml", compress_to_fp16=(name == "conv"))
 print("models:", ", ".join(p.name for p in sorted(out.glob("*.xml"))))

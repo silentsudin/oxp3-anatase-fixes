@@ -395,8 +395,9 @@ def bench_ai(outdir):
     extra = {"OCL_ICD_VENDORS": str(TOOLS / "neo" / "vendors")} if (TOOLS / "neo").exists() else None
     cpu_aff = os.environ.get("OXP3_AI_CPU_AFFINITY", "")
     cpu_pin = os.environ.get("OXP3_AI_CPU_PIN", "1") != "0"
-    for model in ("add", "conv"):
-        for device in devices:
+    for model in ("add", "conv", "convbig"):
+        model_devices = ["CPU"] if model == "convbig" else devices
+        for device in model_devices:
             key = f"{model}-{device}"
             cmd = [str(bench), "-m", str(models / f"{model}.xml"), "-d", device,
                    "-niter", "100", "-api", "sync"]
