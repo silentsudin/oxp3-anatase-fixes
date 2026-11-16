@@ -81,3 +81,74 @@ M=16), which is upstream compiler work, not a layout patch. Options going forwar
 - Test-driver builds: `~/.cache/oxp3-fixes/mesa-fast/usr/local` (last build contains
   0213 + 0214-measured + 0215; none committed).
 - The host system Mesa was never modified.
+
+## Precise root cause from the IGC DPAS specification
+
+From Intel's IGC DPAS documentation
+(https://github.com/intel/intel-graphics-compiler/blob/master/documentation/visa/instructions/DPAS.md):
+
+```
+ D = C + A x B
+ D (Dst)  : MxN
+ C (Src0) : MxN
+ A (Src2) : MxK
+ B (Src1) : KxN
+ M : repeat count
+ N : fixed execution size, either 8 or 16
+ K : depth * OPS_PER_CHAN   (OPS_PER_CHAN = 2 for f16)
+```
+
+On Xe2 the DPAS execution size (`N`) is 16 and `repeat_count` is a small field
+(`DPAS_RCOUNT`, 3 bits — at most 8). Therefore **one DPAS instruction computes at most
+8 rows × 16 columns of f16 output**. A 16-row cooperative-matrix multiply cannot be one
+DPAS.
+
+Mesa's `brw_nir_lower_cooperative_matrix.c` always emits a single
+`nir_dpas_intel(..., .systolic_depth = 8, .repeat_count = 8)`. Combined with the measured
+`126 of 256 elements differ` on a plain 16x16x16 row-major test, this pins the defect:
+Mesa implements only the M=8 shape (its advertised properties are M=8, N=exec_size,
+K=16 for f16); the 16-row path computes the top eight rows and leaves the rest wrong.
+That is why every fragment-layout permutation failed — the multiply itself never
+computed half the matrix.
+
+## Implementation design for 16x8x16 (not implemented)
+
+Longshot needs `C(16x8) = A_long(16x16) * B_long(16x8)`.
+
+### Option 1 — the DPAS swap trick (single instruction)
+
+DPAS computes `D[m,n] = sum_k A_hw[m,k] * B_hw[k,n]` with m<8, n<16.
+
+Set:
+- `A_hw[m,k] = B_long[k,m]`  (A_hw = B_long transposed, 8x16)
+- `B_hw[k,n] = A_long[n,k]`  (B_hw = A_long transposed, 16x16)
+
+Then `D[m,n] = sum_k B_long[k,m] * A_long[n,k] = C[n,m]`, i.e. **D = C^T (8x16)**, and
+C is recovered by transposing D. One DPAS covers the whole product.
+
+The catch is operand construction: the `nir_dpas_intel` operands are slices in Mesa's
+own native layout, not semantic matrices. The native layouts measured earlier are:
+
+- A 16x16 (console-converted, from the passing probe): `A[t][k] = A[t/8 + 4k][2*(t%8)]`
+- B 16x8: `B[t][j] = B[2*(t/8) + 8j][t%8]`
+- C 16x8: `C[t][j] = C[t/4 + 8j][2*(t%4)]`
+
+The hardware operands must instead be slices that `nir_dpas_intel` would produce for a
+native 8x16 A and a 16x16 B; those formulas are:
+`A8x16[t] = { A[t/8][2*(t%8)], A[4+t/8][2*(t%8)] }` and the corresponding 16x16 B VNNI
+pairing. Constructing them from the app slices is a lane/dword gather (the same
+`cmat_gather` machinery used for the PTX conversions), but with the semantic transpose
+folded into the index math.
+
+### Option 2 — two DPAS of M=8
+
+Run DPAS with A = rows 0..7 of A_long and again with rows 8..15, with B padded from N=8
+to N=16 (columns 8..15 zero). Each result gives 8 rows × 8 valid columns; concatenate
+the two 8x8 halves into C. Slightly simpler indexing than option 1 (no transposes), but
+needs an extra zero-padded B slice and two accumulator slices.
+
+### Option 3
+
+Run cooperative-matrix shaders at subgroup 16 (what llama.cpp does for Xe2). Requires an
+application change, because Longshot explicitly requests `requiredSubgroupSize = 32`;
+forcing SIMD16 makes pipeline creation fail (verified: VkResult -77).
