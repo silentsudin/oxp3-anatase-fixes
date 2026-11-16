@@ -202,3 +202,23 @@ native matrix multiplies on (cooperative matrices, the console's fragment layout
 Test support added to the instrumented build: `RX_DIAG_M8` (Mesa's supported M=8 path,
 0/128 wrong), `RX_DIAG_IDENT` (unique-value 16x8 multiply), `RX_DIAG_LAYOUTS` (native
 layout dumps).
+
+## Gameplay validation (same spot, visible window)
+
+Patched driver loaded in the running game (confirmed via /proc/<pid>/maps), env
+`INTEL_COOPMAT_PTX=1` and `VK_DRIVER_FILES=.../mesa-test-icd.json`:
+
+| | native MMA | software MMA (`RX_VK_MMA_SOFTWARE=1`) |
+|---|---|---|
+| FPS | 26 | 21 (then 6 while pipelines churned) |
+| frame | 37.9 ms | 49.0 ms |
+| Game | 22.2 ms | 33.5 ms |
+| Renderer | 15.6 ms | 15.3 ms |
+| GPU time | 27.1 ms | 38.9 ms |
+| draws | 1444 | 1455 |
+| GPU | 2300 MHz / 72% | 2300 MHz / 72% |
+
+Same room and camera.  Native cooperative-matrix multiplies are ~24% higher FPS and
+~30% lower GPU time than the software path here.  The scene is GPU-bound (~27 ms at
+2300 MHz), so it does not reach the 144 Hz panel cap; this validates the path, not a
+game-wide frame-rate fix.
