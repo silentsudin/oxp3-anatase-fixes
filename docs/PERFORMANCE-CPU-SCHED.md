@@ -162,5 +162,8 @@ Otherwise keep `scx_cosmos` and record the result here.
 
 ## Related material
 
+- `docs/PERFORMANCE-CPU-PLACEMENT.md` - research, P-core wrapper and scheduler profile
+  switch (the actionable follow-up to this parked plan).
+
 - `docs/PERFORMANCE-RECOMP.md` — desktop scaling and gamescope wrapper.
 - `docs/cpu-sched.md` — earlier scheduler comparison for the GPU-bound case.
