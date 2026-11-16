@@ -41,6 +41,8 @@ cpuset; pinning to all P+E externally was less consistent than OpenVINO's pinnin
   compatibility fix for Longshot, not a synthetic-compute speedup.
 - **QSV preset/async_depth/look_ahead tuning**: 5.5-6.0x, no repeatable gain over
   the harness default.
+- **GravityMark raster pinned to P-cores 0-1**: 234.1 vs 232.6 fps, within noise;
+  leave the game on the default scheduler affinity.
 
 ## Blocked by privileges
 
