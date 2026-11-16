@@ -117,3 +117,39 @@ Measured while the game ran with lpmd still in `OFF`:
 - GPU 33 % at 1133 MHz -> not GPU-bound, and the main thread is not saturated, so the
   frame rate is limited by the engine/frame cap (or the load burst), not by CPU
   placement alone.
+
+## Second live test: cpusets attach, but P-cores are not detected
+
+After switching lpmd into `PROCESS-PRECONFIG` (the debug log showed
+`proc-connector listener active` and `rescan attached 138 new PIDs`), the game became
+bound — but to **cpu2-13**, not the P-cores:
+
+```text
+process_cpuset: tuning: game_profile_cpu   mask=0x00 <none>
+process_cpuset: tuning: game_profile_mixed mask=0x50 ...
+pid ... current affinity list: 2-13
+```
+
+`game_profile_cpu` with no CPUs means lpmd's automatic P-core detection returns an
+empty set on this Panther Lake (F6/M204) platform, so `game_profile_mixed`
+(`ActivePcores, ActiveEcores`) degraded to E + LP-E only.
+
+Fix: declare the groups explicitly in the user config; the parser takes them from
+`<CpuGroups>` regardless of position:
+
+```xml
+<CpuGroups>
+    <ActivePcores>0-1</ActivePcores>
+    <ActiveEcores>2-9</ActiveEcores>
+    <ActiveLcores>10-13</ActiveLcores>
+</CpuGroups>
+```
+
+`tools/install-intel-lpmd.sh` now seeds this block into
+`/etc/intel_lpmd/process_cpuset_user.xml` alongside the game entries.  Re-run it, then
+`PROCESS-PRECONFIG` rebinds the running processes; the game should show
+`Cpus_allowed_list: 0-9` (mixed) or `0-1` (cpu), and background PIDs `10-13`.
+
+The D-Bus control interface rate-limits repeated privileged calls
+("too many privileged requests"); space them out, the boot-time
+`intel_lpmd-preconfig.service` avoids the manual call.

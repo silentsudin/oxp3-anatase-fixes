@@ -121,6 +121,14 @@ for item in games.split():
         <Classification>{cls}</Classification>
     </Process>
 ''')
+if '<ActivePcores>' not in s:
+    groups = """    <CpuGroups>
+        <ActivePcores>0-1</ActivePcores>
+        <ActiveEcores>2-9</ActiveEcores>
+        <ActiveLcores>10-13</ActiveLcores>
+    </CpuGroups>
+"""
+    s = s.replace('</ProcessCpusetConfig>', groups + '</ProcessCpusetConfig>', 1)
 if entries:
     s = s.replace('</ProcessCpusetConfig>', ''.join(entries) + '</ProcessCpusetConfig>', 1)
     open(p, 'w').write(s)
