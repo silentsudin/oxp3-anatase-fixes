@@ -14,9 +14,15 @@
 # Options: --dry-run  --uninstall  --games "name=class ..."
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-cache=${OXP3_CACHE:-$HOME/.cache/oxp3-fixes}
+# Under sudo, $HOME is /root; use the invoking user's cache/state directories.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+    user_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    user_home=$HOME
+fi
+cache=${OXP3_CACHE:-$user_home/.cache/oxp3-fixes}
 stage=$cache/intel-lpmd/stage
-state=${XDG_STATE_HOME:-$HOME/.local/state}/oxp3-fixes/intel-lpmd
+state=${XDG_STATE_HOME:-$user_home/.local/state}/oxp3-fixes/intel-lpmd
 root=${OXP3_LPMD_ROOT:-}
 dry=0 uninstall=0
 games="udpre=game_profile_cpu uDPRE.exe=game_profile_cpu Dpr.exe=game_profile_cpu eldenring.exe=game_profile_gpu"

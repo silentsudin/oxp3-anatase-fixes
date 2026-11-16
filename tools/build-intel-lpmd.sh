@@ -11,7 +11,13 @@
 #
 # Output: $OXP3_CACHE/intel-lpmd/stage/{bin,data,libexec}
 set -euo pipefail
-cache=${OXP3_CACHE:-$HOME/.cache/oxp3-fixes}
+# Under sudo, $HOME is /root; use the invoking user's cache directory.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+    user_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    user_home=$HOME
+fi
+cache=${OXP3_CACHE:-$user_home/.cache/oxp3-fixes}
 dir=$cache/intel-lpmd
 src=$dir/src
 stage=$dir/stage
