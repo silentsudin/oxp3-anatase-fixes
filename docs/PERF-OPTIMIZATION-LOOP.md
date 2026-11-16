@@ -64,3 +64,17 @@ than the rusticl path:
 `--full` includes it.  This is a backend-selection win, not a source patch; the
 NEO setup still depends on the 16 MB CSR workaround.  Artifacts:
 `results/gpu-bench-20261116-neo-cl/`.
+
+## Accepted: OpenVINO NPU turbo
+
+`NPU_TURBO: true` (via `-load_config`) is a large, repeatable win on the
+Intel AI Boost NPU:
+
+| model | default NPU | turbo NPU | delta |
+|---|---:|---:|---:|
+| add | ~11.5k FPS | 17.8-18.4k FPS | +55-60% |
+| conv | ~3.35k FPS | 4.75-4.87k FPS | +42-45% |
+
+The harness applies turbo to NPU tests by default (`OXP3_AI_NPU_TURBO=0`
+disables it).  `NPU_TILES` 1/2/4 did not add a consistent win over turbo alone.
+Artifacts: `results/gpu-bench-20261116-ai-npu-turbo/`.

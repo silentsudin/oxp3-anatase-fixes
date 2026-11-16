@@ -425,6 +425,11 @@ def bench_ai(outdir):
     extra = {"OCL_ICD_VENDORS": str(TOOLS / "neo" / "vendors")} if (TOOLS / "neo").exists() else None
     cpu_aff = os.environ.get("OXP3_AI_CPU_AFFINITY", "")
     cpu_pin = os.environ.get("OXP3_AI_CPU_PIN", "1") != "0"
+    npu_turbo = os.environ.get("OXP3_AI_NPU_TURBO", "1") != "0"
+    npu_cfg = None
+    if npu_turbo and "NPU" in devices:
+        npu_cfg = outdir / "npu-turbo.json"
+        npu_cfg.write_text(json.dumps({"NPU": {"NPU_TURBO": True}}))
     for model in ("add", "conv", "convbig"):
         model_devices = ["CPU"] if model == "convbig" else devices
         for device in model_devices:
@@ -433,6 +438,8 @@ def bench_ai(outdir):
                    "-niter", "100", "-api", "sync"]
             if device == "CPU" and cpu_pin:
                 cmd += ["-hint", "none", "-pin", "YES"]
+            if device == "NPU" and npu_cfg is not None:
+                cmd += ["-load_config", str(npu_cfg)]
             if device == "CPU" and cpu_aff and shutil.which("taskset"):
                 cmd = ["taskset", "-c", cpu_aff] + cmd
             r = run(cmd, timeout=180, env=extra,
@@ -447,6 +454,7 @@ def bench_ai(outdir):
                 "first_inference_ms": num(r"First inference took\s*([0-9.]+)\s*ms"),
                 "cpu_affinity": cpu_aff if device == "CPU" else None,
                 "cpu_pinned": bool(device == "CPU" and cpu_pin),
+                "npu_turbo": bool(device == "NPU" and npu_turbo),
                 "rc": r["rc"], "output": r["output"][-2000:]}
     (outdir / "ai.json").write_text(json.dumps(res, indent=2))
     return res
