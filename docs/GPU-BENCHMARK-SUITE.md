@@ -284,3 +284,28 @@ Level Zero GPU runtime on this B390, not by Blender or the render settings.
 
 Harness: `--blender` (CPU render).  Artifacts:
 `results/gpu-bench-20261116-render/`.
+
+## Level Zero / NEO GPU compute runtime: aborts on this B390
+
+Testing the extracted Intel GPU compute stack (`intel-level-zero` 26.35,
+`intel-opencl` 26.35, `intel-igc` 2.41) on the Arc B390 (PCI ID **8086:b080**):
+
+```text
+zello_world              -> Abort at command_stream_receiver.cpp:1205
+clinfo (NEO ICD)         -> Abort at command_stream_receiver.cpp:1205
+Blender --cycles-device ONEAPI -> same abort
+OpenVINO GPU plugin      -> no supported devices / abort
+```
+
+So the Vulkan/rusticl compute paths work, but the **NEO/Level Zero GPU compute
+runtime is unusable on this device**, which blocks Blender oneAPI, OpenVINO GPU,
+SYCL/oneAPI and any Level Zero benchmark - independent of the benchmark harness.
+
+This matches the upstream Panther Lake Level Zero breakage reports
+(intel/compute-runtime issue #918), though that report used device 8086:b0a0; the
+B390 here is 8086:b080.  Possible directions: a newer NEO build/device ID support,
+or running the compute workload through Vulkan/rusticl instead.
+
+The NPU path is separate: with the extracted `intel-npu-driver`, OpenVINO enumerates
+`Intel(R) AI Boost`, but compile fails with `ZE_RESULT_ERROR_UNSUPPORTED_FEATURE`
+(see the AI/NPU section) - likely the same driver/firmware generation mismatch.
