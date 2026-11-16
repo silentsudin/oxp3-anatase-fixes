@@ -301,6 +301,36 @@ def bench_vkmark(outdir, quick=False, duration=3):
     (outdir / "vkmark.json").write_text(json.dumps(res, indent=2))
     return res
 
+def bench_opencl_neo(outdir):
+    exe = find_bin("clpeak")
+    neo = TOOLS / "neo"
+    if not exe or not (neo / "vendors").exists():
+        return {"status": "missing"}
+    js = outdir / "clpeak-neo.json"
+    s = Sampler(); s.start()
+    r = run([exe, "--opencl", "--devices", "opencl:0", "--compute",
+             "--single-precision-compute", "--half-precision-compute",
+             "--matrix-compute", "-o", str(js)], timeout=300,
+            env={"OCL_ICD_VENDORS": str(neo / "vendors")},
+            log_path=outdir / "clpeak-neo.txt")
+    prof = s.finish()
+    data = None
+    if js.exists():
+        try: data = json.loads(js.read_text())
+        except Exception: pass
+    unsupported = []
+    if data:
+        for dev in data.get("devices", []):
+            for t in dev.get("tests", []):
+                for m in t.get("metrics", []):
+                    if m.get("status") == "unsupported":
+                        unsupported.append({"test": t.get("id"), "metric": m.get("id"),
+                                            "reason": m.get("reason")})
+    res = {"status": "ok" if r["rc"] == 0 and data else "error",
+           "unsupported": unsupported, "profile": prof, "json": data, **r}
+    (outdir / "clpeak-neo-run.json").write_text(json.dumps(res, indent=2))
+    return res
+
 def bench_opencl(outdir):
     exe = find_bin("clpeak")
     if not exe:
@@ -489,7 +519,7 @@ def build_gaps(results):
     for k in vk.get("zero_metrics", []):
         gaps.append({"area": "vulkan-compute", "item": k, "status": "zero",
                      "detail": "vkpeak reports 0 (unexposed or hardware-unsupported)"})
-    for key, area in (("clpeak", "vulkan-compute"), ("opencl_clpeak", "opencl")):
+    for key, area in (("clpeak", "vulkan-compute"), ("opencl_clpeak", "opencl"), ("opencl_neo", "opencl-neo")):
         for u in results.get(key, {}).get("unsupported", []):
             gaps.append({"area": area, "item": u.get("metric"), "status": "unsupported",
                          "detail": u.get("reason")})
@@ -520,6 +550,7 @@ def main():
     ap.add_argument("--ai", action="store_true", help="also run OpenVINO NPU/CPU models")
     ap.add_argument("--cts", action="store_true", help="also run targeted VK-GL-CTS suites")
     ap.add_argument("--blender-gpu", action="store_true", help="also run Blender oneAPI GPU")
+    ap.add_argument("--neo", action="store_true", help="also run NEO OpenCL")
     ap.add_argument("--skip-vkpeak", action="store_true")
     args = ap.parse_args()
     if args.full:
@@ -529,6 +560,7 @@ def main():
         args.blender_gpu = True
         args.ai = True
         args.cts = True
+        args.neo = True
     outdir = Path(args.out) if args.out else DEFAULT_OUT / f"{datetime.now():%Y%m%d-%H%M%S}-{args.tag}"
     outdir.mkdir(parents=True, exist_ok=True)
     print(f"results: {outdir}")
@@ -554,6 +586,8 @@ def main():
         print("blender GPU..."); results["blender_gpu"] = bench_blender(outdir, True)
     if args.ai:
         print("ai..."); results["ai"] = bench_ai(outdir)
+    if args.neo:
+        print("opencl neo..."); results["opencl_neo"] = bench_opencl_neo(outdir)
     if args.cts:
         print("cts..."); results["cts"] = bench_cts(outdir)
     print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
@@ -581,6 +615,17 @@ def main():
                         lines.append(f"- **unsupported** {met['id']}: {met.get('reason')}")
                     elif met.get("value") is not None:
                         lines.append(f"- {met['id']}: {met['value']:.2f} {met.get('unit','')}")
+        lines.append("")
+    neo = results.get("opencl_neo", {})
+    if neo.get("json"):
+        lines += ["## OpenCL (NEO)", ""]
+        for dev in neo["json"].get("devices", []):
+            for t in dev.get("tests", []):
+                for met in t.get("metrics", []):
+                    if met.get("status") == "unsupported":
+                        lines.append(f"- **unsupported** {met['id']}: {met.get('reason')}")
+                    elif met.get("value") is not None:
+                        lines.append(f"- {met['id']}: {met['value']:.2f}")
         lines.append("")
     ocl = results.get("opencl_clpeak", {})
     if ocl.get("json"):

@@ -49,3 +49,18 @@ affinity requires root; non-interactive `sudo` is unavailable in this session.
 The existing `tools/cpu-sched-test.sh` already covers the scheduler matrix when
 run with sudo.  Candidates to test next with root: EEVDF vs cosmos gaming,
 `scx_lavd`, EPP performance on P-cores, and a higher GPU minimum frequency.
+
+## Accepted: NEO OpenCL backend for throughput
+
+On the same B390, NEO 26.40 + IGC 2.42 (with the preemption override) is faster
+than the rusticl path:
+
+| workload | rusticl | NEO |
+|---|---:|---:|
+| FP32 compute | ~5.9 TFLOPS | **6.37 TFLOPS** |
+| FP16 compute (patched Mesa) | ~11.25 TFLOPS | **12.6 TFLOPS** |
+
+`gpu-bench.py --neo` runs clpeak through the NEO ICD and records the result;
+`--full` includes it.  This is a backend-selection win, not a source patch; the
+NEO setup still depends on the 16 MB CSR workaround.  Artifacts:
+`results/gpu-bench-20261116-neo-cl/`.
