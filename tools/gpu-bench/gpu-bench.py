@@ -177,7 +177,7 @@ def meta():
 def inventory(outdir):
     v = run([shutil.which("vulkaninfo") or "vulkaninfo", "--summary"], timeout=60,
             log_path=outdir / "vulkaninfo-summary.txt")
-    full = run([shutil.which("vulkaninfo") or "vulkaninfo"], timeout=120,
+    full = run([shutil.which("vulkaninfo") or "vulkaninfo", "--show-all"], timeout=180,
                log_path=outdir / "vulkaninfo.txt")
     text = v["output"]
     dev = {}
@@ -193,7 +193,23 @@ def inventory(outdir):
     dev["software_fallback"] = bool(re.search(r"llvmpipe|swiftshader|lvp", sel, re.I))
     dev["is_intel"] = bool(re.search(r"Intel|Arc", sel, re.I))
     exts = sorted(set(re.findall(r"VK_[A-Z0-9_]+", full["output"])))
-    inv = {"device": dev, "extensions": exts, "vulkaninfo_rc": v["rc"],
+    coop = []
+    for block in re.findall(r"VkCooperativeMatrixPropertiesKHR:\n((?:\s+\w+\s*=.*\n)+)", full["output"]):
+        fields = dict(re.findall(r"^\s*(\w+)\s*=\s*(\S+)", block, re.M))
+        def as_int(k):
+            try: return int(fields.get(k, "0"))
+            except ValueError: return 0
+        coop.append({"MSize": as_int("MSize"), "NSize": as_int("NSize"), "KSize": as_int("KSize"),
+                     "AType": fields.get("AType"), "BType": fields.get("BType"),
+                     "CType": fields.get("CType"), "ResultType": fields.get("ResultType"),
+                     "scope": fields.get("scope")})
+    target = [c for c in coop if c["MSize"] == 16 and c["NSize"] == 8 and c["KSize"] == 16
+              and c["AType"] == "COMPONENT_TYPE_FLOAT16_KHR"
+              and c["BType"] == "COMPONENT_TYPE_FLOAT16_KHR"]
+    inv = {"device": dev, "extensions": exts,
+           "cooperative_matrix_properties": coop,
+           "has_16x8x16_f16": bool(target),
+           "vulkaninfo_rc": v["rc"],
            "summary_file": "vulkaninfo-summary.txt", "full_file": "vulkaninfo.txt"}
     (outdir / "inventory.json").write_text(json.dumps(inv, indent=2))
     return inv
@@ -388,6 +404,9 @@ def build_gaps(results):
     if dev.get("software_fallback"):
         gaps.append({"area": "vulkan", "item": "device", "status": "software-fallback",
                      "detail": dev.get("deviceName")})
+    if inv.get("cooperative_matrix_properties") and not inv.get("has_16x8x16_f16"):
+        gaps.append({"area": "vulkan-compute", "item": "coopmat 16x8x16 f16", "status": "unadvertised",
+                     "detail": "only M=8/N=16 properties are exposed (Longshot needs M=16)"})
     vk = results.get("vkpeak", {})
     for k in vk.get("zero_metrics", []):
         gaps.append({"area": "vulkan-compute", "item": k, "status": "zero",

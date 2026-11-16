@@ -363,3 +363,22 @@ Detected gaps in this (stock-runtime) pass: fp8/bf8 matrix 0, fp32 coopmat
 unsupported, fp8 coopmat unsupported, and OpenCL half unsupported (fixed by the
 iris FP16 patch when that Mesa is installed).  The Level Zero GPU compute abort
 and NPU mismatch are documented separately above.
+
+## Cooperative-matrix property audit
+
+`inventory` now runs `vulkaninfo --show-all` and parses every
+`VkCooperativeMatrixPropertiesKHR`.  On stock Mesa the B390 advertises only
+`MSize=8, NSize=16, KSize=16` properties; the gap report now emits:
+
+```text
+vulkan-compute / coopmat 16x8x16 f16: unadvertised
+  only M=8/N=16 properties are exposed (Longshot needs M=16)
+```
+
+That is the exact Longshot fallback condition, now detected automatically
+without launching the game.  The repo's 16x8x16 lowering patch
+(`0214-anv-coopmat-ptx-layout.patch` + `0213`) adds the property; the packaged
+Mesa validation above covers the rusticl side.  This check will also catch a
+driver regression that removes the property.
+
+Evidence: `results/gpu-bench-20261116-coopmat/`.
