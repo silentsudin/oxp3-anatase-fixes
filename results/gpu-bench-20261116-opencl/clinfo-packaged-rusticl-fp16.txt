@@ -1,0 +1,349 @@
+Number of platforms                               1
+  Platform Name                                   rusticl
+  Platform Vendor                                 Mesa/X.org
+  Platform Version                                OpenCL 3.1 
+  Platform Profile                                FULL_PROFILE
+  Platform Extensions                             cl_khr_icd cl_khr_byte_addressable_store cl_khr_create_command_queue cl_khr_expect_assume cl_khr_extended_bit_ops cl_khr_extended_versioning cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_il_program cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_integer_dot_product cl_khr_spirv_no_integer_wrap_decoration cl_khr_spirv_queries cl_khr_suggested_local_work_size cl_ext_immutable_memory_objects cl_khr_spirv_linkonce_odr cl_khr_fp16 cl_khr_gl_sharing cl_khr_kernel_clock cl_khr_image2d_from_buffer cl_khr_3d_image_writes cl_khr_depth_images cl_ext_image_unorm_int_2_101010 cl_khr_pci_bus_info cl_khr_priority_hints cl_khr_device_uuid cl_khr_subgroup_extended_types cl_khr_subgroup_ballot cl_khr_subgroup_clustered_reduce cl_khr_subgroup_non_uniform_arithmetic cl_khr_subgroup_non_uniform_vote cl_khr_subgroup_rotate cl_khr_subgroup_shuffle cl_khr_subgroup_shuffle_relative cl_arm_import_memory cl_arm_import_memory_dma_buf cl_arm_shared_virtual_memory cl_ext_buffer_device_address cl_khr_external_semaphore cl_khr_external_semaphore_sync_fd cl_khr_semaphore cl_khr_external_memory cl_khr_external_memory_dma_buf cl_khr_external_memory_opaque_fd cl_ext_float_atomics
+  Platform Extensions with Version                cl_khr_icd                                                       0x800000 (2.0.0)
+                                                  cl_khr_byte_addressable_store                                    0x400000 (1.0.0)
+                                                  cl_khr_create_command_queue                                      0x400000 (1.0.0)
+                                                  cl_khr_expect_assume                                             0x400000 (1.0.0)
+                                                  cl_khr_extended_bit_ops                                          0x400000 (1.0.0)
+                                                  cl_khr_extended_versioning                                       0x400000 (1.0.0)
+                                                  cl_khr_global_int32_base_atomics                                 0x400000 (1.0.0)
+                                                  cl_khr_global_int32_extended_atomics                             0x400000 (1.0.0)
+                                                  cl_khr_il_program                                                0x400000 (1.0.0)
+                                                  cl_khr_local_int32_base_atomics                                  0x400000 (1.0.0)
+                                                  cl_khr_local_int32_extended_atomics                              0x400000 (1.0.0)
+                                                  cl_khr_integer_dot_product                                       0x800000 (2.0.0)
+                                                  cl_khr_spirv_no_integer_wrap_decoration                          0x400000 (1.0.0)
+                                                  cl_khr_spirv_queries                                             0x400000 (1.0.0)
+                                                  cl_khr_suggested_local_work_size                                 0x400000 (1.0.0)
+                                                  cl_ext_immutable_memory_objects                                  0x400000 (1.0.0)
+                                                  cl_khr_spirv_linkonce_odr                                        0x400000 (1.0.0)
+                                                  cl_khr_fp16                                                      0x400000 (1.0.0)
+                                                  cl_khr_gl_sharing                                                0x400000 (1.0.0)
+                                                  cl_khr_kernel_clock                                              0x400000 (1.0.0)
+                                                  cl_khr_image2d_from_buffer                                       0x400000 (1.0.0)
+                                                  cl_khr_3d_image_writes                                           0x400000 (1.0.0)
+                                                  cl_khr_depth_images                                              0x400000 (1.0.0)
+                                                  cl_ext_image_unorm_int_2_101010                                  0x400000 (1.0.0)
+                                                  cl_khr_pci_bus_info                                              0x400000 (1.0.0)
+                                                  cl_khr_priority_hints                                            0x400000 (1.0.0)
+                                                  cl_khr_device_uuid                                               0x400000 (1.0.0)
+                                                  cl_khr_subgroup_extended_types                                   0x400000 (1.0.0)
+                                                  cl_khr_subgroup_ballot                                           0x400000 (1.0.0)
+                                                  cl_khr_subgroup_clustered_reduce                                 0x400000 (1.0.0)
+                                                  cl_khr_subgroup_non_uniform_arithmetic                           0x400000 (1.0.0)
+                                                  cl_khr_subgroup_non_uniform_vote                                 0x400000 (1.0.0)
+                                                  cl_khr_subgroup_rotate                                           0x400000 (1.0.0)
+                                                  cl_khr_subgroup_shuffle                                          0x400000 (1.0.0)
+                                                  cl_khr_subgroup_shuffle_relative                                 0x400000 (1.0.0)
+                                                  cl_arm_import_memory                                             0x401000 (1.1.0)
+                                                  cl_arm_import_memory_dma_buf                                     0x401000 (1.1.0)
+                                                  cl_arm_shared_virtual_memory                                     0x400000 (1.0.0)
+                                                  cl_ext_buffer_device_address                                     0x400002 (1.0.2)
+                                                  cl_khr_external_semaphore                                        0x400001 (1.0.1)
+                                                  cl_khr_external_semaphore_sync_fd                                0x400001 (1.0.1)
+                                                  cl_khr_semaphore                                                 0x400001 (1.0.1)
+                                                  cl_khr_external_memory                                           0x400001 (1.0.1)
+                                                  cl_khr_external_memory_dma_buf                                   0x400000 (1.0.0)
+                                                  cl_khr_external_memory_opaque_fd                                 0x400000 (1.0.0)
+                                                  cl_ext_float_atomics                                             0x400000 (1.0.0)
+  Platform Numeric Version                        0xc01000 (3.1.0)
+  Platform Extensions function suffix             MESA
+  Platform Host timer resolution                  1ns
+  Platform External memory handle types           DMA buffer, Opaque FD
+  Platform Semaphore types                        Binary
+  Platform External semaphore import types        Sync FD
+  Platform External semaphore export types        Sync FD
+
+  Platform Name                                   rusticl
+Number of devices                                 1
+  Device ID (this run)                            0x55b28ff92ea0
+  Device Name                                     Mesa Intel(R) Arc(tm) B390 (PTL)
+  Device Vendor                                   Intel
+  Device Vendor ID                                0x8086
+  Device Version                                  OpenCL 3.1 
+  Device UUID                                     868080b0-0400-0000-0002-000000000000
+  Driver UUID                                     1c3221d5-3de7-24d6-38b4-3e5e2c0abdb1
+  Valid Device LUID                               No
+  Device LUID                                     0000-000000000000
+  Device Node Mask                                0
+  Device Numeric Version                          0xc01000 (3.1.0)
+  Driver Version                                  27.0.0-devel
+  Device OpenCL C Version                         OpenCL C 1.2 
+  Device OpenCL C Numeric Version                 0x402000 (1.2.0)
+  Device OpenCL C all versions                    OpenCL C                                                         0xc01000 (3.1.0)
+                                                  OpenCL C                                                         0xc00000 (3.0.0)
+                                                  OpenCL C                                                         0x402000 (1.2.0)
+                                                  OpenCL C                                                         0x401000 (1.1.0)
+                                                  OpenCL C                                                         0x400000 (1.0.0)
+  Device OpenCL C features                        __opencl_c_integer_dot_product_input_4x8bit                      0x800000 (2.0.0)
+                                                  __opencl_c_integer_dot_product_input_4x8bit_packed               0x800000 (2.0.0)
+                                                  __opencl_c_int64                                                 0x400000 (1.0.0)
+                                                  __opencl_c_kernel_clock_scope_device                             0x400000 (1.0.0)
+                                                  __opencl_c_kernel_clock_scope_sub_group                          0x400000 (1.0.0)
+                                                  __opencl_c_images                                                0x400000 (1.0.0)
+                                                  __opencl_c_3d_image_writes                                       0x400000 (1.0.0)
+                                                  __opencl_c_ext_image_unorm_int_2_101010                          0x400000 (1.0.0)
+                                                  __opencl_c_subgroups                                             0x400000 (1.0.0)
+                                                  __opencl_c_ext_fp32_global_atomic_min_max                        0x400000 (1.0.0)
+                                                  __opencl_c_ext_fp32_local_atomic_min_max                         0x400000 (1.0.0)
+  Latest conformance test passed                  v0000-01-01-00
+  Device Type                                     GPU
+  Device PCI bus info (KHR)                       PCI-E, 0000:00:02.0
+  Device Profile                                  FULL_PROFILE
+  Device Available                                Yes
+  Compiler Available                              Yes
+  Linker Available                                Yes
+  Max compute units                               12
+  Max clock frequency                             400MHz
+  Device Partition                                (core)
+    Max number of sub-devices                     0
+    Supported partition types                     None
+    Supported affinity domains                    (n/a)
+  Max work item dimensions                        3
+  Max work item sizes                             1024x1024x1024
+  Max work group size                             1024
+  Preferred work group size multiple (device)     32
+  Preferred work group size multiple (kernel)     32
+  Max sub-groups per work group                   32
+  Preferred / native vector sizes                 
+    char                                                 1 / 1       
+    short                                                1 / 1       
+    int                                                  1 / 1       
+    long                                                 1 / 1       
+    half                                                 1 / 1        (cl_khr_fp16)
+    float                                                1 / 1       
+    double                                               0 / 0        (n/a)
+  Integer dot product capabilities                4x8bit packed, 4x8bit
+    4x8bit dot product acceleration               signed, unsigned, mixed signedness, accumulating saturating signed, accumulating saturating unsigned, accumulating saturating mixed signedness
+    4x8bit packed dot product acceleration        signed, unsigned, mixed signedness, accumulating saturating signed, accumulating saturating unsigned, accumulating saturating mixed signedness
+  Half-precision Floating-point support           (cl_khr_fp16)
+    Denormals                                     No
+    Infinity and NANs                             Yes
+    Round to nearest                              Yes
+    Round to zero                                 No
+    Round to infinity                             No
+    IEEE754-2008 fused multiply-add               Yes
+    Support is emulated in software               No
+  Single-precision Floating-point support         (core)
+    Denormals                                     No
+    Infinity and NANs                             Yes
+    Round to nearest                              Yes
+    Round to zero                                 No
+    Round to infinity                             No
+    IEEE754-2008 fused multiply-add               Yes
+    Support is emulated in software               No
+    Correctly-rounded divide and sqrt operations  No
+  Double-precision Floating-point support         (n/a)
+  Address bits                                    64, Little-Endian
+  External memory handle types                    DMA buffer, Opaque FD
+  External memory assume linear img handle types  DMA buffer, Opaque FD
+  Semaphore types                                 Binary
+  External semaphore import types                 Sync FD
+  External semaphore export types                 Sync FD
+  Global memory size                              33154686976 (30.88GiB)
+  Error Correction support                        No
+  Max memory allocation                           1073741824 (1024MiB)
+  Unified memory for Host and Device              Yes
+  Shared Virtual Memory (SVM) capabilities        (core)
+    Coarse-grained buffer sharing                 Yes
+    Fine-grained buffer sharing                   No
+    Fine-grained system sharing                   No
+    Atomics                                       No
+  Shared Virtual Memory (SVM) capabilities (ARM)  
+    Coarse-grained buffer sharing                 Yes
+    Fine-grained buffer sharing                   No
+    Fine-grained system sharing                   No
+    Atomics                                       No
+  Minimum alignment for any data type             128 bytes
+  Alignment of base address                       1024 bits (128 bytes)
+  Preferred alignment for atomics                 
+    SVM                                           0 bytes
+    Global                                        0 bytes
+    Local                                         0 bytes
+  Atomic memory capabilities                      relaxed, work-group scope
+  Atomic fence capabilities                       relaxed, acquire/release, work-group scope
+  Half-precision Floating-point atomic capabilities  
+    Global Load/Store                             No
+    Global Add                                    No
+    Global Min/Max                                No
+    Local Load/Store                              No
+    Local Add                                     No
+    Local Min/Max                                 No
+  Single-precision Floating-point atomic capabilities  
+    Global Load/Store                             Yes
+    Global Add                                    No
+    Global Min/Max                                Yes
+    Local Load/Store                              Yes
+    Local Add                                     No
+    Local Min/Max                                 Yes
+  Max size for global variable                    0
+  Preferred total size of global vars             0
+  Global Memory cache type                        None
+  Image support                                   Yes
+    Max number of samplers per kernel             32
+    Max size for 1D images from buffer            67108864 pixels
+    Max 1D or 2D image array size                 2048 images
+    Base address alignment for 2D image buffers   1 bytes
+    Pitch alignment for 2D image buffers          1 pixels
+    Max 2D image size                             16384x16384 pixels
+    Max 3D image size                             2048x2048x2048 pixels
+    Max number of read image args                 128
+    Max number of write image args                64
+    Max number of read/write image args           0
+  Pipe support                                    No
+  Max number of pipe args                         0
+  Max active pipe reservations                    0
+  Max pipe packet size                            0
+  Local memory type                               Global
+  Local memory size                               65536 (64KiB)
+  Max number of constant args                     16
+  Max constant buffer size                        67108864 (64MiB)
+  Generic address space support                   No
+  Max size of kernel argument                     4096 (4KiB)
+  Queue properties (on host)                      
+    Out-of-order execution                        Yes
+    Profiling                                     Yes
+  Device enqueue capabilities                     (n/a)
+  Queue properties (on device)                    
+    Out-of-order execution                        No
+    Profiling                                     No
+    Preferred size                                0
+    Max size                                      0
+  Max queues on device                            0
+  Max events on device                            0
+  Prefer user sync for interop                    Yes
+  Profiling timer resolution                      53ns
+  Execution capabilities                          
+    Run OpenCL kernels                            Yes
+    Run native kernels                            No
+    Non-uniform work-groups                       No
+    Work-group collective functions               No
+    Sub-group independent forward progress        No
+    IL version                                    SPIR-V_1.0 SPIR-V_1.1 SPIR-V_1.2 SPIR-V_1.3 SPIR-V_1.4 SPIR-V_1.5 SPIR-V_1.6
+    ILs with version                              SPIR-V                                                           0x400000 (1.0.0)
+                                                  SPIR-V                                                           0x401000 (1.1.0)
+                                                  SPIR-V                                                           0x402000 (1.2.0)
+                                                  SPIR-V                                                           0x403000 (1.3.0)
+                                                  SPIR-V                                                           0x404000 (1.4.0)
+                                                  SPIR-V                                                           0x405000 (1.5.0)
+                                                  SPIR-V                                                           0x406000 (1.6.0)
+    SPIR-V extended instruction sets              OpenCL.std
+    SPIR-V extensions                             SPV_KHR_bit_instructions
+                                                  SPV_KHR_expect_assume
+                                                  SPV_KHR_float_controls
+                                                  SPV_KHR_integer_dot_product
+                                                  SPV_KHR_no_integer_wrap_decoration
+                                                  SPV_KHR_linkonce_odr
+                                                  SPV_KHR_shader_clock
+                                                  SPV_KHR_subgroup_rotate
+                                                  SPV_EXT_shader_atomic_float_min_max
+    SPIR-V capabilities                           Addresses (4)
+                                                  BitInstructions (6025)
+                                                  DotProduct / DotProductKHR (6019)
+                                                  DotProductInput4x8Bit / DotProductInput4x8BitKHR (6017)
+                                                  DotProductInput4x8BitPacked / DotProductInput4x8BitPackedKHR (6018)
+                                                  ExpectAssumeKHR (5629)
+                                                  Float16Buffer (8)
+                                                  Int8 (39)
+                                                  Int16 (22)
+                                                  Linkage (5)
+                                                  Kernel (6)
+                                                  UniformDecoration (71)
+                                                  Vector16 (7)
+                                                  Float16 (9)
+                                                  Int64 (11)
+                                                  ShaderClockKHR (5055)
+                                                  Image1D (44)
+                                                  ImageBasic (13)
+                                                  ImageBuffer (47)
+                                                  LiteralSampler (20)
+                                                  Sampled1D (43)
+                                                  SampledBuffer (46)
+                                                  Groups (18)
+                                                  SubgroupDispatch (58)
+                                                  GroupNonUniformBallot (64)
+                                                  GroupNonUniformClustered (67)
+                                                  GroupNonUniformArithmetic (63)
+                                                  GroupNonUniform (61)
+                                                  GroupNonUniformVote (62)
+                                                  GroupNonUniformRotateKHR (6026)
+                                                  GroupNonUniformShuffle (65)
+                                                  GroupNonUniformShuffleRelative (66)
+                                                  AtomicFloat32MinMaxEXT (5612)
+  printf() buffer size                            1048576 (1024KiB)
+  Built-in kernels                                (n/a)
+  Built-in kernels with version                   (n/a)
+  Device Extensions                               cl_khr_byte_addressable_store cl_khr_create_command_queue cl_khr_expect_assume cl_khr_extended_bit_ops cl_khr_extended_versioning cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_il_program cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_integer_dot_product cl_khr_spirv_no_integer_wrap_decoration cl_khr_spirv_queries cl_khr_suggested_local_work_size cl_ext_immutable_memory_objects cl_khr_spirv_linkonce_odr cl_khr_fp16 cl_khr_gl_sharing cl_khr_kernel_clock cl_khr_image2d_from_buffer cl_khr_3d_image_writes cl_khr_depth_images cl_ext_image_unorm_int_2_101010 cl_khr_pci_bus_info cl_khr_priority_hints cl_khr_device_uuid cl_khr_subgroup_extended_types cl_khr_subgroup_ballot cl_khr_subgroup_clustered_reduce cl_khr_subgroup_non_uniform_arithmetic cl_khr_subgroup_non_uniform_vote cl_khr_subgroup_rotate cl_khr_subgroup_shuffle cl_khr_subgroup_shuffle_relative cl_arm_import_memory cl_arm_import_memory_dma_buf cl_arm_shared_virtual_memory cl_ext_buffer_device_address cl_khr_external_semaphore cl_khr_external_semaphore_sync_fd cl_khr_semaphore cl_khr_external_memory cl_khr_external_memory_dma_buf cl_khr_external_memory_opaque_fd cl_ext_float_atomics
+  Device Extensions with Version                  cl_khr_byte_addressable_store                                    0x400000 (1.0.0)
+                                                  cl_khr_create_command_queue                                      0x400000 (1.0.0)
+                                                  cl_khr_expect_assume                                             0x400000 (1.0.0)
+                                                  cl_khr_extended_bit_ops                                          0x400000 (1.0.0)
+                                                  cl_khr_extended_versioning                                       0x400000 (1.0.0)
+                                                  cl_khr_global_int32_base_atomics                                 0x400000 (1.0.0)
+                                                  cl_khr_global_int32_extended_atomics                             0x400000 (1.0.0)
+                                                  cl_khr_il_program                                                0x400000 (1.0.0)
+                                                  cl_khr_local_int32_base_atomics                                  0x400000 (1.0.0)
+                                                  cl_khr_local_int32_extended_atomics                              0x400000 (1.0.0)
+                                                  cl_khr_integer_dot_product                                       0x800000 (2.0.0)
+                                                  cl_khr_spirv_no_integer_wrap_decoration                          0x400000 (1.0.0)
+                                                  cl_khr_spirv_queries                                             0x400000 (1.0.0)
+                                                  cl_khr_suggested_local_work_size                                 0x400000 (1.0.0)
+                                                  cl_ext_immutable_memory_objects                                  0x400000 (1.0.0)
+                                                  cl_khr_spirv_linkonce_odr                                        0x400000 (1.0.0)
+                                                  cl_khr_fp16                                                      0x400000 (1.0.0)
+                                                  cl_khr_gl_sharing                                                0x400000 (1.0.0)
+                                                  cl_khr_kernel_clock                                              0x400000 (1.0.0)
+                                                  cl_khr_image2d_from_buffer                                       0x400000 (1.0.0)
+                                                  cl_khr_3d_image_writes                                           0x400000 (1.0.0)
+                                                  cl_khr_depth_images                                              0x400000 (1.0.0)
+                                                  cl_ext_image_unorm_int_2_101010                                  0x400000 (1.0.0)
+                                                  cl_khr_pci_bus_info                                              0x400000 (1.0.0)
+                                                  cl_khr_priority_hints                                            0x400000 (1.0.0)
+                                                  cl_khr_device_uuid                                               0x400000 (1.0.0)
+                                                  cl_khr_subgroup_extended_types                                   0x400000 (1.0.0)
+                                                  cl_khr_subgroup_ballot                                           0x400000 (1.0.0)
+                                                  cl_khr_subgroup_clustered_reduce                                 0x400000 (1.0.0)
+                                                  cl_khr_subgroup_non_uniform_arithmetic                           0x400000 (1.0.0)
+                                                  cl_khr_subgroup_non_uniform_vote                                 0x400000 (1.0.0)
+                                                  cl_khr_subgroup_rotate                                           0x400000 (1.0.0)
+                                                  cl_khr_subgroup_shuffle                                          0x400000 (1.0.0)
+                                                  cl_khr_subgroup_shuffle_relative                                 0x400000 (1.0.0)
+                                                  cl_arm_import_memory                                             0x401000 (1.1.0)
+                                                  cl_arm_import_memory_dma_buf                                     0x401000 (1.1.0)
+                                                  cl_arm_shared_virtual_memory                                     0x400000 (1.0.0)
+                                                  cl_ext_buffer_device_address                                     0x400002 (1.0.2)
+                                                  cl_khr_external_semaphore                                        0x400001 (1.0.1)
+                                                  cl_khr_external_semaphore_sync_fd                                0x400001 (1.0.1)
+                                                  cl_khr_semaphore                                                 0x400001 (1.0.1)
+                                                  cl_khr_external_memory                                           0x400001 (1.0.1)
+                                                  cl_khr_external_memory_dma_buf                                   0x400000 (1.0.0)
+                                                  cl_khr_external_memory_opaque_fd                                 0x400000 (1.0.0)
+                                                  cl_ext_float_atomics                                             0x400000 (1.0.0)
+
+NULL platform behavior
+  clGetPlatformInfo(NULL, CL_PLATFORM_NAME, ...)  No platform
+  clGetDeviceIDs(NULL, CL_DEVICE_TYPE_ALL, ...)   No platform
+  clCreateContext(NULL, ...) [default]            No platform
+  clCreateContext(NULL, ...) [other]              Success [MESA]
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_DEFAULT)  Success (1)
+    Platform Name                                 rusticl
+    Device Name                                   Mesa Intel(R) Arc(tm) B390 (PTL)
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_CPU)  No devices found in platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_GPU)  Success (1)
+    Platform Name                                 rusticl
+    Device Name                                   Mesa Intel(R) Arc(tm) B390 (PTL)
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_ACCELERATOR)  No devices found in platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_CUSTOM)  No devices found in platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_ALL)  Success (1)
+    Platform Name                                 rusticl
+    Device Name                                   Mesa Intel(R) Arc(tm) B390 (PTL)
+
+ICD loader properties
+  ICD loader Name                                 Khronos OpenCL ICD Loader
+  ICD loader Vendor                               Khronos Group
+  ICD loader Version                              3.1.0
+  ICD loader Profile                              OpenCL 3.1

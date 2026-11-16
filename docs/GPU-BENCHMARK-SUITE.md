@@ -309,3 +309,27 @@ or running the compute workload through Vulkan/rusticl instead.
 The NPU path is separate: with the extracted `intel-npu-driver`, OpenVINO enumerates
 `Intel(R) AI Boost`, but compile fails with `ZE_RESULT_ERROR_UNSUPPORTED_FEATURE`
 (see the AI/NPU section) - likely the same driver/firmware generation mismatch.
+
+## Packaged Mesa validates the FP16 fix
+
+The normal Mesa RPM pipeline (`./oxp3-fixes.sh build`) was rebuilt with
+`patches/mesa/0215-iris-enable-fp16-for-rusticl.patch`.  The resulting
+`mesa-libOpenCL-27.0.0-devel` package was extracted and run with a custom ICD:
+
+```text
+/usr/lib64/libRusticlOpenCL.so.1   -> rusticl 27.0.0-devel
+cl_khr_fp16                        0x400000 (1.0.0)
+half                               1 / 1 (cl_khr_fp16)
+```
+
+clpeak OpenCL on the packaged driver:
+
+```text
+half   : 11.25 TFLOPS   half2 : 9.46   half4 : 10.95
+half8  : 10.85          half16: 8.97
+```
+
+So the one-line iris cap survives the real packaging path, not just the ad-hoc
+container build.  Installing these Mesa RPMs system-wide should give the same
+rusticl FP16 support; the remaining caveat is the Fedora/upstream libclc mismatch
+(the user-space shim was still used for this test).
