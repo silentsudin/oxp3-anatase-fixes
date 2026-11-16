@@ -388,3 +388,22 @@ start-gamescope gamescope-wl wine wine64 wine-preloader reaper
 ```
 
 The catch-all remains for normal games.
+
+## Resolved: Elden Ring starts with lpmd active
+
+After exempting the full Steam/Wine chain with `<AllowSession>1</AllowSession>`, ER
+was launched from `steam -applaunch 1245620` and stayed alive at the title screen
+(past 60 s), with `eldenring.exe` at 0-9 and the launcher chain at 0-13:
+
+```text
+steam 0-13  steamwebhelper 0-13  steam-runtime-l 0-13
+pressure-vessel 0-13  pv-adverb 0-13  wine 0-13
+start_protected 0-13  wineserver 0-13
+eldenring.exe 0-9 (catch-all)
+```
+
+Previously the same launch died after ~6 s because Steam was `user_initiated` (2-13),
+Wine/EAC inherited E+LP-E with no P-cores, and only the game itself got 0-9.
+
+The fix is the exemption fragment plus `AllowSession=1`; the catch-all still applies
+to ordinary games.
