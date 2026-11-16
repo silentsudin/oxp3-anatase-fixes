@@ -24,17 +24,21 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo $0 ...)"
 
 mode=${1:-status}
+shift || true
+dry=0
+[ "${1:-}" = "--dry-run" ] && dry=1
 case $mode in
 gaming)
-    exec_line=/usr/bin/scx_cosmos\ -c\ 0\ -p\ 0
+    exec_line="/usr/bin/scx_cosmos -c 0 -p 0"
     ;;
 lowlat)
-    exec_line=/usr/bin/scx_cosmos\ -c\ 0\ -p\ 0\ -m\ performance\ --primary-overload-us\ 1000
+    exec_line="/usr/bin/scx_cosmos -c 0 -p 0 -m performance --primary-overload-us 1000"
     ;;
 lowlat-fast)
-    exec_line=/usr/bin/scx_cosmos\ -c\ 0\ -p\ 0\ -m\ performance\ --primary-overload-us\ 1000\ -P
+    exec_line="/usr/bin/scx_cosmos -c 0 -p 0 -m performance --primary-overload-us 1000 -P"
     ;;
 eevdf)
+    if [ "$dry" = 1 ]; then say "dry-run: systemctl disable --now $unit"; exit 0; fi
     say "disabling $unit (kernel EEVDF)"
     systemctl disable --now "$unit" || true
     exit 0
@@ -48,6 +52,11 @@ status)
 *) die "unknown mode '$mode' (gaming|lowlat|lowlat-fast|eevdf|status)" ;;
 esac
 
+if [ "$dry" = 1 ]; then
+    say "dry-run: $dropin"
+    printf '[Service]\nExecStart=\nExecStart=%s\n' "$exec_line"
+    exit 0
+fi
 mkdir -p "$(dirname "$dropin")"
 cat > "$dropin" <<CONF
 [Service]
