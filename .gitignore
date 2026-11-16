@@ -22,3 +22,4 @@ node_modules/
 docs/state/sleep-cycles-*/
 docs/state/firstrun-*/
 docs/state/fp-session-*/
+tools/gpu-bench/*-env.sh

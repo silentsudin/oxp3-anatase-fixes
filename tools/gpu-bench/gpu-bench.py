@@ -27,6 +27,10 @@ TOOLS = CACHE / "tools"
 
 # oneVPL GPU runtime (intel-vpl-gpu-rt) extracted by media-setup.sh: without it
 # hevc_qsv fails with "Error creating a MFX session: -9".
+_npu = TOOLS / "npu" / "usr" / "lib" / "x86_64-linux-gnu"
+_ze = TOOLS / "npu" / "ze" / "lib64"
+if _npu.exists():
+    os.environ["LD_LIBRARY_PATH"] = str(_npu) + ":" + str(_ze) + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
 _vpl = TOOLS / "vpl" / "usr" / "lib64"
 if _vpl.exists():
     os.environ["LD_LIBRARY_PATH"] = str(_vpl) + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
@@ -345,6 +349,30 @@ def bench_gravity(outdir, rt=False, asteroids=50000):
     (outdir / f"gravitymark-{tag}.json").write_text(json.dumps(res, indent=2))
     return res
 
+def bench_ai(outdir):
+    bench = TOOLS / "ov" / "bin" / "benchmark_app"
+    models = TOOLS / "ov-models"
+    if not bench.exists() or not (models / "add.xml").exists():
+        return {"status": "missing", "path": str(bench)}
+    res = {"status": "ok", "tests": {}}
+    for model in ("add", "conv"):
+        for device in ("NPU", "CPU"):
+            key = f"{model}-{device}"
+            r = run([str(bench), "-m", str(models / f"{model}.xml"), "-d", device,
+                     "-niter", "100", "-api", "sync"], timeout=180,
+                    log_path=outdir / f"ai-{key}.txt")
+            def num(pat):
+                m = re.search(pat, r["output"])
+                return float(m.group(1)) if m else None
+            res["tests"][key] = {
+                "status": "ok" if r["rc"] == 0 and "Throughput" in r["output"] else "error",
+                "throughput_fps": num(r"Throughput:\s*([0-9.]+)"),
+                "median_ms": (lambda m: (float(m.group(1)) / 1000.0 if m.group(2) == "us" else float(m.group(1))) if m else None)(re.search(r"Median:\s*([0-9.]+)\s*(us|ms)", r["output"])),
+                "first_inference_ms": num(r"First inference took\s*([0-9.]+)\s*ms"),
+                "rc": r["rc"], "output": r["output"][-2000:]}
+    (outdir / "ai.json").write_text(json.dumps(res, indent=2))
+    return res
+
 def bench_blender(outdir):
     exe = TOOLS / "blender" / "blender"
     if not exe.exists():
@@ -439,6 +467,7 @@ def main():
     ap.add_argument("--gravitymark-rt", action="store_true", help="also run GravityMark ray tracing")
     ap.add_argument("--blender", action="store_true", help="also run a Blender Cycles CPU render")
     ap.add_argument("--full", action="store_true", help="run graphics/RT/render extras too")
+    ap.add_argument("--ai", action="store_true", help="also run OpenVINO NPU/CPU models")
     ap.add_argument("--skip-vkpeak", action="store_true")
     args = ap.parse_args()
     if args.full:
@@ -466,6 +495,8 @@ def main():
         print("gravitymark RT..."); results["gravitymark_rt"] = bench_gravity(outdir, True, 20000)
     if args.blender:
         print("blender..."); results["blender"] = bench_blender(outdir)
+    if args.ai:
+        print("ai..."); results["ai"] = bench_ai(outdir)
     print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
     results["gaps"] = build_gaps(results)
     (outdir / "gaps.json").write_text(json.dumps(results["gaps"], indent=2))
@@ -515,6 +546,12 @@ def main():
         if g.get("fps") is not None:
             lines += [f"## {label}", "", f"score: **{g.get('score')}** fps: **{g.get('fps')}** "
                       f"(scene {g.get('scene_seconds')} s)", ""]
+    ai = results.get("ai", {})
+    if isinstance(ai, dict) and ai.get("tests"):
+        lines += ["## OpenVINO", "", "| model-device | throughput (FPS) | median (ms) |", "|---|---:|---:|"]
+        for k, v in ai["tests"].items():
+            lines.append(f"| {k} | {v.get('throughput_fps')} | {v.get('median_ms')} |")
+        lines.append("")
     bl = results.get("blender", {})
     if bl.get("time"):
         lines += ["## Blender Cycles", "", f"CPU render: **{bl['time']}**", ""]

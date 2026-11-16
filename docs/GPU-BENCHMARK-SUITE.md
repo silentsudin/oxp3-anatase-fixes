@@ -382,3 +382,23 @@ Mesa validation above covers the rusticl side.  This check will also catch a
 driver regression that removes the property.
 
 Evidence: `results/gpu-bench-20261116-coopmat/`.
+
+### Update: NPU driver 1.38 fixes the NPU path
+
+The 1.32 NPU driver failure was a version mismatch.  Intel's **1.38.0** release
+(`linux-npu-driver` v1.38.0, Ubuntu 24.04 deb) compiles and runs the same models:
+
+```text
+add-NPU   11805 FPS   median 0.078 ms
+add-CPU  107842 FPS   median 0.004 ms
+conv-NPU  3495 FPS    median 0.230 ms
+conv-CPU  4429 FPS    median 0.126 ms
+```
+
+`ai-setup.sh` downloads 1.38, extracts the NPU/compiler and Level Zero loader into
+the user cache, creates a Python 3.12 OpenVINO venv, and generates the two tiny IR
+models via `ai-models.py`.  `gpu-bench.py --ai` runs NPU and CPU and adds the table
+above.  The models are deliberately tiny (latency-dominated); the important result
+is that the OpenVINO NPU compile path now works.
+
+Artifacts: `results/gpu-bench-20261116-ai/`.
