@@ -283,3 +283,12 @@ P+E; system-slice daemons are not touched by `<DefaultProcess>` and keep the nam
 If a specific game later needs a different mask (e.g. P-only for a single-threaded
 title), add a `<Process>` entry with `game_profile_cpu`; otherwise the catch-all covers
 it.
+
+## Catch-all parsing order bug
+
+`<DefaultProcess>` is parsed in the first pass, before the overlay
+`<ClassDefaults>` block is applied, so its mask was resolved from the **system**
+`custom_profile_0` default (all CPUs) and then never re-resolved.  The catch-all
+therefore appeared inert.  Fix: give it an explicit
+`<ActiveCores>ActivePcores,ActiveEcores</ActiveCores>` (groups are resolved at attach
+time from `<CpuGroups>`), which is independent of the ClassDefaults ordering.

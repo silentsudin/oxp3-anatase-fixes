@@ -139,6 +139,7 @@ for item in games.split():
 ''')
 if '\n    <DefaultProcess>\n' not in s:
     default = """    <DefaultProcess>
+        <ActiveCores>ActivePcores,ActiveEcores</ActiveCores>
         <Classification>custom_profile_0</Classification>
         <AffinityAllThreads>1</AffinityAllThreads>
     </DefaultProcess>
