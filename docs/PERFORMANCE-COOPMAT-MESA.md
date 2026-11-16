@@ -152,3 +152,23 @@ needs an extra zero-padded B slice and two accumulator slices.
 Run cooperative-matrix shaders at subgroup 16 (what llama.cpp does for Xe2). Requires an
 application change, because Longshot explicitly requests `requiredSubgroupSize = 32`;
 forcing SIMD16 makes pipeline creation fail (verified: VkResult -77).
+
+## M=8 path verified correct; swap lowering is at 64/128
+
+Two new diagnostics in the instrumented Longshot settle the question of where the
+defect is:
+
+- `RX_DIAG_M8=1` runs A(8x16) * B(16x16) + C(8x16) from plain row-major
+  `OpCooperativeMatrixLoadKHR` operands and checks the result in the measured
+  C 8x16 layout: **0 of 128 elements differ**.  Mesa's DPAS M=8, N=16 path is
+  correct at 32 lanes.
+- `RX_DIAG_IDENT=1` runs A = I(16x16), B[k][n] = 100 + 8k + n, C = 0 through the
+  same cooperative-matrix types Longshot uses.  The result is exactly half
+  correct: C rows 8..15 verify, rows 0..7 do not, and the raw result slice dump
+  shows the DPAS destination registers do not land where the C 8x16 load layout
+  would put them for that half.
+
+The M=16, N=8 swap lowering (Ahw = B^T 8x16, Bhw = A^T 16x16, D = C^T) is
+implemented and reaches 64/128 correct, up from 124-125/128 wrong.  Since the
+M=8 path is proven correct, the remaining defect is confined to the operand/result
+conversions of the swap lowering, not to DPAS or the layout measurements.
