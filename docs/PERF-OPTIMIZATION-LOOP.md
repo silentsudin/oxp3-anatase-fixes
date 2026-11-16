@@ -96,3 +96,21 @@ The large spread is real run-to-run variance on these tiny graphs; the direction
 was consistent across alternating runs.  CPU inference remains handled by
 OpenVINO's own `-pin YES` policy.  Artifacts:
 `results/gpu-bench-20261116-ai-accel-aff/`.
+
+## Post-optimization full suite (2026-11-16 19:47)
+
+Compared with the pre-optimization complete run, the accepted settings produce:
+
+| metric | before | after | delta |
+|---|---:|---:|---:|
+| OpenVINO add CPU | 102.6k FPS | 158.0k FPS | +54% |
+| OpenVINO add GPU | 25.9k FPS | 41.3k FPS | +60% |
+| OpenVINO add NPU | 11.3k FPS | 19.9k FPS | +75% |
+| OpenVINO conv CPU | 4.26k FPS | 6.56k FPS | +54% |
+| OpenVINO conv GPU | 3.33k FPS | 4.64k FPS | +39% |
+| OpenVINO conv NPU | 3.49k FPS | 5.36k FPS | +54% |
+
+Vulkan/RT/CTS/vkmark are within noise of the prior complete baseline.  The
+optimized run also recorded GravityMark raster 38798/232.3 fps, RT
+33391/199.9 fps, Blender CPU 17.0 s / oneAPI 15.1 s.
+Artifacts: `results/gpu-bench-20261116-optimized/`.

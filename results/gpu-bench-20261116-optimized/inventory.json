@@ -1,0 +1,139 @@
+{
+  "device": {
+    "deviceName": "Intel(R) Arc(tm) B390 (PTL)",
+    "driverName": "Intel open-source Mesa driver",
+    "driverInfo": "Mesa 27.0.0-devel",
+    "apiVersion": "1.4.368",
+    "software_fallback": false,
+    "is_intel": true
+  },
+  "extensions": [
+    "VK_AMDX_",
+    "VK_AMD_",
+    "VK_ANDROID_",
+    "VK_ARM_",
+    "VK_EXT_",
+    "VK_EXT_4444_",
+    "VK_GOOGLE_",
+    "VK_INTEL_",
+    "VK_KHR_",
+    "VK_KHR_16",
+    "VK_KHR_8",
+    "VK_LAYER_FROG_",
+    "VK_LAYER_KHRONOS_",
+    "VK_LAYER_MANGOHUD_",
+    "VK_LAYER_MESA_",
+    "VK_LAYER_NV_",
+    "VK_LAYER_VALVE_",
+    "VK_LUNARG_",
+    "VK_MESA_",
+    "VK_NV_",
+    "VK_VALVE_"
+  ],
+  "cooperative_matrix_properties": [
+    {
+      "MSize": 8,
+      "NSize": 16,
+      "KSize": 16,
+      "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "CType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "ResultType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 16,
+      "KSize": 16,
+      "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+      "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 16,
+      "KSize": 16,
+      "AType": "COMPONENT_TYPE_BFLOAT16_KHR",
+      "BType": "COMPONENT_TYPE_BFLOAT16_KHR",
+      "CType": "COMPONENT_TYPE_BFLOAT16_KHR",
+      "ResultType": "COMPONENT_TYPE_BFLOAT16_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 16,
+      "KSize": 16,
+      "AType": "COMPONENT_TYPE_BFLOAT16_KHR",
+      "BType": "COMPONENT_TYPE_BFLOAT16_KHR",
+      "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+      "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 16,
+      "KSize": 32,
+      "AType": "COMPONENT_TYPE_SINT8_KHR",
+      "BType": "COMPONENT_TYPE_SINT8_KHR",
+      "CType": "COMPONENT_TYPE_SINT32_KHR",
+      "ResultType": "COMPONENT_TYPE_SINT32_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 16,
+      "KSize": 32,
+      "AType": "COMPONENT_TYPE_UINT8_KHR",
+      "BType": "COMPONENT_TYPE_UINT8_KHR",
+      "CType": "COMPONENT_TYPE_UINT32_KHR",
+      "ResultType": "COMPONENT_TYPE_UINT32_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 8,
+      "KSize": 8,
+      "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "CType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "ResultType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 8,
+      "KSize": 8,
+      "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+      "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+      "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 8,
+      "KSize": 8,
+      "AType": "COMPONENT_TYPE_UINT8_KHR",
+      "BType": "COMPONENT_TYPE_UINT8_KHR",
+      "CType": "COMPONENT_TYPE_UINT32_KHR",
+      "ResultType": "COMPONENT_TYPE_UINT32_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    },
+    {
+      "MSize": 8,
+      "NSize": 8,
+      "KSize": 8,
+      "AType": "COMPONENT_TYPE_SINT8_KHR",
+      "BType": "COMPONENT_TYPE_SINT8_KHR",
+      "CType": "COMPONENT_TYPE_SINT32_KHR",
+      "ResultType": "COMPONENT_TYPE_SINT32_KHR",
+      "scope": "SCOPE_SUBGROUP_KHR"
+    }
+  ],
+  "has_16x8x16_f16": false,
+  "vulkaninfo_rc": 0,
+  "summary_file": "vulkaninfo-summary.txt",
+  "full_file": "vulkaninfo.txt"
+}

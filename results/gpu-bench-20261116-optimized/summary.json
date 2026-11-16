@@ -1,0 +1,1514 @@
+{
+  "meta": {
+    "timestamp": "2026-11-16T19:39:12.215494+00:00",
+    "kernel": "7.3.4-an02.fc45.x86_64",
+    "cmdline": "BOOT_IMAGE=(hd0,gpt2)/ostree/anatase-bfd8bdbfb0a4e47ed71af5229ecd7075790c1259e8d9f3e480f7aebf7a6de01a/vmlinuz-7.3.4-an02.fc45.x86_64 ostree=/ostree/boot.0/anatase/bfd8bdbfb0a4e47ed71af5229ecd7075790c1259e8d9f3e480f7aebf7a6de01a/0 rhgb quiet root=UUID=a245ffab-5073-45ee-b3ed-e7ecdec29275 vconsole.keymap=us rootflags=subvol=root rw xe.enable_panel_replay=0 nvme.noacpi=1",
+    "sched_ext": "cosmos_1.1.7_x86_64_unknown_linux_gnu",
+    "governor": "powersave",
+    "epp": "balance_power",
+    "gpu_busy": null,
+    "intel_lpmd": "active",
+    "lspci_vga": "00:02.0 VGA compatible controller [0300]: Intel Corporation Panther Lake [Arc B390] [8086:b080] (rev 04)"
+  },
+  "inventory": {
+    "device": {
+      "deviceName": "Intel(R) Arc(tm) B390 (PTL)",
+      "driverName": "Intel open-source Mesa driver",
+      "driverInfo": "Mesa 27.0.0-devel",
+      "apiVersion": "1.4.368",
+      "software_fallback": false,
+      "is_intel": true
+    },
+    "extensions": [
+      "VK_AMDX_",
+      "VK_AMD_",
+      "VK_ANDROID_",
+      "VK_ARM_",
+      "VK_EXT_",
+      "VK_EXT_4444_",
+      "VK_GOOGLE_",
+      "VK_INTEL_",
+      "VK_KHR_",
+      "VK_KHR_16",
+      "VK_KHR_8",
+      "VK_LAYER_FROG_",
+      "VK_LAYER_KHRONOS_",
+      "VK_LAYER_MANGOHUD_",
+      "VK_LAYER_MESA_",
+      "VK_LAYER_NV_",
+      "VK_LAYER_VALVE_",
+      "VK_LUNARG_",
+      "VK_MESA_",
+      "VK_NV_",
+      "VK_VALVE_"
+    ],
+    "cooperative_matrix_properties": [
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 16,
+        "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 16,
+        "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 16,
+        "AType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "ResultType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 16,
+        "AType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 32,
+        "AType": "COMPONENT_TYPE_SINT8_KHR",
+        "BType": "COMPONENT_TYPE_SINT8_KHR",
+        "CType": "COMPONENT_TYPE_SINT32_KHR",
+        "ResultType": "COMPONENT_TYPE_SINT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 32,
+        "AType": "COMPONENT_TYPE_UINT8_KHR",
+        "BType": "COMPONENT_TYPE_UINT8_KHR",
+        "CType": "COMPONENT_TYPE_UINT32_KHR",
+        "ResultType": "COMPONENT_TYPE_UINT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 8,
+        "KSize": 8,
+        "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 8,
+        "KSize": 8,
+        "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 8,
+        "KSize": 8,
+        "AType": "COMPONENT_TYPE_UINT8_KHR",
+        "BType": "COMPONENT_TYPE_UINT8_KHR",
+        "CType": "COMPONENT_TYPE_UINT32_KHR",
+        "ResultType": "COMPONENT_TYPE_UINT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 8,
+        "KSize": 8,
+        "AType": "COMPONENT_TYPE_SINT8_KHR",
+        "BType": "COMPONENT_TYPE_SINT8_KHR",
+        "CType": "COMPONENT_TYPE_SINT32_KHR",
+        "ResultType": "COMPONENT_TYPE_SINT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      }
+    ],
+    "has_16x8x16_f16": false,
+    "vulkaninfo_rc": 0,
+    "summary_file": "vulkaninfo-summary.txt",
+    "full_file": "vulkaninfo.txt"
+  },
+  "opencl": {
+    "installed": true,
+    "platforms": 1,
+    "device_lines": 3,
+    "raw": "Platform #0: rusticl\n `-- Device #0: Mesa Intel(R) Arc(tm) B390 (PTL)\n\n[stderr]\n=== Rusticl warning: Patched Mesa libclc not detected. Upstream libclc may contain known bugs or breaking changes and isn't guaranteed to work reliably. Please visit https://gitlab.freedesktop.org/karolherbst/mesa-libclc for more information. ===\n"
+  },
+  "vkpeak": {
+    "status": "ok",
+    "metrics": {
+      "fp32-scalar": {
+        "value": 6226.85,
+        "unit": "GFLOPS"
+      },
+      "fp32-vec4": {
+        "value": 4338.17,
+        "unit": "GFLOPS"
+      },
+      "fp16-scalar": {
+        "value": 6546.7,
+        "unit": "GFLOPS"
+      },
+      "fp16-vec4": {
+        "value": 6735.1,
+        "unit": "GFLOPS"
+      },
+      "fp16-matrix": {
+        "value": 52039.88,
+        "unit": "GFLOPS"
+      },
+      "fp64-scalar": {
+        "value": 341.61,
+        "unit": "GFLOPS"
+      },
+      "fp64-vec4": {
+        "value": 350.26,
+        "unit": "GFLOPS"
+      },
+      "int32-scalar": {
+        "value": 1770.72,
+        "unit": "GIOPS"
+      },
+      "int32-vec4": {
+        "value": 1970.43,
+        "unit": "GIOPS"
+      },
+      "int16-scalar": {
+        "value": 2808.51,
+        "unit": "GIOPS"
+      },
+      "int16-vec4": {
+        "value": 5335.13,
+        "unit": "GIOPS"
+      },
+      "int64-scalar": {
+        "value": 377.87,
+        "unit": "GIOPS"
+      },
+      "int64-vec4": {
+        "value": 293.87,
+        "unit": "GIOPS"
+      },
+      "int8-dotprod": {
+        "value": 12640.02,
+        "unit": "GIOPS"
+      },
+      "int8-matrix": {
+        "value": 97109.06,
+        "unit": "GIOPS"
+      },
+      "bf16-dotprod": {
+        "value": 1355.6,
+        "unit": "GFLOPS"
+      },
+      "bf16-matrix": {
+        "value": 50166.21,
+        "unit": "GFLOPS"
+      },
+      "fp8-matrix": {
+        "value": 0.0,
+        "unit": "GFLOPS"
+      },
+      "bf8-matrix": {
+        "value": 0.0,
+        "unit": "GFLOPS"
+      },
+      "copy-h2h": {
+        "value": 16.48,
+        "unit": "GBPS"
+      },
+      "copy-h2d": {
+        "value": 15.84,
+        "unit": "GBPS"
+      },
+      "copy-d2h": {
+        "value": 19.0,
+        "unit": "GBPS"
+      },
+      "copy-d2d": {
+        "value": 54.54,
+        "unit": "GBPS"
+      }
+    },
+    "zero_metrics": [
+      "fp8-matrix",
+      "bf8-matrix"
+    ],
+    "profile": {
+      "samples": 194,
+      "gpu_clock_mhz_avg": 2236.7,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 93.4,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 89.3
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/vkpeak",
+      "0",
+      "all"
+    ],
+    "rc": 0,
+    "seconds": 96.874,
+    "output": "fp32-scalar  = 6226.85 GFLOPS\nfp32-vec4    = 4338.17 GFLOPS\nfp16-scalar  = 6546.70 GFLOPS\nfp16-vec4    = 6735.10 GFLOPS\nfp16-matrix  = 52039.88 GFLOPS\nfp64-scalar  = 341.61 GFLOPS\nfp64-vec4    = 350.26 GFLOPS\nint32-scalar = 1770.72 GIOPS\nint32-vec4   = 1970.43 GIOPS\nint16-scalar = 2808.51 GIOPS\nint16-vec4   = 5335.13 GIOPS\nint64-scalar = 377.87 GIOPS\nint64-vec4   = 293.87 GIOPS\nint8-dotprod = 12640.02 GIOPS\nint8-matrix  = 97109.06 GIOPS\nbf16-dotprod = 1355.60 GFLOPS\nbf16-matrix  = 50166.21 GFLOPS\nfp8-matrix   = 0.00 GFLOPS\nbf8-matrix   = 0.00 GFLOPS\ncopy-h2h     = 16.48 GBPS\ncopy-h2d     = 15.84 GBPS\ncopy-d2h     = 19.00 GBPS\ncopy-d2d     = 54.54 GBPS\n\n[stderr]\ndevice       = Intel(R) Arc(tm) B390 (PTL)\ndriver       = Intel open-source Mesa driver / Mesa 27.0.0-devel\n\n"
+  },
+  "clpeak": {
+    "status": "ok",
+    "unsupported": [
+      {
+        "test": "coopmat",
+        "metric": "fp32",
+        "reason": "No fp32xfp32+fp32 coopmat property! Skipped"
+      },
+      {
+        "test": "coopmat",
+        "metric": "fp8_e4m3",
+        "reason": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+      },
+      {
+        "test": "coopmat",
+        "metric": "fp8_e5m2",
+        "reason": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+      }
+    ],
+    "profile": {
+      "samples": 16,
+      "gpu_clock_mhz_avg": 2244.8,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 92.4,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 89.2
+    },
+    "json": {
+      "schema": "clpeak/run",
+      "format_version": 3,
+      "clpeak_version": "3.0.5",
+      "generated_at": "2026-11-16T19:40:49Z",
+      "duration_s": 7.430638,
+      "build": {
+        "backends": [
+          "Vulkan",
+          "OpenCL",
+          "CPU",
+          "LiteRT",
+          "ONNX"
+        ],
+        "config": "Release"
+      },
+      "host": {
+        "os": "Linux x64",
+        "os_version": "7.3.4-an02.fc45.x86_64",
+        "arch": "x86_64",
+        "cpu": "Intel(R) Arc(TM) G3 Extreme",
+        "logical_cores": 14,
+        "memory_bytes": 33154686976
+      },
+      "invocation": {
+        "argv": [
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+          "--vulkan",
+          "--devices",
+          "vulkan:0",
+          "--compute",
+          "--matrix-compute",
+          "--numeric-error",
+          "-o",
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/clpeak.json"
+        ],
+        "target_time_us": 500000,
+        "target_time_us_cpu": 2000000,
+        "target_time_us_ml_gpu": 1000000,
+        "warmup": 2,
+        "categories": [
+          "compute"
+        ],
+        "tests": [
+          "matrix-compute",
+          "numeric-error"
+        ]
+      },
+      "devices": [
+        {
+          "backend": "Vulkan",
+          "platform": "Vulkan",
+          "name": "Intel(R) Arc(tm) B390 (PTL)",
+          "driver": "26.99.99",
+          "type": "gpu",
+          "device_index": 0,
+          "properties": [
+            {
+              "key": "API version",
+              "value": "1.4.368"
+            },
+            {
+              "key": "VRAM",
+              "value": "23714 MB"
+            }
+          ],
+          "tests": [
+            {
+              "id": "coopmat",
+              "title": "Cooperative matrix",
+              "category": "compute",
+              "shape": "heterogeneous",
+              "axis": "data type",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak cooperative-matrix multiply-add rate, on the device's matrix engine where it has one.",
+              "duration_s": 7.3056,
+              "metrics": [
+                {
+                  "id": "fp32",
+                  "status": "unsupported",
+                  "reason": "No fp32xfp32+fp32 coopmat property! Skipped",
+                  "description": "fp32 inputs and accumulator."
+                },
+                {
+                  "id": "fp16",
+                  "value": 52692120000000.0,
+                  "description": "fp16 inputs, fp32 accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "fp16 f16acc",
+                  "value": 53104700000000.0,
+                  "description": "fp16 inputs and accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "bf16",
+                  "value": 52902580000000.0,
+                  "description": "bf16 inputs, fp32 accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "fp8_e4m3",
+                  "status": "unsupported",
+                  "reason": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped",
+                  "description": "fp8 E4M3 inputs (more precision, less range), fp32 accumulator."
+                },
+                {
+                  "id": "fp8_e5m2",
+                  "status": "unsupported",
+                  "reason": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped",
+                  "description": "fp8 E5M2 inputs (more range, less precision), fp32 accumulator."
+                },
+                {
+                  "id": "int8",
+                  "value": 106857700000000.0,
+                  "unit": "OPS",
+                  "quantity": "ops",
+                  "direction": "higher_is_better",
+                  "description": "int8 inputs, int32 accumulator (8x16x32 tile, fastest at subgroup 16)."
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "log": [
+        {
+          "elapsed_s": 0.004802322,
+          "level": "info",
+          "backend": "Vulkan",
+          "message": "Backend: Vulkan"
+        },
+        {
+          "elapsed_s": 0.12303,
+          "level": "info",
+          "backend": "Vulkan",
+          "device": "Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Device 0: Intel(R) Arc(tm) B390 (PTL)"
+        },
+        {
+          "elapsed_s": 0.1230805,
+          "level": "info",
+          "backend": "Vulkan",
+          "device": "Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "coopmat",
+          "message": "    Cooperative matrix"
+        }
+      ]
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--vulkan",
+      "--devices",
+      "vulkan:0",
+      "--compute",
+      "--matrix-compute",
+      "--numeric-error",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/clpeak.json"
+    ],
+    "rc": 0,
+    "seconds": 7.435,
+    "output": "Backend: Vulkan\n  Device 0: Intel(R) Arc(tm) B390 (PTL)\n    Driver version   : 26.99.99\n    API version      : 1.4.368\n    VRAM             : 23714 MB\n\n    Cooperative matrix\n      fp16     : 52.7 TFLOPS\n      fp16 f16acc : 53.1 TFLOPS\n      bf16        : 52.9 TFLOPS\n      int8        : 107 TOPS\n\n"
+  },
+  "opencl_clpeak": {
+    "status": "ok",
+    "unsupported": [
+      {
+        "test": "half_precision_compute",
+        "metric": "half",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half2",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half4",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half8",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half16",
+        "reason": "No half precision support"
+      }
+    ],
+    "profile": {
+      "samples": 11,
+      "gpu_clock_mhz_avg": 2181.8,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 84.6,
+      "gpu_util_pct_max": 98.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 89.2
+    },
+    "json": {
+      "schema": "clpeak/run",
+      "format_version": 3,
+      "clpeak_version": "3.0.5",
+      "generated_at": "2026-11-16T19:40:57Z",
+      "duration_s": 5.189606,
+      "build": {
+        "backends": [
+          "Vulkan",
+          "OpenCL",
+          "CPU",
+          "LiteRT",
+          "ONNX"
+        ],
+        "config": "Release"
+      },
+      "host": {
+        "os": "Linux x64",
+        "os_version": "7.3.4-an02.fc45.x86_64",
+        "arch": "x86_64",
+        "cpu": "Intel(R) Arc(TM) G3 Extreme",
+        "logical_cores": 14,
+        "memory_bytes": 33154686976
+      },
+      "invocation": {
+        "argv": [
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+          "--opencl",
+          "--devices",
+          "opencl:0",
+          "--compute",
+          "--single-precision-compute",
+          "--half-precision-compute",
+          "-o",
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/clpeak-opencl.json"
+        ],
+        "target_time_us": 500000,
+        "target_time_us_cpu": 2000000,
+        "target_time_us_ml_gpu": 1000000,
+        "warmup": 2,
+        "categories": [
+          "compute"
+        ],
+        "tests": [
+          "single-precision-compute",
+          "half-precision-compute"
+        ]
+      },
+      "devices": [
+        {
+          "backend": "OpenCL",
+          "platform": "rusticl",
+          "name": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "driver": "26.2.6",
+          "type": "gpu",
+          "platform_index": 0,
+          "device_index": 0,
+          "properties": [
+            {
+              "key": "Compute units",
+              "value": "12"
+            },
+            {
+              "key": "Clock frequency",
+              "value": "400 MHz"
+            }
+          ],
+          "tests": [
+            {
+              "id": "single_precision_compute",
+              "title": "Single-precision compute",
+              "category": "compute",
+              "shape": "homogeneous",
+              "axis": "vector width",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak fp32 arithmetic rate of the device's ALUs, with no memory traffic.",
+              "duration_s": 4.829198,
+              "metrics": [
+                {
+                  "id": "float",
+                  "value": 5978380000000.0,
+                  "description": "Scalar, one value per work-item."
+                },
+                {
+                  "id": "float2",
+                  "value": 5937551000000.0,
+                  "description": "2-wide vector per work-item."
+                },
+                {
+                  "id": "float4",
+                  "value": 5032806000000.0,
+                  "description": "4-wide vector per work-item."
+                },
+                {
+                  "id": "float8",
+                  "value": 5392021000000.0,
+                  "description": "8-wide vector per work-item."
+                },
+                {
+                  "id": "float16",
+                  "value": 5315246000000.0,
+                  "description": "16-wide vector per work-item."
+                }
+              ]
+            },
+            {
+              "id": "half_precision_compute",
+              "title": "Half-precision compute",
+              "category": "compute",
+              "shape": "homogeneous",
+              "axis": "vector width",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak fp16 arithmetic rate, with fp16 inputs and accumulator.",
+              "duration_s": 1.551e-05,
+              "metrics": [
+                {
+                  "id": "half",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half2",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half4",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half8",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half16",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "log": [
+        {
+          "elapsed_s": 0.003665132,
+          "level": "info",
+          "backend": "OpenCL",
+          "message": "Backend: OpenCL"
+        },
+        {
+          "elapsed_s": 0.3392367,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Platform 0: rusticl"
+        },
+        {
+          "elapsed_s": 0.3392667,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Device 0: Mesa Intel(R) Arc(tm) B390 (PTL)"
+        },
+        {
+          "elapsed_s": 0.3597807,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "single_precision_compute",
+          "message": "    Single-precision compute"
+        },
+        {
+          "elapsed_s": 5.189225,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "half_precision_compute",
+          "message": "    Half-precision compute"
+        }
+      ]
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--opencl",
+      "--devices",
+      "opencl:0",
+      "--compute",
+      "--single-precision-compute",
+      "--half-precision-compute",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/clpeak-opencl.json"
+    ],
+    "rc": 0,
+    "seconds": 5.202,
+    "output": "Backend: OpenCL\n  Platform 0: rusticl\n    Device 0: Mesa Intel(R) Arc(tm) B390 (PTL)\n      Driver version   : 26.2.6\n      Compute units    : 12\n      Clock frequency  : 400 MHz\n\n      Single-precision compute\n        float    : 5.98 TFLOPS\n        float2   : 5.94 TFLOPS\n        float4   : 5.03 TFLOPS\n        float8   : 5.39 TFLOPS\n        float16  : 5.32 TFLOPS\n\n\n[stderr]\n=== Rusticl warning: Patched Mesa libclc not detected. Upstream libclc may contain known bugs or breaking changes and isn't guaranteed to work reliably. Please visit https://gitlab.freedesktop.org/karolherbst/mesa-libclc for more information. ===\n"
+  },
+  "media": {
+    "hevc_qsv": {
+      "status": "ok",
+      "speed_x": 5.03,
+      "profile": {
+        "samples": 2,
+        "gpu_clock_mhz_avg": 2025.0,
+        "gpu_clock_mhz_max": 2300.0,
+        "gpu_util_pct_avg": 3.0,
+        "gpu_util_pct_max": 3.0,
+        "package_energy_j": null,
+        "cpu_busy_pct": 76.3
+      },
+      "cmd": [
+        "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/ffmpeg/bin/ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1920x1200:rate=60",
+        "-t",
+        "5",
+        "-c:v",
+        "hevc_qsv",
+        "-preset",
+        "fast",
+        "-f",
+        "null",
+        "-"
+      ],
+      "rc": 0,
+      "seconds": 0.873,
+      "output": "\n[stderr]\nInput #0, lavfi, from 'testsrc2=size=1920x1200:rate=60':\n  Duration: N/A, start: 0.000000, bitrate: N/A\n  Stream #0:0: Video: wrapped_avframe, yuv420p, 1920x1200 [SAR 1:1 DAR 8:5], 60 fps, 60 tbr, 60 tbn\nStream mapping:\n  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> hevc (hevc_qsv))\nlibva info: VA-API version 1.24.0\nlibva info: Trying to open /usr/lib64/dri-nonfree/iHD_drv_video.so\nlibva info: Trying to open /usr/lib64/dri-freeworld/iHD_drv_video.so\nlibva info: Trying to open /usr/lib64/dri/iHD_drv_video.so\nlibva info: Found init function __vaDriverInit_1_24\nlibva info: va_openDriver() returns 0\nlibva info: VA-API version 1.24.0\nlibva info: Trying to open /usr/lib64/dri-nonfree/iHD_drv_video.so\nlibva info: Trying to open /usr/lib64/dri-freeworld/iHD_drv_video.so\nlibva info: Trying to open /usr/lib64/dri/iHD_drv_video.so\nlibva info: Found init function __vaDriverInit_1_24\nlibva info: va_openDriver() returns 0\n[hevc_qsv @ 0x556225efbc00] Using the constant quantization parameter (CQP) by default. Please use the global_quality option and other options for a quality-based mode or the b option and other options for a bitrate-based mode if the default is not the desired choice.\nOutput #0, null, to 'pipe:':\n  Metadata:\n    encoder         : Lavf63.20.101\n  Stream #0:0: Video: hevc, nv12(tv, progressive), 1920x1200 [SAR 1:1 DAR 8:5], q=2-31, 60 fps, 60 tbn\n    Metadata:\n      encoder         : Lavc63.28.100 hevc_qsv\n    Side data:\n      CPB properties: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A\nframe=  155 fps=0.0 q=-0.0 size=N/A time=00:00:02.51 bitrate=N/A speed=5.03x elapsed=0:00:00.50    \n[out#0/null @ 0x556225efe700] video:4540KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe=  300 fps=0.0 q=-0.0 Lsize=N/A time=00:00:04.93 bitrate=N/A speed=5.99x elapsed=0:00:00.82    \n"
+    },
+    "hevc_vaapi": {
+      "status": "ok",
+      "speed_x": 6.53,
+      "profile": {
+        "samples": 2,
+        "gpu_clock_mhz_avg": 1625.0,
+        "gpu_clock_mhz_max": 2300.0,
+        "gpu_util_pct_avg": 5.0,
+        "gpu_util_pct_max": 6.0,
+        "package_energy_j": null,
+        "cpu_busy_pct": 76.7
+      },
+      "cmd": [
+        "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/ffmpeg/bin/ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-vaapi_device",
+        "/dev/dri/renderD128",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1920x1200:rate=60",
+        "-t",
+        "5",
+        "-vf",
+        "format=nv12,hwupload",
+        "-c:v",
+        "hevc_vaapi",
+        "-f",
+        "null",
+        "-"
+      ],
+      "rc": 0,
+      "seconds": 0.779,
+      "output": "\n[stderr]\nInput #0, lavfi, from 'testsrc2=size=1920x1200:rate=60':\n  Duration: N/A, start: 0.000000, bitrate: N/A\n  Stream #0:0: Video: wrapped_avframe, yuv420p, 1920x1200 [SAR 1:1 DAR 8:5], 60 fps, 60 tbr, 60 tbn\nStream mapping:\n  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> hevc (hevc_vaapi))\n[hevc_vaapi @ 0x557dd09fc6c0] No quality level set; using default (25).\nOutput #0, null, to 'pipe:':\n  Metadata:\n    encoder         : Lavf63.20.101\n  Stream #0:0: Video: hevc (Main), nv12(tv, progressive), 1920x1200 [SAR 1:1 DAR 8:5], q=2-31, 60 fps, 60 tbn\n    Metadata:\n      encoder         : Lavc63.28.100 hevc_vaapi\nframe=  197 fps=0.0 q=-0.0 size=N/A time=00:00:03.26 bitrate=N/A speed=6.53x elapsed=0:00:00.50    \n[out#0/null @ 0x557dd09fea80] video:9007KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe=  300 fps=0.0 q=-0.0 Lsize=N/A time=00:00:04.98 bitrate=N/A speed=6.89x elapsed=0:00:00.72    \n"
+    },
+    "libx265": {
+      "status": "ok",
+      "speed_x": 3.76,
+      "profile": {
+        "samples": 3,
+        "gpu_clock_mhz_avg": 716.7,
+        "gpu_clock_mhz_max": 750.0,
+        "gpu_util_pct_avg": 8.0,
+        "gpu_util_pct_max": 8.0,
+        "package_energy_j": null,
+        "cpu_busy_pct": 14.4
+      },
+      "cmd": [
+        "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/ffmpeg/bin/ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1920x1200:rate=60",
+        "-t",
+        "5",
+        "-c:v",
+        "libx265",
+        "-preset",
+        "ultrafast",
+        "-f",
+        "null",
+        "-"
+      ],
+      "rc": 0,
+      "seconds": 1.234,
+      "output": "\n[stderr]\nInput #0, lavfi, from 'testsrc2=size=1920x1200:rate=60':\n  Duration: N/A, start: 0.000000, bitrate: N/A\n  Stream #0:0: Video: wrapped_avframe, yuv420p, 1920x1200 [SAR 1:1 DAR 8:5], 60 fps, 60 tbr, 60 tbn\nStream mapping:\n  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> hevc (libx265))\nx265 [info]: HEVC encoder version 4.3+73-5143a2a0\nx265 [info]: build info [Linux][GCC 16.2.0][64 bit] 8bit+10bit+12bit\nx265 [info]: using cpu capabilities: MMX2 SSE2Fast LZCNT SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2\nx265 [info]: Main profile, Level-5 (Main tier)\nx265 [info]: Thread pool created using 14 threads\nx265 [info]: frame threads / pool features       : 3 / wpp(38 rows)\nx265 [info]: Slices                              : 1\nx265 [info]: Coding QT: max CU size, min CU size : 32 / 16\nx265 [info]: Residual QT: max TU size, max depth : 32 / 1 inter / 1 intra\nx265 [info]: ME / range / subpel / merge         : dia / 57 / 0 / 2\nx265 [info]: Lookahead / bframes / badapt        : 5 / 3 / 0\nx265 [info]: b-pyramid / weightp / weightb       : 1 / 0 / 0\nx265 [info]: References / ref-limit  cu / depth  : 1 / off / off\nx265 [info]: AQ: mode / str / qg-size / cu-tree  : 1 / 0.0 / 32 / 1\nx265 [info]: Rate Control / qCompress            : CRF-28.0 / 0.60\nx265 [info]: tools: rd=2 psy-rd=2.00 early-skip rskip mode=1 tmvp fast-intra\nx265 [info]: tools: strong-intra-smoothing lslices=7 deblock\nOutput #0, null, to 'pipe:':\n  Metadata:\n    encoder         : Lavf63.20.101\n  Stream #0:0: Video: hevc, yuv420p(tv, progressive), 1920x1200 [SAR 1:1 DAR 8:5], q=2-31, 60 fps, 60 tbn\n    Metadata:\n      encoder         : Lavc63.28.100 libx265\n    Side data:\n      CPB properties: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A\nframe=  115 fps=0.0 q=38.0 size=N/A time=00:00:01.88 bitrate=N/A speed=3.76x elapsed=0:00:00.50    \nframe=  248 fps=248 q=39.0 size=N/A time=00:00:04.10 bitrate=N/A speed= 4.1x elapsed=0:00:01.00    \n[out#0/null @ 0x5628cebad700] video:2880KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe=  300 fps=251 q=36.0 Lsize=N/A time=00:00:04.96 bitrate=N/A speed=4.15x elapsed=0:00:01.19    \nx265 [info]: frame I:      2, Avg QP:34.17  kb/s: 17111.52\nx265 [info]: frame P:     75, Avg QP:35.39  kb/s: 9123.16 \nx265 [info]: frame B:    223, Avg QP:38.67  kb/s: 3112.95 \n\nencoded 300 frames in 1.18s (254.57 fps), 4708.83 kb/s, Avg QP:37.82\n"
+    }
+  },
+  "gravitymark": {
+    "status": "ok",
+    "api": "Vulkan",
+    "score": 38798.0,
+    "fps": 232.3,
+    "scene_seconds": 167.0,
+    "profile": {
+      "samples": 338,
+      "gpu_clock_mhz_avg": 2279.7,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 97.0,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 86.2
+    },
+    "cmd": [
+      "gamescope",
+      "--backend",
+      "headless",
+      "-W",
+      "1280",
+      "-H",
+      "720",
+      "--",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/GravityMark/bin/GravityMark.x64",
+      "-vulkan",
+      "-benchmark",
+      "1",
+      "-close",
+      "1",
+      "-count",
+      "1",
+      "-asteroids",
+      "50000",
+      "-times",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/gravitymark-raster-times.txt",
+      "-fps",
+      "1"
+    ],
+    "rc": 0,
+    "seconds": 169.016,
+    "output": "M:      0 us: ../data.zip: 313 files\nM:   7.98 ms: Build Date: Jun 20 2025\nM:   8.02 ms: Build Info: version=20250429; linux; x64; release; vk=1; gl=45; gles=32; cu=1; fusion\nM:   8.03 ms: Build Version: 1.89\nM: 132.30 ms: Name: ONE-NETBOOK ONEXPLAYER 3 ONEXPLAYER 3\nM: 132.33 ms: System: Anatase\nM: 132.34 ms: Kernel: Linux 7.3.4-an02.fc45.x86_64 x86_64\nM: 132.35 ms: Memory: 30.88 GB\nM: 132.36 ms: Uptime: 22:12\nM: 132.37 ms: CPU: Intel(R) Arc(TM) G3 Extreme\nM: 132.37 ms: GPU: Panther Lake [Arc B390] (rev 04)\nM: 132.38 ms: Device: VEN_8086&DEV_B080&SUBSYS_00008086\nM: 132.73 ms: Desktop: 1280x720 1.0\nM: 132.75 ms: Screen 0: 1280x720 0 0 gamescope\nM: 132.78 ms: Creating 1600x900 Vulkan Window\nM: 285.66 ms: Render Size: 1600x900\nM: 285.74 ms: Using Fetch Mode\nM: 361.52 ms: Device: Intel(R) Arc(tm) B390 (PTL)\nM: 361.55 ms: Vendor: Intel\nM: 361.56 ms: Version: 26.99.99\nM: 361.56 ms: DeviceID: 0xb080\nM: 361.59 ms: Group Memory: 48.00 KB\nM: 361.59 ms: Video Memory: 23.16 GB\nM: 361.59 ms: Max Uniform Size: 4.00 GB\nM: 361.60 ms: Max Storage Size: 4.00 GB\nM: 361.60 ms: Creating SceneManager\nM: 446.63 ms: Creating RenderManager\nM: 522.34 ms: Rasterization Mode\nM: 522.37 ms: Creating Scene\nM:   1.462 s: Creating 50,000 Asteroids\nM:   1.489 s: Updating Scene\nM:   1.521 s: GravityMark 1.89 Vulkan is Ready in 1.5 s\nM:   1.521 s: Starting 1600x900 Vulkan Benchmark\nM:   1.521 s: Close when finished\nM:   1.521 s: Times: /var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/gravitymark-raster-times.txt\nM:   1.521 s: Count: 1\nM:   1.521 s: Resizing 1600x900 frame\nM:  2:48.533: Benchmark Finished\nM:  2:48.602: Times: /var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/gravitymark-raster-times.txt\nM:  2:48.602: Intel(R) Arc(tm) B390 (PTL)\nM:  2:48.602: API: Vulkan\nM:  2:48.602: Platform: Linux\nM:  2:48.602: Resolution: 1600x900\nM:  2:48.602: Antialiasing: Temporal\nM:  2:48.602: Asteroids: 50,000\nM:  2:48.602: Score: 38798\nM:  2:48.602: Time: 167.0 s\nM:  2:48.602: FPS: 232.3\nM:  2:48.622: Clearing Scene\nM:  2:48.650: GravityMark 1.89 Done\n\n[stderr]\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mconsole:\u001b[0m gamescope version  (gcc 16.2.1)\nNo CAP_SYS_NICE, falling back to regular-priority compute and threads.\nPerformance will be affected.\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/usr/share/gamescope/scripts'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/common'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/inspect.lua' (id: 0)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/modegen.lua' (id: 1)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/util.lua' (id: 2)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/displays'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/asus.rogally.lcd.lua' (id: 3)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/asus.z13.lcd.lua' (id: 4)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/deckhd.steamdeck.deckhd-lcd.lua' (id: 5)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/gpd.win4.lcd.lua' (id: 6)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongo.lcd.lua' (id: 7)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua' (id: 8)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongos.lcd.lua' (id: 9)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/onexplayer.f1.oled.lua' (id: 10)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.lcd.lua' (id: 11)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.oled.lua' (id: 12)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/etc/gamescope/scripts'\n[gamescope] [\u001b[0;33mWarn\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Directory '/etc/gamescope/scripts' does not exist\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/var/home/holzr/.config/gamescope/scripts'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m Intel device detected, forcing general queue family instead of compute-only queue\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m selecting physical device 'Intel(R) Arc(tm) B390 (PTL)': queue family 0 (general queue family 0)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m physical device supports DRM format modifiers\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m [backend/headless/backend.c:67] Creating headless backend\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m supported DRM formats for sampling usage:\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AR24 (0x34325241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XR24 (0x34325258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AB24 (0x34324241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XB24 (0x34324258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   RG16 (0x36314752)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   NV12 (0x3231564E)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AB4H (0x48344241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XB4H (0x48344258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AB48 (0x38344241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XB48 (0x38344258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AB30 (0x30334241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XB30 (0x30334258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AR30 (0x30335241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XR30 (0x30335258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m Using explicit sync when available\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m Running compositor on wayland display 'gamescope-0'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m [backend/headless/backend.c:17] Starting headless backend\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m Successfully initialized libei for input emulation!\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m [xwayland/server.c:107] Starting Xwayland on :2\nThe XKEYBOARD keymap compiler (xkbcomp) reports:\n> Warning:          Multiple symbols for level 1/group 1 on key <FK23>\n>                   Using F23, ignoring XF86TouchpadOff\n> Warning:          Symbol map for key <FK23> redefined\n>                   Using last definition for conflicting fields\n> Warning:          Symbol map for key <FK24> redefined\n>                   Using last definition for conflicting fields\n> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn\n> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff\n> Warning:          Could not resolve keysym XF86ActionOnSelection\n> Warning:          Could not resolve keysym XF86ContextualInsert\n> Warning:          Could not resolve keysym XF86ContextualQuery\nErrors from xkbcomp are not fatal to the X server\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mpipewire:\u001b[0m stream state changed: connecting\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mpipewire:\u001b[0m stream state changed: paused\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mpipewire:\u001b[0m stream available on node ID: 109\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvblank:\u001b[0m Using timerfd.\n[Gamescope WSI] Application info:\n  pApplicationName: ClayApp\n  applicationVersion: 4194305\n  pEngineName: ClayEngine\n  engineVersion: 4194305\n  apiVersion: 4198400\n[Gamescope WSI] Executable name: GravityMark.x64\nATTENTION: default value of option vk_wsi_force_swapchain_to_current_extent overridden by environment.\n[Gamescope WSI] Forcing on VK_EXT_swapchain_maintenance1.\n[Gamescope WSI] Creating Gamescope surface: xid: 0x40002a\n[Gamescope WSI] Atom of T was wrong type. Expected XCB_ATOM_CARDINAL.\n[Gamescope WSI] Atom of T was wrong type. Expected XCB_ATOM_CARDINAL.\n[Gamescope WSI] Made gamescope surface for xid: 0x40002a\n[Gamescope WSI] Surface state:\n  steam app id:                  0\n  window xid:                    0x40002a\n  wayland surface res id:        5\n  layer client flags:            0x0\n  server hdr output enabled:     false\n  hdr formats exposed to client: false\n[Gamescope WSI] Creating swapchain for xid: 0x40002a - oldSwapchain: (nil) - provided minImageCount: 4 - minImageCount: 4 - format: VK_FORMAT_R8G8B8A8_UNORM - colorspace: VK_COLOR_SPACE_SRGB_NONLINEAR_KHR - flip: true\n[Gamescope WSI] Created swapchain for xid: 0x40002a swapchain: 0x1f89e190 - imageCount: 4\nThe XKEYBOARD keymap compiler (xkbcomp) reports:\n> Warning:          Unsupported maximum keycode 709, clipping.\n>                   X11 cannot support keycodes above 255.\n> Warning:          Virtual modifier Hyper multiply defined\n>                   Using 0, ignoring 0\n> Warning:          Virtual modifier ScrollLock multiply defined\n>                   Using 0, ignoring 0\nErrors from xkbcomp are not fatal to the X server\n[Gamescope WSI] Swapchain received new refresh cycle: 16.67ms\n[gamescope] [\u001b[0;31mError\u001b[0m] \u001b[0;37mxwm:\u001b[0m appid clash was 12582916 now 5335\n[Gamescope WSI] Destroying swapchain: 0x1f89e190\n[Gamescope WSI] Destroyed swapchain: 0x1f89e190\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mlaunch:\u001b[0m Primary child shut down!\n(EE) failed to read Wayland events: Broken pipe\n"
+  },
+  "gravitymark_rt": {
+    "status": "ok",
+    "api": "Vulkan RT",
+    "score": 33391.0,
+    "fps": 199.9,
+    "scene_seconds": 167.0,
+    "profile": {
+      "samples": 338,
+      "gpu_clock_mhz_avg": 2284.3,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 96.9,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 86.5
+    },
+    "cmd": [
+      "gamescope",
+      "--backend",
+      "headless",
+      "-W",
+      "1280",
+      "-H",
+      "720",
+      "--",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/GravityMark/bin/GravityMark.x64",
+      "-vulkan",
+      "-raytracing",
+      "1",
+      "-benchmark",
+      "1",
+      "-close",
+      "1",
+      "-count",
+      "1",
+      "-asteroids",
+      "20000",
+      "-times",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/gravitymark-rt-times.txt",
+      "-fps",
+      "1"
+    ],
+    "rc": 0,
+    "seconds": 168.9,
+    "output": "M:      0 us: ../data.zip: 313 files\nM:   7.14 ms: Build Date: Jun 20 2025\nM:   7.18 ms: Build Info: version=20250429; linux; x64; release; vk=1; gl=45; gles=32; cu=1; fusion\nM:   7.19 ms: Build Version: 1.89\nM: 127.01 ms: Name: ONE-NETBOOK ONEXPLAYER 3 ONEXPLAYER 3\nM: 127.04 ms: System: Anatase\nM: 127.05 ms: Kernel: Linux 7.3.4-an02.fc45.x86_64 x86_64\nM: 127.05 ms: Memory: 30.88 GB\nM: 127.06 ms: Uptime: 22:15\nM: 127.07 ms: CPU: Intel(R) Arc(TM) G3 Extreme\nM: 127.08 ms: GPU: Panther Lake [Arc B390] (rev 04)\nM: 127.08 ms: Device: VEN_8086&DEV_B080&SUBSYS_00008086\nM: 127.45 ms: Desktop: 1280x720 1.0\nM: 127.47 ms: Screen 0: 1280x720 0 0 gamescope\nM: 127.51 ms: Creating 1600x900 Vulkan Window\nM: 272.32 ms: Render Size: 1600x900\nM: 272.40 ms: Using Fetch Mode\nM: 358.42 ms: Device: Intel(R) Arc(tm) B390 (PTL)\nM: 358.45 ms: Vendor: Intel\nM: 358.46 ms: Version: 26.99.99\nM: 358.46 ms: DeviceID: 0xb080\nM: 358.49 ms: Group Memory: 48.00 KB\nM: 358.49 ms: Video Memory: 23.16 GB\nM: 358.49 ms: Max Uniform Size: 4.00 GB\nM: 358.50 ms: Max Storage Size: 4.00 GB\nM: 358.50 ms: Creating SceneManager\nM: 422.08 ms: Creating RenderManager\nM: 509.94 ms: Ray Tracing Mode\nM: 509.97 ms: Creating Scene\nM:   1.446 s: Creating 20,000 Asteroids\nM:   1.466 s: Updating Scene\nM:   1.478 s: GravityMark 1.89 Vulkan RT is Ready in 1.5 s\nM:   1.478 s: Starting 1600x900 Vulkan RT Benchmark\nM:   1.478 s: Close when finished\nM:   1.478 s: Times: /var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/gravitymark-rt-times.txt\nM:   1.478 s: Count: 1\nM:   1.479 s: Resizing 1600x900 frame\nM:   1.484 s: Build buffer 4.46 MB\nM:  2:48.494: Benchmark Finished\nM:  2:48.522: Times: /var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/gravitymark-rt-times.txt\nM:  2:48.522: Intel(R) Arc(tm) B390 (PTL)\nM:  2:48.522: API: Vulkan RT\nM:  2:48.522: Platform: Linux\nM:  2:48.522: Resolution: 1600x900\nM:  2:48.522: Antialiasing: Temporal\nM:  2:48.522: Asteroids: 20,000\nM:  2:48.522: Score: 33391\nM:  2:48.522: Time: 167.0 s\nM:  2:48.522: FPS: 199.9\nM:  2:48.528: Clearing Scene\nM:  2:48.540: GravityMark 1.89 Done\n\n[stderr]\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mconsole:\u001b[0m gamescope version  (gcc 16.2.1)\nNo CAP_SYS_NICE, falling back to regular-priority compute and threads.\nPerformance will be affected.\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/usr/share/gamescope/scripts'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/common'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/inspect.lua' (id: 0)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/modegen.lua' (id: 1)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/util.lua' (id: 2)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/displays'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/asus.rogally.lcd.lua' (id: 3)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/asus.z13.lcd.lua' (id: 4)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/deckhd.steamdeck.deckhd-lcd.lua' (id: 5)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/gpd.win4.lcd.lua' (id: 6)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongo.lcd.lua' (id: 7)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua' (id: 8)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongos.lcd.lua' (id: 9)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/onexplayer.f1.oled.lua' (id: 10)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.lcd.lua' (id: 11)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.oled.lua' (id: 12)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/etc/gamescope/scripts'\n[gamescope] [\u001b[0;33mWarn\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Directory '/etc/gamescope/scripts' does not exist\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mscriptmgr:\u001b[0m Loading scripts from: '/var/home/holzr/.config/gamescope/scripts'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m Intel device detected, forcing general queue family instead of compute-only queue\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m selecting physical device 'Intel(R) Arc(tm) B390 (PTL)': queue family 0 (general queue family 0)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m physical device supports DRM format modifiers\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m [backend/headless/backend.c:67] Creating headless backend\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m supported DRM formats for sampling usage:\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AR24 (0x34325241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XR24 (0x34325258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AB24 (0x34324241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XB24 (0x34324258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   RG16 (0x36314752)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   NV12 (0x3231564E)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AB4H (0x48344241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XB4H (0x48344258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AB48 (0x38344241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XB48 (0x38344258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AB30 (0x30334241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XB30 (0x30334258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   AR30 (0x30335241)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvulkan:\u001b[0m   XR30 (0x30335258)\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m Using explicit sync when available\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m Running compositor on wayland display 'gamescope-0'\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m [backend/headless/backend.c:17] Starting headless backend\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m Successfully initialized libei for input emulation!\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mwlserver:\u001b[0m [xwayland/server.c:107] Starting Xwayland on :2\nThe XKEYBOARD keymap compiler (xkbcomp) reports:\n> Warning:          Multiple symbols for level 1/group 1 on key <FK23>\n>                   Using F23, ignoring XF86TouchpadOff\n> Warning:          Symbol map for key <FK23> redefined\n>                   Using last definition for conflicting fields\n> Warning:          Symbol map for key <FK24> redefined\n>                   Using last definition for conflicting fields\n> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn\n> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff\n> Warning:          Could not resolve keysym XF86ActionOnSelection\n> Warning:          Could not resolve keysym XF86ContextualInsert\n> Warning:          Could not resolve keysym XF86ContextualQuery\nErrors from xkbcomp are not fatal to the X server\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mpipewire:\u001b[0m stream state changed: connecting\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mpipewire:\u001b[0m stream state changed: paused\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mpipewire:\u001b[0m stream available on node ID: 109\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mvblank:\u001b[0m Using timerfd.\n[Gamescope WSI] Application info:\n  pApplicationName: ClayApp\n  applicationVersion: 4194305\n  pEngineName: ClayEngine\n  engineVersion: 4194305\n  apiVersion: 4198400\n[Gamescope WSI] Executable name: GravityMark.x64\nATTENTION: default value of option vk_wsi_force_swapchain_to_current_extent overridden by environment.\n[Gamescope WSI] Forcing on VK_EXT_swapchain_maintenance1.\n[Gamescope WSI] Creating Gamescope surface: xid: 0x40002a\n[Gamescope WSI] Atom of T was wrong type. Expected XCB_ATOM_CARDINAL.\n[Gamescope WSI] Atom of T was wrong type. Expected XCB_ATOM_CARDINAL.\n[Gamescope WSI] Made gamescope surface for xid: 0x40002a\n[Gamescope WSI] Surface state:\n  steam app id:                  0\n  window xid:                    0x40002a\n  wayland surface res id:        5\n  layer client flags:            0x0\n  server hdr output enabled:     false\n  hdr formats exposed to client: false\n[Gamescope WSI] Creating swapchain for xid: 0x40002a - oldSwapchain: (nil) - provided minImageCount: 4 - minImageCount: 4 - format: VK_FORMAT_R8G8B8A8_UNORM - colorspace: VK_COLOR_SPACE_SRGB_NONLINEAR_KHR - flip: true\n[Gamescope WSI] Created swapchain for xid: 0x40002a swapchain: 0x1d8e2560 - imageCount: 4\nThe XKEYBOARD keymap compiler (xkbcomp) reports:\n> Warning:          Unsupported maximum keycode 709, clipping.\n>                   X11 cannot support keycodes above 255.\n> Warning:          Virtual modifier Hyper multiply defined\n>                   Using 0, ignoring 0\n> Warning:          Virtual modifier ScrollLock multiply defined\n>                   Using 0, ignoring 0\nErrors from xkbcomp are not fatal to the X server\n[Gamescope WSI] Swapchain received new refresh cycle: 16.67ms\n[Gamescope WSI] Destroying swapchain: 0x1d8e2560\n[Gamescope WSI] Destroyed swapchain: 0x1d8e2560\n[gamescope] [\u001b[0;34mInfo\u001b[0m]  \u001b[0;37mlaunch:\u001b[0m Primary child shut down!\n(EE) failed to read Wayland events: Broken pipe\n"
+  },
+  "blender": {
+    "status": "ok",
+    "gpu": false,
+    "time": "00:16.98",
+    "profile": {
+      "samples": 34,
+      "gpu_clock_mhz_avg": 746.1,
+      "gpu_clock_mhz_max": 1100.0,
+      "gpu_util_pct_avg": 7.6,
+      "gpu_util_pct_max": 9.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 8.1
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/blender/blender",
+      "-b",
+      "--factory-startup",
+      "-E",
+      "CYCLES",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/blender_",
+      "-F",
+      "PNG",
+      "-f",
+      "1"
+    ],
+    "rc": 0,
+    "seconds": 17.607,
+    "output": "Blender 4.5.16 LTS (hash 3f6797307da5 built 2026-11-10 01:31:21)\nFra:1 Mem:8.42M (Peak 26.71M) | Time:00:00.00 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Synchronizing object | Cube\nFra:1 Mem:8.42M (Peak 26.71M) | Time:00:00.00 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Synchronizing object | Light\nFra:1 Mem:8.42M (Peak 26.71M) | Time:00:00.00 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Initializing\nFra:1 Mem:8.24M (Peak 26.71M) | Time:00:00.00 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Waiting for render to start\nFra:1 Mem:8.24M (Peak 26.71M) | Time:00:00.00 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Scene\nFra:1 Mem:8.24M (Peak 26.71M) | Time:00:00.00 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Shaders\nFra:1 Mem:8.24M (Peak 26.71M) | Time:00:00.00 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Loading render kernels (may take a few minutes the first time)\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Procedurals\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Background\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Camera\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Meshes Flags\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Objects\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Objects | Copying Transformations to device\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Particle Systems\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Particle Systems | Copying Particles to device\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Meshes\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Objects | Applying Static Transformations\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Mesh | Computing attributes\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Mesh | Copying Attributes to device\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Scene BVH | Building\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Scene BVH | Building BVH\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Scene BVH | Building BVH 0%\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Scene BVH | Copying BVH to device\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Mesh | Computing normals\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Mesh | Copying Mesh to device\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Objects Flags\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Primitive Offsets\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Images\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Camera Volume\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Lookup Tables\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.08M, Peak:0.08M | Scene, ViewLayer | Updating Lights\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.09M, Peak:0.09M | Scene, ViewLayer | Updating Lights | Computing tree\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.09M, Peak:0.09M | Scene, ViewLayer | Updating Integrator\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.01 | Mem:0.09M, Peak:0.09M | Scene, ViewLayer | Updating Film\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.01 | Mem:0.00M, Peak:0.09M | Scene, ViewLayer | Updating Lookup Tables\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.01 | Mem:0.09M, Peak:0.09M | Scene, ViewLayer | Updating Baking\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.01 | Mem:0.09M, Peak:0.09M | Scene, ViewLayer | Updating Device | Writing constant memory\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.01 | Mem:0.09M, Peak:0.09M | Scene, ViewLayer | Loading denoising kernels (may take a few minutes the first time)\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.01 | Mem:0.09M, Peak:0.09M | Scene, ViewLayer | Sample 0/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:00.27 | Remaining:17:42.55 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:05.95 | Remaining:04:57.94 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 80/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:05.96 | Remaining:04:07.84 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 96/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:05.97 | Remaining:03:32.00 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 112/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:05.98 | Remaining:03:05.08 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 128/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:05.99 | Remaining:02:44.12 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 144/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.00 | Remaining:02:27.33 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 160/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.01 | Remaining:02:13.60 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 176/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.02 | Remaining:02:02.13 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 192/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.03 | Remaining:01:52.43 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 208/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.04 | Remaining:01:44.11 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 224/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.04 | Remaining:01:36.89 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 240/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.05 | Remaining:01:30.57 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 256/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.06 | Remaining:01:25.00 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 272/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.07 | Remaining:01:20.03 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 288/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.07 | Remaining:01:15.59 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 304/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.08 | Remaining:01:11.59 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 320/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.09 | Remaining:01:07.97 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 336/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.09 | Remaining:01:04.68 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 352/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.10 | Remaining:01:01.67 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 368/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.11 | Remaining:00:58.92 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 384/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.11 | Remaining:00:56.38 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 400/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.12 | Remaining:00:54.04 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 416/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.13 | Remaining:00:51.87 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 432/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.13 | Remaining:00:49.85 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 448/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.14 | Remaining:00:47.97 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 464/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.15 | Remaining:00:46.22 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 480/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.16 | Remaining:00:44.58 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 496/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.16 | Remaining:00:43.04 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 512/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.17 | Remaining:00:41.59 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 528/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.17 | Remaining:00:40.23 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 544/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.18 | Remaining:00:38.95 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 560/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.19 | Remaining:00:37.74 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 576/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.19 | Remaining:00:36.59 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 592/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.20 | Remaining:00:35.50 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 608/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.21 | Remaining:00:34.47 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 624/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.21 | Remaining:00:33.48 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 640/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.22 | Remaining:00:32.55 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 656/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.23 | Remaining:00:31.66 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 672/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.23 | Remaining:00:30.81 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 688/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.24 | Remaining:00:30.00 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 704/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.25 | Remaining:00:29.23 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 720/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.25 | Remaining:00:28.49 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 736/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.26 | Remaining:00:27.78 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 752/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.27 | Remaining:00:27.10 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 768/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.27 | Remaining:00:26.45 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 784/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.28 | Remaining:00:25.82 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 800/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.29 | Remaining:00:25.21 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 816/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.29 | Remaining:00:24.63 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 832/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.30 | Remaining:00:24.07 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 848/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.31 | Remaining:00:23.54 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 864/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.31 | Remaining:00:23.02 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 880/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.32 | Remaining:00:22.52 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 896/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.33 | Remaining:00:22.04 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 912/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.33 | Remaining:00:21.57 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 928/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.34 | Remaining:00:21.12 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 944/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.35 | Remaining:00:20.68 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 960/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.35 | Remaining:00:20.26 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 976/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.36 | Remaining:00:19.85 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 992/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.37 | Remaining:00:19.46 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1008/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.37 | Remaining:00:19.07 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1024/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.38 | Remaining:00:18.70 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1040/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.39 | Remaining:00:18.34 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1056/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.39 | Remaining:00:17.99 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1072/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.40 | Remaining:00:17.65 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1088/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.40 | Remaining:00:17.32 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1104/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.41 | Remaining:00:17.00 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1120/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.42 | Remaining:00:16.68 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1136/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.42 | Remaining:00:16.38 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1152/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.43 | Remaining:00:16.08 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1168/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.44 | Remaining:00:15.79 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1184/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.44 | Remaining:00:15.51 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1200/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.45 | Remaining:00:15.24 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1216/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.46 | Remaining:00:14.97 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1232/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.46 | Remaining:00:14.71 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1248/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.47 | Remaining:00:14.46 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1264/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.47 | Remaining:00:14.21 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1280/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.48 | Remaining:00:13.97 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1296/4096\nFra:1 Mem:158.78M (Peak 158.78M) | Time:00:06.49 | Remaining:00:13.73 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1312/4096\nFra:1 Mem:158.78M (Peak 206.24M) | Time:00:11.50 | Remaining:00:23.95 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 1328/4096\nFra:1 Mem:222.07M (Peak 316.99M) | Time:00:16.69 | Remaining:00:34.75 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Sample 0/4096\nFra:1 Mem:222.07M (Peak 316.99M) | Time:00:16.69 | Remaining:00:34.75 | Mem:150.38M, Peak:150.38M | Scene, ViewLayer | Finished\nSaved: '/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/blender_0001.png'\nTime: 00:16.98 (Saving: 00:00.28)\n\n\nBlender quit\n"
+  },
+  "blender_gpu": {
+    "status": "ok",
+    "gpu": true,
+    "time": "00:15.07",
+    "profile": {
+      "samples": 31,
+      "gpu_clock_mhz_avg": 1093.0,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 29.2,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 32.3
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/blender/blender",
+      "-b",
+      "--factory-startup",
+      "-E",
+      "CYCLES",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/blender-gpu_",
+      "-F",
+      "PNG",
+      "-f",
+      "1",
+      "--",
+      "--cycles-device",
+      "ONEAPI"
+    ],
+    "rc": 0,
+    "seconds": 15.538,
+    "output": "Blender 4.5.16 LTS (hash 3f6797307da5 built 2026-11-10 01:31:21)\nFra:1 Mem:8.42M (Peak 26.71M) | Time:00:00.09 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Synchronizing object | Cube\nFra:1 Mem:8.42M (Peak 26.71M) | Time:00:00.09 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Synchronizing object | Light\nFra:1 Mem:8.42M (Peak 26.71M) | Time:00:00.09 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Initializing\nFra:1 Mem:8.24M (Peak 26.71M) | Time:00:00.10 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Waiting for render to start\nFra:1 Mem:8.24M (Peak 26.71M) | Time:00:00.10 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Scene\nFra:1 Mem:8.24M (Peak 26.71M) | Time:00:00.10 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Shaders\nFra:1 Mem:8.24M (Peak 26.71M) | Time:00:00.10 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Loading render kernels (may take a few minutes the first time)\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Procedurals\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Background\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Camera\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Meshes Flags\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Objects\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Objects | Copying Transformations to device\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Particle Systems\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Particle Systems | Copying Particles to device\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Meshes\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Objects | Applying Static Transformations\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Mesh | Computing attributes\nFra:1 Mem:8.32M (Peak 26.71M) | Time:00:00.89 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Mesh | Copying Attributes to device\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Geometry BVH light 4/3 | Building BVH\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Geometry BVH Cube 2/3 | Building BVH\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.00M, Peak:0.00M | Scene, ViewLayer | Updating Geometry BVH Light 3/3 | Building BVH\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.03M, Peak:0.03M | Scene, ViewLayer | Updating Scene BVH | Building\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.03M, Peak:0.03M | Scene, ViewLayer | Updating Scene BVH | Building BVH\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.04M | Scene, ViewLayer | Updating Scene BVH | Copying BVH to device\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.04M | Scene, ViewLayer | Updating Mesh | Computing normals\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.04M | Scene, ViewLayer | Updating Mesh | Copying Mesh to device\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.04M | Scene, ViewLayer | Updating Objects Flags\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.04M | Scene, ViewLayer | Updating Primitive Offsets\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.04M | Scene, ViewLayer | Updating Images\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.04M | Scene, ViewLayer | Updating Camera Volume\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.04M | Scene, ViewLayer | Updating Lookup Tables\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.12M, Peak:0.12M | Scene, ViewLayer | Updating Lights\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.12M, Peak:0.12M | Scene, ViewLayer | Updating Lights | Computing tree\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.12M, Peak:0.12M | Scene, ViewLayer | Updating Integrator\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.12M, Peak:0.12M | Scene, ViewLayer | Updating Film\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.04M, Peak:0.12M | Scene, ViewLayer | Updating Lookup Tables\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.12M, Peak:0.12M | Scene, ViewLayer | Updating Baking\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.12M, Peak:0.12M | Scene, ViewLayer | Updating Device | Writing constant memory\nFra:1 Mem:8.33M (Peak 26.71M) | Time:00:00.90 | Mem:0.12M, Peak:0.12M | Scene, ViewLayer | Loading denoising kernels (may take a few minutes the first time)\nFra:1 Mem:15.83M (Peak 26.71M) | Time:00:00.95 | Mem:660.13M, Peak:660.13M | Scene, ViewLayer | Sample 0/4096\nFra:1 Mem:166.13M (Peak 166.13M) | Time:00:01.20 | Remaining:17:17.16 | Mem:810.42M, Peak:810.42M | Scene, ViewLayer | Sample 1/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.14 | Remaining:01:50.12 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 80/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.17 | Remaining:01:32.53 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 96/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.20 | Remaining:01:19.99 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 112/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.22 | Remaining:01:10.58 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 128/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.25 | Remaining:01:03.15 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 144/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.27 | Remaining:00:57.19 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 160/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.30 | Remaining:00:52.32 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 176/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.32 | Remaining:00:48.25 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 192/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.34 | Remaining:00:44.79 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 208/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.37 | Remaining:00:41.80 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 224/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.39 | Remaining:00:39.21 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 240/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.41 | Remaining:00:36.93 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 256/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.43 | Remaining:00:34.91 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 272/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.45 | Remaining:00:33.13 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 288/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.47 | Remaining:00:31.50 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 304/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.50 | Remaining:00:30.05 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 320/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.51 | Remaining:00:28.71 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 336/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.53 | Remaining:00:27.50 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 352/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.55 | Remaining:00:26.36 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 368/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.57 | Remaining:00:25.32 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 384/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.59 | Remaining:00:24.36 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 400/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.60 | Remaining:00:23.47 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 416/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.62 | Remaining:00:22.63 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 432/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.63 | Remaining:00:21.87 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 448/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.65 | Remaining:00:21.16 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 464/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.67 | Remaining:00:20.49 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 480/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.68 | Remaining:00:19.85 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 496/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.70 | Remaining:00:19.25 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 512/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.71 | Remaining:00:18.69 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 528/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.73 | Remaining:00:18.17 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 544/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.75 | Remaining:00:17.68 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 560/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.77 | Remaining:00:17.22 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 576/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.78 | Remaining:00:16.76 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 592/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.80 | Remaining:00:16.34 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 608/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.81 | Remaining:00:15.93 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 624/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.83 | Remaining:00:15.55 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 640/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.84 | Remaining:00:15.18 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 656/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.86 | Remaining:00:14.82 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 672/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.87 | Remaining:00:14.47 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 688/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.89 | Remaining:00:14.15 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 704/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.90 | Remaining:00:13.84 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 720/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.92 | Remaining:00:13.54 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 736/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.93 | Remaining:00:13.26 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 752/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.95 | Remaining:00:12.98 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 768/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.96 | Remaining:00:12.72 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 784/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.97 | Remaining:00:12.46 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 800/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:03.99 | Remaining:00:12.22 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 816/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.00 | Remaining:00:11.97 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 832/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.01 | Remaining:00:11.74 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 848/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.03 | Remaining:00:11.51 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 864/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.04 | Remaining:00:11.28 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 880/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.05 | Remaining:00:11.07 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 896/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.06 | Remaining:00:10.86 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 912/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.07 | Remaining:00:10.65 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 928/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.08 | Remaining:00:10.46 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 944/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.09 | Remaining:00:10.27 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 960/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.11 | Remaining:00:10.09 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 976/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.12 | Remaining:00:09.91 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 992/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.13 | Remaining:00:09.74 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1008/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.14 | Remaining:00:09.57 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1024/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.15 | Remaining:00:09.41 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1040/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.16 | Remaining:00:09.25 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1056/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.18 | Remaining:00:09.10 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1072/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.19 | Remaining:00:08.95 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1088/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.20 | Remaining:00:08.80 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1104/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.21 | Remaining:00:08.66 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1120/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.22 | Remaining:00:08.52 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1136/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.23 | Remaining:00:08.39 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1152/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.24 | Remaining:00:08.26 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1168/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.25 | Remaining:00:08.13 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1184/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.27 | Remaining:00:08.00 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1200/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.28 | Remaining:00:07.88 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1216/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.29 | Remaining:00:07.76 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1232/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.30 | Remaining:00:07.64 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1248/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.31 | Remaining:00:07.53 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1264/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.32 | Remaining:00:07.42 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1280/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.33 | Remaining:00:07.31 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1296/4096\nFra:1 Mem:166.15M (Peak 166.15M) | Time:00:04.34 | Remaining:00:07.20 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1312/4096\nFra:1 Mem:166.15M (Peak 213.61M) | Time:00:09.36 | Remaining:00:17.53 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 1328/4096\nFra:1 Mem:229.43M (Peak 324.35M) | Time:00:14.79 | Remaining:00:28.84 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Sample 0/4096\nFra:1 Mem:229.43M (Peak 324.35M) | Time:00:14.79 | Remaining:00:28.84 | Mem:810.43M, Peak:810.43M | Scene, ViewLayer | Finished\nSaved: '/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/blender-gpu_0001.png'\nTime: 00:15.07 (Saving: 00:00.26)\n\n\nBlender quit\n"
+  },
+  "ai": {
+    "status": "ok",
+    "tests": {
+      "add-NPU": {
+        "status": "ok",
+        "throughput_fps": 19876.98,
+        "median_ms": 0.04646,
+        "first_inference_ms": 3.97,
+        "cpu_affinity": null,
+        "accel_affinity": "0-1",
+        "cpu_pinned": false,
+        "npu_turbo": true,
+        "rc": 0,
+        "output": "     y (node: y) : f32 / [...] / [1,1024]\n[Step 7/11] Loading the model to the device\n[ INFO ] Compile model took 2.92 ms\n[ INFO ] Start of compilation memory usage: Peak 564808 KB\n[ INFO ] End of compilation memory usage: Peak 564808 KB\n[ INFO ] Compile model ram used 0 KB\n[Step 8/11] Querying optimal runtime parameters\n[ INFO ] Model:\n[ INFO ]   CACHE_ENCRYPTION_CALLBACKS: None\n[ INFO ]   CACHE_MODE: CacheMode.OPTIMIZE_SPEED\n[ INFO ]   COMPILATION_NUM_THREADS: 14\n[ INFO ]   EXECUTION_DEVICES: NPU\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float16'>\n[ INFO ]   LOADED_FROM_CACHE: False\n[ INFO ]   LOG_LEVEL: Level.ERR\n[ INFO ]   MODEL_PRIORITY: Priority.MEDIUM\n[ INFO ]   MODEL_PTR: None\n[ INFO ]   NETWORK_NAME: onnx_Frontend_IR\n[ INFO ]   NPU_COMPILER_TYPE: CompilerType.DRIVER\n[ INFO ]   NPU_COMPILER_VERSION: 524291\n[ INFO ]   NPU_PLATFORM: 5010\n[ INFO ]   NPU_TURBO: True\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   PERFORMANCE_HINT: PerformanceMode.LATENCY\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 1\n[ INFO ]   PERF_COUNT: False\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=2.7;ov=2026.4.1\n[ INFO ]   WORKLOAD_TYPE: WorkloadType.DEFAULT\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 3.97 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:NPU\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         5.03 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        46.46 us\n[ INFO ]    Average:       47.01 us\n[ INFO ]    Min:           45.32 us\n[ INFO ]    Max:           65.95 us\n[ INFO ] Throughput:   19876.98 FPS\n"
+      },
+      "add-CPU": {
+        "status": "ok",
+        "throughput_fps": 157969.9,
+        "median_ms": 0.00302,
+        "first_inference_ms": 0.53,
+        "cpu_affinity": "",
+        "accel_affinity": null,
+        "cpu_pinned": true,
+        "npu_turbo": false,
+        "rc": 0,
+        "output": "nx_Frontend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   INFERENCE_NUM_THREADS: 10\n[ INFO ]   PERF_COUNT: NO\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float32'>\n[ INFO ]   PERFORMANCE_HINT: LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   ENABLE_CPU_PINNING: True\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   SCHEDULING_CORE_TYPE: SchedulingCoreType.ANY_CORE\n[ INFO ]   MODEL_DISTRIBUTION_POLICY: set()\n[ INFO ]   ENABLE_HYPER_THREADING: False\n[ INFO ]   EXECUTION_DEVICES: ['CPU']\n[ INFO ]   CPU_DENORMALS_OPTIMIZATION: False\n[ INFO ]   LOG_LEVEL: Level.NO\n[ INFO ]   CPU_SPARSE_WEIGHTS_DECOMPRESSION_RATE: 1.0\n[ INFO ]   ENABLE_TENSOR_PARALLEL: False\n[ INFO ]   TBB_PARTITIONER: TbbPartitioner.STATIC\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 32\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   VALUE_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_GROUP_SIZE: 0\n[ INFO ]   VALUE_CACHE_GROUP_SIZE: 0\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;isa=Intel AVX2 with Intel DL Boost, float16 and bfloat16 support\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 0.53 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['CPU']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         0.63 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        3.02 us\n[ INFO ]    Average:       3.24 us\n[ INFO ]    Min:           2.69 us\n[ INFO ]    Max:           14.48 us\n[ INFO ] Throughput:   157969.90 FPS\n"
+      },
+      "add-GPU": {
+        "status": "ok",
+        "throughput_fps": 41338.54,
+        "median_ms": 0.02112,
+        "first_inference_ms": 0.19,
+        "cpu_affinity": null,
+        "accel_affinity": "0-1",
+        "cpu_pinned": false,
+        "npu_turbo": false,
+        "rc": 0,
+        "output": " ]   NETWORK_NAME: onnx_Frontend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   PERF_COUNT: False\n[ INFO ]   ENABLE_CPU_PINNING: False\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   MODEL_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_HOST_TASK_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_QUEUE_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_ENABLE_LARGE_ALLOCATIONS: False\n[ INFO ]   GPU_QUEUE_THROTTLE: Priority.MEDIUM\n[ INFO ]   GPU_ENABLE_LOOP_UNROLLING: True\n[ INFO ]   GPU_DISABLE_WINOGRAD_CONVOLUTION: False\n[ INFO ]   CACHE_DIR: \n[ INFO ]   CACHE_MODE: CacheMode.OPTIMIZE_SPEED\n[ INFO ]   PERFORMANCE_HINT: PerformanceMode.LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   COMPILATION_NUM_THREADS: 14\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float16'>\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 18446744073709551615\n[ INFO ]   ACTIVATIONS_SCALE_FACTOR: -1.0\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'float16'>\n[ INFO ]   OFFLOAD_RATIO: 0\n[ INFO ]   DEVICE_ID: 0\n[ INFO ]   EXECUTION_DEVICES: ['GPU.0']\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;desc=[driver=26.40.40196.8;ip=30.0.4;eus=96]\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 0.19 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['GPU.0']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         2.42 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        21.12 us\n[ INFO ]    Average:       21.32 us\n[ INFO ]    Min:           20.20 us\n[ INFO ]    Max:           33.83 us\n[ INFO ] Throughput:   41338.54 FPS\n"
+      },
+      "conv-NPU": {
+        "status": "ok",
+        "throughput_fps": 5362.69,
+        "median_ms": 0.12143000000000001,
+        "first_inference_ms": 5.48,
+        "cpu_affinity": null,
+        "accel_affinity": "0-1",
+        "cpu_pinned": false,
+        "npu_turbo": true,
+        "rc": 0,
+        "output": "ode: y) : f32 / [...] / [1,8,224,224]\n[Step 7/11] Loading the model to the device\n[ INFO ] Compile model took 2.39 ms\n[ INFO ] Start of compilation memory usage: Peak 564808 KB\n[ INFO ] End of compilation memory usage: Peak 564808 KB\n[ INFO ] Compile model ram used 0 KB\n[Step 8/11] Querying optimal runtime parameters\n[ INFO ] Model:\n[ INFO ]   CACHE_ENCRYPTION_CALLBACKS: None\n[ INFO ]   CACHE_MODE: CacheMode.OPTIMIZE_SPEED\n[ INFO ]   COMPILATION_NUM_THREADS: 14\n[ INFO ]   EXECUTION_DEVICES: NPU\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float16'>\n[ INFO ]   LOADED_FROM_CACHE: False\n[ INFO ]   LOG_LEVEL: Level.ERR\n[ INFO ]   MODEL_PRIORITY: Priority.MEDIUM\n[ INFO ]   MODEL_PTR: None\n[ INFO ]   NETWORK_NAME: onnx_Frontend_IR\n[ INFO ]   NPU_COMPILER_TYPE: CompilerType.DRIVER\n[ INFO ]   NPU_COMPILER_VERSION: 524291\n[ INFO ]   NPU_PLATFORM: 5010\n[ INFO ]   NPU_TURBO: True\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   PERFORMANCE_HINT: PerformanceMode.LATENCY\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 1\n[ INFO ]   PERF_COUNT: False\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=2.7;ov=2026.4.1\n[ INFO ]   WORKLOAD_TYPE: WorkloadType.DEFAULT\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 5.48 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:NPU\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         18.65 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        121.43 us\n[ INFO ]    Average:       125.57 us\n[ INFO ]    Min:           117.76 us\n[ INFO ]    Max:           165.60 us\n[ INFO ] Throughput:   5362.69 FPS\n"
+      },
+      "conv-CPU": {
+        "status": "ok",
+        "throughput_fps": 6562.63,
+        "median_ms": 0.09085,
+        "first_inference_ms": 1.2,
+        "cpu_affinity": "",
+        "accel_affinity": null,
+        "cpu_pinned": true,
+        "npu_turbo": false,
+        "rc": 0,
+        "output": "Frontend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   INFERENCE_NUM_THREADS: 10\n[ INFO ]   PERF_COUNT: NO\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float32'>\n[ INFO ]   PERFORMANCE_HINT: LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   ENABLE_CPU_PINNING: True\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   SCHEDULING_CORE_TYPE: SchedulingCoreType.ANY_CORE\n[ INFO ]   MODEL_DISTRIBUTION_POLICY: set()\n[ INFO ]   ENABLE_HYPER_THREADING: False\n[ INFO ]   EXECUTION_DEVICES: ['CPU']\n[ INFO ]   CPU_DENORMALS_OPTIMIZATION: False\n[ INFO ]   LOG_LEVEL: Level.NO\n[ INFO ]   CPU_SPARSE_WEIGHTS_DECOMPRESSION_RATE: 1.0\n[ INFO ]   ENABLE_TENSOR_PARALLEL: False\n[ INFO ]   TBB_PARTITIONER: TbbPartitioner.STATIC\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 32\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   VALUE_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_GROUP_SIZE: 0\n[ INFO ]   VALUE_CACHE_GROUP_SIZE: 0\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;isa=Intel AVX2 with Intel DL Boost, float16 and bfloat16 support\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 1.20 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['CPU']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         15.24 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        90.85 us\n[ INFO ]    Average:       95.18 us\n[ INFO ]    Min:           78.26 us\n[ INFO ]    Max:           190.42 us\n[ INFO ] Throughput:   6562.63 FPS\n"
+      },
+      "conv-GPU": {
+        "status": "ok",
+        "throughput_fps": 4641.38,
+        "median_ms": 0.1259,
+        "first_inference_ms": 0.39,
+        "cpu_affinity": null,
+        "accel_affinity": "0-1",
+        "cpu_pinned": false,
+        "npu_turbo": false,
+        "rc": 0,
+        "output": "  NETWORK_NAME: onnx_Frontend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   PERF_COUNT: False\n[ INFO ]   ENABLE_CPU_PINNING: False\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   MODEL_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_HOST_TASK_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_QUEUE_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_ENABLE_LARGE_ALLOCATIONS: False\n[ INFO ]   GPU_QUEUE_THROTTLE: Priority.MEDIUM\n[ INFO ]   GPU_ENABLE_LOOP_UNROLLING: True\n[ INFO ]   GPU_DISABLE_WINOGRAD_CONVOLUTION: False\n[ INFO ]   CACHE_DIR: \n[ INFO ]   CACHE_MODE: CacheMode.OPTIMIZE_SPEED\n[ INFO ]   PERFORMANCE_HINT: PerformanceMode.LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   COMPILATION_NUM_THREADS: 14\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float16'>\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 18446744073709551615\n[ INFO ]   ACTIVATIONS_SCALE_FACTOR: -1.0\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'float16'>\n[ INFO ]   OFFLOAD_RATIO: 0\n[ INFO ]   DEVICE_ID: 0\n[ INFO ]   EXECUTION_DEVICES: ['GPU.0']\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;desc=[driver=26.40.40196.8;ip=30.0.4;eus=96]\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 0.39 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['GPU.0']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         21.55 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        125.90 us\n[ INFO ]    Average:       131.87 us\n[ INFO ]    Min:           73.22 us\n[ INFO ]    Max:           755.23 us\n[ INFO ] Throughput:   4641.38 FPS\n"
+      },
+      "convbig-CPU": {
+        "status": "ok",
+        "throughput_fps": 64.61,
+        "median_ms": 9.0,
+        "first_inference_ms": 13.66,
+        "cpu_affinity": "",
+        "accel_affinity": null,
+        "cpu_pinned": true,
+        "npu_turbo": false,
+        "rc": 0,
+        "output": "nx_Frontend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   INFERENCE_NUM_THREADS: 10\n[ INFO ]   PERF_COUNT: NO\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float32'>\n[ INFO ]   PERFORMANCE_HINT: LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   ENABLE_CPU_PINNING: True\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   SCHEDULING_CORE_TYPE: SchedulingCoreType.ANY_CORE\n[ INFO ]   MODEL_DISTRIBUTION_POLICY: set()\n[ INFO ]   ENABLE_HYPER_THREADING: False\n[ INFO ]   EXECUTION_DEVICES: ['CPU']\n[ INFO ]   CPU_DENORMALS_OPTIMIZATION: False\n[ INFO ]   LOG_LEVEL: Level.NO\n[ INFO ]   CPU_SPARSE_WEIGHTS_DECOMPRESSION_RATE: 1.0\n[ INFO ]   ENABLE_TENSOR_PARALLEL: False\n[ INFO ]   TBB_PARTITIONER: TbbPartitioner.STATIC\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 32\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   VALUE_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_GROUP_SIZE: 0\n[ INFO ]   VALUE_CACHE_GROUP_SIZE: 0\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;isa=Intel AVX2 with Intel DL Boost, float16 and bfloat16 support\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 13.66 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['CPU']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         1547.63 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        9.00 ms\n[ INFO ]    Average:       9.15 ms\n[ INFO ]    Min:           8.30 ms\n[ INFO ]    Max:           12.24 ms\n[ INFO ] Throughput:   64.61 FPS\n"
+      }
+    }
+  },
+  "opencl_neo": {
+    "status": "ok",
+    "unsupported": [],
+    "profile": {
+      "samples": 31,
+      "gpu_clock_mhz_avg": 2300.0,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 95.1,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 83.9
+    },
+    "json": {
+      "schema": "clpeak/run",
+      "format_version": 3,
+      "clpeak_version": "3.0.5",
+      "generated_at": "2026-11-16T19:47:19Z",
+      "duration_s": 14.80712,
+      "build": {
+        "backends": [
+          "Vulkan",
+          "OpenCL",
+          "CPU",
+          "LiteRT",
+          "ONNX"
+        ],
+        "config": "Release"
+      },
+      "host": {
+        "os": "Linux x64",
+        "os_version": "7.3.4-an02.fc45.x86_64",
+        "arch": "x86_64",
+        "cpu": "Intel(R) Arc(TM) G3 Extreme",
+        "logical_cores": 14,
+        "memory_bytes": 33154686976
+      },
+      "invocation": {
+        "argv": [
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+          "--opencl",
+          "--devices",
+          "opencl:0",
+          "--compute",
+          "--single-precision-compute",
+          "--half-precision-compute",
+          "--matrix-compute",
+          "-o",
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/clpeak-neo.json"
+        ],
+        "target_time_us": 500000,
+        "target_time_us_cpu": 2000000,
+        "target_time_us_ml_gpu": 1000000,
+        "warmup": 2,
+        "categories": [
+          "compute"
+        ],
+        "tests": [
+          "single-precision-compute",
+          "half-precision-compute",
+          "matrix-compute"
+        ]
+      },
+      "devices": [
+        {
+          "backend": "OpenCL",
+          "platform": "Intel(R) OpenCL Graphics (integrated)",
+          "name": "Intel(R) Arc(TM) B390 GPU",
+          "driver": "26.40.40196.8",
+          "type": "gpu",
+          "platform_index": 0,
+          "device_index": 0,
+          "properties": [
+            {
+              "key": "Compute units",
+              "value": "96"
+            },
+            {
+              "key": "Clock frequency",
+              "value": "2300 MHz"
+            }
+          ],
+          "tests": [
+            {
+              "id": "single_precision_compute",
+              "title": "Single-precision compute",
+              "category": "compute",
+              "shape": "homogeneous",
+              "axis": "vector width",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak fp32 arithmetic rate of the device's ALUs, with no memory traffic.",
+              "duration_s": 8.812501,
+              "metrics": [
+                {
+                  "id": "float",
+                  "value": 6355748000000.0,
+                  "description": "Scalar, one value per work-item."
+                },
+                {
+                  "id": "float2",
+                  "value": 6354599000000.0,
+                  "description": "2-wide vector per work-item."
+                },
+                {
+                  "id": "float4",
+                  "value": 6341086000000.0,
+                  "description": "4-wide vector per work-item."
+                },
+                {
+                  "id": "float8",
+                  "value": 6317458000000.0,
+                  "description": "8-wide vector per work-item."
+                },
+                {
+                  "id": "float16",
+                  "value": 6247048000000.0,
+                  "description": "16-wide vector per work-item."
+                }
+              ]
+            },
+            {
+              "id": "half_precision_compute",
+              "title": "Half-precision compute",
+              "category": "compute",
+              "shape": "homogeneous",
+              "axis": "vector width",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak fp16 arithmetic rate, with fp16 inputs and accumulator.",
+              "duration_s": 5.968801,
+              "metrics": [
+                {
+                  "id": "half",
+                  "value": 12568360000000.0,
+                  "description": "Scalar, one value per work-item."
+                },
+                {
+                  "id": "half2",
+                  "value": 12533720000000.0,
+                  "description": "2-wide vector per work-item."
+                },
+                {
+                  "id": "half4",
+                  "value": 12537310000000.0,
+                  "description": "4-wide vector per work-item."
+                },
+                {
+                  "id": "half8",
+                  "value": 12408200000000.0,
+                  "description": "8-wide vector per work-item."
+                },
+                {
+                  "id": "half16",
+                  "value": 12327840000000.0,
+                  "description": "16-wide vector per work-item."
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "log": [
+        {
+          "elapsed_s": 0.004686888,
+          "level": "info",
+          "backend": "OpenCL",
+          "message": "Backend: OpenCL"
+        },
+        {
+          "elapsed_s": 0.02000966,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Intel(R) Arc(TM) B390 GPU",
+          "device_index": 0,
+          "message": "  Platform 0: Intel(R) OpenCL Graphics (integrated)"
+        },
+        {
+          "elapsed_s": 0.02003625,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Intel(R) Arc(TM) B390 GPU",
+          "device_index": 0,
+          "message": "  Device 0: Intel(R) Arc(TM) B390 GPU"
+        },
+        {
+          "elapsed_s": 0.02293094,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Intel(R) Arc(TM) B390 GPU",
+          "device_index": 0,
+          "test": "single_precision_compute",
+          "message": "    Single-precision compute"
+        },
+        {
+          "elapsed_s": 8.835707,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Intel(R) Arc(TM) B390 GPU",
+          "device_index": 0,
+          "test": "half_precision_compute",
+          "message": "    Half-precision compute"
+        }
+      ]
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--opencl",
+      "--devices",
+      "opencl:0",
+      "--compute",
+      "--single-precision-compute",
+      "--half-precision-compute",
+      "--matrix-compute",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-193912-optimized/clpeak-neo.json"
+    ],
+    "rc": 0,
+    "seconds": 14.822,
+    "output": "Backend: OpenCL\n  Platform 0: Intel(R) OpenCL Graphics (integrated)\n    Device 0: Intel(R) Arc(TM) B390 GPU\n      Driver version   : 26.40.40196.8\n      Compute units    : 96\n      Clock frequency  : 2300 MHz\n\n      Single-precision compute\n        float    : 6.36 TFLOPS\n        float2   : 6.35 TFLOPS\n        float4   : 6.34 TFLOPS\n        float8   : 6.32 TFLOPS\n        float16  : 6.25 TFLOPS\n\n      Half-precision compute\n        half     : 12.6 TFLOPS\n        half2    : 12.5 TFLOPS\n        half4    : 12.5 TFLOPS\n        half8    : 12.4 TFLOPS\n        half16   : 12.3 TFLOPS\n\n"
+  },
+  "cts": {
+    "status": "ok",
+    "binary": "/tmp/vkcts-build/build/external/vulkancts/modules/vulkan/deqp-vk",
+    "suites": {
+      "cooperative_matrix": {
+        "status": "ok",
+        "passed": {
+          "count": 3682,
+          "total": 54283
+        },
+        "failed": {
+          "count": 0,
+          "total": 54283
+        },
+        "not_supported": {
+          "count": 50601,
+          "total": 54283
+        },
+        "warnings": {
+          "count": 0,
+          "total": 54283
+        },
+        "rc": 0,
+        "seconds": 62.161
+      },
+      "ray_query": {
+        "status": "ok",
+        "passed": {
+          "count": 22581,
+          "total": 49360
+        },
+        "failed": {
+          "count": 0,
+          "total": 49360
+        },
+        "not_supported": {
+          "count": 26779,
+          "total": 49360
+        },
+        "warnings": {
+          "count": 0,
+          "total": 49360
+        },
+        "rc": 0,
+        "seconds": 172.661
+      },
+      "mesh_shader": {
+        "status": "ok",
+        "passed": {
+          "count": 18012,
+          "total": 28067
+        },
+        "failed": {
+          "count": 0,
+          "total": 28067
+        },
+        "not_supported": {
+          "count": 10055,
+          "total": 28067
+        },
+        "warnings": {
+          "count": 0,
+          "total": 28067
+        },
+        "rc": 0,
+        "seconds": 59.552
+      }
+    }
+  },
+  "vkmark": {
+    "status": "ok",
+    "score": 29785.0,
+    "scenes": [
+      {
+        "scene": "vertex",
+        "options": "device-local=true",
+        "fps": 35215.0
+      },
+      {
+        "scene": "vertex",
+        "options": "device-local=false",
+        "fps": 36546.0
+      },
+      {
+        "scene": "texture",
+        "options": "anisotropy=0",
+        "fps": 33095.0
+      },
+      {
+        "scene": "texture",
+        "options": "anisotropy=16",
+        "fps": 32843.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=gouraud",
+        "fps": 29967.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=blinn-phong-inf",
+        "fps": 30016.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=phong",
+        "fps": 30048.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=cel",
+        "fps": 30149.0
+      },
+      {
+        "scene": "effect2d",
+        "options": "kernel=edge",
+        "fps": 21820.0
+      },
+      {
+        "scene": "effect2d",
+        "options": "kernel=blur",
+        "fps": 14712.0
+      },
+      {
+        "scene": "desktop",
+        "options": "<default>",
+        "fps": 22723.0
+      },
+      {
+        "scene": "cube",
+        "options": "<default>",
+        "fps": 36866.0
+      },
+      {
+        "scene": "clear",
+        "options": "<default>",
+        "fps": 33207.0
+      }
+    ],
+    "profile": {
+      "samples": 80,
+      "gpu_clock_mhz_avg": 2300.0,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 82.0,
+      "gpu_util_pct_max": 92.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 83.3
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/vkmark",
+      "--winsys",
+      "headless",
+      "--winsys-dir",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin",
+      "--data-dir",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/share/vkmark-data",
+      "-b",
+      ":duration=3"
+    ],
+    "rc": 0,
+    "seconds": 39.315,
+    "output": "=======================================================\n    vkmark 2025.01\n=======================================================\n    Vendor ID:      0x8086\n    Device ID:      0xB080\n    Device Name:    Intel(R) Arc(tm) B390 (PTL)\n    Driver Version: 109457507\n    Device UUID:    16941867e53a639db4d0092a7e676c87\n=======================================================\n[vertex] device-local=true: FPS: 35215 FrameTime: 0.028 ms\n[vertex] device-local=false: FPS: 36546 FrameTime: 0.027 ms\n[texture] anisotropy=0: FPS: 33095 FrameTime: 0.030 ms\n[texture] anisotropy=16: FPS: 32843 FrameTime: 0.030 ms\n[shading] shading=gouraud: FPS: 29967 FrameTime: 0.033 ms\n[shading] shading=blinn-phong-inf: FPS: 30016 FrameTime: 0.033 ms\n[shading] shading=phong: FPS: 30048 FrameTime: 0.033 ms\n[shading] shading=cel: FPS: 30149 FrameTime: 0.033 ms\n[effect2d] kernel=edge: FPS: 21820 FrameTime: 0.046 ms\n[effect2d] kernel=blur: FPS: 14712 FrameTime: 0.068 ms\n[desktop] <default>: FPS: 22723 FrameTime: 0.044 ms\n[cube] <default>: FPS: 36866 FrameTime: 0.027 ms\n[clear] <default>: FPS: 33207 FrameTime: 0.030 ms\n=======================================================\n                                   vkmark Score: 29785\n=======================================================\n"
+  },
+  "gaps": [
+    {
+      "area": "vulkan-compute",
+      "item": "coopmat 16x8x16 f16",
+      "status": "unadvertised",
+      "detail": "only M=8/N=16 properties are exposed (Longshot needs M=16)"
+    },
+    {
+      "area": "vulkan-compute",
+      "item": "fp8-matrix",
+      "status": "zero",
+      "detail": "vkpeak reports 0 (unexposed or hardware-unsupported)"
+    },
+    {
+      "area": "vulkan-compute",
+      "item": "bf8-matrix",
+      "status": "zero",
+      "detail": "vkpeak reports 0 (unexposed or hardware-unsupported)"
+    },
+    {
+      "area": "vulkan-compute",
+      "item": "fp32",
+      "status": "unsupported",
+      "detail": "No fp32xfp32+fp32 coopmat property! Skipped"
+    },
+    {
+      "area": "vulkan-compute",
+      "item": "fp8_e4m3",
+      "status": "unsupported",
+      "detail": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+    },
+    {
+      "area": "vulkan-compute",
+      "item": "fp8_e5m2",
+      "status": "unsupported",
+      "detail": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+    },
+    {
+      "area": "opencl",
+      "item": "half",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    },
+    {
+      "area": "opencl",
+      "item": "half2",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    },
+    {
+      "area": "opencl",
+      "item": "half4",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    },
+    {
+      "area": "opencl",
+      "item": "half8",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    },
+    {
+      "area": "opencl",
+      "item": "half16",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    }
+  ]
+}

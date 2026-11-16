@@ -56,6 +56,9 @@ def main():
         if av is None or bv is None:
             print(f"{k:42} {str(av):>12} {str(bv):>12} {'-':>9}")
             continue
+        if not isinstance(av, (int, float)) or not isinstance(bv, (int, float)):
+            print(f"{k:42} {str(av):>12} {str(bv):>12} {'-':>9}")
+            continue
         pct = (bv - av) / av * 100 if av else 0.0
         if abs(pct) >= args.min_pct:
             print(f"{k:42} {av:12.3f} {bv:12.3f} {pct:+8.2f}%")
