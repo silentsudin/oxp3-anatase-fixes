@@ -25,7 +25,7 @@ stage=$cache/intel-lpmd/stage
 state=${XDG_STATE_HOME:-$user_home/.local/state}/oxp3-fixes/intel-lpmd
 root=${OXP3_LPMD_ROOT:-}
 dry=0 uninstall=0
-games="udpre=game_profile_cpu uDPRE.exe=game_profile_cpu Dpr.exe=game_profile_cpu eldenring.exe=game_profile_gpu"
+games="udpre=game_profile_mixed uDPRE.exe=game_profile_mixed Dpr.exe=game_profile_mixed eldenring.exe=game_profile_gpu"
 say() { printf '== %s\n' "$*"; }
 run() { if (( dry )); then printf '   [dry-run] %s\n' "$*"; else "$@"; fi; }
 
@@ -51,7 +51,7 @@ if (( uninstall )); then
         run mkdir -p "$root/etc"
         run tar -C "$root/etc" -xf "$state/conf.tar"
     fi
-    run rm -f "$dropin"
+    run rm -f "$dropin" "$unitdir/intel_lpmd-preconfig.service"
     run rm -f "$bindir/intel_lpmd" "$libexecdir/intel_lpmd_focus_helper"
     if [ -z "$root" ] && (( ! dry )); then
         systemctl daemon-reload
@@ -138,9 +138,29 @@ ExecStart=
 ExecStart=/usr/local/bin/intel_lpmd --systemd --dbus-enable
 CONF
 fi
+say "installing PROCESS-PRECONFIG activation"
+preconfig_unit=$unitdir/intel_lpmd-preconfig.service
+if (( ! dry )); then
+    cat > "$preconfig_unit" <<'CONF'
+[Unit]
+Description=Put intel-lpmd into per-process cpuset mode (OneXPlayer 3)
+After=intel_lpmd.service
+Wants=intel_lpmd.service
+PartOf=intel_lpmd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/intel_lpmd_control PROCESS-PRECONFIG
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+CONF
+fi
 if [ -z "$root" ] && (( ! dry )); then
     systemctl daemon-reload
     systemctl restart intel_lpmd.service
+    systemctl enable --now intel_lpmd-preconfig.service
     sleep 1
     say "status"
     systemctl is-active intel_lpmd.service || true

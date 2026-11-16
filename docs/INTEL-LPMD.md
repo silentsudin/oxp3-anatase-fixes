@@ -83,3 +83,37 @@ sudo intel_lpmd_control ADD-PROCESS <comm> GameProfileCPU 1
   change it to `GameProfileMixed` (P + E) or `GameProfileGPU`.
 - This does **not** give the kernel Thread Director; it is Intel's userspace
   classification/cpuset mechanism, the closest supported equivalent today.
+
+## First live test (2026-11-16): why cpusets were not applied
+
+The game (`Dpr.exe` under Proton, 81 threads) still had `Cpus_allowed_list: 0-13` on
+every thread even though `/etc/intel_lpmd/process_cpuset_user.xml` had a `Dpr.exe`
+entry.  Cause: lpmd's periodic process rescan is **skipped while the LPM state is
+`OFF`** (`src/lpmd_proc.c`: `use_process_cpuset && get_lpmd_state() != LPMD_OFF`),
+and this platform's config sets every mode to `-1`, so the state never leaves `OFF`.
+`UseProcessCPUSet=1` alone only attaches PIDs present at daemon start.
+
+Fix: activate per-process mode explicitly:
+
+```sh
+sudo intel_lpmd_control PROCESS-PRECONFIG
+```
+
+The installer now also enables a oneshot `intel_lpmd-preconfig.service`
+(`ExecStart=/usr/local/bin/intel_lpmd_control PROCESS-PRECONFIG`, `PartOf=intel_lpmd`)
+so this is re-applied on every boot and on lpmd restart.
+
+Default game classes were changed to `game_profile_mixed` (P+E, cpu0-9) for
+`udpre`/`uDPRE.exe`/`Dpr.exe`: the BD process has 81 threads, and hard-pinning all of
+them to the two P-cores (`game_profile_cpu`) is likely to lose throughput.
+
+Measured while the game ran with lpmd still in `OFF`:
+
+- 81 threads, all affinity 0-13.
+- Main `Dpr.exe` ~63 % of one core, scheduled on **cpu10 (LP-E)**.
+- `UnityGfxDeviceW` ~9 %, `dxvk-cs` ~9 %, 12 `Job.Worker` ~3 % each.
+- A transient burst at level load had `Dpr.exe:disk$0..3` at ~100 % each, then they
+  went back to `futex_do_wait`.
+- GPU 33 % at 1133 MHz -> not GPU-bound, and the main thread is not saturated, so the
+  frame rate is limited by the engine/frame cap (or the load burst), not by CPU
+  placement alone.
