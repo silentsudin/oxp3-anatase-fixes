@@ -94,3 +94,37 @@ tools/gpu-bench/
 Each run writes `results/<timestamp>/<test>.json|txt`, a `meta.json` (kernel, Mesa,
 driver, CPU governor/EPP, scheduler, lpmd state), and an `unsupported.json` assembled
 from tool statuses (zero metrics, "unsupported", "fallback", "llvmpipe").
+
+## Harness (implemented)
+
+```sh
+tools/gpu-bench/setup.sh                 # vkpeak + clpeak releases, vkmark container build
+tools/gpu-bench/gpu-bench.py --tag baseline
+tools/gpu-bench/gpu-bench.py --quick     # short vkpeak scenario list + 1 s vkmark scenes
+```
+
+Output: `~/.cache/oxp3-fixes/gpu-bench/results/<timestamp>-<tag>/` with
+`meta.json`, `inventory.json` (full `vulkaninfo`), `vkpeak.json`,
+`clpeak.json`, `vkmark.json`, per-run `profile` blocks (GPU clock/util sampled from
+nvtop, CPU busy from `/proc/stat`), `summary.json`/`summary.md`.
+
+The run aborts with exit code 2 if the selected Vulkan device is
+`llvmpipe`/SwiftShader/LVP rather than the Arc B390.
+
+## First full baseline (2026-11-16 16:08)
+
+Artifacts committed under `results/gpu-bench-20261116/`.  Highlights:
+
+- vkpeak: fp16-matrix **51.97 TFLOPS**, int8-matrix **97.13 TOPS**, bf16-matrix
+  **50.27 TFLOPS**, fp8/bf8 matrix **0**, copy-d2d **54.65 GB/s**.
+- clpeak: coopmat fp16 **52.35 TFLOPS**, bf16 **53.03 TFLOPS**, int8 **106.9 TOPS**;
+  fp32 and FP8 coopmat reported unsupported (FP8 reason: no `VK_EXT_shader_float8`).
+- vkmark (headless): score **29344**, GPU clock pinned at 2300 MHz.
+- Profiling: vkpeak 92.8 % GPU util / 2241 MHz avg, clpeak 98.0 % / 2300 MHz,
+  vkmark 79.8 % / 2298 MHz; CPU busy 83-88 %.
+- OpenCL: clinfo sees the rusticl platform but **0 devices**; `libclc` is missing.
+
+The compute tests are GPU-bound at the maximum clock, so there is no CPU scheduling
+headroom in those workloads; the gaps to chase are feature exposure (FP8/coopmat
+properties, OpenCL device bring-up, NPU stack) and the vkmark CPU overhead
+(80 % GPU util at 83 % CPU busy is worth profiling next).

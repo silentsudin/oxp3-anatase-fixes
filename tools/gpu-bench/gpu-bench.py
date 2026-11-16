@@ -86,7 +86,12 @@ class Sampler:
             try:
                 p = subprocess.run(["nvtop", "-s"], capture_output=True, text=True, timeout=2)
                 d = json.loads(p.stdout)[0]
-                self.gpu.append((float(d.get("gpu_clock", 0)), float(d.get("gpu_util", 0))))
+
+                def num(v):
+                    m = re.search(r"[0-9]+(?:\.[0-9]+)?", str(v or ""))
+                    return float(m.group(0)) if m else 0.0
+
+                self.gpu.append((num(d.get("gpu_clock")), num(d.get("gpu_util"))))
             except Exception:
                 pass
 
