@@ -167,7 +167,9 @@ PartOf=intel_lpmd.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/intel_lpmd_control PROCESS-PRECONFIG
+# lpmd rate-limits privileged D-Bus calls; retry briefly instead of failing the boot.
+ExecStart=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do /usr/local/bin/intel_lpmd_control PROCESS-PRECONFIG && exit 0; sleep 4; done; exit 1'
+TimeoutStartSec=120
 RemainAfterExit=yes
 
 [Install]
