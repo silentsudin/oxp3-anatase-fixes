@@ -424,6 +424,7 @@ def bench_ai(outdir):
     devices = ["NPU", "CPU"] + (["GPU"] if (TOOLS / "neo").exists() else [])
     extra = {"OCL_ICD_VENDORS": str(TOOLS / "neo" / "vendors")} if (TOOLS / "neo").exists() else None
     cpu_aff = os.environ.get("OXP3_AI_CPU_AFFINITY", "")
+    accel_aff = os.environ.get("OXP3_AI_ACCEL_AFFINITY", "0-1")
     cpu_pin = os.environ.get("OXP3_AI_CPU_PIN", "1") != "0"
     npu_turbo = os.environ.get("OXP3_AI_NPU_TURBO", "1") != "0"
     npu_cfg = None
@@ -442,6 +443,8 @@ def bench_ai(outdir):
                 cmd += ["-load_config", str(npu_cfg)]
             if device == "CPU" and cpu_aff and shutil.which("taskset"):
                 cmd = ["taskset", "-c", cpu_aff] + cmd
+            elif device in ("GPU", "NPU") and accel_aff and shutil.which("taskset"):
+                cmd = ["taskset", "-c", accel_aff] + cmd
             r = run(cmd, timeout=180, env=extra,
                     log_path=outdir / f"ai-{key}.txt")
             def num(pat):
@@ -453,6 +456,7 @@ def bench_ai(outdir):
                 "median_ms": (lambda m: (float(m.group(1)) / 1000.0 if m.group(2) == "us" else float(m.group(1))) if m else None)(re.search(r"Median:\s*([0-9.]+)\s*(us|ms)", r["output"])),
                 "first_inference_ms": num(r"First inference took\s*([0-9.]+)\s*ms"),
                 "cpu_affinity": cpu_aff if device == "CPU" else None,
+                "accel_affinity": accel_aff if device in ("GPU", "NPU") else None,
                 "cpu_pinned": bool(device == "CPU" and cpu_pin),
                 "npu_turbo": bool(device == "NPU" and npu_turbo),
                 "rc": r["rc"], "output": r["output"][-2000:]}

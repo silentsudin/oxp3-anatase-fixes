@@ -78,3 +78,21 @@ Intel AI Boost NPU:
 The harness applies turbo to NPU tests by default (`OXP3_AI_NPU_TURBO=0`
 disables it).  `NPU_TILES` 1/2/4 did not add a consistent win over turbo alone.
 Artifacts: `results/gpu-bench-20261116-ai-npu-turbo/`.
+
+## Accepted: P-core host affinity for GPU/NPU submission
+
+OpenVINO GPU/NPU submission threads benefit from staying on the two P-cores.
+Pinning the host process to CPUs 0-1 (configurable via
+`OXP3_AI_ACCEL_AFFINITY`, default `0-1`) gave:
+
+| model/device | no host affinity | 0-1 | delta |
+|---|---:|---:|---:|
+| add GPU | ~21-28k FPS | 31-52k FPS | ~1.5-1.8x |
+| conv GPU | ~3.7-4.2k FPS | 4.7-5.2k FPS | ~1.2-1.3x |
+| add NPU (turbo) | ~18-19k FPS | ~19.8k FPS | ~+5-10% |
+| conv NPU (turbo) | ~4.7-5.5k FPS | ~5.6k FPS | ~+5-20% |
+
+The large spread is real run-to-run variance on these tiny graphs; the direction
+was consistent across alternating runs.  CPU inference remains handled by
+OpenVINO's own `-pin YES` policy.  Artifacts:
+`results/gpu-bench-20261116-ai-accel-aff/`.
