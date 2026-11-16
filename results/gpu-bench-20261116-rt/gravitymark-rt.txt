@@ -1,0 +1,152 @@
+M:      0 us: ../data.zip: 313 files
+M:   7.49 ms: Build Date: Jun 20 2025
+M:   7.54 ms: Build Info: version=20250429; linux; x64; release; vk=1; gl=45; gles=32; cu=1; fusion
+M:   7.54 ms: Build Version: 1.89
+M: 124.17 ms: Name: ONE-NETBOOK ONEXPLAYER 3 ONEXPLAYER 3
+M: 124.21 ms: System: Anatase
+M: 124.21 ms: Kernel: Linux 7.3.4-an02.fc45.x86_64 x86_64
+M: 124.22 ms: Memory: 30.88 GB
+M: 124.23 ms: Uptime: 19:24
+M: 124.24 ms: CPU: Intel(R) Arc(TM) G3 Extreme
+M: 124.25 ms: GPU: Panther Lake [Arc B390] (rev 04)
+M: 124.25 ms: Device: VEN_8086&DEV_B080&SUBSYS_00008086
+M: 124.54 ms: Desktop: 1280x720 1.0
+M: 124.56 ms: Screen 0: 1280x720 0 0 gamescope
+M: 124.59 ms: Creating 1600x900 Vulkan Window
+M: 272.95 ms: Render Size: 1600x900
+M: 273.04 ms: Using Fetch Mode
+M: 357.27 ms: Device: Intel(R) Arc(tm) B390 (PTL)
+M: 357.29 ms: Vendor: Intel
+M: 357.30 ms: Version: 26.99.99
+M: 357.30 ms: DeviceID: 0xb080
+M: 357.31 ms: Group Memory: 48.00 KB
+M: 357.32 ms: Video Memory: 23.16 GB
+M: 357.32 ms: Max Uniform Size: 4.00 GB
+M: 357.32 ms: Max Storage Size: 4.00 GB
+M: 357.33 ms: Creating SceneManager
+M: 424.82 ms: Creating RenderManager
+M: 513.37 ms: Ray Tracing Mode
+M: 513.41 ms: Creating Scene
+M:   1.494 s: Creating 20,000 Asteroids
+M:   1.515 s: Updating Scene
+M:   1.526 s: GravityMark 1.89 Vulkan RT is Ready in 1.5 s
+M:   1.526 s: Starting 1600x900 Vulkan RT Benchmark
+M:   1.526 s: Close when finished
+M:   1.526 s: Times: /var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-165033-gravitycheck2/gravitymark-rt-times.txt
+M:   1.526 s: Count: 1
+M:   1.527 s: Resizing 1600x900 frame
+M:   1.532 s: Build buffer 4.46 MB
+M:  2:48.540: Benchmark Finished
+M:  2:48.567: Times: /var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-165033-gravitycheck2/gravitymark-rt-times.txt
+M:  2:48.567: Intel(R) Arc(tm) B390 (PTL)
+M:  2:48.567: API: Vulkan RT
+M:  2:48.567: Platform: Linux
+M:  2:48.567: Resolution: 1600x900
+M:  2:48.567: Antialiasing: Temporal
+M:  2:48.567: Asteroids: 20,000
+M:  2:48.567: Score: 33383
+M:  2:48.567: Time: 167.0 s
+M:  2:48.567: FPS: 199.9
+M:  2:48.583: Clearing Scene
+M:  2:48.595: GravityMark 1.89 Done
+
+[stderr]
+[gamescope] [[0;34mInfo[0m]  [0;37mconsole:[0m gamescope version  (gcc 16.2.1)
+No CAP_SYS_NICE, falling back to regular-priority compute and threads.
+Performance will be affected.
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/common'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/inspect.lua' (id: 0)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/modegen.lua' (id: 1)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/common/util.lua' (id: 2)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/usr/share/gamescope/scripts/00-gamescope/displays'
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/asus.rogally.lcd.lua' (id: 3)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/asus.z13.lcd.lua' (id: 4)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/deckhd.steamdeck.deckhd-lcd.lua' (id: 5)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/gpd.win4.lcd.lua' (id: 6)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongo.lcd.lua' (id: 7)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua' (id: 8)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/lenovo.legiongos.lcd.lua' (id: 9)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/onexplayer.f1.oled.lua' (id: 10)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.lcd.lua' (id: 11)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Running script file '/usr/share/gamescope/scripts/00-gamescope/displays/valve.steamdeck.oled.lua' (id: 12)
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/etc/gamescope/scripts'
+[gamescope] [[0;33mWarn[0m]  [0;37mscriptmgr:[0m Directory '/etc/gamescope/scripts' does not exist
+[gamescope] [[0;34mInfo[0m]  [0;37mscriptmgr:[0m Loading scripts from: '/var/home/holzr/.config/gamescope/scripts'
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m Intel device detected, forcing general queue family instead of compute-only queue
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m selecting physical device 'Intel(R) Arc(tm) B390 (PTL)': queue family 0 (general queue family 0)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m physical device supports DRM format modifiers
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [backend/headless/backend.c:67] Creating headless backend
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m supported DRM formats for sampling usage:
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AR24 (0x34325241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XR24 (0x34325258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AB24 (0x34324241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB24 (0x34324258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   RG16 (0x36314752)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   NV12 (0x3231564E)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AB4H (0x48344241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB4H (0x48344258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AB48 (0x38344241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB48 (0x38344258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AB30 (0x30334241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XB30 (0x30334258)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   AR30 (0x30335241)
+[gamescope] [[0;34mInfo[0m]  [0;37mvulkan:[0m   XR30 (0x30335258)
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Using explicit sync when available
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Running compositor on wayland display 'gamescope-0'
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [backend/headless/backend.c:17] Starting headless backend
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m Successfully initialized libei for input emulation!
+[gamescope] [[0;34mInfo[0m]  [0;37mwlserver:[0m [xwayland/server.c:107] Starting Xwayland on :2
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Multiple symbols for level 1/group 1 on key <FK23>
+>                   Using F23, ignoring XF86TouchpadOff
+> Warning:          Symbol map for key <FK23> redefined
+>                   Using last definition for conflicting fields
+> Warning:          Symbol map for key <FK24> redefined
+>                   Using last definition for conflicting fields
+> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOn
+> Warning:          Could not resolve keysym XF86ElectronicPrivacyScreenOff
+> Warning:          Could not resolve keysym XF86ActionOnSelection
+> Warning:          Could not resolve keysym XF86ContextualInsert
+> Warning:          Could not resolve keysym XF86ContextualQuery
+Errors from xkbcomp are not fatal to the X server
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream state changed: connecting
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream state changed: paused
+[gamescope] [[0;34mInfo[0m]  [0;37mpipewire:[0m stream available on node ID: 102
+[gamescope] [[0;34mInfo[0m]  [0;37mvblank:[0m Using timerfd.
+[Gamescope WSI] Application info:
+  pApplicationName: ClayApp
+  applicationVersion: 4194305
+  pEngineName: ClayEngine
+  engineVersion: 4194305
+  apiVersion: 4198400
+[Gamescope WSI] Executable name: GravityMark.x64
+ATTENTION: default value of option vk_wsi_force_swapchain_to_current_extent overridden by environment.
+[Gamescope WSI] Forcing on VK_EXT_swapchain_maintenance1.
+[Gamescope WSI] Creating Gamescope surface: xid: 0x40002a
+[Gamescope WSI] Atom of T was wrong type. Expected XCB_ATOM_CARDINAL.
+[Gamescope WSI] Atom of T was wrong type. Expected XCB_ATOM_CARDINAL.
+[Gamescope WSI] Made gamescope surface for xid: 0x40002a
+[Gamescope WSI] Surface state:
+  steam app id:                  0
+  window xid:                    0x40002a
+  wayland surface res id:        5
+  layer client flags:            0x0
+  server hdr output enabled:     false
+  hdr formats exposed to client: false
+[Gamescope WSI] Creating swapchain for xid: 0x40002a - oldSwapchain: (nil) - provided minImageCount: 4 - minImageCount: 4 - format: VK_FORMAT_R8G8B8A8_UNORM - colorspace: VK_COLOR_SPACE_SRGB_NONLINEAR_KHR - flip: true
+[Gamescope WSI] Created swapchain for xid: 0x40002a swapchain: 0x136c9560 - imageCount: 4
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Unsupported maximum keycode 709, clipping.
+>                   X11 cannot support keycodes above 255.
+> Warning:          Virtual modifier Hyper multiply defined
+>                   Using 0, ignoring 0
+> Warning:          Virtual modifier ScrollLock multiply defined
+>                   Using 0, ignoring 0
+Errors from xkbcomp are not fatal to the X server
+[Gamescope WSI] Swapchain received new refresh cycle: 16.67ms
+[Gamescope WSI] Destroying swapchain: 0x136c9560
+[Gamescope WSI] Destroyed swapchain: 0x136c9560
+[gamescope] [[0;34mInfo[0m]  [0;37mlaunch:[0m Primary child shut down!
+(EE) failed to read Wayland events: Broken pipe

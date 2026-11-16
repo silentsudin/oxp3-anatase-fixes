@@ -161,10 +161,10 @@ Artifacts: `results/gpu-bench-20261116-opencl/`.
 - OpenCL rusticl: FP32 ~5.9 TFLOPS, FP32 vec2 ~5.9, vec4 ~5.0, vec8 ~5.4,
   vec16 ~5.3; **half precision unsupported**.
 - GPU profiling: compute runs pin at 2300 MHz / 93-98 % util; vkmark ~80 % util.
-- `GravityMark` 1.89 was acquired; its CLI supports
-  `-benchmark 1 -close 1 -times <file>` and it enumerates the B390 under
-  `gamescope --backend headless`, but the scene did not finish within the first
-  headless attempt; it remains an optional graphics/RT test.
+- `GravityMark` 1.89 is now integrated (`--gravitymark`, `--gravitymark-rt`) and
+  runs headless under `gamescope --backend headless`; raster 50k asteroids:
+  score 38608 / 231.2 fps, RT 20k asteroids: score 33317-33383 / 199.5-199.9 fps
+  (both scenes 167 s).
 
 ## Validated Mesa fix: iris FP16 for rusticl
 

@@ -301,6 +301,34 @@ def bench_opencl(outdir):
     (outdir / "clpeak-opencl-run.json").write_text(json.dumps(res, indent=2))
     return res
 
+def bench_gravity(outdir, rt=False, asteroids=50000):
+    exe = TOOLS / "GravityMark" / "bin" / "GravityMark.x64"
+    if not exe.exists():
+        return {"status": "missing", "path": str(exe)}
+    tag = "rt" if rt else "raster"
+    cmd = ["gamescope", "--backend", "headless", "-W", "1280", "-H", "720", "--",
+           str(exe), "-vulkan"]
+    if rt:
+        cmd.append("-raytracing")
+        cmd.append("1")
+    cmd += ["-benchmark", "1", "-close", "1", "-count", "1",
+            "-asteroids", str(asteroids), "-times", str(outdir / f"gravitymark-{tag}-times.txt"),
+            "-fps", "1"]
+    s = Sampler(); s.start()
+    r = run(cmd, timeout=420, log_path=outdir / f"gravitymark-{tag}.txt", cwd=str(exe.parent))
+    prof = s.finish()
+    def grab(pat):
+        m = re.search(pat, r["output"])
+        return float(m.group(1)) if m else None
+    res = {"status": "ok" if r["rc"] == 0 and "Benchmark Finished" in r["output"] else "error",
+           "api": "Vulkan RT" if rt else "Vulkan",
+           "score": grab(r"Score:\s*([0-9.]+)"),
+           "fps": grab(r"FPS:\s*([0-9.]+)"),
+           "scene_seconds": grab(r"Time:\s*([0-9.]+)"),
+           "profile": prof, **r}
+    (outdir / f"gravitymark-{tag}.json").write_text(json.dumps(res, indent=2))
+    return res
+
 def bench_media(outdir):
     ff = TOOLS / "ffmpeg" / "bin" / "ffmpeg"
     if not ff.exists():
@@ -344,6 +372,8 @@ def main():
     ap.add_argument("--tag", default="baseline")
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--skip-vkmark", action="store_true")
+    ap.add_argument("--gravitymark", action="store_true", help="also run GravityMark raster")
+    ap.add_argument("--gravitymark-rt", action="store_true", help="also run GravityMark ray tracing")
     ap.add_argument("--skip-vkpeak", action="store_true")
     args = ap.parse_args()
     outdir = Path(args.out) if args.out else DEFAULT_OUT / f"{datetime.now():%Y%m%d-%H%M%S}-{args.tag}"
@@ -361,6 +391,10 @@ def main():
     print("opencl..."); results["opencl_clpeak"] = bench_opencl(outdir)
     if not args.skip_vkmark:
         print("media..."); results["media"] = bench_media(outdir)
+    if args.gravitymark:
+        print("gravitymark raster..."); results["gravitymark"] = bench_gravity(outdir, False)
+    if args.gravitymark_rt:
+        print("gravitymark RT..."); results["gravitymark_rt"] = bench_gravity(outdir, True, 20000)
     print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
     (outdir / "summary.json").write_text(json.dumps(results, indent=2))
     # Markdown summary
@@ -403,6 +437,11 @@ def main():
             if isinstance(v, dict):
                 lines.append(f"| {name} | {v.get('speed_x')}x ({v.get('status')}) |")
         lines.append("")
+    for key, label in (("gravitymark", "GravityMark Vulkan"), ("gravitymark_rt", "GravityMark Vulkan RT")):
+        g = results.get(key, {})
+        if g.get("fps") is not None:
+            lines += [f"## {label}", "", f"score: **{g.get('score')}** fps: **{g.get('fps')}** "
+                      f"(scene {g.get('scene_seconds')} s)", ""]
     vkm = results.get("vkmark", {})
     if vkm.get("score") is not None:
         lines += ["## vkmark", "", f"score: **{vkm['score']:.0f}**", ""]
