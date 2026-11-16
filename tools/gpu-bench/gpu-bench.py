@@ -23,6 +23,13 @@ from pathlib import Path
 CACHE = Path(os.environ.get("OXP3_GPU_BENCH_CACHE", Path.home() / ".cache/oxp3-fixes/gpu-bench"))
 BIN = CACHE / "bin"
 SHARE = CACHE / "share"
+TOOLS = CACHE / "tools"
+
+# oneVPL GPU runtime (intel-vpl-gpu-rt) extracted by media-setup.sh: without it
+# hevc_qsv fails with "Error creating a MFX session: -9".
+_vpl = TOOLS / "vpl" / "usr" / "lib64"
+if _vpl.exists():
+    os.environ["LD_LIBRARY_PATH"] = str(_vpl) + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
 DEFAULT_OUT = CACHE / "results"
 
 # If opencl-setup.sh has been run, make rusticl load the extracted libclc.
@@ -294,6 +301,31 @@ def bench_opencl(outdir):
     (outdir / "clpeak-opencl-run.json").write_text(json.dumps(res, indent=2))
     return res
 
+def bench_media(outdir):
+    ff = TOOLS / "ffmpeg" / "bin" / "ffmpeg"
+    if not ff.exists():
+        return {"status": "missing", "path": str(ff)}
+    tests = {}
+    base = [str(ff), "-hide_banner", "-nostdin", "-f", "lavfi",
+            "-i", "testsrc2=size=1920x1200:rate=60", "-t", "5"]
+    variants = {
+        "hevc_qsv": base + ["-c:v", "hevc_qsv", "-preset", "fast", "-f", "null", "-"],
+        "hevc_vaapi": [str(ff), "-hide_banner", "-nostdin", "-vaapi_device",
+                       "/dev/dri/renderD128"] + base[3:] +
+                      ["-vf", "format=nv12,hwupload", "-c:v", "hevc_vaapi", "-f", "null", "-"],
+        "libx265": base + ["-c:v", "libx265", "-preset", "ultrafast", "-f", "null", "-"],
+    }
+    for name, cmd in variants.items():
+        s = Sampler(); s.start()
+        r = run(cmd, timeout=180, log_path=outdir / f"ffmpeg-{name}.txt")
+        prof = s.finish()
+        m = re.search(r"speed=([0-9.]+)x", r["output"])
+        status = "ok" if r["rc"] == 0 else "error"
+        tests[name] = {"status": status, "speed_x": float(m.group(1)) if m else None,
+                       "profile": prof, **r}
+    (outdir / "media.json").write_text(json.dumps(tests, indent=2))
+    return tests
+
 def opencl_status(outdir):
     cl = shutil.which("clinfo")
     if not cl:
@@ -328,7 +360,8 @@ def main():
     print("clpeak..."); results["clpeak"] = bench_clpeak(outdir)
     print("opencl..."); results["opencl_clpeak"] = bench_opencl(outdir)
     if not args.skip_vkmark:
-        print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
+        print("media..."); results["media"] = bench_media(outdir)
+    print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
     (outdir / "summary.json").write_text(json.dumps(results, indent=2))
     # Markdown summary
     lines = [f"# GPU benchmark {m['timestamp']}", "", f"- kernel: `{m['kernel']}`",
@@ -362,6 +395,13 @@ def main():
                         lines.append(f"- **unsupported** {met['id']}: {met.get('reason')}")
                     elif met.get("value") is not None:
                         lines.append(f"- {met['id']}: {met['value']:.2f}")
+        lines.append("")
+    med = results.get("media", {})
+    if med:
+        lines += ["## media (FFmpeg, 1920x1200 testsrc2, 5 s)", "", "| encoder | speed |", "|---|---:|"]
+        for name, v in med.items():
+            if isinstance(v, dict):
+                lines.append(f"| {name} | {v.get('speed_x')}x ({v.get('status')}) |")
         lines.append("")
     vkm = results.get("vkmark", {})
     if vkm.get("score") is not None:

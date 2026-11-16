@@ -206,3 +206,30 @@ Note: the test used the user-space libclc shim, and rusticl warns that upstream
 (non-Mesa-patched) libclc may have bugs; the capability itself is fixed by the iris
 cap.  This patch should go through the normal Mesa package/overlay build for a
 system-wide install.
+
+## Media (FFmpeg): QSV gap and oneVPL runtime
+
+`media-setup.sh` downloads the static FFmpeg build and extracts Fedora's
+`intel-vpl-gpu-rt` RPM into the user cache.  With only `libvpl` installed,
+`hevc_qsv` fails:
+
+```text
+Use Intel(R) oneVPL to create MFX session, the required implementation version is 1.1
+Error creating a MFX session: -9.
+```
+
+After extracting `intel-vpl-gpu-rt` (libmfx-gen.so.1.2), QSV works.  The harness
+prepends that path to `LD_LIBRARY_PATH` automatically when present.
+
+Baseline 4 media (1920x1200 `testsrc2`, 60 fps, 5 s):
+
+| encoder | speed |
+|---|---:|
+| hevc_qsv | 5.13x (~308 fps) |
+| hevc_vaapi | 6.82x (~409 fps) |
+| libx265 (CPU, ultrafast) | 3.51x (~211 fps) |
+
+So the GPU encoders are already 1.5-2x the CPU x265 path; the actionable gap was
+purely the missing oneVPL GPU runtime package, not the driver.
+
+Artifacts: `results/gpu-bench-20261116-media/`.

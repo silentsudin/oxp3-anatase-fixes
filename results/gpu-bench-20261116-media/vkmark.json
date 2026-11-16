@@ -1,0 +1,94 @@
+{
+  "status": "ok",
+  "score": 29286.0,
+  "scenes": [
+    {
+      "scene": "vertex",
+      "options": "device-local=true",
+      "fps": 34924.0
+    },
+    {
+      "scene": "vertex",
+      "options": "device-local=false",
+      "fps": 35793.0
+    },
+    {
+      "scene": "texture",
+      "options": "anisotropy=0",
+      "fps": 32598.0
+    },
+    {
+      "scene": "texture",
+      "options": "anisotropy=16",
+      "fps": 32299.0
+    },
+    {
+      "scene": "shading",
+      "options": "shading=gouraud",
+      "fps": 29912.0
+    },
+    {
+      "scene": "shading",
+      "options": "shading=blinn-phong-inf",
+      "fps": 29741.0
+    },
+    {
+      "scene": "shading",
+      "options": "shading=phong",
+      "fps": 29649.0
+    },
+    {
+      "scene": "shading",
+      "options": "shading=cel",
+      "fps": 29767.0
+    },
+    {
+      "scene": "effect2d",
+      "options": "kernel=edge",
+      "fps": 21484.0
+    },
+    {
+      "scene": "effect2d",
+      "options": "kernel=blur",
+      "fps": 14479.0
+    },
+    {
+      "scene": "desktop",
+      "options": "<default>",
+      "fps": 22624.0
+    },
+    {
+      "scene": "cube",
+      "options": "<default>",
+      "fps": 36052.0
+    },
+    {
+      "scene": "clear",
+      "options": "<default>",
+      "fps": 31406.0
+    }
+  ],
+  "profile": {
+    "samples": 81,
+    "gpu_clock_mhz_avg": 2300.0,
+    "gpu_clock_mhz_max": 2300.0,
+    "gpu_util_pct_avg": 80.2,
+    "gpu_util_pct_max": 92.0,
+    "package_energy_j": null,
+    "cpu_busy_pct": 83.5
+  },
+  "cmd": [
+    "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/vkmark",
+    "--winsys",
+    "headless",
+    "--winsys-dir",
+    "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin",
+    "--data-dir",
+    "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/share/vkmark-data",
+    "-b",
+    ":duration=3"
+  ],
+  "rc": 0,
+  "seconds": 39.325,
+  "output": "=======================================================\n    vkmark 2025.01\n=======================================================\n    Vendor ID:      0x8086\n    Device ID:      0xB080\n    Device Name:    Intel(R) Arc(tm) B390 (PTL)\n    Driver Version: 109457507\n    Device UUID:    16941867e53a639db4d0092a7e676c87\n=======================================================\n[vertex] device-local=true: FPS: 34924 FrameTime: 0.029 ms\n[vertex] device-local=false: FPS: 35793 FrameTime: 0.028 ms\n[texture] anisotropy=0: FPS: 32598 FrameTime: 0.031 ms\n[texture] anisotropy=16: FPS: 32299 FrameTime: 0.031 ms\n[shading] shading=gouraud: FPS: 29912 FrameTime: 0.033 ms\n[shading] shading=blinn-phong-inf: FPS: 29741 FrameTime: 0.034 ms\n[shading] shading=phong: FPS: 29649 FrameTime: 0.034 ms\n[shading] shading=cel: FPS: 29767 FrameTime: 0.034 ms\n[effect2d] kernel=edge: FPS: 21484 FrameTime: 0.047 ms\n[effect2d] kernel=blur: FPS: 14479 FrameTime: 0.069 ms\n[desktop] <default>: FPS: 22624 FrameTime: 0.044 ms\n[cube] <default>: FPS: 36052 FrameTime: 0.028 ms\n[clear] <default>: FPS: 31406 FrameTime: 0.032 ms\n=======================================================\n                                   vkmark Score: 29286\n=======================================================\n"
+}
