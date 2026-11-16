@@ -434,3 +434,27 @@ The lpmd ER exemption now also has `AffinityAllThreads=1`, so the initial attach
 covers every existing thread; the watchdog defeats any later re-pinning by the game.
 
 Measure with MangoHud (%) lows/frame-time, not only average FPS.
+
+## Elden Ring launch options (EAC stays on)
+
+Working Steam launch options (no wrapper, env vars only), user-validated:
+
+```sh
+WINE_CPU_TOPOLOGY=8:0,1,2,3,4,5,6,7 PROTON_VKD3D_HEAP=1 DXVK_CONFIG="dxgi.syncInterval=0" %command%
+```
+
+- `WINE_CPU_TOPOLOGY=8:0,1,2,3,4,5,6,7` is the known Linux workaround for EAC's
+  many-core handling, which otherwise misbehaves on high-core CPUs.
+- `PROTON_VKD3D_HEAP=1` and `DXVK_CONFIG="dxgi.syncInterval=0"` reduce D3D12/DXVK
+  overhead and vsync stalls.
+- If 8 CPUs is too restrictive on the 14-core G3 Extreme, use
+  `WINE_CPU_TOPOLOGY=10:0,1,2,3,4,5,6,7,8,9` (P+E, no LP-E).
+
+Reported result: **FPS is more stable in Elden Ring**.  ER remains capped at 60 with
+EAC online; exceeding that needs offline/patcher, which is out of scope.
+
+Related known Linux issues:
+- Intel FRED bug on Panther Lake (ER freezes after 2-3 min) was fixed in Linux 7.3-rc4;
+  this kernel is 7.3.4, so the fix is included.
+- lpmd must leave the Steam/Wine/EAC chain on all CPUs (see above); the catch-all
+  still handles ordinary games.
