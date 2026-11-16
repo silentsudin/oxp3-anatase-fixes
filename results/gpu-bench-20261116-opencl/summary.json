@@ -1,0 +1,706 @@
+{
+  "meta": {
+    "timestamp": "2026-11-16T16:23:17.612718+00:00",
+    "kernel": "7.3.4-an02.fc45.x86_64",
+    "cmdline": "BOOT_IMAGE=(hd0,gpt2)/ostree/anatase-bfd8bdbfb0a4e47ed71af5229ecd7075790c1259e8d9f3e480f7aebf7a6de01a/vmlinuz-7.3.4-an02.fc45.x86_64 ostree=/ostree/boot.0/anatase/bfd8bdbfb0a4e47ed71af5229ecd7075790c1259e8d9f3e480f7aebf7a6de01a/0 rhgb quiet root=UUID=a245ffab-5073-45ee-b3ed-e7ecdec29275 vconsole.keymap=us rootflags=subvol=root rw xe.enable_panel_replay=0 nvme.noacpi=1",
+    "sched_ext": "cosmos_1.1.7_x86_64_unknown_linux_gnu",
+    "governor": "powersave",
+    "epp": "balance_power",
+    "gpu_busy": null,
+    "intel_lpmd": "active",
+    "lspci_vga": "00:02.0 VGA compatible controller [0300]: Intel Corporation Panther Lake [Arc B390] [8086:b080] (rev 04)"
+  },
+  "inventory": {
+    "device": {
+      "deviceName": "Intel(R) Arc(tm) B390 (PTL)",
+      "driverName": "Intel open-source Mesa driver",
+      "driverInfo": "Mesa 27.0.0-devel",
+      "apiVersion": "1.4.368",
+      "software_fallback": false,
+      "is_intel": true
+    },
+    "extensions": [
+      "VK_AMDX_",
+      "VK_AMD_",
+      "VK_ANDROID_",
+      "VK_ARM_",
+      "VK_EXT_",
+      "VK_EXT_4444_",
+      "VK_GOOGLE_",
+      "VK_INTEL_",
+      "VK_KHR_",
+      "VK_KHR_16",
+      "VK_KHR_8",
+      "VK_LAYER_FROG_",
+      "VK_LAYER_KHRONOS_",
+      "VK_LAYER_MANGOHUD_",
+      "VK_LAYER_MESA_",
+      "VK_LAYER_NV_",
+      "VK_LAYER_VALVE_",
+      "VK_LUNARG_",
+      "VK_MESA_",
+      "VK_NV_",
+      "VK_VALVE_"
+    ],
+    "vulkaninfo_rc": 0,
+    "summary_file": "vulkaninfo-summary.txt",
+    "full_file": "vulkaninfo.txt"
+  },
+  "opencl": {
+    "installed": true,
+    "platforms": 1,
+    "device_lines": 3,
+    "raw": "Platform #0: rusticl\n `-- Device #0: Mesa Intel(R) Arc(tm) B390 (PTL)\n\n[stderr]\n=== Rusticl warning: Patched Mesa libclc not detected. Upstream libclc may contain known bugs or breaking changes and isn't guaranteed to work reliably. Please visit https://gitlab.freedesktop.org/karolherbst/mesa-libclc for more information. ===\n"
+  },
+  "vkpeak": {
+    "status": "ok",
+    "metrics": {
+      "fp32-scalar": {
+        "value": 6240.27,
+        "unit": "GFLOPS"
+      },
+      "fp32-vec4": {
+        "value": 4344.61,
+        "unit": "GFLOPS"
+      },
+      "fp16-scalar": {
+        "value": 6581.54,
+        "unit": "GFLOPS"
+      },
+      "fp16-vec4": {
+        "value": 6754.73,
+        "unit": "GFLOPS"
+      },
+      "fp16-matrix": {
+        "value": 52253.36,
+        "unit": "GFLOPS"
+      },
+      "fp64-scalar": {
+        "value": 342.3,
+        "unit": "GFLOPS"
+      },
+      "fp64-vec4": {
+        "value": 350.06,
+        "unit": "GFLOPS"
+      },
+      "int32-scalar": {
+        "value": 1778.33,
+        "unit": "GIOPS"
+      },
+      "int32-vec4": {
+        "value": 1986.41,
+        "unit": "GIOPS"
+      },
+      "int16-scalar": {
+        "value": 2815.08,
+        "unit": "GIOPS"
+      },
+      "int16-vec4": {
+        "value": 5353.86,
+        "unit": "GIOPS"
+      },
+      "int64-scalar": {
+        "value": 378.33,
+        "unit": "GIOPS"
+      },
+      "int64-vec4": {
+        "value": 294.66,
+        "unit": "GIOPS"
+      },
+      "int8-dotprod": {
+        "value": 12694.92,
+        "unit": "GIOPS"
+      },
+      "int8-matrix": {
+        "value": 97160.26,
+        "unit": "GIOPS"
+      },
+      "bf16-dotprod": {
+        "value": 1362.52,
+        "unit": "GFLOPS"
+      },
+      "bf16-matrix": {
+        "value": 50302.2,
+        "unit": "GFLOPS"
+      },
+      "fp8-matrix": {
+        "value": 0.0,
+        "unit": "GFLOPS"
+      },
+      "bf8-matrix": {
+        "value": 0.0,
+        "unit": "GFLOPS"
+      },
+      "copy-h2h": {
+        "value": 15.91,
+        "unit": "GBPS"
+      },
+      "copy-h2d": {
+        "value": 18.47,
+        "unit": "GBPS"
+      },
+      "copy-d2h": {
+        "value": 25.46,
+        "unit": "GBPS"
+      },
+      "copy-d2d": {
+        "value": 54.7,
+        "unit": "GBPS"
+      }
+    },
+    "zero_metrics": [
+      "fp8-matrix",
+      "bf8-matrix"
+    ],
+    "profile": {
+      "samples": 193,
+      "gpu_clock_mhz_avg": 2241.1,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 93.5,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 88.7
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/vkpeak",
+      "0",
+      "all"
+    ],
+    "rc": 0,
+    "seconds": 96.693,
+    "output": "fp32-scalar  = 6240.27 GFLOPS\nfp32-vec4    = 4344.61 GFLOPS\nfp16-scalar  = 6581.54 GFLOPS\nfp16-vec4    = 6754.73 GFLOPS\nfp16-matrix  = 52253.36 GFLOPS\nfp64-scalar  = 342.30 GFLOPS\nfp64-vec4    = 350.06 GFLOPS\nint32-scalar = 1778.33 GIOPS\nint32-vec4   = 1986.41 GIOPS\nint16-scalar = 2815.08 GIOPS\nint16-vec4   = 5353.86 GIOPS\nint64-scalar = 378.33 GIOPS\nint64-vec4   = 294.66 GIOPS\nint8-dotprod = 12694.92 GIOPS\nint8-matrix  = 97160.26 GIOPS\nbf16-dotprod = 1362.52 GFLOPS\nbf16-matrix  = 50302.20 GFLOPS\nfp8-matrix   = 0.00 GFLOPS\nbf8-matrix   = 0.00 GFLOPS\ncopy-h2h     = 15.91 GBPS\ncopy-h2d     = 18.47 GBPS\ncopy-d2h     = 25.46 GBPS\ncopy-d2d     = 54.70 GBPS\n\n[stderr]\ndevice       = Intel(R) Arc(tm) B390 (PTL)\ndriver       = Intel open-source Mesa driver / Mesa 27.0.0-devel\n\n"
+  },
+  "clpeak": {
+    "status": "ok",
+    "unsupported": [
+      {
+        "test": "coopmat",
+        "metric": "fp32",
+        "reason": "No fp32xfp32+fp32 coopmat property! Skipped"
+      },
+      {
+        "test": "coopmat",
+        "metric": "fp8_e4m3",
+        "reason": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+      },
+      {
+        "test": "coopmat",
+        "metric": "fp8_e5m2",
+        "reason": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+      }
+    ],
+    "profile": {
+      "samples": 16,
+      "gpu_clock_mhz_avg": 2265.6,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 92.4,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 88.6
+    },
+    "json": {
+      "schema": "clpeak/run",
+      "format_version": 3,
+      "clpeak_version": "3.0.5",
+      "generated_at": "2026-11-16T16:24:55Z",
+      "duration_s": 7.545049,
+      "build": {
+        "backends": [
+          "Vulkan",
+          "OpenCL",
+          "CPU",
+          "LiteRT",
+          "ONNX"
+        ],
+        "config": "Release"
+      },
+      "host": {
+        "os": "Linux x64",
+        "os_version": "7.3.4-an02.fc45.x86_64",
+        "arch": "x86_64",
+        "cpu": "Intel(R) Arc(TM) G3 Extreme",
+        "logical_cores": 14,
+        "memory_bytes": 33154686976
+      },
+      "invocation": {
+        "argv": [
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+          "--vulkan",
+          "--devices",
+          "vulkan:0",
+          "--compute",
+          "--matrix-compute",
+          "--numeric-error",
+          "-o",
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-162317-baseline3/clpeak.json"
+        ],
+        "target_time_us": 500000,
+        "target_time_us_cpu": 2000000,
+        "target_time_us_ml_gpu": 1000000,
+        "warmup": 2,
+        "categories": [
+          "compute"
+        ],
+        "tests": [
+          "matrix-compute",
+          "numeric-error"
+        ]
+      },
+      "devices": [
+        {
+          "backend": "Vulkan",
+          "platform": "Vulkan",
+          "name": "Intel(R) Arc(tm) B390 (PTL)",
+          "driver": "26.99.99",
+          "type": "gpu",
+          "device_index": 0,
+          "properties": [
+            {
+              "key": "API version",
+              "value": "1.4.368"
+            },
+            {
+              "key": "VRAM",
+              "value": "23714 MB"
+            }
+          ],
+          "tests": [
+            {
+              "id": "coopmat",
+              "title": "Cooperative matrix",
+              "category": "compute",
+              "shape": "heterogeneous",
+              "axis": "data type",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak cooperative-matrix multiply-add rate, on the device's matrix engine where it has one.",
+              "duration_s": 7.417949,
+              "metrics": [
+                {
+                  "id": "fp32",
+                  "status": "unsupported",
+                  "reason": "No fp32xfp32+fp32 coopmat property! Skipped",
+                  "description": "fp32 inputs and accumulator."
+                },
+                {
+                  "id": "fp16",
+                  "value": 53085950000000.0,
+                  "description": "fp16 inputs, fp32 accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "fp16 f16acc",
+                  "value": 53253710000000.0,
+                  "description": "fp16 inputs and accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "bf16",
+                  "value": 53333410000000.0,
+                  "description": "bf16 inputs, fp32 accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "fp8_e4m3",
+                  "status": "unsupported",
+                  "reason": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped",
+                  "description": "fp8 E4M3 inputs (more precision, less range), fp32 accumulator."
+                },
+                {
+                  "id": "fp8_e5m2",
+                  "status": "unsupported",
+                  "reason": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped",
+                  "description": "fp8 E5M2 inputs (more range, less precision), fp32 accumulator."
+                },
+                {
+                  "id": "int8",
+                  "value": 106986800000000.0,
+                  "unit": "OPS",
+                  "quantity": "ops",
+                  "direction": "higher_is_better",
+                  "description": "int8 inputs, int32 accumulator (8x16x32 tile, fastest at subgroup 16)."
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "log": [
+        {
+          "elapsed_s": 0.005037824,
+          "level": "info",
+          "backend": "Vulkan",
+          "message": "Backend: Vulkan"
+        },
+        {
+          "elapsed_s": 0.1255614,
+          "level": "info",
+          "backend": "Vulkan",
+          "device": "Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Device 0: Intel(R) Arc(tm) B390 (PTL)"
+        },
+        {
+          "elapsed_s": 0.125613,
+          "level": "info",
+          "backend": "Vulkan",
+          "device": "Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "coopmat",
+          "message": "    Cooperative matrix"
+        }
+      ]
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--vulkan",
+      "--devices",
+      "vulkan:0",
+      "--compute",
+      "--matrix-compute",
+      "--numeric-error",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-162317-baseline3/clpeak.json"
+    ],
+    "rc": 0,
+    "seconds": 7.55,
+    "output": "Backend: Vulkan\n  Device 0: Intel(R) Arc(tm) B390 (PTL)\n    Driver version   : 26.99.99\n    API version      : 1.4.368\n    VRAM             : 23714 MB\n\n    Cooperative matrix\n      fp16     : 53.1 TFLOPS\n      fp16 f16acc : 53.3 TFLOPS\n      bf16        : 53.3 TFLOPS\n      int8        : 107 TOPS\n\n"
+  },
+  "opencl_clpeak": {
+    "status": "ok",
+    "unsupported": [
+      {
+        "test": "half_precision_compute",
+        "metric": "half",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half2",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half4",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half8",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half16",
+        "reason": "No half precision support"
+      }
+    ],
+    "profile": {
+      "samples": 11,
+      "gpu_clock_mhz_avg": 2159.1,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 75.5,
+      "gpu_util_pct_max": 93.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 87.9
+    },
+    "json": {
+      "schema": "clpeak/run",
+      "format_version": 3,
+      "clpeak_version": "3.0.5",
+      "generated_at": "2026-11-16T16:25:02Z",
+      "duration_s": 5.137749,
+      "build": {
+        "backends": [
+          "Vulkan",
+          "OpenCL",
+          "CPU",
+          "LiteRT",
+          "ONNX"
+        ],
+        "config": "Release"
+      },
+      "host": {
+        "os": "Linux x64",
+        "os_version": "7.3.4-an02.fc45.x86_64",
+        "arch": "x86_64",
+        "cpu": "Intel(R) Arc(TM) G3 Extreme",
+        "logical_cores": 14,
+        "memory_bytes": 33154686976
+      },
+      "invocation": {
+        "argv": [
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+          "--opencl",
+          "--devices",
+          "opencl:0",
+          "--compute",
+          "--single-precision-compute",
+          "--half-precision-compute",
+          "-o",
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-162317-baseline3/clpeak-opencl.json"
+        ],
+        "target_time_us": 500000,
+        "target_time_us_cpu": 2000000,
+        "target_time_us_ml_gpu": 1000000,
+        "warmup": 2,
+        "categories": [
+          "compute"
+        ],
+        "tests": [
+          "single-precision-compute",
+          "half-precision-compute"
+        ]
+      },
+      "devices": [
+        {
+          "backend": "OpenCL",
+          "platform": "rusticl",
+          "name": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "driver": "26.2.6",
+          "type": "gpu",
+          "platform_index": 0,
+          "device_index": 0,
+          "properties": [
+            {
+              "key": "Compute units",
+              "value": "12"
+            },
+            {
+              "key": "Clock frequency",
+              "value": "400 MHz"
+            }
+          ],
+          "tests": [
+            {
+              "id": "single_precision_compute",
+              "title": "Single-precision compute",
+              "category": "compute",
+              "shape": "homogeneous",
+              "axis": "vector width",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak fp32 arithmetic rate of the device's ALUs, with no memory traffic.",
+              "duration_s": 4.778669,
+              "metrics": [
+                {
+                  "id": "float",
+                  "value": 5884107000000.0,
+                  "description": "Scalar, one value per work-item."
+                },
+                {
+                  "id": "float2",
+                  "value": 5946836000000.0,
+                  "description": "2-wide vector per work-item."
+                },
+                {
+                  "id": "float4",
+                  "value": 5051307000000.0,
+                  "description": "4-wide vector per work-item."
+                },
+                {
+                  "id": "float8",
+                  "value": 5386541000000.0,
+                  "description": "8-wide vector per work-item."
+                },
+                {
+                  "id": "float16",
+                  "value": 5330427000000.0,
+                  "description": "16-wide vector per work-item."
+                }
+              ]
+            },
+            {
+              "id": "half_precision_compute",
+              "title": "Half-precision compute",
+              "category": "compute",
+              "shape": "homogeneous",
+              "axis": "vector width",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak fp16 arithmetic rate, with fp16 inputs and accumulator.",
+              "duration_s": 1.8384e-05,
+              "metrics": [
+                {
+                  "id": "half",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half2",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half4",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half8",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half16",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "log": [
+        {
+          "elapsed_s": 0.004090617,
+          "level": "info",
+          "backend": "OpenCL",
+          "message": "Backend: OpenCL"
+        },
+        {
+          "elapsed_s": 0.3393226,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Platform 0: rusticl"
+        },
+        {
+          "elapsed_s": 0.3393497,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Device 0: Mesa Intel(R) Arc(tm) B390 (PTL)"
+        },
+        {
+          "elapsed_s": 0.3584075,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "single_precision_compute",
+          "message": "    Single-precision compute"
+        },
+        {
+          "elapsed_s": 5.137352,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "half_precision_compute",
+          "message": "    Half-precision compute"
+        }
+      ]
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--opencl",
+      "--devices",
+      "opencl:0",
+      "--compute",
+      "--single-precision-compute",
+      "--half-precision-compute",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-162317-baseline3/clpeak-opencl.json"
+    ],
+    "rc": 0,
+    "seconds": 5.151,
+    "output": "Backend: OpenCL\n  Platform 0: rusticl\n    Device 0: Mesa Intel(R) Arc(tm) B390 (PTL)\n      Driver version   : 26.2.6\n      Compute units    : 12\n      Clock frequency  : 400 MHz\n\n      Single-precision compute\n        float    : 5.88 TFLOPS\n        float2   : 5.95 TFLOPS\n        float4   : 5.05 TFLOPS\n        float8   : 5.39 TFLOPS\n        float16  : 5.33 TFLOPS\n\n\n[stderr]\n=== Rusticl warning: Patched Mesa libclc not detected. Upstream libclc may contain known bugs or breaking changes and isn't guaranteed to work reliably. Please visit https://gitlab.freedesktop.org/karolherbst/mesa-libclc for more information. ===\n"
+  },
+  "vkmark": {
+    "status": "ok",
+    "score": 29383.0,
+    "scenes": [
+      {
+        "scene": "vertex",
+        "options": "device-local=true",
+        "fps": 35581.0
+      },
+      {
+        "scene": "vertex",
+        "options": "device-local=false",
+        "fps": 35779.0
+      },
+      {
+        "scene": "texture",
+        "options": "anisotropy=0",
+        "fps": 32326.0
+      },
+      {
+        "scene": "texture",
+        "options": "anisotropy=16",
+        "fps": 32256.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=gouraud",
+        "fps": 29463.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=blinn-phong-inf",
+        "fps": 29470.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=phong",
+        "fps": 29743.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=cel",
+        "fps": 29675.0
+      },
+      {
+        "scene": "effect2d",
+        "options": "kernel=edge",
+        "fps": 21793.0
+      },
+      {
+        "scene": "effect2d",
+        "options": "kernel=blur",
+        "fps": 14518.0
+      },
+      {
+        "scene": "desktop",
+        "options": "<default>",
+        "fps": 22568.0
+      },
+      {
+        "scene": "cube",
+        "options": "<default>",
+        "fps": 37218.0
+      },
+      {
+        "scene": "clear",
+        "options": "<default>",
+        "fps": 31593.0
+      }
+    ],
+    "profile": {
+      "samples": 81,
+      "gpu_clock_mhz_avg": 2300.0,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 80.1,
+      "gpu_util_pct_max": 92.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 83.5
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/vkmark",
+      "--winsys",
+      "headless",
+      "--winsys-dir",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin",
+      "--data-dir",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/share/vkmark-data",
+      "-b",
+      ":duration=3"
+    ],
+    "rc": 0,
+    "seconds": 39.298,
+    "output": "=======================================================\n    vkmark 2025.01\n=======================================================\n    Vendor ID:      0x8086\n    Device ID:      0xB080\n    Device Name:    Intel(R) Arc(tm) B390 (PTL)\n    Driver Version: 109457507\n    Device UUID:    16941867e53a639db4d0092a7e676c87\n=======================================================\n[vertex] device-local=true: FPS: 35581 FrameTime: 0.028 ms\n[vertex] device-local=false: FPS: 35779 FrameTime: 0.028 ms\n[texture] anisotropy=0: FPS: 32326 FrameTime: 0.031 ms\n[texture] anisotropy=16: FPS: 32256 FrameTime: 0.031 ms\n[shading] shading=gouraud: FPS: 29463 FrameTime: 0.034 ms\n[shading] shading=blinn-phong-inf: FPS: 29470 FrameTime: 0.034 ms\n[shading] shading=phong: FPS: 29743 FrameTime: 0.034 ms\n[shading] shading=cel: FPS: 29675 FrameTime: 0.034 ms\n[effect2d] kernel=edge: FPS: 21793 FrameTime: 0.046 ms\n[effect2d] kernel=blur: FPS: 14518 FrameTime: 0.069 ms\n[desktop] <default>: FPS: 22568 FrameTime: 0.044 ms\n[cube] <default>: FPS: 37218 FrameTime: 0.027 ms\n[clear] <default>: FPS: 31593 FrameTime: 0.032 ms\n=======================================================\n                                   vkmark Score: 29383\n=======================================================\n"
+  }
+}

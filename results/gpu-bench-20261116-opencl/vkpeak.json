@@ -1,0 +1,118 @@
+{
+  "status": "ok",
+  "metrics": {
+    "fp32-scalar": {
+      "value": 6240.27,
+      "unit": "GFLOPS"
+    },
+    "fp32-vec4": {
+      "value": 4344.61,
+      "unit": "GFLOPS"
+    },
+    "fp16-scalar": {
+      "value": 6581.54,
+      "unit": "GFLOPS"
+    },
+    "fp16-vec4": {
+      "value": 6754.73,
+      "unit": "GFLOPS"
+    },
+    "fp16-matrix": {
+      "value": 52253.36,
+      "unit": "GFLOPS"
+    },
+    "fp64-scalar": {
+      "value": 342.3,
+      "unit": "GFLOPS"
+    },
+    "fp64-vec4": {
+      "value": 350.06,
+      "unit": "GFLOPS"
+    },
+    "int32-scalar": {
+      "value": 1778.33,
+      "unit": "GIOPS"
+    },
+    "int32-vec4": {
+      "value": 1986.41,
+      "unit": "GIOPS"
+    },
+    "int16-scalar": {
+      "value": 2815.08,
+      "unit": "GIOPS"
+    },
+    "int16-vec4": {
+      "value": 5353.86,
+      "unit": "GIOPS"
+    },
+    "int64-scalar": {
+      "value": 378.33,
+      "unit": "GIOPS"
+    },
+    "int64-vec4": {
+      "value": 294.66,
+      "unit": "GIOPS"
+    },
+    "int8-dotprod": {
+      "value": 12694.92,
+      "unit": "GIOPS"
+    },
+    "int8-matrix": {
+      "value": 97160.26,
+      "unit": "GIOPS"
+    },
+    "bf16-dotprod": {
+      "value": 1362.52,
+      "unit": "GFLOPS"
+    },
+    "bf16-matrix": {
+      "value": 50302.2,
+      "unit": "GFLOPS"
+    },
+    "fp8-matrix": {
+      "value": 0.0,
+      "unit": "GFLOPS"
+    },
+    "bf8-matrix": {
+      "value": 0.0,
+      "unit": "GFLOPS"
+    },
+    "copy-h2h": {
+      "value": 15.91,
+      "unit": "GBPS"
+    },
+    "copy-h2d": {
+      "value": 18.47,
+      "unit": "GBPS"
+    },
+    "copy-d2h": {
+      "value": 25.46,
+      "unit": "GBPS"
+    },
+    "copy-d2d": {
+      "value": 54.7,
+      "unit": "GBPS"
+    }
+  },
+  "zero_metrics": [
+    "fp8-matrix",
+    "bf8-matrix"
+  ],
+  "profile": {
+    "samples": 193,
+    "gpu_clock_mhz_avg": 2241.1,
+    "gpu_clock_mhz_max": 2300.0,
+    "gpu_util_pct_avg": 93.5,
+    "gpu_util_pct_max": 99.0,
+    "package_energy_j": null,
+    "cpu_busy_pct": 88.7
+  },
+  "cmd": [
+    "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/vkpeak",
+    "0",
+    "all"
+  ],
+  "rc": 0,
+  "seconds": 96.693,
+  "output": "fp32-scalar  = 6240.27 GFLOPS\nfp32-vec4    = 4344.61 GFLOPS\nfp16-scalar  = 6581.54 GFLOPS\nfp16-vec4    = 6754.73 GFLOPS\nfp16-matrix  = 52253.36 GFLOPS\nfp64-scalar  = 342.30 GFLOPS\nfp64-vec4    = 350.06 GFLOPS\nint32-scalar = 1778.33 GIOPS\nint32-vec4   = 1986.41 GIOPS\nint16-scalar = 2815.08 GIOPS\nint16-vec4   = 5353.86 GIOPS\nint64-scalar = 378.33 GIOPS\nint64-vec4   = 294.66 GIOPS\nint8-dotprod = 12694.92 GIOPS\nint8-matrix  = 97160.26 GIOPS\nbf16-dotprod = 1362.52 GFLOPS\nbf16-matrix  = 50302.20 GFLOPS\nfp8-matrix   = 0.00 GFLOPS\nbf8-matrix   = 0.00 GFLOPS\ncopy-h2h     = 15.91 GBPS\ncopy-h2d     = 18.47 GBPS\ncopy-d2h     = 25.46 GBPS\ncopy-d2d     = 54.70 GBPS\n\n[stderr]\ndevice       = Intel(R) Arc(tm) B390 (PTL)\ndriver       = Intel open-source Mesa driver / Mesa 27.0.0-devel\n\n"
+}

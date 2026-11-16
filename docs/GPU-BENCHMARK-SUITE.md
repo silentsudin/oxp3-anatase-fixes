@@ -128,3 +128,40 @@ The compute tests are GPU-bound at the maximum clock, so there is no CPU schedul
 headroom in those workloads; the gaps to chase are feature exposure (FP8/coopmat
 properties, OpenCL device bring-up, NPU stack) and the vkmark CPU overhead
 (80 % GPU util at 83 % CPU busy is worth profiling next).
+
+## OpenCL bring-up (user-space, no root)
+
+Fedora's `libclc-spirv` installs `libclc.spv` under the LLVM 23 names, while
+rusticl looks for `spirv-mesa3d-.spv` (the well-known LLVM 23/libclc packaging
+breakage).  `tools/gpu-bench/opencl-setup.sh`:
+
+- downloads `libclc-spirv`, extracts `libclc.spv` to
+  `~/.cache/oxp3-fixes/gpu-bench/share/clc/spirv{64,}-mesa3d-.spv`,
+- builds `libclc-shim.so`, a small `LD_PRELOAD` path shim, and writes
+  `opencl-env.sh`.
+
+Result: `clinfo -l` now sees `Device #0: Mesa Intel(R) Arc(tm) B390 (PTL)`.
+
+The harness auto-enables the shim when those files exist.  Note the rusticl warning
+that upstream (non-Mesa-patched) libclc may have bugs.
+
+**New gap:** rusticl does **not expose `cl_khr_fp16`** on this device:
+`clinfo` reports half-precision `n/a`, and clpeak's OpenCL half tests are
+"unsupported: No half precision support", even though the Vulkan path has full FP16
+coopmat.  This is a rusticl/iris feature gap worth investigating (it blocks OpenCL
+FP16 workloads, hashcat's FP16 paths and any FP16 OpenCL AI kernels).
+
+## Baseline 3 (Vulkan + OpenCL, 2026-11-16 16:2x)
+
+Artifacts: `results/gpu-bench-20261116-opencl/`.
+
+- Vulkan coopmat unchanged: fp16 ~53 TFLOPS, bf16 ~53 TFLOPS, int8 ~107 TOPS;
+  fp8/bf8 unsupported, fp32 coopmat unsupported.
+- vkmark headless score ~29383.
+- OpenCL rusticl: FP32 ~5.9 TFLOPS, FP32 vec2 ~5.9, vec4 ~5.0, vec8 ~5.4,
+  vec16 ~5.3; **half precision unsupported**.
+- GPU profiling: compute runs pin at 2300 MHz / 93-98 % util; vkmark ~80 % util.
+- `GravityMark` 1.89 was acquired; its CLI supports
+  `-benchmark 1 -close 1 -times <file>` and it enumerates the B390 under
+  `gamescope --backend headless`, but the scene did not finish within the first
+  headless attempt; it remains an optional graphics/RT test.

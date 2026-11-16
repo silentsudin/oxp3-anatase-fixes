@@ -25,6 +25,14 @@ BIN = CACHE / "bin"
 SHARE = CACHE / "share"
 DEFAULT_OUT = CACHE / "results"
 
+# If opencl-setup.sh has been run, make rusticl load the extracted libclc.
+_shim = BIN / "libclc-shim.so"
+_clc = SHARE / "clc"
+if _shim.exists() and (_clc / "spirv-mesa3d-.spv").exists():
+    os.environ.setdefault("OXP3_LIBCLC_DIR", str(_clc))
+    os.environ["LD_PRELOAD"] = str(_shim)
+    os.environ.setdefault("RUSTICL_ENABLE", "iris")
+
 def run(cmd, timeout=600, log_path=None, cwd=None):
     t0 = time.time()
     try:
@@ -257,6 +265,35 @@ def bench_vkmark(outdir, quick=False, duration=3):
     (outdir / "vkmark.json").write_text(json.dumps(res, indent=2))
     return res
 
+def bench_opencl(outdir):
+    exe = find_bin("clpeak")
+    if not exe:
+        return {"status": "missing"}
+    js = outdir / "clpeak-opencl.json"
+    s = Sampler(); s.start()
+    r = run([exe, "--opencl", "--devices", "opencl:0", "--compute",
+             "--single-precision-compute", "--half-precision-compute", "-o", str(js)],
+            timeout=300, log_path=outdir / "clpeak-opencl.txt")
+    prof = s.finish()
+    data = None
+    if js.exists():
+        try:
+            data = json.loads(js.read_text())
+        except Exception:
+            pass
+    unsupported = []
+    if data:
+        for dev in data.get("devices", []):
+            for t in dev.get("tests", []):
+                for m in t.get("metrics", []):
+                    if m.get("status") == "unsupported":
+                        unsupported.append({"test": t.get("id"), "metric": m.get("id"),
+                                            "reason": m.get("reason")})
+    res = {"status": "ok" if r["rc"] == 0 and data else "error",
+           "unsupported": unsupported, "profile": prof, "json": data, **r}
+    (outdir / "clpeak-opencl-run.json").write_text(json.dumps(res, indent=2))
+    return res
+
 def opencl_status(outdir):
     cl = shutil.which("clinfo")
     if not cl:
@@ -289,6 +326,7 @@ def main():
     if not args.skip_vkpeak:
         print("vkpeak..."); results["vkpeak"] = bench_vkpeak(outdir, args.quick)
     print("clpeak..."); results["clpeak"] = bench_clpeak(outdir)
+    print("opencl..."); results["opencl_clpeak"] = bench_opencl(outdir)
     if not args.skip_vkmark:
         print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
     (outdir / "summary.json").write_text(json.dumps(results, indent=2))
@@ -313,6 +351,17 @@ def main():
                         lines.append(f"- **unsupported** {met['id']}: {met.get('reason')}")
                     elif met.get("value") is not None:
                         lines.append(f"- {met['id']}: {met['value']:.2f} {met.get('unit','')}")
+        lines.append("")
+    ocl = results.get("opencl_clpeak", {})
+    if ocl.get("json"):
+        lines += ["## OpenCL (rusticl)", ""]
+        for dev in ocl["json"].get("devices", []):
+            for t in dev.get("tests", []):
+                for met in t.get("metrics", []):
+                    if met.get("status") == "unsupported":
+                        lines.append(f"- **unsupported** {met['id']}: {met.get('reason')}")
+                    elif met.get("value") is not None:
+                        lines.append(f"- {met['id']}: {met['value']:.2f}")
         lines.append("")
     vkm = results.get("vkmark", {})
     if vkm.get("score") is not None:
