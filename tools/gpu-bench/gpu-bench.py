@@ -474,6 +474,7 @@ def main():
         args.gravitymark = True
         args.gravitymark_rt = True
         args.blender = True
+        args.ai = True
     outdir = Path(args.out) if args.out else DEFAULT_OUT / f"{datetime.now():%Y%m%d-%H%M%S}-{args.tag}"
     outdir.mkdir(parents=True, exist_ok=True)
     print(f"results: {outdir}")
