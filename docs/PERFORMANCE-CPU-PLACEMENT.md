@@ -100,3 +100,25 @@ restarts the unit.
 Measure with MangoHud (FPS, 1% low), per-thread CPU + `psr` for the main thread, GPU
 clock/util, and package power.  Brilliant Diamond re-runs its mod setup on launch, so
 avoid casual relaunches; do the A/B on a title that starts cleanly.
+
+## First results (2026-11-16)
+
+`sudo tools/oxp3-scx-profile.sh lowlat` (scx_cosmos -m performance primary domain,
+spill at 1000 us) produced a clearly higher frame rate in **Brilliant Diamond** (Unity
+recomp, the CPU-bound case with the main thread previously on an E-core).  **Elden Ring
+showed no change.**
+
+That split is expected if Elden Ring is GPU-bound or frame-capped (60) rather than
+waiting on a badly placed CPU thread: the primary domain can only help when the game's
+critical thread is the limiter.  Diagnose next with MangoHud/nvtop while in game:
+
+- `gpu_load` near 100 % and GPU frame time >= wall frame time -> GPU-bound; scheduler
+  changes cannot raise FPS.
+- GPU load well below 100 % with frame time >> GPU time -> CPU/driver bound; then try
+  `tools/game-pcores.sh` (P-cores only) or `--cpus 0-9` (drop LP-E, keep E) and compare
+  1 % lows, not only average FPS.
+- Windows reports for Elden Ring are about **stutter** (1 % low / frame-time spikes) and
+  are fixed by P-core affinity or disabling E-cores; average FPS usually moves little.
+
+Other Elden Ring-specific tests: `WINE_CPU_TOPOLOGY` spoofing so the game does not see
+the hybrid topology, and the P-core wrapper in Steam Launch Options.
