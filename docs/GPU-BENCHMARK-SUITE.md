@@ -484,3 +484,27 @@ NPU/CPU/GPU and `--blender-gpu` runs the oneAPI render.
 
 This is a **user-space workaround** for the preemption-size bug; a proper system
 package should eventually replace it.
+
+## Complete suite (2026-11-16 18:35)
+
+```sh
+OXP3_CTS_BIN=.../deqp-vk tools/gpu-bench/gpu-bench.py --full --tag complete
+```
+
+`--full` now includes all extras: GravityMark raster/RT, Blender CPU + oneAPI GPU,
+OpenVINO NPU/CPU/GPU, and VK-GL-CTS.  One run produced:
+
+| area | result |
+|---|---|
+| fp16 / bf16 / int8 coopmat | ~52 / ~50-53 TFLOPS / ~97-107 TOPS |
+| vkmark | 29790 |
+| GravityMark raster / RT | 37509 / 224.6 fps, 33302 / 199.4 fps |
+| VK-GL-CTS coopmat / ray_query / mesh_shader | 3682/54283, 22581/49360, 18012/28067; **0 failed** |
+| OpenVINO add | NPU 11.3k, CPU 102.6k, GPU 25.9k FPS |
+| OpenVINO conv | NPU 3.49k, CPU 4.26k, GPU 3.33k FPS |
+| Blender Cycles | CPU 21.1 s, oneAPI GPU 17.3 s |
+| FFmpeg QSV / VAAPI / x265 | ~5.6x / ~6.3x / ~3.5x |
+
+Artifacts: `results/gpu-bench-20261116-complete/`.  The remaining gap list is
+dominated by deliberately unimplemented FP8/bf8 coopmat variants and the stock
+rusticl FP16 omission (fixed by the packaged Mesa patch).

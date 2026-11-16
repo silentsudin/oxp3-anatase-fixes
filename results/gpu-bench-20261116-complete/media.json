@@ -1,0 +1,106 @@
+{
+  "hevc_qsv": {
+    "status": "ok",
+    "speed_x": 5.35,
+    "profile": {
+      "samples": 3,
+      "gpu_clock_mhz_avg": 961.0,
+      "gpu_clock_mhz_max": 1483.0,
+      "gpu_util_pct_avg": 6.3,
+      "gpu_util_pct_max": 8.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 79.2
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/ffmpeg/bin/ffmpeg",
+      "-hide_banner",
+      "-nostdin",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=size=1920x1200:rate=60",
+      "-t",
+      "5",
+      "-c:v",
+      "hevc_qsv",
+      "-preset",
+      "fast",
+      "-f",
+      "null",
+      "-"
+    ],
+    "rc": 0,
+    "seconds": 1.038,
+    "output": "\n[stderr]\nInput #0, lavfi, from 'testsrc2=size=1920x1200:rate=60':\n  Duration: N/A, start: 0.000000, bitrate: N/A\n  Stream #0:0: Video: wrapped_avframe, yuv420p, 1920x1200 [SAR 1:1 DAR 8:5], 60 fps, 60 tbr, 60 tbn\nStream mapping:\n  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> hevc (hevc_qsv))\nlibva info: VA-API version 1.24.0\nlibva info: Trying to open /usr/lib64/dri-nonfree/iHD_drv_video.so\nlibva info: Trying to open /usr/lib64/dri-freeworld/iHD_drv_video.so\nlibva info: Trying to open /usr/lib64/dri/iHD_drv_video.so\nlibva info: Found init function __vaDriverInit_1_24\nlibva info: va_openDriver() returns 0\nlibva info: VA-API version 1.24.0\nlibva info: Trying to open /usr/lib64/dri-nonfree/iHD_drv_video.so\nlibva info: Trying to open /usr/lib64/dri-freeworld/iHD_drv_video.so\nlibva info: Trying to open /usr/lib64/dri/iHD_drv_video.so\nlibva info: Found init function __vaDriverInit_1_24\nlibva info: va_openDriver() returns 0\n[hevc_qsv @ 0x5627a6eae540] Using the constant quantization parameter (CQP) by default. Please use the global_quality option and other options for a quality-based mode or the b option and other options for a bitrate-based mode if the default is not the desired choice.\nOutput #0, null, to 'pipe:':\n  Metadata:\n    encoder         : Lavf63.20.101\n  Stream #0:0: Video: hevc, nv12(tv, progressive), 1920x1200 [SAR 1:1 DAR 8:5], q=2-31, 60 fps, 60 tbn\n    Metadata:\n      encoder         : Lavc63.28.100 hevc_qsv\n    Side data:\n      CPB properties: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A\nframe=  118 fps=0.0 q=-0.0 size=N/A time=00:00:01.90 bitrate=N/A speed= 3.8x elapsed=0:00:00.50    \n[out#0/null @ 0x5627a6eb1040] video:4540KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe=  300 fps=0.0 q=-0.0 Lsize=N/A time=00:00:04.93 bitrate=N/A speed=5.35x elapsed=0:00:00.92    \n"
+  },
+  "hevc_vaapi": {
+    "status": "ok",
+    "speed_x": null,
+    "profile": {
+      "samples": 2,
+      "gpu_clock_mhz_avg": 1583.0,
+      "gpu_clock_mhz_max": 2283.0,
+      "gpu_util_pct_avg": 4.5,
+      "gpu_util_pct_max": 6.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 77.6
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/ffmpeg/bin/ffmpeg",
+      "-hide_banner",
+      "-nostdin",
+      "-vaapi_device",
+      "/dev/dri/renderD128",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=size=1920x1200:rate=60",
+      "-t",
+      "5",
+      "-vf",
+      "format=nv12,hwupload",
+      "-c:v",
+      "hevc_vaapi",
+      "-f",
+      "null",
+      "-"
+    ],
+    "rc": 0,
+    "seconds": 0.798,
+    "output": "\n[stderr]\nInput #0, lavfi, from 'testsrc2=size=1920x1200:rate=60':\n  Duration: N/A, start: 0.000000, bitrate: N/A\n  Stream #0:0: Video: wrapped_avframe, yuv420p, 1920x1200 [SAR 1:1 DAR 8:5], 60 fps, 60 tbr, 60 tbn\nStream mapping:\n  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> hevc (hevc_vaapi))\n[hevc_vaapi @ 0x562ce5de7f80] No quality level set; using default (25).\nOutput #0, null, to 'pipe:':\n  Metadata:\n    encoder         : Lavf63.20.101\n  Stream #0:0: Video: hevc (Main), nv12(tv, progressive), 1920x1200 [SAR 1:1 DAR 8:5], q=2-31, 60 fps, 60 tbn\n    Metadata:\n      encoder         : Lavc63.28.100 hevc_vaapi\nframe=  187 fps=0.0 q=-0.0 size=N/A time=00:00:03.10 bitrate=N/A speed= 6.2x elapsed=0:00:00.50    \n[out#0/null @ 0x562ce5dea380] video:9007KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe=  300 fps=0.0 q=-0.0 Lsize=N/A time=00:00:04.98 bitrate=N/A speed= 6.7x elapsed=0:00:00.74    \n"
+  },
+  "libx265": {
+    "status": "ok",
+    "speed_x": 3.03,
+    "profile": {
+      "samples": 3,
+      "gpu_clock_mhz_avg": 750.0,
+      "gpu_clock_mhz_max": 800.0,
+      "gpu_util_pct_avg": 7.3,
+      "gpu_util_pct_max": 8.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 32.7
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/tools/ffmpeg/bin/ffmpeg",
+      "-hide_banner",
+      "-nostdin",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=size=1920x1200:rate=60",
+      "-t",
+      "5",
+      "-c:v",
+      "libx265",
+      "-preset",
+      "ultrafast",
+      "-f",
+      "null",
+      "-"
+    ],
+    "rc": 0,
+    "seconds": 1.499,
+    "output": "\n[stderr]\nInput #0, lavfi, from 'testsrc2=size=1920x1200:rate=60':\n  Duration: N/A, start: 0.000000, bitrate: N/A\n  Stream #0:0: Video: wrapped_avframe, yuv420p, 1920x1200 [SAR 1:1 DAR 8:5], 60 fps, 60 tbr, 60 tbn\nStream mapping:\n  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> hevc (libx265))\nx265 [info]: HEVC encoder version 4.3+73-5143a2a0\nx265 [info]: build info [Linux][GCC 16.2.0][64 bit] 8bit+10bit+12bit\nx265 [info]: using cpu capabilities: MMX2 SSE2Fast LZCNT SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2\nx265 [info]: Main profile, Level-5 (Main tier)\nx265 [info]: Thread pool created using 14 threads\nx265 [info]: frame threads / pool features       : 3 / wpp(38 rows)\nx265 [info]: Slices                              : 1\nx265 [info]: Coding QT: max CU size, min CU size : 32 / 16\nx265 [info]: Residual QT: max TU size, max depth : 32 / 1 inter / 1 intra\nx265 [info]: ME / range / subpel / merge         : dia / 57 / 0 / 2\nx265 [info]: Lookahead / bframes / badapt        : 5 / 3 / 0\nx265 [info]: b-pyramid / weightp / weightb       : 1 / 0 / 0\nx265 [info]: References / ref-limit  cu / depth  : 1 / off / off\nx265 [info]: AQ: mode / str / qg-size / cu-tree  : 1 / 0.0 / 32 / 1\nx265 [info]: Rate Control / qCompress            : CRF-28.0 / 0.60\nx265 [info]: tools: rd=2 psy-rd=2.00 early-skip rskip mode=1 tmvp fast-intra\nx265 [info]: tools: strong-intra-smoothing lslices=7 deblock\nOutput #0, null, to 'pipe:':\n  Metadata:\n    encoder         : Lavf63.20.101\n  Stream #0:0: Video: hevc, yuv420p(tv, progressive), 1920x1200 [SAR 1:1 DAR 8:5], q=2-31, 60 fps, 60 tbn\n    Metadata:\n      encoder         : Lavc63.28.100 libx265\n    Side data:\n      CPB properties: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A\nframe=   91 fps=0.0 q=39.0 size=N/A time=00:00:01.51 bitrate=N/A speed=3.03x elapsed=0:00:00.50    \nframe=  201 fps=201 q=39.0 size=N/A time=00:00:03.31 bitrate=N/A speed=3.32x elapsed=0:00:01.00    \n[out#0/null @ 0x55ddf756c040] video:2880KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\nframe=  300 fps=206 q=36.0 Lsize=N/A time=00:00:04.96 bitrate=N/A speed=3.41x elapsed=0:00:01.45    \nx265 [info]: frame I:      2, Avg QP:34.17  kb/s: 17111.52\nx265 [info]: frame P:     75, Avg QP:35.39  kb/s: 9123.16 \nx265 [info]: frame B:    223, Avg QP:38.67  kb/s: 3112.95 \n\nencoded 300 frames in 1.44s (208.66 fps), 4708.83 kb/s, Avg QP:37.82\n"
+  }
+}

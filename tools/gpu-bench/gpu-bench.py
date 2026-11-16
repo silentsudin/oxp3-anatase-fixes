@@ -34,7 +34,7 @@ if _npu.exists():
 _neo = TOOLS / "neo"
 if _neo.exists():
     os.environ["LD_LIBRARY_PATH"] = ":".join(str(x) for x in
-        (_neo / "igc", _neo / "compute", _neo / "rt", _neo / "tbb", _ze)) +         (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
+        (_neo / "igc", _neo / "compute", _neo / "rt", _neo / "tbb", _neo / "ze" / "lib64", _ze)) +         (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
     os.environ.setdefault("NEOReadDebugKeys", "1")
     os.environ.setdefault("NEO_OverrideCsrAllocationSize", "16777216")
 _vpl = TOOLS / "vpl" / "usr" / "lib64"
@@ -516,7 +516,9 @@ def main():
         args.gravitymark = True
         args.gravitymark_rt = True
         args.blender = True
+        args.blender_gpu = True
         args.ai = True
+        args.cts = True
     outdir = Path(args.out) if args.out else DEFAULT_OUT / f"{datetime.now():%Y%m%d-%H%M%S}-{args.tag}"
     outdir.mkdir(parents=True, exist_ok=True)
     print(f"results: {outdir}")

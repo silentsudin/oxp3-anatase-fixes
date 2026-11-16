@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-11-16T18:27:32.460008+00:00",
+  "kernel": "7.3.4-an02.fc45.x86_64",
+  "cmdline": "BOOT_IMAGE=(hd0,gpt2)/ostree/anatase-bfd8bdbfb0a4e47ed71af5229ecd7075790c1259e8d9f3e480f7aebf7a6de01a/vmlinuz-7.3.4-an02.fc45.x86_64 ostree=/ostree/boot.0/anatase/bfd8bdbfb0a4e47ed71af5229ecd7075790c1259e8d9f3e480f7aebf7a6de01a/0 rhgb quiet root=UUID=a245ffab-5073-45ee-b3ed-e7ecdec29275 vconsole.keymap=us rootflags=subvol=root rw xe.enable_panel_replay=0 nvme.noacpi=1",
+  "sched_ext": "cosmos_1.1.7_x86_64_unknown_linux_gnu",
+  "governor": "powersave",
+  "epp": "balance_power",
+  "gpu_busy": null,
+  "intel_lpmd": "active",
+  "lspci_vga": "00:02.0 VGA compatible controller [0300]: Intel Corporation Panther Lake [Arc B390] [8086:b080] (rev 04)"
+}
