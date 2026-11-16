@@ -21,7 +21,7 @@ while :; do
     found=0
     for p in $(pgrep -x eldenring.exe 2>/dev/null); do
         found=1
-        if taskset -a -p "$mask" "$p" >/dev/null 2>&1; then
+        if taskset -a -pc "$mask" "$p" >/dev/null 2>&1; then
             printf '%s pid %s -> %s\n' "$(date +%H:%M:%S)" "$p" "$mask" >&2
         fi
     done
