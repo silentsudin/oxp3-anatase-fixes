@@ -137,11 +137,19 @@ for item in games.split():
         <Classification>{cls}</Classification>
     </Process>
 ''')
+if '\n    <DefaultProcess>\n' not in s:
+    default = """    <DefaultProcess>
+        <Classification>custom_profile_0</Classification>
+        <AffinityAllThreads>1</AffinityAllThreads>
+    </DefaultProcess>
+"""
+    s = s.replace('</ProcessCpusetConfig>', default + '</ProcessCpusetConfig>', 1)
 if '<GameProfileMixed>' not in s:
     defaults = """    <ClassDefaults>
         <GameProfileCPU><Cores>ActivePcores</Cores></GameProfileCPU>
         <GameProfileGPU><Cores>ActivePcores,ActiveEcores</Cores></GameProfileGPU>
         <GameProfileMixed><Cores>ActivePcores,ActiveEcores</Cores></GameProfileMixed>
+        <CustomProfile0><Cores>ActivePcores,ActiveEcores</Cores></CustomProfile0>
         <Background><Cores>ActiveLcores</Cores></Background>
     </ClassDefaults>
 """

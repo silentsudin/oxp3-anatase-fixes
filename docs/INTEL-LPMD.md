@@ -256,3 +256,30 @@ taskset -pc "$(pgrep -x Dpr.exe)"
 or restart `intel_lpmd` after the game is running (the init scan binds existing PIDs).
 The remaining work is making the proc-connector/periodic-rescan path catch this
 process reliably on every launch.
+
+## Covering every game (there is no game database)
+
+`intel-lpmd` does **not** ship a game database.  `data/process_cpuset.xml` contains only
+commented examples (`Spaceship*`, `Strange*`, `ShadowOfTheTomb*`, `_hitman*`), and the
+classification is purely `comm`-name based.  So the coverage strategy is:
+
+1. **Explicit entries** for titles we want a specific class/mask for, currently
+   `udpre`/`uDPRE.exe`/`Dpr.exe` → `game_profile_mixed`, `eldenring.exe` →
+   `game_profile_gpu`.
+2. **A catch-all `<DefaultProcess>`** for every unmatched user-session process.  It is
+   classified as `custom_profile_0`, whose `<ClassDefaults>` entry is
+   `ActivePcores, ActiveEcores` (cpu0-9), so any game not named in the file still avoids
+   LP-E and stays on P+E.
+
+`user_initiated` was deliberately not used for the catch-all: with no focus helper
+present, lpmd makes `user_initiated` mirror `user_interactive`, which this platform's
+model config maps to E+LP-E.  `custom_profile_0` with an explicit `<Cores>` avoids that
+and carries no game-specific tuning.
+
+The catch-all also resets other unmatched user apps (compositor, browser, terminal) to
+P+E; system-slice daemons are not touched by `<DefaultProcess>` and keep the named
+`background` → LP-E mapping.
+
+If a specific game later needs a different mask (e.g. P-only for a single-threaded
+title), add a `<Process>` entry with `game_profile_cpu`; otherwise the catch-all covers
+it.
