@@ -203,3 +203,33 @@ installer re-copies the upstream data on every run, so this has to happen after 
 copy).
 
 Expected end state for a `game_profile_mixed` title: `Cpus_allowed_list: 0-9`.
+
+## Persistence
+
+Everything the installer writes is on persistent storage and enabled:
+
+- `/etc/intel_lpmd/` - configs, `process_cpuset.xml`, the user overlay with
+  `<CpuGroups>` + game entries, and the patched `intel_lpmd_config_F6_M204.xml`
+  (model `ClassDefaults` = P+E for `GameProfileMixed`/`GameProfileGPU`).
+- `/usr/local/bin/intel_lpmd` - `/usr/local` is `../var/usrlocal` on this ostree
+  system, so it survives OS updates.
+- `/etc/systemd/system/intel_lpmd.service.d/90-oxp3-test.conf` - points the packaged
+  unit at the new binary.
+- `/etc/systemd/system/intel_lpmd-preconfig.service` - `enabled`, runs
+  `intel_lpmd_control PROCESS-PRECONFIG` after lpmd starts (retries through the
+  D-Bus rate limit).
+- `oxp3-gaming-sched.service` remains enabled separately for the scheduler.
+
+So a reboot or a switch into Gamemode keeps the behaviour: lpmd starts at
+`multi-user.target`, the preconfig oneshot puts it in `PROCESS-PRECONFIG`, and the
+proc-connector/rescan binds `Dpr.exe` to `0-9` when it launches.
+
+Caveats:
+
+- A distro update that reinstalls `intel-lpmd` (or a full `oxp3-install.sh` run) can
+  restore the packaged `/etc/intel_lpmd` files; re-run
+  `sudo tools/install-intel-lpmd.sh` afterwards.
+- A game launched *before* the preconfig oneshot finishes can keep the old mask until
+  the next rescan (up to 60 s); the proc-connector usually catches it immediately.
+- If the oneshot ever fails, `sudo systemctl restart intel_lpmd-preconfig` re-applies
+  the state; `PROCESS-PRECONFIG` is not persisted in lpmd itself, only in the unit.
