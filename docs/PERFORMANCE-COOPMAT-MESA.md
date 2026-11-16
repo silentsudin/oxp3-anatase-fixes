@@ -172,3 +172,33 @@ The M=16, N=8 swap lowering (Ahw = B^T 8x16, Bhw = A^T 16x16, D = C^T) is
 implemented and reaches 64/128 correct, up from 124-125/128 wrong.  Since the
 M=8 path is proven correct, the remaining defect is confined to the operand/result
 conversions of the swap lowering, not to DPAS or the layout measurements.
+
+## RESOLVED: native matrix multiplies work on Xe2
+
+Two patches implement the M=16, N=8, K=16 f16 cooperative matrix that Mesa never
+supported:
+
+- `patches/mesa/0213-anv-coopmat-16x8x16-f16.patch` advertises the shape.
+- `patches/mesa/0214-anv-coopmat-ptx-layout.patch` lowers it.  The lowering keeps the
+  PTX/console fragment order for loads/stores (so Longshot's measured layout matches)
+  and implements the multiply as one DPAS M=8,N=16 with swapped, transposed operands:
+  Ahw = B_long^T (8x16), Bhw = A_long^T (16x16 VNNI), D = C^T (8x16), plus the
+  accumulator and result conversions back to the console 16x8 slice.
+
+The decisive detail: the console A fragment dword index is
+`j = (row >= 8 ? 1 : 0) + 2 * (col >= 8 ? 1 : 0)`.  An earlier version omitted the
+row term, so rows 8..15 were never gathered and half the output duplicated — the
+64/128-wrong result.
+
+With the fix, the instrumented Longshot probe reports:
+
+```
+cooperative matrix A: the console's elements are the device's 0 1 2 3 4 5 6 7
+cooperative matrix B: the console's elements are the device's 0 1 2 3
+cooperative matrix C: the console's elements are the device's 0 1 2 3
+native matrix multiplies on (cooperative matrices, the console's fragment layout checked)
+```
+
+Test support added to the instrumented build: `RX_DIAG_M8` (Mesa's supported M=8 path,
+0/128 wrong), `RX_DIAG_IDENT` (unique-value 16x8 multiply), `RX_DIAG_LAYOUTS` (native
+layout dumps).

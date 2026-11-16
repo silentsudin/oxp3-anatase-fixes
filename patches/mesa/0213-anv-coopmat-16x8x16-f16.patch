@@ -1,0 +1,55 @@
+--- a/src/intel/vulkan/anv_physical_device.c
++++ b/src/intel/vulkan/anv_physical_device.c
+@@ -3725,7 +3725,7 @@
+ 
+ static void
+ anv_fill_all_cooperative_matrix_props(const struct anv_physical_device *pdevice, struct __vk_outarray *base,
+-                                      void (*fill_cb)(struct __vk_outarray *base, unsigned exec_size,
++                                      void (*fill_cb)(struct __vk_outarray *base, unsigned m_size, unsigned n_size,
+                                                       VkComponentTypeKHR a_type, VkComponentTypeKHR b_type,
+                                                       VkComponentTypeKHR c_type, VkComponentTypeKHR r_type,
+                                                       unsigned ops_per_chan, bool saturate))
+@@ -3738,7 +3738,7 @@
+    const unsigned exec_size = devinfo->ver >= 20 ? 16 : 8;
+ 
+ #define FILL(a_type, b_type, c_type, r_type, ops_per_chan, sat) \
+-   fill_cb(base, exec_size,                                     \
++   fill_cb(base, 8, exec_size,                                  \
+            VK_COMPONENT_TYPE_##a_type##_KHR,                    \
+            VK_COMPONENT_TYPE_##b_type##_KHR,                    \
+            VK_COMPONENT_TYPE_##c_type##_KHR,                    \
+@@ -3751,6 +3751,14 @@
+ 
+    FILL(FLOAT16, FLOAT16, FLOAT32, FLOAT32, 2, false);
+ 
++   /* NVN/RX title matrix paths ask for a 16x8x16 f16 cooperative matrix.
++    * Xe2's DPAS can use a 16-row result; expose the tile so they do not fall
++    * back to software matrix multiplies. */
++   if (devinfo->ver >= 20)
++      fill_cb(base, 16, 8, VK_COMPONENT_TYPE_FLOAT16_KHR,
++              VK_COMPONENT_TYPE_FLOAT16_KHR, VK_COMPONENT_TYPE_FLOAT16_KHR,
++              VK_COMPONENT_TYPE_FLOAT16_KHR, 2, false);
++
+    if (devinfo->has_bfloat16 && !emulated) {
+       if (devinfo->ver >= 20)
+          FILL(BFLOAT16, BFLOAT16, BFLOAT16, BFLOAT16, 2, false);
+@@ -3764,7 +3772,7 @@
+ }
+ 
+ static void
+-anv_fill_cooperative_matrix_prop(struct __vk_outarray *base, unsigned exec_size,
++anv_fill_cooperative_matrix_prop(struct __vk_outarray *base, unsigned m_size, unsigned n_size,
+                                  VkComponentTypeKHR a_type, VkComponentTypeKHR b_type,
+                                  VkComponentTypeKHR c_type, VkComponentTypeKHR r_type,
+                                  unsigned ops_per_chan, bool saturate)
+@@ -3774,8 +3782,8 @@
+    vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, out, p)
+    {
+       *p = (struct VkCooperativeMatrixPropertiesKHR){.sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+-                                                     .MSize = 8,
+-                                                     .NSize = exec_size,
++                                                     .MSize = m_size,
++                                                     .NSize = n_size,
+                                                      .KSize = 8 * ops_per_chan,
+                                                      .AType = a_type,
+                                                      .BType = b_type,
