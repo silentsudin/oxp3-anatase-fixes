@@ -121,6 +121,15 @@ for item in games.split():
         <Classification>{cls}</Classification>
     </Process>
 ''')
+if '<GameProfileMixed>' not in s:
+    defaults = """    <ClassDefaults>
+        <GameProfileCPU><Cores>ActivePcores</Cores></GameProfileCPU>
+        <GameProfileGPU><Cores>ActivePcores,ActiveEcores</Cores></GameProfileGPU>
+        <GameProfileMixed><Cores>ActivePcores,ActiveEcores</Cores></GameProfileMixed>
+        <Background><Cores>ActiveLcores</Cores></Background>
+    </ClassDefaults>
+"""
+    s = s.replace('</ProcessCpusetConfig>', defaults + '</ProcessCpusetConfig>', 1)
 if '<ActivePcores>' not in s:
     groups = """    <CpuGroups>
         <ActivePcores>0-1</ActivePcores>
@@ -168,7 +177,8 @@ fi
 if [ -z "$root" ] && (( ! dry )); then
     systemctl daemon-reload
     systemctl restart intel_lpmd.service
-    systemctl enable --now intel_lpmd-preconfig.service
+    systemctl enable intel_lpmd-preconfig.service
+    systemctl restart intel_lpmd-preconfig.service
     sleep 1
     say "status"
     systemctl is-active intel_lpmd.service || true

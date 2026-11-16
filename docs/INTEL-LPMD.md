@@ -153,3 +153,30 @@ Fix: declare the groups explicitly in the user config; the parser takes them fro
 The D-Bus control interface rate-limits repeated privileged calls
 ("too many privileged requests"); space them out, the boot-time
 `intel_lpmd-preconfig.service` avoids the manual call.
+
+## Third test: the shipped ClassDefaults are the surprise
+
+Even with `<CpuGroups>` seeded, lpmd classified the game as
+`game_profile_mixed groups=Ecores+LPEcores`.  The shipped `process_cpuset.xml`
+`<ClassDefaults>` block actually maps:
+
+```text
+GameProfileCPU   -> ActivePcores
+GameProfileGPU   -> ActiveLcores          (not P+E as the comments claim)
+GameProfileMixed -> ActiveEcores,ActiveLcores  (not P+E)
+```
+
+So "mixed" was never P+E in this release.  The installer now overrides them in
+`process_cpuset_user.xml`:
+
+```xml
+<ClassDefaults>
+    <GameProfileCPU><Cores>ActivePcores</Cores></GameProfileCPU>
+    <GameProfileGPU><Cores>ActivePcores,ActiveEcores</Cores></GameProfileGPU>
+    <GameProfileMixed><Cores>ActivePcores,ActiveEcores</Cores></GameProfileMixed>
+    <Background><Cores>ActiveLcores</Cores></Background>
+</ClassDefaults>
+```
+
+It also restarts `intel_lpmd-preconfig.service` after restarting lpmd (the oneshot is
+already active/exited, so `enable --now` alone did not re-enter PROCESS-PRECONFIG).
