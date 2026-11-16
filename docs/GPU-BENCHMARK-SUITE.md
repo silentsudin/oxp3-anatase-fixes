@@ -267,3 +267,20 @@ offers CPU here; the Intel GPU plugin reports "no supported devices".
 Status: benchmarks and probes are ready; AI GPU/NPU measurement waits on a working
 Level Zero/NPU stack.  The CPU reference (tiny models) is measurable:
 `benchmark_app -d CPU` gives thousands of FPS on the toy graphs.
+
+## Render (Blender Cycles): CPU works, oneAPI GPU blocked
+
+`render-setup.sh` installs Blender 4.5.16 LTS.  Default cube, 4096 samples, Cycles:
+
+```text
+CPU render: 00:19.5
+```
+
+`-- --cycles-device ONEAPI` reports `Found no Cycles device of the specified type`;
+with the extracted Level Zero runtime it aborts in
+`intel-compute-runtime/.../command_stream_receiver.cpp` - the same failure seen with
+`zello_world` and the OpenVINO GPU plugin.  So Blender GPU render is blocked by the
+Level Zero GPU runtime on this B390, not by Blender or the render settings.
+
+Harness: `--blender` (CPU render).  Artifacts:
+`results/gpu-bench-20261116-render/`.

@@ -329,6 +329,21 @@ def bench_gravity(outdir, rt=False, asteroids=50000):
     (outdir / f"gravitymark-{tag}.json").write_text(json.dumps(res, indent=2))
     return res
 
+def bench_blender(outdir):
+    exe = TOOLS / "blender" / "blender"
+    if not exe.exists():
+        return {"status": "missing", "path": str(exe)}
+    base = [str(exe), "-b", "--factory-startup", "-E", "CYCLES",
+            "-o", str(outdir / "blender_"), "-F", "PNG", "-f", "1"]
+    s = Sampler(); s.start()
+    r = run(base, timeout=600, log_path=outdir / "blender-cpu.txt")
+    prof = s.finish()
+    times = re.findall(r"^Time:\s*([0-9:.]+)", r["output"], re.M)
+    res = {"status": "ok" if r["rc"] == 0 and "Saved:" in r["output"] else "error",
+           "time": times[-1] if times else None, "profile": prof, **r}
+    (outdir / "blender.json").write_text(json.dumps(res, indent=2))
+    return res
+
 def bench_media(outdir):
     ff = TOOLS / "ffmpeg" / "bin" / "ffmpeg"
     if not ff.exists():
@@ -374,6 +389,7 @@ def main():
     ap.add_argument("--skip-vkmark", action="store_true")
     ap.add_argument("--gravitymark", action="store_true", help="also run GravityMark raster")
     ap.add_argument("--gravitymark-rt", action="store_true", help="also run GravityMark ray tracing")
+    ap.add_argument("--blender", action="store_true", help="also run a Blender Cycles CPU render")
     ap.add_argument("--skip-vkpeak", action="store_true")
     args = ap.parse_args()
     outdir = Path(args.out) if args.out else DEFAULT_OUT / f"{datetime.now():%Y%m%d-%H%M%S}-{args.tag}"
@@ -395,6 +411,8 @@ def main():
         print("gravitymark raster..."); results["gravitymark"] = bench_gravity(outdir, False)
     if args.gravitymark_rt:
         print("gravitymark RT..."); results["gravitymark_rt"] = bench_gravity(outdir, True, 20000)
+    if args.blender:
+        print("blender..."); results["blender"] = bench_blender(outdir)
     print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
     (outdir / "summary.json").write_text(json.dumps(results, indent=2))
     # Markdown summary
@@ -442,6 +460,9 @@ def main():
         if g.get("fps") is not None:
             lines += [f"## {label}", "", f"score: **{g.get('score')}** fps: **{g.get('fps')}** "
                       f"(scene {g.get('scene_seconds')} s)", ""]
+    bl = results.get("blender", {})
+    if bl.get("time"):
+        lines += ["## Blender Cycles", "", f"CPU render: **{bl['time']}**", ""]
     vkm = results.get("vkmark", {})
     if vkm.get("score") is not None:
         lines += ["## vkmark", "", f"score: **{vkm['score']:.0f}**", ""]
