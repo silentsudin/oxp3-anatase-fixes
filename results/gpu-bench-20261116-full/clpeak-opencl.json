@@ -1,0 +1,157 @@
+{
+  "schema": "clpeak/run",
+  "format_version": 3,
+  "clpeak_version": "3.0.5",
+  "generated_at": "2026-11-16T17:29:22Z",
+  "duration_s": 5.099058,
+  "build": {
+    "backends": [
+      "Vulkan",
+      "OpenCL",
+      "CPU",
+      "LiteRT",
+      "ONNX"
+    ],
+    "config": "Release"
+  },
+  "host": {
+    "os": "Linux x64",
+    "os_version": "7.3.4-an02.fc45.x86_64",
+    "arch": "x86_64",
+    "cpu": "Intel(R) Arc(TM) G3 Extreme",
+    "logical_cores": 14,
+    "memory_bytes": 33154686976
+  },
+  "invocation": {
+    "argv": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--opencl",
+      "--devices",
+      "opencl:0",
+      "--compute",
+      "--single-precision-compute",
+      "--half-precision-compute",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-172737-full-suite/clpeak-opencl.json"
+    ],
+    "target_time_us": 500000,
+    "target_time_us_cpu": 2000000,
+    "target_time_us_ml_gpu": 1000000,
+    "warmup": 2,
+    "categories": [
+      "compute"
+    ],
+    "tests": [
+      "single-precision-compute",
+      "half-precision-compute"
+    ]
+  },
+  "devices": [
+    {
+      "backend": "OpenCL",
+      "platform": "rusticl",
+      "name": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+      "driver": "26.2.6",
+      "type": "gpu",
+      "platform_index": 0,
+      "device_index": 0,
+      "properties": [
+        {
+          "key": "Compute units",
+          "value": "12"
+        },
+        {
+          "key": "Clock frequency",
+          "value": "400 MHz"
+        }
+      ],
+      "tests": [
+        {
+          "id": "single_precision_compute",
+          "title": "Single-precision compute",
+          "category": "compute",
+          "shape": "homogeneous",
+          "axis": "vector width",
+          "direction": "higher_is_better",
+          "quantity": "flops",
+          "unit": "FLOPS",
+          "description": "Peak fp32 arithmetic rate of the device's ALUs, with no memory traffic.",
+          "duration_s": 4.733402,
+          "metrics": [
+            {
+              "id": "float",
+              "value": 5.881744e+12,
+              "description": "Scalar, one value per work-item."
+            },
+            {
+              "id": "float2",
+              "value": 5.947866e+12,
+              "description": "2-wide vector per work-item."
+            },
+            {
+              "id": "float4",
+              "value": 5.037695e+12,
+              "description": "4-wide vector per work-item."
+            },
+            {
+              "id": "float8",
+              "value": 5.365538e+12,
+              "description": "8-wide vector per work-item."
+            },
+            {
+              "id": "float16",
+              "value": 5.313049e+12,
+              "description": "16-wide vector per work-item."
+            }
+          ]
+        },
+        {
+          "id": "half_precision_compute",
+          "title": "Half-precision compute",
+          "category": "compute",
+          "shape": "homogeneous",
+          "axis": "vector width",
+          "direction": "higher_is_better",
+          "quantity": "flops",
+          "unit": "FLOPS",
+          "description": "Peak fp16 arithmetic rate, with fp16 inputs and accumulator.",
+          "duration_s": 1.9906e-05,
+          "metrics": [
+            {
+              "id": "half",
+              "status": "unsupported",
+              "reason": "No half precision support"
+            },
+            {
+              "id": "half2",
+              "status": "unsupported",
+              "reason": "No half precision support"
+            },
+            {
+              "id": "half4",
+              "status": "unsupported",
+              "reason": "No half precision support"
+            },
+            {
+              "id": "half8",
+              "status": "unsupported",
+              "reason": "No half precision support"
+            },
+            {
+              "id": "half16",
+              "status": "unsupported",
+              "reason": "No half precision support"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "log": [
+    {"elapsed_s": 0.006407627, "level": "info", "backend": "OpenCL", "message": "Backend: OpenCL"},
+    {"elapsed_s": 0.3457598, "level": "info", "backend": "OpenCL", "device": "Mesa Intel(R) Arc(tm) B390 (PTL)", "device_index": 0, "message": "  Platform 0: rusticl"},
+    {"elapsed_s": 0.3457906, "level": "info", "backend": "OpenCL", "device": "Mesa Intel(R) Arc(tm) B390 (PTL)", "device_index": 0, "message": "  Device 0: Mesa Intel(R) Arc(tm) B390 (PTL)"},
+    {"elapsed_s": 0.3649372, "level": "info", "backend": "OpenCL", "device": "Mesa Intel(R) Arc(tm) B390 (PTL)", "device_index": 0, "test": "single_precision_compute", "message": "    Single-precision compute"},
+    {"elapsed_s": 5.098581, "level": "info", "backend": "OpenCL", "device": "Mesa Intel(R) Arc(tm) B390 (PTL)", "device_index": 0, "test": "half_precision_compute", "message": "    Half-precision compute"}
+  ]
+}

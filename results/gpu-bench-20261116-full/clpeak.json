@@ -1,0 +1,131 @@
+{
+  "schema": "clpeak/run",
+  "format_version": 3,
+  "clpeak_version": "3.0.5",
+  "generated_at": "2026-11-16T17:29:15Z",
+  "duration_s": 7.462356,
+  "build": {
+    "backends": [
+      "Vulkan",
+      "OpenCL",
+      "CPU",
+      "LiteRT",
+      "ONNX"
+    ],
+    "config": "Release"
+  },
+  "host": {
+    "os": "Linux x64",
+    "os_version": "7.3.4-an02.fc45.x86_64",
+    "arch": "x86_64",
+    "cpu": "Intel(R) Arc(TM) G3 Extreme",
+    "logical_cores": 14,
+    "memory_bytes": 33154686976
+  },
+  "invocation": {
+    "argv": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--vulkan",
+      "--devices",
+      "vulkan:0",
+      "--compute",
+      "--matrix-compute",
+      "--numeric-error",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-172737-full-suite/clpeak.json"
+    ],
+    "target_time_us": 500000,
+    "target_time_us_cpu": 2000000,
+    "target_time_us_ml_gpu": 1000000,
+    "warmup": 2,
+    "categories": [
+      "compute"
+    ],
+    "tests": [
+      "matrix-compute",
+      "numeric-error"
+    ]
+  },
+  "devices": [
+    {
+      "backend": "Vulkan",
+      "platform": "Vulkan",
+      "name": "Intel(R) Arc(tm) B390 (PTL)",
+      "driver": "26.99.99",
+      "type": "gpu",
+      "device_index": 0,
+      "properties": [
+        {
+          "key": "API version",
+          "value": "1.4.368"
+        },
+        {
+          "key": "VRAM",
+          "value": "23714 MB"
+        }
+      ],
+      "tests": [
+        {
+          "id": "coopmat",
+          "title": "Cooperative matrix",
+          "category": "compute",
+          "shape": "heterogeneous",
+          "axis": "data type",
+          "direction": "higher_is_better",
+          "quantity": "flops",
+          "unit": "FLOPS",
+          "description": "Peak cooperative-matrix multiply-add rate, on the device's matrix engine where it has one.",
+          "duration_s": 7.334796,
+          "metrics": [
+            {
+              "id": "fp32",
+              "status": "unsupported",
+              "reason": "No fp32xfp32+fp32 coopmat property! Skipped",
+              "description": "fp32 inputs and accumulator."
+            },
+            {
+              "id": "fp16",
+              "value": 5.253263e+13,
+              "description": "fp16 inputs, fp32 accumulator (8x16x16 tile, fastest at subgroup 32)."
+            },
+            {
+              "id": "fp16 f16acc",
+              "value": 5.283535e+13,
+              "description": "fp16 inputs and accumulator (8x16x16 tile, fastest at subgroup 32)."
+            },
+            {
+              "id": "bf16",
+              "value": 5.284248e+13,
+              "description": "bf16 inputs, fp32 accumulator (8x16x16 tile, fastest at subgroup 32)."
+            },
+            {
+              "id": "fp8_e4m3",
+              "status": "unsupported",
+              "reason": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped",
+              "description": "fp8 E4M3 inputs (more precision, less range), fp32 accumulator."
+            },
+            {
+              "id": "fp8_e5m2",
+              "status": "unsupported",
+              "reason": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped",
+              "description": "fp8 E5M2 inputs (more range, less precision), fp32 accumulator."
+            },
+            {
+              "id": "int8",
+              "value": 1.067584e+14,
+              "unit": "OPS",
+              "quantity": "ops",
+              "direction": "higher_is_better",
+              "description": "int8 inputs, int32 accumulator (8x16x32 tile, fastest at subgroup 16)."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "log": [
+    {"elapsed_s": 0.005038392, "level": "info", "backend": "Vulkan", "message": "Backend: Vulkan"},
+    {"elapsed_s": 0.1244853, "level": "info", "backend": "Vulkan", "device": "Intel(R) Arc(tm) B390 (PTL)", "device_index": 0, "message": "  Device 0: Intel(R) Arc(tm) B390 (PTL)"},
+    {"elapsed_s": 0.1245307, "level": "info", "backend": "Vulkan", "device": "Intel(R) Arc(tm) B390 (PTL)", "device_index": 0, "test": "coopmat", "message": "    Cooperative matrix"}
+  ]
+}

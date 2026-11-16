@@ -381,6 +381,35 @@ def opencl_status(outdir):
     return {"installed": True, "platforms": platforms, "device_lines": len(lines),
             "raw": r["output"]}
 
+def build_gaps(results):
+    gaps = []
+    inv = results.get("inventory", {})
+    dev = inv.get("device", {})
+    if dev.get("software_fallback"):
+        gaps.append({"area": "vulkan", "item": "device", "status": "software-fallback",
+                     "detail": dev.get("deviceName")})
+    vk = results.get("vkpeak", {})
+    for k in vk.get("zero_metrics", []):
+        gaps.append({"area": "vulkan-compute", "item": k, "status": "zero",
+                     "detail": "vkpeak reports 0 (unexposed or hardware-unsupported)"})
+    for key, area in (("clpeak", "vulkan-compute"), ("opencl_clpeak", "opencl")):
+        for u in results.get(key, {}).get("unsupported", []):
+            gaps.append({"area": area, "item": u.get("metric"), "status": "unsupported",
+                         "detail": u.get("reason")})
+    for name, v in (results.get("media") or {}).items():
+        if isinstance(v, dict) and v.get("status") not in (None, "ok"):
+            gaps.append({"area": "media", "item": name, "status": v.get("status"),
+                         "detail": (v.get("output", "") or "").strip().splitlines()[-1:]})
+    bl = results.get("blender") or {}
+    if bl and bl.get("status") not in (None, "ok"):
+        gaps.append({"area": "render", "item": "cycles", "status": bl.get("status"),
+                     "detail": "Blender render failed"})
+    ocl = results.get("opencl") or {}
+    if ocl.get("installed") and ocl.get("device_lines", 0) == 0:
+        gaps.append({"area": "opencl", "item": "device", "status": "unavailable",
+                     "detail": "rusticl platform with zero devices (libclc missing?)"})
+    return gaps
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=None)
@@ -390,8 +419,13 @@ def main():
     ap.add_argument("--gravitymark", action="store_true", help="also run GravityMark raster")
     ap.add_argument("--gravitymark-rt", action="store_true", help="also run GravityMark ray tracing")
     ap.add_argument("--blender", action="store_true", help="also run a Blender Cycles CPU render")
+    ap.add_argument("--full", action="store_true", help="run graphics/RT/render extras too")
     ap.add_argument("--skip-vkpeak", action="store_true")
     args = ap.parse_args()
+    if args.full:
+        args.gravitymark = True
+        args.gravitymark_rt = True
+        args.blender = True
     outdir = Path(args.out) if args.out else DEFAULT_OUT / f"{datetime.now():%Y%m%d-%H%M%S}-{args.tag}"
     outdir.mkdir(parents=True, exist_ok=True)
     print(f"results: {outdir}")
@@ -414,6 +448,8 @@ def main():
     if args.blender:
         print("blender..."); results["blender"] = bench_blender(outdir)
     print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
+    results["gaps"] = build_gaps(results)
+    (outdir / "gaps.json").write_text(json.dumps(results["gaps"], indent=2))
     (outdir / "summary.json").write_text(json.dumps(results, indent=2))
     # Markdown summary
     lines = [f"# GPU benchmark {m['timestamp']}", "", f"- kernel: `{m['kernel']}`",
@@ -466,6 +502,16 @@ def main():
     vkm = results.get("vkmark", {})
     if vkm.get("score") is not None:
         lines += ["## vkmark", "", f"score: **{vkm['score']:.0f}**", ""]
+    lines += ["## Gaps", ""]
+    if results.get("gaps"):
+        for g in results["gaps"]:
+            detail = g.get("detail")
+            if isinstance(detail, list):
+                detail = " ".join(str(x) for x in detail)
+            lines.append(f"- **{g['area']} / {g['item']}**: {g['status']} - {detail or ''}")
+    else:
+        lines.append("- none detected")
+    lines.append("")
     (outdir / "summary.md").write_text("\n".join(lines) + "\n")
     print((outdir / "summary.md").read_text())
     if inv["device"].get("software_fallback"):

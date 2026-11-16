@@ -1,0 +1,36 @@
+{
+  "device": {
+    "deviceName": "Intel(R) Arc(tm) B390 (PTL)",
+    "driverName": "Intel open-source Mesa driver",
+    "driverInfo": "Mesa 27.0.0-devel",
+    "apiVersion": "1.4.368",
+    "software_fallback": false,
+    "is_intel": true
+  },
+  "extensions": [
+    "VK_AMDX_",
+    "VK_AMD_",
+    "VK_ANDROID_",
+    "VK_ARM_",
+    "VK_EXT_",
+    "VK_EXT_4444_",
+    "VK_GOOGLE_",
+    "VK_INTEL_",
+    "VK_KHR_",
+    "VK_KHR_16",
+    "VK_KHR_8",
+    "VK_LAYER_FROG_",
+    "VK_LAYER_KHRONOS_",
+    "VK_LAYER_MANGOHUD_",
+    "VK_LAYER_MESA_",
+    "VK_LAYER_NV_",
+    "VK_LAYER_VALVE_",
+    "VK_LUNARG_",
+    "VK_MESA_",
+    "VK_NV_",
+    "VK_VALVE_"
+  ],
+  "vulkaninfo_rc": 0,
+  "summary_file": "vulkaninfo-summary.txt",
+  "full_file": "vulkaninfo.txt"
+}

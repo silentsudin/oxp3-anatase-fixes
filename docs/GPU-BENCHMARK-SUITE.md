@@ -333,3 +333,33 @@ So the one-line iris cap survives the real packaging path, not just the ad-hoc
 container build.  Installing these Mesa RPMs system-wide should give the same
 rusticl FP16 support; the remaining caveat is the Fedora/upstream libclc mismatch
 (the user-space shim was still used for this test).
+
+## Full suite run (2026-11-16 17:33)
+
+```sh
+tools/gpu-bench/gpu-bench.py --full --tag full-suite
+```
+
+`--full` adds GravityMark raster + RT and the Blender CPU render.  One run now
+captures: Vulkan inventory, vkpeak, clpeak Vulkan, clpeak OpenCL, FFmpeg
+QSV/VAAPI/x265, vkmark, GravityMark raster/RT, Blender Cycles, and a `gaps.json`
+assembled from every tool's unsupported/zero/error statuses.
+
+Results (artifacts in `results/gpu-bench-20261116-full/`):
+
+| test | result |
+|---|---|
+| fp16 coopmat | ~52 TFLOPS |
+| bf16 coopmat | ~50-53 TFLOPS |
+| int8 coopmat | ~97-107 TOPS |
+| vkmark | 28912 |
+| GravityMark raster | 37509 / 224.6 fps |
+| GravityMark RT | 33247 / 199.1 fps |
+| Blender Cycles CPU | 19.4 s |
+| FFmpeg hevc_qsv / vaapi / x265 | 5.6x / 6.3x / 3.5x |
+| OpenCL FP32 | ~5.9 TFLOPS |
+
+Detected gaps in this (stock-runtime) pass: fp8/bf8 matrix 0, fp32 coopmat
+unsupported, fp8 coopmat unsupported, and OpenCL half unsupported (fixed by the
+iris FP16 patch when that Mesa is installed).  The Level Zero GPU compute abort
+and NPU mismatch are documented separately above.

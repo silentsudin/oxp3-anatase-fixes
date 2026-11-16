@@ -1,0 +1,62 @@
+[
+  {
+    "area": "vulkan-compute",
+    "item": "fp8-matrix",
+    "status": "zero",
+    "detail": "vkpeak reports 0 (unexposed or hardware-unsupported)"
+  },
+  {
+    "area": "vulkan-compute",
+    "item": "bf8-matrix",
+    "status": "zero",
+    "detail": "vkpeak reports 0 (unexposed or hardware-unsupported)"
+  },
+  {
+    "area": "vulkan-compute",
+    "item": "fp32",
+    "status": "unsupported",
+    "detail": "No fp32xfp32+fp32 coopmat property! Skipped"
+  },
+  {
+    "area": "vulkan-compute",
+    "item": "fp8_e4m3",
+    "status": "unsupported",
+    "detail": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+  },
+  {
+    "area": "vulkan-compute",
+    "item": "fp8_e5m2",
+    "status": "unsupported",
+    "detail": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+  },
+  {
+    "area": "opencl",
+    "item": "half",
+    "status": "unsupported",
+    "detail": "No half precision support"
+  },
+  {
+    "area": "opencl",
+    "item": "half2",
+    "status": "unsupported",
+    "detail": "No half precision support"
+  },
+  {
+    "area": "opencl",
+    "item": "half4",
+    "status": "unsupported",
+    "detail": "No half precision support"
+  },
+  {
+    "area": "opencl",
+    "item": "half8",
+    "status": "unsupported",
+    "detail": "No half precision support"
+  },
+  {
+    "area": "opencl",
+    "item": "half16",
+    "status": "unsupported",
+    "detail": "No half precision support"
+  }
+]
