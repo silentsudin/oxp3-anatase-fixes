@@ -1,0 +1,54 @@
+# GPU benchmark 2026-11-16T18:13:27.201110+00:00
+
+- kernel: `7.3.4-an02.fc45.x86_64`
+- scheduler: `cosmos_1.1.7_x86_64_unknown_linux_gnu`
+- governor: `powersave` EPP: `balance_power`
+- device: `Intel(R) Arc(tm) B390 (PTL)` driver `Mesa 27.0.0-devel`
+
+## clpeak coopmat
+
+- **unsupported** fp32: No fp32xfp32+fp32 coopmat property! Skipped
+- fp16: 52677170000000.00 
+- fp16 f16acc: 53115380000000.00 
+- bf16: 53254820000000.00 
+- **unsupported** fp8_e4m3: No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped
+- **unsupported** fp8_e5m2: No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped
+- int8: 106348400000000.00 OPS
+
+## OpenCL (rusticl)
+
+- float: 5975928000000.00
+- float2: 5942946000000.00
+- float4: 5052808000000.00
+- float8: 5412375000000.00
+- float16: 5322680000000.00
+- **unsupported** half: No half precision support
+- **unsupported** half2: No half precision support
+- **unsupported** half4: No half precision support
+- **unsupported** half8: No half precision support
+- **unsupported** half16: No half precision support
+
+## VK-GL-CTS (targeted)
+
+| suite | passed | failed | unsupported |
+|---|---:|---:|---:|
+| cooperative_matrix | 3682/54283 | 0 | 50601 |
+| ray_query | 22581/49360 | 0 | 26779 |
+| mesh_shader | 18012/28067 | 0 | 10055 |
+
+## vkmark
+
+score: **29466**
+
+## Gaps
+
+- **vulkan-compute / coopmat 16x8x16 f16**: unadvertised - only M=8/N=16 properties are exposed (Longshot needs M=16)
+- **vulkan-compute / fp32**: unsupported - No fp32xfp32+fp32 coopmat property! Skipped
+- **vulkan-compute / fp8_e4m3**: unsupported - No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped
+- **vulkan-compute / fp8_e5m2**: unsupported - No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped
+- **opencl / half**: unsupported - No half precision support
+- **opencl / half2**: unsupported - No half precision support
+- **opencl / half4**: unsupported - No half precision support
+- **opencl / half8**: unsupported - No half precision support
+- **opencl / half16**: unsupported - No half precision support
+

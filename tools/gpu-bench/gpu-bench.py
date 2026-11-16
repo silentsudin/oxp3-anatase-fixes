@@ -349,6 +349,33 @@ def bench_gravity(outdir, rt=False, asteroids=50000):
     (outdir / f"gravitymark-{tag}.json").write_text(json.dumps(res, indent=2))
     return res
 
+def bench_cts(outdir):
+    binp = Path(os.environ.get("OXP3_CTS_BIN", str(TOOLS / "vkcts" / "deqp-vk")))
+    if not binp.exists():
+        return {"status": "missing", "path": str(binp), "hint": "build VK-GL-CTS deqp-vk or set OXP3_CTS_BIN"}
+    cases = {
+        "cooperative_matrix": "dEQP-VK.*cooperative_matrix*",
+        "ray_query": "dEQP-VK.ray_query.*",
+        "mesh_shader": "dEQP-VK.mesh_shader.*",
+    }
+    res = {"status": "ok", "binary": str(binp), "suites": {}}
+    for name, pattern in cases.items():
+        r = run([str(binp), "--deqp-case=" + pattern,
+                 "--deqp-log-filename=" + str(outdir / f"cts-{name}.qpa")],
+                timeout=1800, cwd=str(binp.parent),
+                log_path=outdir / f"cts-{name}.txt")
+        nums = {}
+        for key in ("Passed", "Failed", "Not supported", "Warnings"):
+            m = re.search(key + r":\s*(\d+)/(\d+)", r["output"])
+            if m:
+                nums[key.lower().replace(" ", "_")] = {"count": int(m.group(1)), "total": int(m.group(2))}
+        res["suites"][name] = {"status": "ok" if r["rc"] == 0 else "error", **nums,
+                               "rc": r["rc"], "seconds": r["seconds"]}
+        if r["rc"] != 0:
+            res["status"] = "error"
+    (outdir / "cts.json").write_text(json.dumps(res, indent=2))
+    return res
+
 def bench_ai(outdir):
     bench = TOOLS / "ov" / "bin" / "benchmark_app"
     models = TOOLS / "ov-models"
@@ -468,6 +495,7 @@ def main():
     ap.add_argument("--blender", action="store_true", help="also run a Blender Cycles CPU render")
     ap.add_argument("--full", action="store_true", help="run graphics/RT/render extras too")
     ap.add_argument("--ai", action="store_true", help="also run OpenVINO NPU/CPU models")
+    ap.add_argument("--cts", action="store_true", help="also run targeted VK-GL-CTS suites")
     ap.add_argument("--skip-vkpeak", action="store_true")
     args = ap.parse_args()
     if args.full:
@@ -498,6 +526,8 @@ def main():
         print("blender..."); results["blender"] = bench_blender(outdir)
     if args.ai:
         print("ai..."); results["ai"] = bench_ai(outdir)
+    if args.cts:
+        print("cts..."); results["cts"] = bench_cts(outdir)
     print("vkmark..."); results["vkmark"] = bench_vkmark(outdir, args.quick)
     results["gaps"] = build_gaps(results)
     (outdir / "gaps.json").write_text(json.dumps(results["gaps"], indent=2))
@@ -547,6 +577,13 @@ def main():
         if g.get("fps") is not None:
             lines += [f"## {label}", "", f"score: **{g.get('score')}** fps: **{g.get('fps')}** "
                       f"(scene {g.get('scene_seconds')} s)", ""]
+    cts = results.get("cts", {})
+    if isinstance(cts, dict) and cts.get("suites"):
+        lines += ["## VK-GL-CTS (targeted)", "", "| suite | passed | failed | unsupported |", "|---|---:|---:|---:|"]
+        for name, v in cts["suites"].items():
+            lines.append(f"| {name} | {v.get('passed', {}).get('count')}/{v.get('passed', {}).get('total')} | "
+                         f"{v.get('failed', {}).get('count')} | {v.get('not_supported', {}).get('count')} |")
+        lines.append("")
     ai = results.get("ai", {})
     if isinstance(ai, dict) and ai.get("tests"):
         lines += ["## OpenVINO", "", "| model-device | throughput (FPS) | median (ms) |", "|---|---:|---:|"]

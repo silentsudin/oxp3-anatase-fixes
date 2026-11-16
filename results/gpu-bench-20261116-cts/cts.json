@@ -1,0 +1,69 @@
+{
+  "status": "ok",
+  "binary": "/tmp/vkcts-build/build/external/vulkancts/modules/vulkan/deqp-vk",
+  "suites": {
+    "cooperative_matrix": {
+      "status": "ok",
+      "passed": {
+        "count": 3682,
+        "total": 54283
+      },
+      "failed": {
+        "count": 0,
+        "total": 54283
+      },
+      "not_supported": {
+        "count": 50601,
+        "total": 54283
+      },
+      "warnings": {
+        "count": 0,
+        "total": 54283
+      },
+      "rc": 0,
+      "seconds": 65.413
+    },
+    "ray_query": {
+      "status": "ok",
+      "passed": {
+        "count": 22581,
+        "total": 49360
+      },
+      "failed": {
+        "count": 0,
+        "total": 49360
+      },
+      "not_supported": {
+        "count": 26779,
+        "total": 49360
+      },
+      "warnings": {
+        "count": 0,
+        "total": 49360
+      },
+      "rc": 0,
+      "seconds": 184.09
+    },
+    "mesh_shader": {
+      "status": "ok",
+      "passed": {
+        "count": 18012,
+        "total": 28067
+      },
+      "failed": {
+        "count": 0,
+        "total": 28067
+      },
+      "not_supported": {
+        "count": 10055,
+        "total": 28067
+      },
+      "warnings": {
+        "count": 0,
+        "total": 28067
+      },
+      "rc": 0,
+      "seconds": 66.478
+    }
+  }
+}

@@ -427,3 +427,35 @@ fails: `clBuildProgram -6 (CL_OUT_OF_HOST_MEMORY)` for NEO OpenCL, and Blender
 aborts in `built_ins.cpp` when fetching the SIP kernel.  So the preemption size was
 one blocker; the built-ins/IGC compiler path is another.  This is now a focused,
 reproducible next fix rather than an opaque "Level Zero doesn't work".
+
+## VK-GL-CTS targeted conformance
+
+VK-GL-CTS was built from source (`deqp-vk`, Fedora 45 container, CMake/Ninja,
+`-DDEQP_DISABLE_VK_VIDEO_TESTS=ON` to skip the shaderc fetch).  It must run from
+the module directory containing the `vulkan/` data tree.
+
+`gpu-bench.py --cts` runs three targeted suites and parses the totals:
+
+| suite | passed | failed | not supported |
+|---|---:|---:|---:|
+| cooperative_matrix | 3682/54283 | **0** | 50601 |
+| ray_query | 22581/49360 | **0** | 26779 |
+| mesh_shader | 18012/28067 | **0** | 10055 |
+
+Zero failures is the conformance signal; the large "not supported" counts are the
+driver correctly declining unimplemented parameter/feature combinations (for
+example many coopmat type/scope variants), not crashes or wrong results.
+
+Build notes:
+
+```sh
+git clone --depth 1 https://github.com/KhronosGroup/VK-GL-CTS.git
+python3 external/fetch_sources.py
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DDEQP_DISABLE_VK_VIDEO_TESTS=ON
+cmake --build build --target deqp-vk -j8
+```
+
+Set `OXP3_CTS_BIN` to the built
+`build/external/vulkancts/modules/vulkan/deqp-vk`; the harness runs it from its
+data directory.  Artifacts: `results/gpu-bench-20261116-cts/`.
