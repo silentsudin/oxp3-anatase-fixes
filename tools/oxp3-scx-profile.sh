@@ -5,6 +5,8 @@
 #   sudo tools/oxp3-scx-profile.sh gaming     # scx_cosmos -c 0 -p 0            (current default)
 #   sudo tools/oxp3-scx-profile.sh lowlat     # + -m performance --primary-overload-us 1000
 #   sudo tools/oxp3-scx-profile.sh lowlat-fast# + -P (prefer higher-ranked idle cores)
+#   sudo tools/oxp3-scx-profile.sh lavd       # scx_lavd autopilot (EMAS, per-core-type domains)
+#   sudo tools/oxp3-scx-profile.sh lavd-nc    # scx_lavd --balanced --no-core-compaction
 #   sudo tools/oxp3-scx-profile.sh eevdf      # stop/disable sched_ext, use kernel EEVDF
 #   sudo tools/oxp3-scx-profile.sh status
 #
@@ -37,6 +39,14 @@ lowlat)
 lowlat-fast)
     exec_line="/usr/bin/scx_cosmos -c 0 -p 0 -m performance --primary-overload-us 1000 -P"
     ;;
+lavd)
+    # EMAS: per-LLC and per-core-type scheduling domains, energy-model aware.
+    # Do NOT use --performance here (sched-ext/scx #3340: pegged CPU, ~34 GB leak).
+    exec_line="/usr/bin/scx_lavd"
+    ;;
+lavd-nc)
+    exec_line="/usr/bin/scx_lavd --balanced --no-core-compaction"
+    ;;
 eevdf)
     if [ "$dry" = 1 ]; then say "dry-run: systemctl disable --now $unit"; exit 0; fi
     say "disabling $unit (kernel EEVDF)"
@@ -49,7 +59,7 @@ status)
     say "drop-in"; cat "$dropin" 2>/dev/null || echo "(none)"
     exit 0
     ;;
-*) die "unknown mode '$mode' (gaming|lowlat|lowlat-fast|eevdf|status)" ;;
+*) die "unknown mode '$mode' (gaming|lowlat|lowlat-fast|lavd|lavd-nc|eevdf|status)" ;;
 esac
 
 if [ "$dry" = 1 ]; then

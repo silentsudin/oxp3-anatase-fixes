@@ -122,3 +122,50 @@ critical thread is the limiter.  Diagnose next with MangoHud/nvtop while in game
 
 Other Elden Ring-specific tests: `WINE_CPU_TOPOLOGY` spoofing so the game does not see
 the hybrid topology, and the P-core wrapper in Steam Launch Options.
+
+## Intelligent placement: LPE engagement and ITD
+
+Two separate observations:
+
+### LP-E cores stay idle (measured: cpu10-13 at 0.4-1.4 % busy on the desktop)
+
+That is expected: EEVDF and scx_cosmos rank CPUs by capacity, so the 3.1 GHz LP-E
+cores are only chosen when nothing better is free, and the `-m performance` primary
+domain deliberately excludes them for games.  LP-E cores are for idle/housekeeping,
+not for game threads.  To make them useful they must be given work explicitly:
+housekeeping, background services, or IRQs pinned there (see below), or the LAVD
+scheduler's energy-model placement in powersave/balanced mode.
+
+### Intel Thread Director is not available to the Linux scheduler
+
+- The kernel exposes HFI (Hardware Feedback Interface) to userspace; EEVDF and
+  sched_ext do **not** read it.  Windows integrates ITD in its scheduler, which is the
+  behavioural gap.
+- `intel-lpmd` is the HFI consumer on Linux, but the installed 0.1.0 only uses it for
+  Low Power Mode selection, and this platform's config has every mode set to `-1`
+  (never enter LPM).
+- The HFI → sched_ext integration was presented at LPC 2026 ("HFI plug in to
+  scx_ext"): converting HFI output into scheduler-readable CPU hints for LAVD.  It is
+  not in the installed scx 1.1.x, so there is no mainline ITD-driven placement today.
+
+### Remediation options, in order of practicality
+
+1. **`scx_lavd` EMAS** (added as `sudo tools/oxp3-scx-profile.sh lavd`): LAVD creates a
+   separate scheduling domain per LLC and per core type and uses an energy model, which
+   is the closest thing available to "intelligent" hybrid placement.  Test it; do not
+   use `--performance` (CPU peg + ~34 GB leak, sched-ext/scx #3340).  `lavd-nc` is the
+   non-compacting balanced variant.
+2. **`intel-lpmd` 0.1.1 per-process cpusets** (test release, not packaged): classifies
+   processes (game, interactive, background, utility) and confines them to P/E/LP-E via
+   `AllowedCPUs`, uclamp, and focus-PID promotion.  This is the most direct ITD-adjacent
+   userspace policy; it needs building from intel/intel-lpmd or a Fedora package update.
+3. **Static housekeeping policy** (works today): confine background work to LP-E and
+   keep games on P/E.  Examples: IRQ affinity for `xe`/NVMe on cpu10-13, `systemd`
+   `AllowedCPUs=10-13` for non-latency slices, and `tools/game-pcores.sh` for titles
+   that must stay on P-cores.  This does not make the kernel smarter, but it stops
+   background work from competing and gives LP-E a defined job.
+4. **Per-game confinement** (`tools/game-pcores.sh`, `WINE_CPU_TOPOLOGY`) for the titles
+   where the main thread must stay on a P-core.
+5. **Kernel/HFI future work**: track the LPC 2026 HFI→sched_ext work; a mainline HFI
+   scheduler plugin would be the real ITD equivalent.  No supported patch exists for
+   kernel 7.3.4 today.
