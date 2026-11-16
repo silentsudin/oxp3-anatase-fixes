@@ -292,3 +292,23 @@ it.
 therefore appeared inert.  Fix: give it an explicit
 `<ActiveCores>ActivePcores,ActiveEcores</ActiveCores>` (groups are resolved at attach
 time from `<CpuGroups>`), which is independent of the ClassDefaults ordering.
+
+## Catch-all verified (2026-11-16)
+
+After the explicit-mask fix, a normal user shell and every unmatched Wine process
+resolved to P+E:
+
+```text
+shell            0-9  custom_profile_0
+Dpr.exe          0-9  game_profile_mixed   (explicit entry)
+UnityCrashHandl  0-9  custom_profile_0
+services.exe / winedevice.exe / explorer.exe ...  0-9  custom_profile_0
+```
+
+`tools/lpmd-game-status.sh` reports both the affinity and the lpmd classification, so a
+future launch can be checked at a glance.  Coverage is therefore:
+
+- named games -> their explicit class (currently also 0-9),
+- **any other game** -> catch-all `custom_profile_0` 0-9,
+- desktop/Wine helper processes -> catch-all 0-9 (intentional),
+- system daemons -> 10-13.
