@@ -25,7 +25,7 @@ stage=$cache/intel-lpmd/stage
 state=${XDG_STATE_HOME:-$user_home/.local/state}/oxp3-fixes/intel-lpmd
 root=${OXP3_LPMD_ROOT:-}
 dry=0 uninstall=0
-games="udpre=game_profile_mixed uDPRE.exe=game_profile_mixed Dpr.exe=game_profile_mixed eldenring.exe=game_profile_gpu"
+games="udpre=game_profile_mixed uDPRE.exe=game_profile_mixed Dpr.exe=game_profile_mixed"
 say() { printf '== %s\n' "$*"; }
 run() { if (( dry )); then printf '   [dry-run] %s\n' "$*"; else "$@"; fi; }
 
@@ -110,6 +110,7 @@ except FileNotFoundError:
 for cls in ("GameProfileGPU", "GameProfileMixed"):
     s = re.sub(r'(<%s>.*?<Cores>)[^<]*(</Cores>)' % cls,
                r'\g<1>ActivePcores, ActiveEcores\g<2>', s, count=1, flags=re.S)
+s = re.sub(r'<OverrideGlobalCPUSettings>[^<]*</OverrideGlobalCPUSettings>\s*\n?', '', s)
 open(p, 'w').write(s)
 PY
 fi
@@ -170,6 +171,13 @@ if entries:
 else:
     print('   game entries already present')
 PY
+fi
+
+say "exempting anti-cheat titles from the catch-all"
+if (( ! dry )); then
+    python3 -c 'import sys; p,f=sys.argv[1],sys.argv[2]; s=open(p).read(); frag=open(f).read();
+s=s.replace("</ProcessCpusetConfig>", frag + "</ProcessCpusetConfig>", 1); open(p,"w").write(s)' \
+        "$confdir/process_cpuset_user.xml" "$here/lpmd-exempt.xml"
 fi
 
 say "installing systemd drop-in"

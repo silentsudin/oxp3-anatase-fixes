@@ -312,3 +312,33 @@ future launch can be checked at a glance.  Coverage is therefore:
 - **any other game** -> catch-all `custom_profile_0` 0-9,
 - desktop/Wine helper processes -> catch-all 0-9 (intentional),
 - system daemons -> 10-13.
+
+## Elden Ring crash and anti-cheat exemptions
+
+After the catch-all became active, Elden Ring started crashing at startup.  Two
+risky behaviours were removed:
+
+1. The catch-all attached `eldenring.exe`, `start_protected_game.exe` and the EAC
+   processes to cpu0-9.  Anti-cheat + affinity changes are fragile; they now have
+   explicit `<Process>` entries with `<ActiveCores>0-13</ActiveCores>` so they are
+   left on all CPUs (the fragment lives in `tools/lpmd-exempt.xml` and is appended by
+   the installer).
+2. The model `GameProfileGPU` block had
+   `<OverrideGlobalCPUSettings>1</OverrideGlobalCPUSettings>`, which lets the class
+   rewrite the `system.slice`/`user.slice`/`machine.slice` cpusets while attached.
+   That is far too broad for a game class; the installer removes the tag and
+   `eldenring.exe` is no longer classified as `game_profile_gpu`.
+
+`eldenring.exe` is now `custom_profile_0` with all CPUs, i.e. deliberately not
+managed by lpmd until the crash is understood.
+
+Diagnosis if it still crashes:
+
+```sh
+sudo systemctl stop intel_lpmd intel_lpmd-preconfig   # no lpmd at all
+# launch Elden Ring; if it runs, lpmd is implicated
+sudo systemctl start intel_lpmd
+sudo systemctl restart intel_lpmd-preconfig
+```
+
+Also try without MangoHud: `mangoapp` aborted (SIGABRT) around the same period.
