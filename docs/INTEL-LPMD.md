@@ -360,3 +360,31 @@ exemption.
 
 If it still crashes with these in place, test with MangoHud disabled (`MANGOHUD=0`
 or no overlay) before blaming lpmd itself.
+
+## ER crash: Steam itself was on 2-13
+
+Sampling the launch chain showed the actual inheritance problem:
+
+```text
+steam-runtime-l 0-9   reaper 0-9   pressure-vessel 0-9   bwrap 0-9
+wine            2-13  start_protected 2-13  wine64 2-13
+eldenring.exe   0-9
+```
+
+The system `process_cpuset.xml` classifies `steam`/`steamwebhelper`/`steam-runtime-l`/
+`pv-adverb`/`mangoapp` as `user_initiated`, which the model config maps to E+LP-E
+(2-13).  Wine/EAC inherited that from Steam, ending up on E-cores with no P-cores.
+Anti-cheat is timing-sensitive enough that this aborts at start-up.
+
+The exemption fragment now leaves the **whole Steam/Wine chain** on 0-13, with
+`<AllowSession>1</AllowSession>` (many launcher processes sit in login-session scopes
+and are otherwise skipped by lpmd):
+
+```text
+eldenring.exe start_protected* EasyAntiCheat* easyanticheat*
+mangoapp mangohud gamescope pressure-vessel pv-adverb bwrap wineserver
+steam steamwebhelper steam-runtime-l srt-bwrap srt-logger
+start-gamescope gamescope-wl wine wine64 wine-preloader reaper
+```
+
+The catch-all remains for normal games.

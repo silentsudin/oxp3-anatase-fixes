@@ -1,58 +1,134 @@
-    <!-- Anti-cheat titles and the runtime/overlay processes they depend on are
-         deliberately left on all CPUs (0-13).  Restricting them to P+E has
-         crashed Elden Ring at startup (EAC/Proton/MangoHud). -->
+    <!-- Anti-cheat titles and the Steam/Wine runtime they depend on are left on
+         all CPUs (0-13): restricting them to P+E crashes Elden Ring at start. -->
     <Process>
         <Name>eldenring.exe</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>start_protected*</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>EasyAntiCheat*</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>easyanticheat*</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>mangoapp</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>mangohud</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>gamescope</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>pressure-vessel</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>pv-adverb</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>bwrap</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>
         <Name>wineserver</Name>
         <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>steam</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>steamwebhelper</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>steam-runtime-l</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>srt-bwrap</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>srt-logger</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>start-gamescope</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>gamescope-wl</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>wine</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>wine64</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>wine-preloader</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
+        <Classification>custom_profile_0</Classification>
+    </Process>
+    <Process>
+        <Name>reaper</Name>
+        <ActiveCores>0-13</ActiveCores>
+        <AllowSession>1</AllowSession>
         <Classification>custom_profile_0</Classification>
     </Process>
