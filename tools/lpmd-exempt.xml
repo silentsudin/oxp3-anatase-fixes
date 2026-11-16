@@ -4,6 +4,7 @@
         <Name>eldenring.exe</Name>
         <ActiveCores>0-13</ActiveCores>
         <AllowSession>1</AllowSession>
+        <AffinityAllThreads>1</AffinityAllThreads>
         <Classification>custom_profile_0</Classification>
     </Process>
     <Process>

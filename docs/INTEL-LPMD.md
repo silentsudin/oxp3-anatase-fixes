@@ -407,3 +407,30 @@ Wine/EAC inherited E+LP-E with no P-cores, and only the game itself got 0-9.
 
 The fix is the exemption fragment plus `AllowSession=1`; the catch-all still applies
 to ordinary games.
+
+## Elden Ring performance is still open (research)
+
+The lpmd work fixed the **launch crash** only.  Windows does not have a magic hybrid
+scheduler fix for this game either; the community fixes are affinity workarounds:
+
+- P-core affinity / E-core disable via Process Lasso or BIOS.
+- Windows 11 power plan must be Balanced (High performance makes Thread Director
+  behaviour worse).
+- A specific engine bug: Elden Ring restricts the worker `EWP_LOW_Single_Clus1` to
+  logical CPUs 1-3 (`0xE`), causing stalls; a Windows mod widens that worker's
+  affinity (Nexus mod 10721, github oskarwirga/eldenring-intel-affinity-patch).
+- Separate CPU-0 affinity/freeze workaround (Nexus mod 9186).
+
+The portable Linux equivalent is not "P-cores only" (this chip has only two P-cores);
+it is widening the game's own worker masks.  `tools/er-affinity-watch.sh` reapplies a
+mask to **all threads** of `eldenring.exe` once per second:
+
+```sh
+tools/er-affinity-watch.sh            # all CPUs, every second
+tools/er-affinity-watch.sh 0-9        # P+E only
+```
+
+The lpmd ER exemption now also has `AffinityAllThreads=1`, so the initial attach
+covers every existing thread; the watchdog defeats any later re-pinning by the game.
+
+Measure with MangoHud (%) lows/frame-time, not only average FPS.
