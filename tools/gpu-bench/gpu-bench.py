@@ -31,6 +31,12 @@ _npu = TOOLS / "npu" / "usr" / "lib" / "x86_64-linux-gnu"
 _ze = TOOLS / "npu" / "ze" / "lib64"
 if _npu.exists():
     os.environ["LD_LIBRARY_PATH"] = str(_npu) + ":" + str(_ze) + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
+_neo = TOOLS / "neo"
+if _neo.exists():
+    os.environ["LD_LIBRARY_PATH"] = ":".join(str(x) for x in
+        (_neo / "igc", _neo / "compute", _neo / "rt", _neo / "tbb", _ze)) +         (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
+    os.environ.setdefault("NEOReadDebugKeys", "1")
+    os.environ.setdefault("NEO_OverrideCsrAllocationSize", "16777216")
 _vpl = TOOLS / "vpl" / "usr" / "lib64"
 if _vpl.exists():
     os.environ["LD_LIBRARY_PATH"] = str(_vpl) + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")
@@ -44,10 +50,13 @@ if _shim.exists() and (_clc / "spirv-mesa3d-.spv").exists():
     os.environ["LD_PRELOAD"] = str(_shim)
     os.environ.setdefault("RUSTICL_ENABLE", "iris")
 
-def run(cmd, timeout=600, log_path=None, cwd=None):
+def run(cmd, timeout=600, log_path=None, cwd=None, env=None):
     t0 = time.time()
+    e = os.environ.copy()
+    if env:
+        e.update(env)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=e)
         out, err, rc = p.stdout, p.stderr, p.returncode
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or "") if isinstance(e.stdout, str) else ""
@@ -382,12 +391,14 @@ def bench_ai(outdir):
     if not bench.exists() or not (models / "add.xml").exists():
         return {"status": "missing", "path": str(bench)}
     res = {"status": "ok", "tests": {}}
+    devices = ["NPU", "CPU"] + (["GPU"] if (TOOLS / "neo").exists() else [])
+    extra = {"OCL_ICD_VENDORS": str(TOOLS / "neo" / "vendors")} if (TOOLS / "neo").exists() else None
     for model in ("add", "conv"):
-        for device in ("NPU", "CPU"):
+        for device in devices:
             key = f"{model}-{device}"
             r = run([str(bench), "-m", str(models / f"{model}.xml"), "-d", device,
                      "-niter", "100", "-api", "sync"], timeout=180,
-                    log_path=outdir / f"ai-{key}.txt")
+                    env=extra, log_path=outdir / f"ai-{key}.txt")
             def num(pat):
                 m = re.search(pat, r["output"])
                 return float(m.group(1)) if m else None
@@ -400,19 +411,21 @@ def bench_ai(outdir):
     (outdir / "ai.json").write_text(json.dumps(res, indent=2))
     return res
 
-def bench_blender(outdir):
+def bench_blender(outdir, gpu=False):
     exe = TOOLS / "blender" / "blender"
     if not exe.exists():
         return {"status": "missing", "path": str(exe)}
     base = [str(exe), "-b", "--factory-startup", "-E", "CYCLES",
-            "-o", str(outdir / "blender_"), "-F", "PNG", "-f", "1"]
+            "-o", str(outdir / ("blender-gpu_" if gpu else "blender_")), "-F", "PNG", "-f", "1"]
+    if gpu:
+        base += ["--", "--cycles-device", "ONEAPI"]
     s = Sampler(); s.start()
-    r = run(base, timeout=600, log_path=outdir / "blender-cpu.txt")
+    r = run(base, timeout=900, log_path=outdir / ("blender-gpu.txt" if gpu else "blender-cpu.txt"))
     prof = s.finish()
     times = re.findall(r"^Time:\s*([0-9:.]+)", r["output"], re.M)
     res = {"status": "ok" if r["rc"] == 0 and "Saved:" in r["output"] else "error",
-           "time": times[-1] if times else None, "profile": prof, **r}
-    (outdir / "blender.json").write_text(json.dumps(res, indent=2))
+           "gpu": gpu, "time": times[-1] if times else None, "profile": prof, **r}
+    (outdir / ("blender-gpu.json" if gpu else "blender.json")).write_text(json.dumps(res, indent=2))
     return res
 
 def bench_media(outdir):
@@ -496,6 +509,7 @@ def main():
     ap.add_argument("--full", action="store_true", help="run graphics/RT/render extras too")
     ap.add_argument("--ai", action="store_true", help="also run OpenVINO NPU/CPU models")
     ap.add_argument("--cts", action="store_true", help="also run targeted VK-GL-CTS suites")
+    ap.add_argument("--blender-gpu", action="store_true", help="also run Blender oneAPI GPU")
     ap.add_argument("--skip-vkpeak", action="store_true")
     args = ap.parse_args()
     if args.full:
@@ -524,6 +538,8 @@ def main():
         print("gravitymark RT..."); results["gravitymark_rt"] = bench_gravity(outdir, True, 20000)
     if args.blender:
         print("blender..."); results["blender"] = bench_blender(outdir)
+    if args.blender_gpu:
+        print("blender GPU..."); results["blender_gpu"] = bench_blender(outdir, True)
     if args.ai:
         print("ai..."); results["ai"] = bench_ai(outdir)
     if args.cts:
@@ -593,6 +609,9 @@ def main():
     bl = results.get("blender", {})
     if bl.get("time"):
         lines += ["## Blender Cycles", "", f"CPU render: **{bl['time']}**", ""]
+    blg = results.get("blender_gpu", {})
+    if blg.get("time"):
+        lines += ["## Blender Cycles (oneAPI)", "", f"GPU render: **{blg['time']}**", ""]
     vkm = results.get("vkmark", {})
     if vkm.get("score") is not None:
         lines += ["## vkmark", "", f"score: **{vkm['score']:.0f}**", ""]

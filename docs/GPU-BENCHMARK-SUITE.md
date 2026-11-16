@@ -459,3 +459,28 @@ cmake --build build --target deqp-vk -j8
 Set `OXP3_CTS_BIN` to the built
 `build/external/vulkancts/modules/vulkan/deqp-vk`; the harness runs it from its
 data directory.  Artifacts: `results/gpu-bench-20261116-cts/`.
+
+### Update: NEO GPU compute is now working
+
+Combining compute-runtime **26.40**, IGC **2.42**, and the preemption override with a
+**16 MB** CSR allocation makes the GPU execute:
+
+```sh
+export NEOReadDebugKeys=1
+export NEO_OverrideCsrAllocationSize=16777216
+```
+
+Verified results:
+
+- NEO OpenCL FP32: **~6.37 TFLOPS** (vs rusticl ~5.9)
+- OpenVINO GPU: add ~19.6k FPS, conv ~3.64k FPS
+- Blender oneAPI Cycles, default cube: **16.6 s** (CPU: 19.5 s)
+- OpenVINO NPU still works alongside (add ~11.8k, conv ~3.3k)
+
+`neo-setup.sh` stages compute-runtime 26.40, IGC 2.42, the raytracing/TBB
+libraries, a Level Zero loader, and an ICD vendor directory.  `gpu-bench.py`
+prepends the paths and sets the two environment variables; `--ai` now runs
+NPU/CPU/GPU and `--blender-gpu` runs the oneAPI render.
+
+This is a **user-space workaround** for the preemption-size bug; a proper system
+package should eventually replace it.

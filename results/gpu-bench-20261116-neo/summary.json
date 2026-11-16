@@ -1,0 +1,800 @@
+{
+  "meta": {
+    "timestamp": "2026-11-16T18:26:32.614901+00:00",
+    "kernel": "7.3.4-an02.fc45.x86_64",
+    "cmdline": "BOOT_IMAGE=(hd0,gpt2)/ostree/anatase-bfd8bdbfb0a4e47ed71af5229ecd7075790c1259e8d9f3e480f7aebf7a6de01a/vmlinuz-7.3.4-an02.fc45.x86_64 ostree=/ostree/boot.0/anatase/bfd8bdbfb0a4e47ed71af5229ecd7075790c1259e8d9f3e480f7aebf7a6de01a/0 rhgb quiet root=UUID=a245ffab-5073-45ee-b3ed-e7ecdec29275 vconsole.keymap=us rootflags=subvol=root rw xe.enable_panel_replay=0 nvme.noacpi=1",
+    "sched_ext": "cosmos_1.1.7_x86_64_unknown_linux_gnu",
+    "governor": "powersave",
+    "epp": "balance_power",
+    "gpu_busy": null,
+    "intel_lpmd": "active",
+    "lspci_vga": "00:02.0 VGA compatible controller [0300]: Intel Corporation Panther Lake [Arc B390] [8086:b080] (rev 04)"
+  },
+  "inventory": {
+    "device": {
+      "deviceName": "Intel(R) Arc(tm) B390 (PTL)",
+      "driverName": "Intel open-source Mesa driver",
+      "driverInfo": "Mesa 27.0.0-devel",
+      "apiVersion": "1.4.368",
+      "software_fallback": false,
+      "is_intel": true
+    },
+    "extensions": [
+      "VK_AMDX_",
+      "VK_AMD_",
+      "VK_ANDROID_",
+      "VK_ARM_",
+      "VK_EXT_",
+      "VK_EXT_4444_",
+      "VK_GOOGLE_",
+      "VK_INTEL_",
+      "VK_KHR_",
+      "VK_KHR_16",
+      "VK_KHR_8",
+      "VK_LAYER_FROG_",
+      "VK_LAYER_KHRONOS_",
+      "VK_LAYER_MANGOHUD_",
+      "VK_LAYER_MESA_",
+      "VK_LAYER_NV_",
+      "VK_LAYER_VALVE_",
+      "VK_LUNARG_",
+      "VK_MESA_",
+      "VK_NV_",
+      "VK_VALVE_"
+    ],
+    "cooperative_matrix_properties": [
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 16,
+        "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 16,
+        "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 16,
+        "AType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "ResultType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 16,
+        "AType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_BFLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 32,
+        "AType": "COMPONENT_TYPE_SINT8_KHR",
+        "BType": "COMPONENT_TYPE_SINT8_KHR",
+        "CType": "COMPONENT_TYPE_SINT32_KHR",
+        "ResultType": "COMPONENT_TYPE_SINT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 16,
+        "KSize": 32,
+        "AType": "COMPONENT_TYPE_UINT8_KHR",
+        "BType": "COMPONENT_TYPE_UINT8_KHR",
+        "CType": "COMPONENT_TYPE_UINT32_KHR",
+        "ResultType": "COMPONENT_TYPE_UINT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 8,
+        "KSize": 8,
+        "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 8,
+        "KSize": 8,
+        "AType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "BType": "COMPONENT_TYPE_FLOAT16_KHR",
+        "CType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "ResultType": "COMPONENT_TYPE_FLOAT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 8,
+        "KSize": 8,
+        "AType": "COMPONENT_TYPE_UINT8_KHR",
+        "BType": "COMPONENT_TYPE_UINT8_KHR",
+        "CType": "COMPONENT_TYPE_UINT32_KHR",
+        "ResultType": "COMPONENT_TYPE_UINT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      },
+      {
+        "MSize": 8,
+        "NSize": 8,
+        "KSize": 8,
+        "AType": "COMPONENT_TYPE_SINT8_KHR",
+        "BType": "COMPONENT_TYPE_SINT8_KHR",
+        "CType": "COMPONENT_TYPE_SINT32_KHR",
+        "ResultType": "COMPONENT_TYPE_SINT32_KHR",
+        "scope": "SCOPE_SUBGROUP_KHR"
+      }
+    ],
+    "has_16x8x16_f16": false,
+    "vulkaninfo_rc": 0,
+    "summary_file": "vulkaninfo-summary.txt",
+    "full_file": "vulkaninfo.txt"
+  },
+  "opencl": {
+    "installed": true,
+    "platforms": 1,
+    "device_lines": 3,
+    "raw": "Platform #0: rusticl\n `-- Device #0: Mesa Intel(R) Arc(tm) B390 (PTL)\n\n[stderr]\n=== Rusticl warning: Patched Mesa libclc not detected. Upstream libclc may contain known bugs or breaking changes and isn't guaranteed to work reliably. Please visit https://gitlab.freedesktop.org/karolherbst/mesa-libclc for more information. ===\n"
+  },
+  "clpeak": {
+    "status": "ok",
+    "unsupported": [
+      {
+        "test": "coopmat",
+        "metric": "fp32",
+        "reason": "No fp32xfp32+fp32 coopmat property! Skipped"
+      },
+      {
+        "test": "coopmat",
+        "metric": "fp8_e4m3",
+        "reason": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+      },
+      {
+        "test": "coopmat",
+        "metric": "fp8_e5m2",
+        "reason": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+      }
+    ],
+    "profile": {
+      "samples": 15,
+      "gpu_clock_mhz_avg": 2300.0,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 97.7,
+      "gpu_util_pct_max": 99.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 88.8
+    },
+    "json": {
+      "schema": "clpeak/run",
+      "format_version": 3,
+      "clpeak_version": "3.0.5",
+      "generated_at": "2026-11-16T18:26:33Z",
+      "duration_s": 7.43598,
+      "build": {
+        "backends": [
+          "Vulkan",
+          "OpenCL",
+          "CPU",
+          "LiteRT",
+          "ONNX"
+        ],
+        "config": "Release"
+      },
+      "host": {
+        "os": "Linux x64",
+        "os_version": "7.3.4-an02.fc45.x86_64",
+        "arch": "x86_64",
+        "cpu": "Intel(R) Arc(TM) G3 Extreme",
+        "logical_cores": 14,
+        "memory_bytes": 33154686976
+      },
+      "invocation": {
+        "argv": [
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+          "--vulkan",
+          "--devices",
+          "vulkan:0",
+          "--compute",
+          "--matrix-compute",
+          "--numeric-error",
+          "-o",
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-182632-neocheck4/clpeak.json"
+        ],
+        "target_time_us": 500000,
+        "target_time_us_cpu": 2000000,
+        "target_time_us_ml_gpu": 1000000,
+        "warmup": 2,
+        "categories": [
+          "compute"
+        ],
+        "tests": [
+          "matrix-compute",
+          "numeric-error"
+        ]
+      },
+      "devices": [
+        {
+          "backend": "Vulkan",
+          "platform": "Vulkan",
+          "name": "Intel(R) Arc(tm) B390 (PTL)",
+          "driver": "26.99.99",
+          "type": "gpu",
+          "device_index": 0,
+          "properties": [
+            {
+              "key": "API version",
+              "value": "1.4.368"
+            },
+            {
+              "key": "VRAM",
+              "value": "23714 MB"
+            }
+          ],
+          "tests": [
+            {
+              "id": "coopmat",
+              "title": "Cooperative matrix",
+              "category": "compute",
+              "shape": "heterogeneous",
+              "axis": "data type",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak cooperative-matrix multiply-add rate, on the device's matrix engine where it has one.",
+              "duration_s": 7.336346,
+              "metrics": [
+                {
+                  "id": "fp32",
+                  "status": "unsupported",
+                  "reason": "No fp32xfp32+fp32 coopmat property! Skipped",
+                  "description": "fp32 inputs and accumulator."
+                },
+                {
+                  "id": "fp16",
+                  "value": 52599680000000.0,
+                  "description": "fp16 inputs, fp32 accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "fp16 f16acc",
+                  "value": 52839150000000.0,
+                  "description": "fp16 inputs and accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "bf16",
+                  "value": 53155810000000.0,
+                  "description": "bf16 inputs, fp32 accumulator (8x16x16 tile, fastest at subgroup 32)."
+                },
+                {
+                  "id": "fp8_e4m3",
+                  "status": "unsupported",
+                  "reason": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped",
+                  "description": "fp8 E4M3 inputs (more precision, less range), fp32 accumulator."
+                },
+                {
+                  "id": "fp8_e5m2",
+                  "status": "unsupported",
+                  "reason": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped",
+                  "description": "fp8 E5M2 inputs (more range, less precision), fp32 accumulator."
+                },
+                {
+                  "id": "int8",
+                  "value": 106923000000000.0,
+                  "unit": "OPS",
+                  "quantity": "ops",
+                  "direction": "higher_is_better",
+                  "description": "int8 inputs, int32 accumulator (8x16x32 tile, fastest at subgroup 16)."
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "log": [
+        {
+          "elapsed_s": 0.004580836,
+          "level": "info",
+          "backend": "Vulkan",
+          "message": "Backend: Vulkan"
+        },
+        {
+          "elapsed_s": 0.09711006,
+          "level": "info",
+          "backend": "Vulkan",
+          "device": "Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Device 0: Intel(R) Arc(tm) B390 (PTL)"
+        },
+        {
+          "elapsed_s": 0.0971663,
+          "level": "info",
+          "backend": "Vulkan",
+          "device": "Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "coopmat",
+          "message": "    Cooperative matrix"
+        }
+      ]
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--vulkan",
+      "--devices",
+      "vulkan:0",
+      "--compute",
+      "--matrix-compute",
+      "--numeric-error",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-182632-neocheck4/clpeak.json"
+    ],
+    "rc": 0,
+    "seconds": 7.44,
+    "output": "Backend: Vulkan\n  Device 0: Intel(R) Arc(tm) B390 (PTL)\n    Driver version   : 26.99.99\n    API version      : 1.4.368\n    VRAM             : 23714 MB\n\n    Cooperative matrix\n      fp16     : 52.6 TFLOPS\n      fp16 f16acc : 52.8 TFLOPS\n      bf16        : 53.2 TFLOPS\n      int8        : 107 TOPS\n\n"
+  },
+  "opencl_clpeak": {
+    "status": "ok",
+    "unsupported": [
+      {
+        "test": "half_precision_compute",
+        "metric": "half",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half2",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half4",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half8",
+        "reason": "No half precision support"
+      },
+      {
+        "test": "half_precision_compute",
+        "metric": "half16",
+        "reason": "No half precision support"
+      }
+    ],
+    "profile": {
+      "samples": 11,
+      "gpu_clock_mhz_avg": 2206.1,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 76.2,
+      "gpu_util_pct_max": 98.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 87.7
+    },
+    "json": {
+      "schema": "clpeak/run",
+      "format_version": 3,
+      "clpeak_version": "3.0.5",
+      "generated_at": "2026-11-16T18:26:40Z",
+      "duration_s": 5.084767,
+      "build": {
+        "backends": [
+          "Vulkan",
+          "OpenCL",
+          "CPU",
+          "LiteRT",
+          "ONNX"
+        ],
+        "config": "Release"
+      },
+      "host": {
+        "os": "Linux x64",
+        "os_version": "7.3.4-an02.fc45.x86_64",
+        "arch": "x86_64",
+        "cpu": "Intel(R) Arc(TM) G3 Extreme",
+        "logical_cores": 14,
+        "memory_bytes": 33154686976
+      },
+      "invocation": {
+        "argv": [
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+          "--opencl",
+          "--devices",
+          "opencl:0",
+          "--compute",
+          "--single-precision-compute",
+          "--half-precision-compute",
+          "-o",
+          "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-182632-neocheck4/clpeak-opencl.json"
+        ],
+        "target_time_us": 500000,
+        "target_time_us_cpu": 2000000,
+        "target_time_us_ml_gpu": 1000000,
+        "warmup": 2,
+        "categories": [
+          "compute"
+        ],
+        "tests": [
+          "single-precision-compute",
+          "half-precision-compute"
+        ]
+      },
+      "devices": [
+        {
+          "backend": "OpenCL",
+          "platform": "rusticl",
+          "name": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "driver": "26.2.6",
+          "type": "gpu",
+          "platform_index": 0,
+          "device_index": 0,
+          "properties": [
+            {
+              "key": "Compute units",
+              "value": "12"
+            },
+            {
+              "key": "Clock frequency",
+              "value": "400 MHz"
+            }
+          ],
+          "tests": [
+            {
+              "id": "single_precision_compute",
+              "title": "Single-precision compute",
+              "category": "compute",
+              "shape": "homogeneous",
+              "axis": "vector width",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak fp32 arithmetic rate of the device's ALUs, with no memory traffic.",
+              "duration_s": 4.729026,
+              "metrics": [
+                {
+                  "id": "float",
+                  "value": 5892773000000.0,
+                  "description": "Scalar, one value per work-item."
+                },
+                {
+                  "id": "float2",
+                  "value": 5968917000000.0,
+                  "description": "2-wide vector per work-item."
+                },
+                {
+                  "id": "float4",
+                  "value": 5062604000000.0,
+                  "description": "4-wide vector per work-item."
+                },
+                {
+                  "id": "float8",
+                  "value": 5385944000000.0,
+                  "description": "8-wide vector per work-item."
+                },
+                {
+                  "id": "float16",
+                  "value": 5292853000000.0,
+                  "description": "16-wide vector per work-item."
+                }
+              ]
+            },
+            {
+              "id": "half_precision_compute",
+              "title": "Half-precision compute",
+              "category": "compute",
+              "shape": "homogeneous",
+              "axis": "vector width",
+              "direction": "higher_is_better",
+              "quantity": "flops",
+              "unit": "FLOPS",
+              "description": "Peak fp16 arithmetic rate, with fp16 inputs and accumulator.",
+              "duration_s": 3.125e-05,
+              "metrics": [
+                {
+                  "id": "half",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half2",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half4",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half8",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                },
+                {
+                  "id": "half16",
+                  "status": "unsupported",
+                  "reason": "No half precision support"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "log": [
+        {
+          "elapsed_s": 0.004483954,
+          "level": "info",
+          "backend": "OpenCL",
+          "message": "Backend: OpenCL"
+        },
+        {
+          "elapsed_s": 0.335343,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Platform 0: rusticl"
+        },
+        {
+          "elapsed_s": 0.3353703,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "message": "  Device 0: Mesa Intel(R) Arc(tm) B390 (PTL)"
+        },
+        {
+          "elapsed_s": 0.3546385,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "single_precision_compute",
+          "message": "    Single-precision compute"
+        },
+        {
+          "elapsed_s": 5.08405,
+          "level": "info",
+          "backend": "OpenCL",
+          "device": "Mesa Intel(R) Arc(tm) B390 (PTL)",
+          "device_index": 0,
+          "test": "half_precision_compute",
+          "message": "    Half-precision compute"
+        }
+      ]
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/clpeak",
+      "--opencl",
+      "--devices",
+      "opencl:0",
+      "--compute",
+      "--single-precision-compute",
+      "--half-precision-compute",
+      "-o",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/results/20261116-182632-neocheck4/clpeak-opencl.json"
+    ],
+    "rc": 0,
+    "seconds": 5.1,
+    "output": "Backend: OpenCL\n  Platform 0: rusticl\n    Device 0: Mesa Intel(R) Arc(tm) B390 (PTL)\n      Driver version   : 26.2.6\n      Compute units    : 12\n      Clock frequency  : 400 MHz\n\n      Single-precision compute\n        float    : 5.89 TFLOPS\n        float2   : 5.97 TFLOPS\n        float4   : 5.06 TFLOPS\n        float8   : 5.39 TFLOPS\n        float16  : 5.29 TFLOPS\n\n\n[stderr]\n=== Rusticl warning: Patched Mesa libclc not detected. Upstream libclc may contain known bugs or breaking changes and isn't guaranteed to work reliably. Please visit https://gitlab.freedesktop.org/karolherbst/mesa-libclc for more information. ===\n"
+  },
+  "ai": {
+    "status": "ok",
+    "tests": {
+      "add-NPU": {
+        "status": "ok",
+        "throughput_fps": 11753.61,
+        "median_ms": 0.077,
+        "first_inference_ms": 11.31,
+        "rc": 0,
+        "output": "] Model outputs:\n[ INFO ]     y (node: y) : f32 / [...] / [1,1024]\n[Step 7/11] Loading the model to the device\n[ INFO ] Compile model took 3.75 ms\n[ INFO ] Start of compilation memory usage: Peak 892520 KB\n[ INFO ] End of compilation memory usage: Peak 892520 KB\n[ INFO ] Compile model ram used 0 KB\n[Step 8/11] Querying optimal runtime parameters\n[ INFO ] Model:\n[ INFO ]   CACHE_ENCRYPTION_CALLBACKS: None\n[ INFO ]   CACHE_MODE: CacheMode.OPTIMIZE_SPEED\n[ INFO ]   COMPILATION_NUM_THREADS: 14\n[ INFO ]   EXECUTION_DEVICES: NPU\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float16'>\n[ INFO ]   LOADED_FROM_CACHE: False\n[ INFO ]   LOG_LEVEL: Level.ERR\n[ INFO ]   MODEL_PRIORITY: Priority.MEDIUM\n[ INFO ]   MODEL_PTR: None\n[ INFO ]   NETWORK_NAME: onnx_Frontend_IR\n[ INFO ]   NPU_COMPILER_TYPE: CompilerType.DRIVER\n[ INFO ]   NPU_COMPILER_VERSION: 524291\n[ INFO ]   NPU_PLATFORM: 5010\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   PERFORMANCE_HINT: PerformanceMode.LATENCY\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 1\n[ INFO ]   PERF_COUNT: False\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=2.7;ov=2026.4.1\n[ INFO ]   WORKLOAD_TYPE: WorkloadType.DEFAULT\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 11.31 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:NPU\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         8.51 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        77.00 us\n[ INFO ]    Average:       78.22 us\n[ INFO ]    Min:           71.25 us\n[ INFO ]    Max:           100.82 us\n[ INFO ] Throughput:   11753.61 FPS\n"
+      },
+      "add-CPU": {
+        "status": "ok",
+        "throughput_fps": 102334.66,
+        "median_ms": 0.00423,
+        "first_inference_ms": 0.45,
+        "rc": 0,
+        "output": "x_Frontend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   INFERENCE_NUM_THREADS: 10\n[ INFO ]   PERF_COUNT: NO\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float32'>\n[ INFO ]   PERFORMANCE_HINT: LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   ENABLE_CPU_PINNING: False\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   SCHEDULING_CORE_TYPE: SchedulingCoreType.ANY_CORE\n[ INFO ]   MODEL_DISTRIBUTION_POLICY: set()\n[ INFO ]   ENABLE_HYPER_THREADING: False\n[ INFO ]   EXECUTION_DEVICES: ['CPU']\n[ INFO ]   CPU_DENORMALS_OPTIMIZATION: False\n[ INFO ]   LOG_LEVEL: Level.NO\n[ INFO ]   CPU_SPARSE_WEIGHTS_DECOMPRESSION_RATE: 1.0\n[ INFO ]   ENABLE_TENSOR_PARALLEL: False\n[ INFO ]   TBB_PARTITIONER: TbbPartitioner.STATIC\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 32\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   VALUE_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_GROUP_SIZE: 0\n[ INFO ]   VALUE_CACHE_GROUP_SIZE: 0\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;isa=Intel AVX2 with Intel DL Boost, float16 and bfloat16 support\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 0.45 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['CPU']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         0.98 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        4.23 us\n[ INFO ]    Average:       4.36 us\n[ INFO ]    Min:           4.03 us\n[ INFO ]    Max:           11.05 us\n[ INFO ] Throughput:   102334.66 FPS\n"
+      },
+      "add-GPU": {
+        "status": "ok",
+        "throughput_fps": 19601.66,
+        "median_ms": 0.03558,
+        "first_inference_ms": 0.25,
+        "rc": 0,
+        "output": "]   NETWORK_NAME: onnx_Frontend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   PERF_COUNT: False\n[ INFO ]   ENABLE_CPU_PINNING: False\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   MODEL_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_HOST_TASK_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_QUEUE_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_ENABLE_LARGE_ALLOCATIONS: False\n[ INFO ]   GPU_QUEUE_THROTTLE: Priority.MEDIUM\n[ INFO ]   GPU_ENABLE_LOOP_UNROLLING: True\n[ INFO ]   GPU_DISABLE_WINOGRAD_CONVOLUTION: False\n[ INFO ]   CACHE_DIR: \n[ INFO ]   CACHE_MODE: CacheMode.OPTIMIZE_SPEED\n[ INFO ]   PERFORMANCE_HINT: PerformanceMode.LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   COMPILATION_NUM_THREADS: 14\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float16'>\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 18446744073709551615\n[ INFO ]   ACTIVATIONS_SCALE_FACTOR: -1.0\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'float16'>\n[ INFO ]   OFFLOAD_RATIO: 0\n[ INFO ]   DEVICE_ID: 0\n[ INFO ]   EXECUTION_DEVICES: ['GPU.0']\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;desc=[driver=26.40.40196.8;ip=30.0.4;eus=96]\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 0.25 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['GPU.0']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         5.10 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        35.58 us\n[ INFO ]    Average:       43.50 us\n[ INFO ]    Min:           31.62 us\n[ INFO ]    Max:           709.42 us\n[ INFO ] Throughput:   19601.66 FPS\n"
+      },
+      "conv-NPU": {
+        "status": "ok",
+        "throughput_fps": 3283.34,
+        "median_ms": 0.22300999999999999,
+        "first_inference_ms": 12.66,
+        "rc": 0,
+        "output": "outputs:\n[ INFO ]     y (node: y) : f32 / [...] / [1,8,224,224]\n[Step 7/11] Loading the model to the device\n[ INFO ] Compile model took 1.87 ms\n[ INFO ] Start of compilation memory usage: Peak 892520 KB\n[ INFO ] End of compilation memory usage: Peak 892520 KB\n[ INFO ] Compile model ram used 0 KB\n[Step 8/11] Querying optimal runtime parameters\n[ INFO ] Model:\n[ INFO ]   CACHE_ENCRYPTION_CALLBACKS: None\n[ INFO ]   CACHE_MODE: CacheMode.OPTIMIZE_SPEED\n[ INFO ]   COMPILATION_NUM_THREADS: 14\n[ INFO ]   EXECUTION_DEVICES: NPU\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float16'>\n[ INFO ]   LOADED_FROM_CACHE: False\n[ INFO ]   LOG_LEVEL: Level.ERR\n[ INFO ]   MODEL_PRIORITY: Priority.MEDIUM\n[ INFO ]   MODEL_PTR: None\n[ INFO ]   NETWORK_NAME: onnx_Frontend_IR\n[ INFO ]   NPU_COMPILER_TYPE: CompilerType.DRIVER\n[ INFO ]   NPU_COMPILER_VERSION: 524291\n[ INFO ]   NPU_PLATFORM: 5010\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   PERFORMANCE_HINT: PerformanceMode.LATENCY\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 1\n[ INFO ]   PERF_COUNT: False\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=2.7;ov=2026.4.1\n[ INFO ]   WORKLOAD_TYPE: WorkloadType.DEFAULT\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 12.66 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:NPU\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         30.46 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        223.01 us\n[ INFO ]    Average:       223.91 us\n[ INFO ]    Min:           202.60 us\n[ INFO ]    Max:           357.89 us\n[ INFO ] Throughput:   3283.34 FPS\n"
+      },
+      "conv-CPU": {
+        "status": "ok",
+        "throughput_fps": 4382.0,
+        "median_ms": 0.11871999999999999,
+        "first_inference_ms": 0.94,
+        "rc": 0,
+        "output": "ntend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   INFERENCE_NUM_THREADS: 10\n[ INFO ]   PERF_COUNT: NO\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float32'>\n[ INFO ]   PERFORMANCE_HINT: LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   ENABLE_CPU_PINNING: False\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   SCHEDULING_CORE_TYPE: SchedulingCoreType.ANY_CORE\n[ INFO ]   MODEL_DISTRIBUTION_POLICY: set()\n[ INFO ]   ENABLE_HYPER_THREADING: False\n[ INFO ]   EXECUTION_DEVICES: ['CPU']\n[ INFO ]   CPU_DENORMALS_OPTIMIZATION: False\n[ INFO ]   LOG_LEVEL: Level.NO\n[ INFO ]   CPU_SPARSE_WEIGHTS_DECOMPRESSION_RATE: 1.0\n[ INFO ]   ENABLE_TENSOR_PARALLEL: False\n[ INFO ]   TBB_PARTITIONER: TbbPartitioner.STATIC\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 32\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   VALUE_CACHE_PRECISION: <Type: 'uint8_t'>\n[ INFO ]   KEY_CACHE_GROUP_SIZE: 0\n[ INFO ]   VALUE_CACHE_GROUP_SIZE: 0\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;isa=Intel AVX2 with Intel DL Boost, float16 and bfloat16 support\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 0.94 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['CPU']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         22.82 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        118.72 us\n[ INFO ]    Average:       131.90 us\n[ INFO ]    Min:           88.80 us\n[ INFO ]    Max:           342.90 us\n[ INFO ] Throughput:   4382.00 FPS\n"
+      },
+      "conv-GPU": {
+        "status": "ok",
+        "throughput_fps": 3639.09,
+        "median_ms": 0.14789,
+        "first_inference_ms": 0.4,
+        "rc": 0,
+        "output": "  NETWORK_NAME: onnx_Frontend_IR\n[ INFO ]   OPTIMAL_NUMBER_OF_INFER_REQUESTS: 1\n[ INFO ]   PERF_COUNT: False\n[ INFO ]   ENABLE_CPU_PINNING: False\n[ INFO ]   ENABLE_CPU_RESERVATION: False\n[ INFO ]   MODEL_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_HOST_TASK_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_QUEUE_PRIORITY: Priority.MEDIUM\n[ INFO ]   GPU_ENABLE_LARGE_ALLOCATIONS: False\n[ INFO ]   GPU_QUEUE_THROTTLE: Priority.MEDIUM\n[ INFO ]   GPU_ENABLE_LOOP_UNROLLING: True\n[ INFO ]   GPU_DISABLE_WINOGRAD_CONVOLUTION: False\n[ INFO ]   CACHE_DIR: \n[ INFO ]   CACHE_MODE: CacheMode.OPTIMIZE_SPEED\n[ INFO ]   PERFORMANCE_HINT: PerformanceMode.LATENCY\n[ INFO ]   EXECUTION_MODE_HINT: ExecutionMode.PERFORMANCE\n[ INFO ]   COMPILATION_NUM_THREADS: 14\n[ INFO ]   NUM_STREAMS: 1\n[ INFO ]   PERFORMANCE_HINT_NUM_REQUESTS: 0\n[ INFO ]   INFERENCE_PRECISION_HINT: <Type: 'float16'>\n[ INFO ]   DYNAMIC_QUANTIZATION_GROUP_SIZE: 18446744073709551615\n[ INFO ]   ACTIVATIONS_SCALE_FACTOR: -1.0\n[ INFO ]   KV_CACHE_PRECISION: <Type: 'float16'>\n[ INFO ]   OFFLOAD_RATIO: 0\n[ INFO ]   DEVICE_ID: 0\n[ INFO ]   EXECUTION_DEVICES: ['GPU.0']\n[ INFO ]   RUNTIME_REQUIREMENTS: meta=1.0;ov=2026.4.1;desc=[driver=26.40.40196.8;ip=30.0.4;eus=96]\n[Step 9/11] Creating infer requests and preparing input tensors\n[ WARNING ] No input files were given for input 'x'!. This input will be filled with random values!\n[ INFO ] Fill input 'x' with random values \n[Step 10/11] Measuring performance (Start inference synchronously, limits: 100 iterations)\n[ INFO ] Benchmarking in inference only mode (inputs filling are not included in measurement loop).\n[ INFO ] First inference took 0.40 ms\n[Step 11/11] Dumping statistics report\n[ INFO ] Execution Devices:['GPU.0']\n[ INFO ] Count:            100 iterations\n[ INFO ] Duration:         27.48 ms\n[ INFO ] Latency:\n[ INFO ]    Median:        147.89 us\n[ INFO ]    Average:       156.24 us\n[ INFO ]    Min:           89.38 us\n[ INFO ]    Max:           803.11 us\n[ INFO ] Throughput:   3639.09 FPS\n"
+      }
+    }
+  },
+  "vkmark": {
+    "status": "ok",
+    "score": 29854.0,
+    "scenes": [
+      {
+        "scene": "vertex",
+        "options": "device-local=true",
+        "fps": 35496.0
+      },
+      {
+        "scene": "vertex",
+        "options": "device-local=false",
+        "fps": 36137.0
+      },
+      {
+        "scene": "texture",
+        "options": "anisotropy=0",
+        "fps": 33401.0
+      },
+      {
+        "scene": "texture",
+        "options": "anisotropy=16",
+        "fps": 33516.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=gouraud",
+        "fps": 30199.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=blinn-phong-inf",
+        "fps": 29646.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=phong",
+        "fps": 30171.0
+      },
+      {
+        "scene": "shading",
+        "options": "shading=cel",
+        "fps": 29867.0
+      },
+      {
+        "scene": "effect2d",
+        "options": "kernel=edge",
+        "fps": 21587.0
+      },
+      {
+        "scene": "effect2d",
+        "options": "kernel=blur",
+        "fps": 14761.0
+      },
+      {
+        "scene": "desktop",
+        "options": "<default>",
+        "fps": 22655.0
+      },
+      {
+        "scene": "cube",
+        "options": "<default>",
+        "fps": 37628.0
+      },
+      {
+        "scene": "clear",
+        "options": "<default>",
+        "fps": 33042.0
+      }
+    ],
+    "profile": {
+      "samples": 28,
+      "gpu_clock_mhz_avg": 2279.2,
+      "gpu_clock_mhz_max": 2300.0,
+      "gpu_util_pct_avg": 78.1,
+      "gpu_util_pct_max": 92.0,
+      "package_energy_j": null,
+      "cpu_busy_pct": 83.0
+    },
+    "cmd": [
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin/vkmark",
+      "--winsys",
+      "headless",
+      "--winsys-dir",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/bin",
+      "--data-dir",
+      "/var/home/holzr/.cache/oxp3-fixes/gpu-bench/share/vkmark-data",
+      "-b",
+      ":duration=1"
+    ],
+    "rc": 0,
+    "seconds": 13.304,
+    "output": "=======================================================\n    vkmark 2025.01\n=======================================================\n    Vendor ID:      0x8086\n    Device ID:      0xB080\n    Device Name:    Intel(R) Arc(tm) B390 (PTL)\n    Driver Version: 109457507\n    Device UUID:    16941867e53a639db4d0092a7e676c87\n=======================================================\n[vertex] device-local=true: FPS: 35496 FrameTime: 0.028 ms\n[vertex] device-local=false: FPS: 36137 FrameTime: 0.028 ms\n[texture] anisotropy=0: FPS: 33401 FrameTime: 0.030 ms\n[texture] anisotropy=16: FPS: 33516 FrameTime: 0.030 ms\n[shading] shading=gouraud: FPS: 30199 FrameTime: 0.033 ms\n[shading] shading=blinn-phong-inf: FPS: 29646 FrameTime: 0.034 ms\n[shading] shading=phong: FPS: 30171 FrameTime: 0.033 ms\n[shading] shading=cel: FPS: 29867 FrameTime: 0.033 ms\n[effect2d] kernel=edge: FPS: 21587 FrameTime: 0.046 ms\n[effect2d] kernel=blur: FPS: 14761 FrameTime: 0.068 ms\n[desktop] <default>: FPS: 22655 FrameTime: 0.044 ms\n[cube] <default>: FPS: 37628 FrameTime: 0.027 ms\n[clear] <default>: FPS: 33042 FrameTime: 0.030 ms\n=======================================================\n                                   vkmark Score: 29854\n=======================================================\n"
+  },
+  "gaps": [
+    {
+      "area": "vulkan-compute",
+      "item": "coopmat 16x8x16 f16",
+      "status": "unadvertised",
+      "detail": "only M=8/N=16 properties are exposed (Longshot needs M=16)"
+    },
+    {
+      "area": "vulkan-compute",
+      "item": "fp32",
+      "status": "unsupported",
+      "detail": "No fp32xfp32+fp32 coopmat property! Skipped"
+    },
+    {
+      "area": "vulkan-compute",
+      "item": "fp8_e4m3",
+      "status": "unsupported",
+      "detail": "No fp8-E4M3 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+    },
+    {
+      "area": "vulkan-compute",
+      "item": "fp8_e5m2",
+      "status": "unsupported",
+      "detail": "No fp8-E5M2 coopmat support (VK_EXT_shader_float8 or property)! Skipped"
+    },
+    {
+      "area": "opencl",
+      "item": "half",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    },
+    {
+      "area": "opencl",
+      "item": "half2",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    },
+    {
+      "area": "opencl",
+      "item": "half4",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    },
+    {
+      "area": "opencl",
+      "item": "half8",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    },
+    {
+      "area": "opencl",
+      "item": "half16",
+      "status": "unsupported",
+      "detail": "No half precision support"
+    }
+  ]
+}
