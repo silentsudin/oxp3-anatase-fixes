@@ -402,3 +402,28 @@ above.  The models are deliberately tiny (latency-dominated); the important resu
 is that the OpenVINO NPU compile path now works.
 
 Artifacts: `results/gpu-bench-20261116-ai/`.
+
+### Level Zero GPU: preemption workaround gets enumeration
+
+The `command_stream_receiver.cpp` abort is `UNRECOVERABLE_IF(preemptionSurfaceSize == 0)`.
+Setting the compute-runtime debug override avoids it:
+
+```sh
+export NEOReadDebugKeys=1
+export NEO_OverrideCsrAllocationSize=4096
+```
+
+With Intel compute-runtime 26.40 + IGC 2.41:
+
+```text
+clinfo (NEO):  Intel(R) Arc(TM) B390 GPU, 96 CUs, 2300 MHz
+OpenVINO:      available_devices = ['CPU', 'GPU']
+Blender oneAPI: device initializes (after adding
+                intel-level-zero-gpu-raytracing + libtbb)
+```
+
+That is a major improvement over "device unavailable", but kernel compilation still
+fails: `clBuildProgram -6 (CL_OUT_OF_HOST_MEMORY)` for NEO OpenCL, and Blender
+aborts in `built_ins.cpp` when fetching the SIP kernel.  So the preemption size was
+one blocker; the built-ins/IGC compiler path is another.  This is now a focused,
+reproducible next fix rather than an opaque "Level Zero doesn't work".
