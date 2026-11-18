@@ -1,0 +1,99 @@
+diff --git a/drivers/gpu/drm/i915/display/intel_display_types.h b/drivers/gpu/drm/i915/display/intel_display_types.h
+index 6dfad1157..79f99f168 100644
+--- a/drivers/gpu/drm/i915/display/intel_display_types.h
++++ b/drivers/gpu/drm/i915/display/intel_display_types.h
+@@ -1879,6 +1879,7 @@ struct intel_dp {
+ 	/* connector directly attached - won't be use for modeset in mst world */
+ 	struct intel_connector *attached_connector;
+ 	bool as_sdp_supported;
++	bool as_sdp_v1_supported;
+ 	bool as_sdp_v2_supported;
+ 
+ 	struct drm_dp_tunnel *tunnel;
+diff --git a/drivers/gpu/drm/i915/display/intel_dp.c b/drivers/gpu/drm/i915/display/intel_dp.c
+index 69b3606d5..9ca7e7543 100644
+--- a/drivers/gpu/drm/i915/display/intel_dp.c
++++ b/drivers/gpu/drm/i915/display/intel_dp.c
+@@ -3103,13 +3103,11 @@ static void intel_dp_compute_vsc_colorimetry(const struct intel_crtc_state *crtc
+ static bool intel_dp_needs_as_sdp(struct intel_dp *intel_dp,
+ 				  struct intel_crtc_state *crtc_state)
+ {
+-	if (!intel_dp->as_sdp_v2_supported)
++	if (!intel_dp->as_sdp_v2_supported && !intel_dp->as_sdp_v1_supported)
+ 		return false;
+ 
+-	/*
+-	 * #TODO: Add AS SDP v1 support for PCONs (DP branch devices).
+-	 */
+-	if (drm_dp_is_branch(intel_dp->dpcd))
++	if (drm_dp_is_branch(intel_dp->dpcd) &&
++	    !intel_dp->as_sdp_v1_supported)
+ 		return false;
+ 
+ 	if (intel_psr_needs_alpm_aux_less(intel_dp, crtc_state) &&
+@@ -3136,6 +3134,17 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
+ 
+ 	crtc_state->infoframes.enable |= intel_hdmi_infoframe_enable(DP_SDP_ADAPTIVE_SYNC);
+ 
++	/*
++	 * The PCON path uses the legacy header-only AS SDP v1.  The DP 2.1
++	 * v2 payload is not parsed by a DP-to-HDMI 2.1 protocol converter.
++	 */
++	if (intel_dp->as_sdp_v1_supported && !intel_dp->as_sdp_v2_supported) {
++		as_sdp->sdp_type = DP_SDP_ADAPTIVE_SYNC;
++		as_sdp->revision = 0x1;
++		as_sdp->length = 0;
++		return;
++	}
++
+ 	as_sdp->sdp_type = DP_SDP_ADAPTIVE_SYNC;
+ 	as_sdp->length = 0x9;
+ 	as_sdp->duration_incr_ms = 0;
+@@ -6318,6 +6327,14 @@ intel_dp_detect_sdp_caps(struct intel_dp *intel_dp)
+ 		intel_dp->as_sdp_v2_supported =  true;
+ 	else
+ 		intel_dp->as_sdp_v2_supported = intel_dp_sink_supports_as_sdp_v2(intel_dp);
++
++	/*
++	 * A DP-to-HDMI 2.1 PCON forwards the legacy AS SDP v1 packet.  The
++	 * downstream HDMI sink still advertises its VRR range through the
++	 * HDMI Forum VSDB, which is parsed into display_info.monitor_range.
++	 */
++	if (drm_dp_is_branch(intel_dp->dpcd))
++		intel_dp->as_sdp_v1_supported = true;
+ }
+ 
+ static bool intel_dp_needs_dpcd_probe(struct intel_dp *intel_dp, bool force_on_external)
+diff --git a/drivers/gpu/drm/i915/display/intel_vrr.c b/drivers/gpu/drm/i915/display/intel_vrr.c
+index cfc0cfbff..87b3c8059 100644
+--- a/drivers/gpu/drm/i915/display/intel_vrr.c
++++ b/drivers/gpu/drm/i915/display/intel_vrr.c
+@@ -59,18 +59,18 @@ bool intel_vrr_is_capable(struct intel_connector *connector)
+ 			return false;
+ 		intel_dp = intel_attached_dp(connector);
+ 		/*
+-		 * Among non-MST DP branch devices, only an HDMI 2.1 sink connected
+-		 * via a PCON could support VRR. However, supporting VRR through a
+-		 * PCON requires non-trivial changes that are not implemented yet.
+-		 * Until that support exists, avoid VRR on all DP branch devices.
+-		 *
+-		 * TODO: Add support for VRR for DP->HDMI 2.1 PCON.
++		 * A non-MST DP branch device (PCON) can expose an HDMI 2.1 sink.
++		 * Such a sink needs the Adaptive-Sync SDP v1 forwarding path; only
++		 * enable VRR when the branch reports AS SDP support and the EDID is
++		 * an HDMI sink.
+ 		 */
+-		if (drm_dp_is_branch(intel_dp->dpcd))
+-			return false;
+-
+-		if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd))
++		if (drm_dp_is_branch(intel_dp->dpcd)) {
++			if (!intel_dp->as_sdp_v1_supported ||
++			    !intel_dp_has_hdmi_sink(intel_dp))
++				return false;
++		} else if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd)) {
+ 			return false;
++		}
+ 
+ 		break;
+ 	default:
