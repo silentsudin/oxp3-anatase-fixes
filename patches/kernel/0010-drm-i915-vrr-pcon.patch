@@ -1,3 +1,19 @@
+From 263e3e0ca6ed857c2188615fdaec26eaed2ef997 Mon Sep 17 00:00:00 2001
+From: oxp3-fixes <oxp3-fixes@localhost>
+Date: Wed, 18 Nov 2026 20:53:09 +0000
+Subject: [PATCH] drm/i915/vrr: allow VRR over a DP-to-HDMI 2.1 PCON
+
+A DP branch device with an HDMI sink can forward the legacy AS SDP v1
+packet.  Expose VRR capability for that case and send the header-only
+v1 packet instead of the DP 2.1 v2 payload.
+
+This is experimental and requires hardware validation.
+---
+ .../drm/i915/display/intel_display_types.h    |  1 +
+ drivers/gpu/drm/i915/display/intel_dp.c       | 27 +++++++++++++++----
+ drivers/gpu/drm/i915/display/intel_vrr.c      | 20 +++++++-------
+ 3 files changed, 33 insertions(+), 15 deletions(-)
+
 diff --git a/drivers/gpu/drm/i915/display/intel_display_types.h b/drivers/gpu/drm/i915/display/intel_display_types.h
 index 6dfad1157..79f99f168 100644
 --- a/drivers/gpu/drm/i915/display/intel_display_types.h
@@ -11,7 +27,7 @@ index 6dfad1157..79f99f168 100644
  
  	struct drm_dp_tunnel *tunnel;
 diff --git a/drivers/gpu/drm/i915/display/intel_dp.c b/drivers/gpu/drm/i915/display/intel_dp.c
-index 69b3606d5..9ca7e7543 100644
+index c842b0669..fffaeb8cc 100644
 --- a/drivers/gpu/drm/i915/display/intel_dp.c
 +++ b/drivers/gpu/drm/i915/display/intel_dp.c
 @@ -3103,13 +3103,11 @@ static void intel_dp_compute_vsc_colorimetry(const struct intel_crtc_state *crtc
@@ -49,7 +65,7 @@ index 69b3606d5..9ca7e7543 100644
  	as_sdp->sdp_type = DP_SDP_ADAPTIVE_SYNC;
  	as_sdp->length = 0x9;
  	as_sdp->duration_incr_ms = 0;
-@@ -6318,6 +6327,14 @@ intel_dp_detect_sdp_caps(struct intel_dp *intel_dp)
+@@ -6280,6 +6289,14 @@ intel_dp_detect_sdp_caps(struct intel_dp *intel_dp)
  		intel_dp->as_sdp_v2_supported =  true;
  	else
  		intel_dp->as_sdp_v2_supported = intel_dp_sink_supports_as_sdp_v2(intel_dp);
@@ -97,3 +113,6 @@ index cfc0cfbff..87b3c8059 100644
  
  		break;
  	default:
+-- 
+2.56.0
+
