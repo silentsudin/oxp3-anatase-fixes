@@ -29,8 +29,12 @@
 #                              --stock-dmc (keep Anatase's display DMC firmware)
 #                              --skip-hw (leave the hardware fixes - home button/LEDs, power units -
 #                                         from tools/oxp3-hw-install.sh alone)
+#                              --skip-flatpak-gl (Flathub apps keep Flathub's Mesa instead of the
+#                                                 org.freedesktop.Platform.GL.oxp3 extension)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
 #              OXP3_CACHE   (default ~/.cache/oxp3-fixes)
+#              OXP3_FLATPAK_GL_BRANCHES  Flatpak runtime branches to build our Mesa for
+#                                        (default 26.08; e.g. "26.08 25.08")
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -53,7 +57,7 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_HW=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_HW=0 SKIP_FLATPAK_GL=0
 [[ ${OXP3_SKIP_HW:-0} == 1 ]] && SKIP_HW=1
 cmd="${1:-}"; shift || true
 for a in "$@"; do
@@ -66,6 +70,7 @@ for a in "$@"; do
         --skip-hw) SKIP_HW=1 ;;
         --skip-extras) SKIP_EXTRAS=1 ;;
         --skip-mesa) SKIP_MESA=1 ;;
+        --skip-flatpak-gl) SKIP_FLATPAK_GL=1 ;;
         --skip-xess) SKIP_XESS=1 ;;
         *) echo "unknown option: $a" >&2; exit 2 ;;
     esac
@@ -207,12 +212,12 @@ rep('%global vulkan_drivers ', '%ifarch %{ix86}\n%undefine with_opencl\n%undefin
 rep('%meson \\\n', "%ifarch %{ix86}\nprintf \"[binaries]\\nllvm-config = '%%s'\\n\" \"$(ls /usr/lib/llvm[0-9]*/bin/llvm-config | sort -V | tail -1)\" > oxp3-llvm32.ini\n%global oxp3_native --native-file oxp3-llvm32.ini\n%endif\n%meson %{?oxp3_native} \\\n")
 open(p, 'w').write(s)
 EOF
-    # our patches after Anatase's overrides.patch
-    local n=2000 lines="" f
+    # our patches after Anatase's own (overrides.patch), in order; refuses a spec they can't go into
+    local f names=()
     for f in "$here"/patches/mesa/*.patch; do
-        cp "$f" "$top/SOURCES/"; lines+="Patch$n: $(basename "$f")\n"; n=$((n + 1))
+        cp "$f" "$top/SOURCES/"; names+=( "$(basename "$f")" )
     done
-    sed -i -E "0,/^Patch99:[[:space:]]+overrides\.patch/s//&\n${lines%\\n}/" "$spec"
+    spec_add_patches "$spec" "${names[@]}" || die "mesa: could not add patches/mesa to mesa.spec"
     ctr spectool -g -C "$top/SOURCES" "$spec" >/dev/null
     ctr_root dnf -y -q builddep "$spec" >/dev/null 2>&1 || ctr_root dnf -y builddep --skip-unavailable "$spec" | tail -3
     # the Rust crates are dynamic build requirements (%generate_buildrequires)
@@ -233,6 +238,12 @@ EOF
         { tail -30 "$top/build-i686.log"; die "mesa i686 build failed (full log: $top/build-i686.log)"; }
     rm -f "$OUT"/mesa-*.rpm
     find "$top/RPMS" -name 'mesa-*.rpm' ! -name '*debug*' ! -name '*-devel-*' -exec cp {} "$OUT/" \;
+    local fit; fit=$(mesa_rpms)
+    # shellcheck disable=SC2086
+    if ! rpms_fit_host $fit; then
+        rm -f "$OUT"/mesa-*.rpm
+        die "mesa: the built RPMs would not install on this Anatase image (see rpm's message above), so they were discarded"
+    fi
     cache_store mesa "$key"
     ls "$OUT"/mesa-*.rpm
 }
@@ -244,7 +255,16 @@ mesa_rpms() {
         f=$(ls "$OUT/$pkg-$MESA_VERSION-"*".$arch.rpm" 2>/dev/null | head -1)
         [[ -n $f ]] || die "no built $pkg.$arch - run '$0 build' first"
         echo "$f"
-    done < <(rpm -qa 'mesa-*' --qf '%{NAME} %{ARCH}\n' | grep -vE -- '-devel |-debug' | sort -u)
+    done < <(mesa_installed_pkgs)
+}
+
+# Installed subpackages of the Mesa source package. Selected by SOURCERPM, not by the "mesa-"
+# name prefix: mesa-libGLU(-devel) is a different project (GLU, its own source RPM) that this
+# build never produces, and matching it by name made `install` die on systems that have GLU.
+mesa_installed_pkgs() {
+    rpm -qa 'mesa-*' --qf '%{NAME} %{ARCH} %{SOURCERPM}\n' |
+        awk '{ src = $3; sub(/-[^-]+-[^-]+\.src\.rpm$/, "", src) } src == "mesa" { print $1, $2 }' |
+        grep -vE -- '-devel |-debug' | sort -u
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -381,6 +401,18 @@ install_extras() {
         oxp3_manifest_record /etc/modprobe.d/oxp3-bmi160.conf oxp3-fixes "${bmit%%$'\t'*}" auto \
             "IMU blacklist (bmi160_i2c)"
     fi
+    # Panther Lake HDMI KAE: without this, the first 6/8-channel stream on the
+    # DP-alt/PCON output wedges the audio pin and every later stream is silent.
+    # A module option only takes effect on the next module load, i.e. reboot.
+    local kaec=/etc/modprobe.d/99-oxp3-hdmi-kae.conf kaeimg
+    if cmp -s "$here/files/99-oxp3-hdmi-kae.conf" "$kaec"; then
+        :
+    else
+        kaeimg=$(oxp3_backup_image "$kaec" oxp3-fixes)
+        sudo install -D -m 0644 "$here/files/99-oxp3-hdmi-kae.conf" "$kaec"
+        oxp3_manifest_record "$kaec" oxp3-fixes "${kaeimg%%$'\t'*}" auto \
+            "Panther Lake HDMI KAE workaround"
+    fi
     sudo systemctl daemon-reload
     sudo systemctl enable oxp3-xpad-sleep.service oxp3-rapl-pp1.service "oxp3-audio-resume@$me.service" \
         oxp3-sleep-wakeup.service oxp3-sleep-pre.service oxp3-sleep-log.service \
@@ -399,6 +431,7 @@ install_extras() {
         sudo install -d "$EXTRA_STATE"; sudo touch "$EXTRA_STATE/thermald-disabled"
     fi
     echo "  TDP sync, speaker route check (+ resume), speaker name, xpad sleep, GPU power zone check"
+    echo "  HDMI KAE workaround (takes effect after reboot)"
     echo "  suspend: only lid/power/sleep button + the RTC alarm can wake it now (tools/sleep-power-measure.sh)"
     echo "  (the speaker name shows after WirePlumber restarts: next login, or systemctl --user restart wireplumber)"
 }
@@ -410,11 +443,16 @@ uninstall_extras() {
     sudo systemctl disable --now "${EXTRA_UNITS[@]}" "oxp3-audio-resume@$me.service" >/dev/null 2>&1 || true
     sudo systemctl --global disable oxp3-audio-route.service >/dev/null 2>&1 || true
     for u in "${EXTRA_UNITS[@]}" oxp3-audio-resume@.service; do sudo rm -f "/etc/systemd/system/$u"; done
-    local bmiconf=/etc/modprobe.d/oxp3-bmi160.conf rbt="$here/tools/oxp3-rollback.sh"
+    local bmiconf=/etc/modprobe.d/oxp3-bmi160.conf kaec=/etc/modprobe.d/99-oxp3-hdmi-kae.conf rbt="$here/tools/oxp3-rollback.sh"
     if [[ -x $rbt ]] && "$rbt" has-record "$bmiconf" 2>/dev/null; then
         sudo "$rbt" restore-file "$bmiconf" || sudo rm -f "$bmiconf"
     else
         sudo rm -f "$bmiconf"
+    fi
+    if [[ -x $rbt ]] && "$rbt" has-record "$kaec" 2>/dev/null; then
+        sudo "$rbt" restore-file "$kaec" || sudo rm -f "$kaec"
+    else
+        sudo rm -f "$kaec"
     fi
     sudo rm -f /etc/systemd/user/oxp3-audio-route.service \
         /etc/wireplumber/wireplumber.conf.d/52-oxp3-speakers.conf \
@@ -437,7 +475,7 @@ uninstall_extras() {
 # update drops both and the rocker keeps working (just unfixed) until the next install.
 HHD_PATCHES=("$here"/patches/hhd/*.patch)
 VOLUME_HWDB=/usr/lib/udev/hwdb.d/84-oxp3-volume-keys.hwdb
-# The patch list above is consumed by hhd_site/install_volume_fix/hhd_volume_unpatch in
+# The patch list above is consumed by hhd_site/install_hhd_patches/hhd_volume_unpatch in
 # tools/lib/install-common.sh.
 
 # Mesa for the Steam Flatpak. Anatase builds the org.anatase.Platform runtime from the composefs /usr
@@ -467,7 +505,7 @@ record_known_good() { # <host|runtime> <driver file>
 install_flatpak_mesa() {
     [[ -d $FLATPAK_RT/overrides ]] || { echo "  no Anatase Flatpak runtime overrides - Steam keeps Anatase's Mesa"; return 0; }
     local pkgs list
-    pkgs=$(rpm -qa 'mesa-*' | grep -v -- '-devel-')
+    pkgs=$(mesa_installed_pkgs | awk '{ print $1 "." $2 }')
     # shellcheck disable=SC2086
     list=$(rpm -ql $pkgs | grep '^/usr/' | grep -vE "$FLATPAK_MESA_SKIP" | sort -u)
     remove_flatpak_mesa
@@ -511,6 +549,13 @@ do_install() {
         say "hardware fixes: home button/LEDs + power units (sudo)"
         sudo "$here/tools/oxp3-hw-install.sh" --leds --power ||
             echo "WARNING: hardware fixes (leds/power units) failed - see above" >&2
+    fi
+
+    # Flathub apps: our Mesa as a Flatpak GL driver extension. It lives in /var/lib/flatpak and
+    # /etc (not the /usr overlay), so it survives Anatase updates and needs no reboot.
+    if (( !SKIP_MESA && !SKIP_FLATPAK_GL )); then
+        say "Mesa for Flathub apps: Flatpak GL driver extension (sudo)"
+        install_flatpak_gl
     fi
 
     # 1. kernel modules + firmware: xe loads from the initramfs, so both are layered with
@@ -587,8 +632,8 @@ do_install() {
             fi
         fi
         if (( !SKIP_EXTRAS )); then
-            say "volume rocker (sudo)"
-            install_volume_fix
+            say "hhd patches: OneXPlayer 3 power limits, volume rocker (sudo)"
+            install_hhd_patches
         fi
         if (( !SKIP_XESS )); then
             say "XeSS on XMX (xess-xmx-linux)"
@@ -618,6 +663,7 @@ do_uninstall() {
             echo "WARNING: removing the hardware units failed - see above" >&2
     fi
     uninstall_xess
+    uninstall_flatpak_gl
     if [[ -r $FLATPAK_MESA_LIST ]]; then remove_flatpak_mesa; refresh_flatpak_runtime; fi
     if [[ -e $VOLUME_HWDB ]]; then
         sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update

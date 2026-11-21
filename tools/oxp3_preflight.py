@@ -106,6 +106,7 @@ REPO_REQUIRED = (
     "files/logind-oxp3.conf",
     "files/49-oxp3-suspend.rules",
     "files/oxp3-bmi160.conf",
+    "files/99-oxp3-hdmi-kae.conf",
 )
 
 # Install artefacts per component. 0 present = not installed; all = installed;
