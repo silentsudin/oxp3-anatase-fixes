@@ -237,7 +237,7 @@ behavior — that is the root-cause fix path.
   transitions so the bit is programmed during training — tested, did not resolve the
   failure (2026-11-22 boot with kmod-oxp3 …-202611220207).
 
-# No firmware changes: the fix is on the Intel side (2026-11-22, patch 0025)
+# No firmware changes: the fix is on the Intel side (2026-11-22, patch 0201)
 
 Per hardware decision: nothing gets pushed or patched on the dock. The dock's converter
 re-times its HDMI output whenever the MSA Vtotal field changes, and Panther Lake hardware
@@ -249,7 +249,7 @@ takes the MSA Vtotal from VMAX during variable VRR with no documented way to cha
 source (our tree already carries the upstream "program TRANS_VTOTAL from mode timing"
 fix — TRANS_VTOTAL is 2250 — and the converter still saw VMAX).
 
-Patch `0025-drm-i915-bound-pcon-vrr-stretch.patch` therefore bounds the stretch itself:
+Patch `0201-drm-i915-bound-pcon-vrr-stretch.patch` therefore bounds the stretch itself:
 on a FreeSync PCON, `intel_vrr_compute_vmax()` caps VMAX at
 `vtotal + pcon_vrr_max_stretch_pct %` (module param, default **5**, runtime-tunable,
 `100` = full range). The announced MSA Vtotal then stays within 5% of the mode timing,
