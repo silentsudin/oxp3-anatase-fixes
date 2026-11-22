@@ -401,3 +401,21 @@ Also recorded: the bisection steps at 4K ran as RGB at announced 2363 (unstable 
 black / TV "invalid format"); the transient `00 10 fa .. "HDMI"` source-OUI ghost
 reappeared once after a reset (a second chip in the dock identifying itself through
 the converter's DPCD 0x300 area — noted, not a lever).
+
+# 4K60 round with 0203: RGB again, dock drop on the VRR flip (2026-11-22 18:04)
+
+The 0203 run's capture shows Gamemode at 4K announcing 2363 (stretch 5, post-install
+default) with MISC1 = 0x00 — RGB, the 420 path never reached the wire. The knob
+defaulted off and needed a post-reboot echo, and its failure reason logged only at
+debug level, so a missed echo and a failed 4:2:0 config were indistinguishable. Fixed
+in 0204: `pcon_vrr_force_420` defaults to true (nothing to set after a reboot) and
+every 4:2:0 fallback prints an `oxp3-vrr: 4:2:0 VRR config failed (<err>)` line in the
+plain journal, plus an `oxp3-vrr: VRR path using YCbCr 4:2:0` confirmation when it
+succeeds.
+
+Also captured: at 4K the VRR flip (fixed 2250 -> VRR 2363 as a fastset ~25 ms apart)
+was followed by the dock dropping off the bus ~5 s later ([Errno 6] No such device) —
+the original hard failure, independent of the stretch width, at RGB. The MISC1 byte
+of the next capture decides: 0x40 means 4:2:0 is on the wire and the DSC-free 4K
+hypothesis is being tested for real; 0x00 with an `oxp3-vrr: ... failed (<err>)`
+journal line names the exact gate that rejected 4:2:0.
