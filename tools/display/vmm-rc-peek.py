@@ -120,6 +120,14 @@ def main():
     home = os.path.expanduser(f"~{user}")
     logp = os.path.join(home, time.strftime("oxp3-vmm-rc-%Y%m%d-%H%M%S.log"))
     log = open(logp, "w")
+    try:
+        if user != "root":
+            import pwd
+            pw = pwd.getpwnam(user)
+            os.chown(logp, pw.pw_uid, pw.pw_gid)
+            os.chmod(logp, 0o644)
+    except Exception:
+        pass
 
     def out(s):
         print(s)
