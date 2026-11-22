@@ -329,3 +329,39 @@ MSA-driven and the search is for what register state Windows presents during str
 FreeSync SPD vs VTEM). A Windows-side capture of the converter's frame-header memory (the
 same registers Astra read from Linux) is the decisive comparison target now that the
 device dual-boots Windows.
+
+# The 4K failure isolated to two source-side differences (2026-11-22, patch 0202)
+
+The full-session RC capture (2026-11-22 17:20, ladder at 1080p) plus the 4K ladder
+(pct 2/1/0, all black with UI flashes) and the MSA decode give the complete picture:
+
+- VRR engages with the announced header at exactly `vtotal x cap` (1125 -> 1181 = +5%
+  live-confirmed); the converter's saved copy follows within 0.1 s.
+- `vendor_type` never leaves 0 through a whole session — the FreeSync VSIF does not
+  engage a vendor path, and DPCD 0x300 ignores writes (read-back empty after i915's
+  own init write and after a manual write). Classification-by-source is unreachable.
+- FAVT parsing = false (0x2214 bit2), so the AS SDP cannot carry timing to the
+  converter. AS-SDP v1 header-only is the only packet the converter parses.
+- MSA decode: bytes 0-1 htotal, 2-3 vtotal, 8-9 hactive, 10-11 vactive,
+  byte 19 = MISC1 (bit 6 = YCbCr 4:2:0).
+- **Desktop 4K120 (no VRR, stable): MISC1 = 0x40 -> YCbCr 4:2:0.**
+- **Gamemode 4K VRR (black at cap 2%, 1% and 0%): MISC1 = 0x00 -> RGB.**
+- 1080p Gamemode VRR (no DSC on the link): works; a game ran 73 s with the watchdog
+  re-timing as designed.
+
+So the 4K black is not the retiming width (even cap 0 with announced 2251 blacks) —
+it is the format/packet combination on the DSC link. The desktop proves 420+DSC
+without VRR is stable on this converter. Patch 0202 adds two runtime knobs to
+bisect it:
+
+    xe.pcon_vrr_force_420     # prefer YCbCr 4:2:0 first in the VRR path (desktop parity)
+    xe.pcon_vrr_no_msa_ignore # skip DP_MSA_TIMING_PAR_IGNORE_EN (whose ignore-MSA
+                              # semantics can desync the converter's DSC decoder)
+
+Test ladder at 4K (each = set param, leave and re-enter Gamemode):
+1. `pcon_vrr_force_420=1` — 4:2:0 like the desktop;
+2. `pcon_vrr_no_msa_ignore=1` — VRR signaling without the MSA-ignore bit;
+3. both together.
+`xe.pcon_vrr=0` remains the full off switch. Run the RC peek detached alongside;
+its per-transition dumps now also record the converter HDMI link mode (0x3036,
+changed 0x3f -> 0x3e across the modeset) and the source OUI state after each reset.
