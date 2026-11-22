@@ -135,15 +135,30 @@ def main():
     last = {}
     t0 = time.monotonic()
     samples = 0
+    warned = False
     try:
         while time.monotonic() - t0 < secs:
             t = time.monotonic() - t0
-            for label, addr, n in WATCH:
-                v = aux.mem(addr, n).hex(" ")
-                if last.get(label) != v:
-                    out(f"{t:7.2f}s {label:13s} {v}")
-                    last[label] = v
-            samples += 1
+            try:
+                for label, addr, n in WATCH:
+                    v = aux.mem(addr, n).hex(" ")
+                    if last.get(label) != v:
+                        out(f"{t:7.2f}s {label:13s} {v}")
+                        last[label] = v
+                samples += 1
+                warned = False
+            except Exception as e:
+                # AUX/RC failures are normal while the source re-trains (e.g. the
+                # Gamemode modeset): wait and bring RC back up, keep sampling.
+                if not warned:
+                    out(f"{t:7.2f}s aux/RC unavailable ({e}); waiting for the link")
+                    warned = True
+                try:
+                    time.sleep(0.5)
+                    aux.enable_rc()
+                    out(f"{t:7.2f}s RC re-enabled, resuming")
+                except Exception:
+                    pass
     finally:
         try:
             dump_dpcd(aux, log, out)
