@@ -99,6 +99,8 @@ def dump_dpcd(aux, log, out):
     oui = aux.rd(0x300, 3)
     out(f"  source OUI as seen by the converter: {oui.hex(':')}"
         f" (Intel=00:aa:01, AMD=00:00:1a, none/empty means never written)")
+    hdmi_mode = aux.rd(0x3036, 2)
+    out(f"  converter HDMI link mode/status (0x3036-0x3037): {hdmi_mode.hex(' ')}")
     ascap = aux.rd(0x2214, 1)
     bit0, bit2 = ascap[0] & 1, ascap[0] & 4
     out(f"dpcd 0x2214 DPRX_FEATURE_ENUMERATION_LIST_CONT_1 = {ascap[0]:#04x}:"
@@ -165,6 +167,7 @@ def main():
                     time.sleep(0.5)
                     aux.enable_rc()
                     out(f"{t:7.2f}s RC re-enabled, resuming")
+                    dump_dpcd(aux, log, out)
                 except Exception:
                     pass
     finally:
