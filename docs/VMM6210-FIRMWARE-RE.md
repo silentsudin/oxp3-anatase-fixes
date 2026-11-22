@@ -112,11 +112,71 @@ parse state machine that distinguishes MSA from VSC, inter-core MSGQ notificatio
   menus; `.fullrom`/`.eeprom` file selection; flashing via USB HID
   (`AtUsbHid.dll`, `vmmUsb.dll`).
 
+## String references resolved — the `override adaptive sync` mechanism
+
+The reference analyzer produced no string xrefs because the image is position-independent:
+strings are addressed `lui reg, 0x8005x; addi reg, reg, lo12` with the firmware mapped XIP
+at **`0x80020000`** (base derived from the code-pointer table at bank `0x310e8+`, whose
+entries are `0x8002_314C`-style absolute addresses). A static walk over `auipc`/`addi`
+pairs found nothing; walking `lui+addi` pairs with the `0x80020000` base found them.
+
+**Referencing sites found (bank-relative):**
+
+| String | Reference site |
+|---|---|
+| `Invalid MSA found on RFRM%d` (`0x31440`) | `lui@0x0e93e addi@0x0e946` |
+| `RX_PARSE_MSA state: No VSC received.` (`0x31494`) | `lui@0x0e9ee addi@0x0e9f2` |
+| `timeout,force send MSGQ_RX_FRM_PARSE_MSA` (`0x314bc`) | `lui@0x0ea0c addi@0x0ea10` |
+| `RX_PARSE_MSA state: Using MSA, not VSC.` (`0x314e8`) | `lui@0x0ea16 addi@0x0ea1a` |
+| `override adaptive sync: %02x` (`0x342a0`) | `lui@0x1c01a addi@0x1c01e` (`lui a1,0x80054; addi a1,a1,0x2a0`) |
+
+The `0x324bc`, `0x34360`, `0x34a08`, `0x34a24`, `0x36f6c` strings were not resolved this
+way yet (separated pair, other base, or still unresolved) — the VTEMP path remains to be
+traced.
+
+**`FUN_ram_0001bd9a` (`0x1bd9a`, the DPCD AUX read handler)** — decompiled, this is a
+chunked 16-byte AUX read with retries. Relevant branch: when the requested DPCD address
+is `0x0007` (**DP_DOWNSTREAM_PORT_COUNT**) or `0x2207`, and MMIO config register
+**`0x90000257` bit 6 (`0x40`) is clear**, the handler:
+
+```c
+FUN_ram_000057aa(1, 0x800542a0, *pbVar6);  // "override adaptive sync: %02x", value
+*pbVar6 = *pbVar6 & 0xbf;                  // clear bit 6 = DP_IGNORE_MSA_TIMING_PARAM
+```
+
+i.e. the firmware **masks the MSA-timing-ignore capability bit out of DPCD 0x0007 reads**
+under config control — the exact bit i915's `drm_dp_sink_can_do_video_without_timing_msa()`
+and amdgpu's `allow_invalid_MSA_timing_param` depend on. The gate check is at bank
+`0x1c006–0x1c012` (`lui a5,0x90000; lbu a5,0x257(a5); andi a5,a5,0x40`).
+
+**`0x90000257` config bitfield (observed):**
+
+- bit 6 `0x40` — gate for the `override adaptive sync` masking of DPCD 0x0007/0x2207 reads
+  (clear ⇒ bit masked out of returned data).
+- bit 5 `0x20` — set by both known writers: bank `0x3886` (`lbu 0x257,s10; ori a5,a5,0x20;
+  sb`, gated by config byte `0x9000029e` bit 1) and bank `0x10e4e` (same `ori 0x20` pattern,
+  with `0x90000246 |= 0x3` immediately before). **No writer of bit 6 was found in this
+  image** — with the UGREEN build's config byte `0x257 = 0x00` (flash bank offset `0x257`),
+  the masking path is active by default unless something sets it at runtime.
+- bit 3 `0x8` — gates a second override in the same handler: for one more address, with
+  `0x90000023 >= 0x10` or bit 3 set, the byte is passed through; otherwise it is zeroed
+  with log `Clear the SST monitor DSC or FEC cap: %02x` (string `0x34270`).
+- bit 7 — read as a **signed** byte at bank `0x2448a` (`lb a5,0x257(a5); blt …`): negative
+  ⇒ different path.
+
+**Practical meaning for the OXP3 failure:** the bridge's own firmware can hide the
+MSA-ignore capability from the host, and its AS/MSA behavior is config-gated per bit. The
+earlier AUX capture that read `0x007 = 0xc2` (bit 6 set) means the mask was *not* applied in
+that state — so the gate state at any given moment depends on runtime conditions still to
+be traced. What sets bit 6 (or prevents it being cleared) is the next question; if it is a
+vendor config byte, JSAUX's config may differ from UGREEN's here.
+
 ## Open questions
 
-1. What sets the `override adaptive sync` byte, and what do its values mean? If it is a
-   config-table entry or a DPCD-writable vendor register, the OXP3 VRR failure may be
-   fixable at runtime — no reflash, no kernel change.
+1. What sets or clears `0x90000257` bit 6 at runtime (no static writer of bit 6 was found;
+   boot loader or DPCD-side path?), and which flash config byte feeds the bitfield at
+   init. If it is a vendor config byte, the OXP3 VRR failure may be fixable by config —
+   no reflash of code, no kernel change.
 2. How the RX_PARSE_MSA state machine reacts to i915's variable-timing stream, and what
    makes it drop the picture (black vs duplicated image vs full dock reset).
 3. Per-vendor config differences (UGREEN vs JSAUX): diff a second vendor's fullrom config
@@ -126,13 +186,14 @@ parse state machine that distinguishes MSA from VSC, inter-core MSGQ notificatio
 
 ## Next steps
 
-1. Find the function referencing `0x342a0` ("override adaptive sync"). Code is
-   PC-relative: 718 `auipc` instructions, **zero** absolute `lui` references to strings,
-   and the RISCV Constant Reference Analyzer produced no string references. Route: walk
-   `auipc+addi` arithmetic (target = `P + (imm20<<12) + sext(addi)`), or decompile
-   candidates and let the decompiler fold the pairs.
-2. Decompile the VTEMP configuration path around `0x34a24` and the `RX_PARSE_MSA` MSGQ
-   state machine.
+1. Trace what initializes `0x90000257` (the `0x2448a` signed read sits in a likely
+   boot/config path; also check callers of `FUN_ram_0001bd9a` and the `0x10e42`
+   `0x90000246 |= 0x3` path), and locate the flash config byte that feeds it.
+2. Resolve the remaining strings (`0x34a24` "Configuring VTEMP", `0x324bc`, `0x34360`,
+   `0x34a08`, `0x36f6c`) — the pair may be separated by more than 3 instructions or use a
+   different base register; widen the walk or decompile the RX/TX VTEMP functions found
+   via the `0x0e93e–0x0ea1a` cluster (the RX_PARSE_MSA state machine lives in that
+   function region).
 3. Download Unisynk 6.05.130 (and/or i-tec) fullrom; diff config tables to isolate
    per-vendor bytes.
 4. Ask JSAUX support for the HB1201B (HB1201BWSXS01) firmware package; a newer VMM6210
