@@ -365,3 +365,39 @@ Test ladder at 4K (each = set param, leave and re-enter Gamemode):
 `xe.pcon_vrr=0` remains the full off switch. Run the RC peek detached alongside;
 its per-transition dumps now also record the converter HDMI link mode (0x3036,
 changed 0x3f -> 0x3e across the modeset) and the source OUI state after each reset.
+
+# force_420 was a silent no-op; patch 0203 makes it real (2026-11-22)
+
+The bisection round's capture shows why the 420-first knob changed nothing: all three
+steps ran at stretch 5 (announced 2363) with MISC1 = 0x00 (RGB) — the 420 attempt
+never reached the wire. Two reasons stacked: 4:2:0 at 10 bpc needs ~15 Gbps (fails the
+2-lane HBR3 budget), and `intel_dp_sink_format_valid()` rejects 4:2:0 for any mode the
+TV's EDID does not declare as 4:2:0 — and Gamemode's generated modes are never
+EDID-declared 4:2:0, unlike the desktop's VIC-97 4K120 mode.
+
+Key bandwidth facts for this link (2 lanes HBR3, ~12.96 Gbps effective):
+
+- 4K120, any format, any bpc: needs DSC (4:2:0@8bpc alone is 14.26 Gbps per the
+  upstream comment) — there is no DSC-free 4K120.
+- 4K60 4:2:0 @ 10 bpc: ~8.9 Gbps — **fits without DSC, HDR included**. This is the
+  exact analog of the working 1080p120-RGB state, at 4K.
+
+Patch 0203 makes `xe.pcon_vrr_force_420` skip the EDID 4:2:0 checks so the VRR path
+actually runs 4:2:0. The decisive test is 4K60 with the knob on:
+
+    echo 1 | sudo tee /sys/module/xe/parameters/pcon_vrr_force_420
+    # modes.cfg: 3840x2160@60, leave and re-enter Gamemode
+
+Outcomes:
+- 4K60 4:2:0 VRR stable -> the converter's VRR machinery works on Intel whenever DSC
+  is out of the picture. 4K60 VRR+HDR becomes the working 4K option, and 4K120 VRR is
+  then provably blocked by DSC+VRR on this converter — the precise, evidenced Intel
+  bug-report claim (Windows does 4K120 VRR+DSC through the same silicon, so the
+  difference is in the DSC+VRR source presentation, not the hardware).
+- 4K60 4:2:0 VRR still broken -> the failure tracks the VRR signaling itself at 4K,
+  independent of DSC and format; the capture from that run is the report's core.
+
+Also recorded: the bisection steps at 4K ran as RGB at announced 2363 (unstable /
+black / TV "invalid format"); the transient `00 10 fa .. "HDMI"` source-OUI ghost
+reappeared once after a reset (a second chip in the dock identifying itself through
+the converter's DPCD 0x300 area — noted, not a lever).
