@@ -1,0 +1,134 @@
+From 792fda22491831790d9c9b75d27d41ea2dab12d7 Mon Sep 17 00:00:00 2001
+From: Codex <codex@localhost>
+Date: Sun, 22 Nov 2026 01:25:35 +0000
+Subject: [PATCH] drm/i915/dp: restore PCON MSA-ignore before enabling variable
+ timing
+
+On the OXP3 with the Synaptics bridge and LG SSCR2, a direct KMS
+session read DP_DOWNSPREAD_CTRL as zero repeatedly with VRR_ENABLED=1.
+An earlier training trace wrote 0x80. The training-time write does
+not guarantee that the downstream receiver retains the bit when the
+CRTC switches to variable timing without retraining.
+
+Check the actual DPCD register on VRR enable, after CRTC enable and
+before the timing-generator update. Preserve the other control bits,
+write only if needed, and verify the readback. Limit this to the
+dual-protocol Synaptics path. This corrects the observed mismatch;
+whether it accounts for the lost HDMI picture remains unverified.
+---
+ drivers/gpu/drm/i915/display/intel_display.c |  9 ++++
+ drivers/gpu/drm/i915/display/intel_dp.c      | 55 +++++++++++++++++---
+ drivers/gpu/drm/i915/display/intel_dp.h      |  1 +
+ 3 files changed, 58 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/display/intel_display.c b/drivers/gpu/drm/i915/display/intel_display.c
+index 9dfd095f3..c627c0d3d 100644
+--- a/drivers/gpu/drm/i915/display/intel_display.c
++++ b/drivers/gpu/drm/i915/display/intel_display.c
+@@ -7501,6 +7501,15 @@ static void intel_atomic_commit_tail(struct intel_atomic_state *state)
+ 	struct ref_tracker *wakeref = NULL;
+ 	int power_async_delay;
+ 
++	/* The PCON must accept stretched timing before a fastset can start it.
++	 * Do the sink AUX transaction here, while display power and commit lock
++	 * are held, before DSB preparation and the frame update.
++	 */
++	for_each_new_intel_crtc_in_state(state, crtc, new_crtc_state) {
++		if (intel_crtc_vrr_enabling(state, crtc))
++			intel_dp_prepare_pcon_vrr(new_crtc_state);
++	}
++
+ 	for_each_new_intel_crtc_in_state(state, crtc, new_crtc_state)
+ 		intel_atomic_dsb_prepare(state, crtc);
+ 
+diff --git a/drivers/gpu/drm/i915/display/intel_dp.c b/drivers/gpu/drm/i915/display/intel_dp.c
+index b88023719..472f9ba73 100644
+--- a/drivers/gpu/drm/i915/display/intel_dp.c
++++ b/drivers/gpu/drm/i915/display/intel_dp.c
+@@ -3158,6 +3158,48 @@ static bool intel_dp_pcon_prefers_hdmi_vrr(const struct intel_dp *intel_dp)
+ 		hf->vrr_max == info->monitor_range.max_vfreq;
+ }
+ 
++/*
++ * A PCON can lose MSA-ignore after training. A fixed-to-variable fastset
++ * reuses the link, so repair the sink before the transcoder stretches a
++ * frame. Do AUX I/O during commit preparation, outside vblank evasion.
++ */
++void intel_dp_prepare_pcon_vrr(const struct intel_crtc_state *crtc_state)
++{
++	struct intel_display *display = to_intel_display(crtc_state);
++	struct intel_encoder *encoder;
++
++	if (crtc_state->output_types != BIT(INTEL_OUTPUT_DP))
++		return;
++
++	for_each_intel_encoder_mask(display->drm, encoder, crtc_state->uapi.encoder_mask) {
++		struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
++		u8 ctrl;
++		ssize_t ret;
++
++		if (!intel_dp->pcon_freesync_ver || !intel_dp_pcon_prefers_hdmi_vrr(intel_dp))
++			continue;
++
++		for (int attempt = 0; attempt < 3; attempt++) {
++			ret = drm_dp_dpcd_readb(&intel_dp->aux, DP_DOWNSPREAD_CTRL, &ctrl);
++			if (ret != 1)
++				goto next;
++			if (ctrl & DP_MSA_TIMING_PAR_IGNORE_EN) {
++				drm_dbg_kms(display->drm, "PCON MSA-ignore on VRR enable: 0x%02x\n", ctrl);
++				break;
++			}
++			ret = drm_dp_dpcd_writeb(&intel_dp->aux, DP_DOWNSPREAD_CTRL,
++						 ctrl | DP_MSA_TIMING_PAR_IGNORE_EN);
++next:
++			if (attempt < 2)
++				usleep_range(1000, 2000);
++		}
++		if (ret != 1 || !(ctrl & DP_MSA_TIMING_PAR_IGNORE_EN)) {
++			dev_warn_ratelimited(display->drm->dev, "PCON MSA-ignore unavailable on VRR enable (AUX %zd)\n", ret);
++		} else
++			drm_dbg_kms(display->drm, "PCON MSA-ignore restored on VRR enable\n");
++	}
++}
++
+ static bool intel_dp_needs_as_sdp(struct intel_dp *intel_dp,
+ 				  struct intel_crtc_state *crtc_state)
+ {
+@@ -7735,16 +7777,15 @@ int intel_dp_sdp_min_guardband(const struct intel_crtc_state *crtc_state,
+ 				    intel_dp_get_lines_for_sdp(crtc_state, DP_SDP_PPS));
+ 
+ 	/*
+-	 * Reserve room for the PCON's Adaptive-Sync SDP in fixed refresh too.
+-	 * The FreeSync SPD is present in both states on an opted-in PCON.
+-	 * On PTL the guardband must match across a fastset. Only count the
+-	 * actual packets when validating the SDP transmission window.
++	 * Reserve the AS SDP space on a VRR-capable PCON even in fixed mode.
++	 * The source can send it at GMP timing first, irrespective of whether
++	 * the downstream protocol is FreeSync SPD or HDMI Forum VRR. Keep
++	 * guardbands stable across the activation fastset; don't account for
++	 * a packet in late validation unless the source really planned to send it.
+ 	 */
+ 	if ((crtc_state->infoframes.enable &
+ 	     intel_hdmi_infoframe_enable(DP_SDP_ADAPTIVE_SYNC)) ||
+-	    (assume_all_enabled && crtc_state->vrr.in_range &&
+-	     (crtc_state->infoframes.enable &
+-	      intel_hdmi_infoframe_enable(HDMI_INFOFRAME_TYPE_SPD))))
++	    (assume_all_enabled && crtc_state->vrr.in_range))
+ 		sdp_guardband = max(sdp_guardband,
+ 				    intel_dp_get_lines_for_sdp(crtc_state, DP_SDP_ADAPTIVE_SYNC));
+ 
+diff --git a/drivers/gpu/drm/i915/display/intel_dp.h b/drivers/gpu/drm/i915/display/intel_dp.h
+index 04fae203b..7dc2c9cc4 100644
+--- a/drivers/gpu/drm/i915/display/intel_dp.h
++++ b/drivers/gpu/drm/i915/display/intel_dp.h
+@@ -61,6 +61,7 @@ int intel_dp_get_active_pipes(struct intel_dp *intel_dp,
+ 			      struct drm_modeset_acquire_ctx *ctx,
+ 			      u8 *pipe_mask);
+ void intel_dp_flush_connector_commits(struct intel_connector *connector);
++void intel_dp_prepare_pcon_vrr(const struct intel_crtc_state *crtc_state);
+ void intel_dp_set_power(struct intel_dp *intel_dp, u8 mode);
+ void intel_dp_configure_protocol_converter(struct intel_dp *intel_dp,
+ 					   const struct intel_crtc_state *crtc_state);
+-- 
+2.56.0
+

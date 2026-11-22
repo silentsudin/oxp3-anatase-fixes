@@ -17,7 +17,8 @@ dropin=/etc/systemd/user/anatase-gamemode.service.d/90-oxp3-hdr.conf
 state=/var/lib/oxp3-fixes
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 log() { printf 'gamemode-hdr: %s\n' "$*"; }
-has_flags() { grep -q -- '--hdr-enabled' "$target" 2>/dev/null; }
+has_flags() { grep -q -- '--hdr-enabled' "$target" 2>/dev/null &&
+    grep -q -- '--adaptive-sync' "$target" 2>/dev/null; }
 case ${1:-status} in
     -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
@@ -37,6 +38,17 @@ case ${1:-status} in
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 text = open(src, encoding="utf-8").read()
+text = text.replace("--hdr-pq-internal-enable", "--adaptive-sync")
+if "--adaptive-sync" not in text:
+    out, inserted = [], False
+    for line in text.splitlines():
+        out.append(line)
+        if not inserted and "--backend drm" in line:
+            out.append("    --adaptive-sync")
+            inserted = True
+    if not inserted:
+        sys.exit("no DRM backend argument found")
+    text = "\n".join(out) + "\n"
 if "--hdr-enabled" not in text:
     out, inserted = [], False
     for line in text.splitlines():
@@ -44,7 +56,6 @@ if "--hdr-enabled" not in text:
         if not inserted and "-O" in line and "eDP-1" in line and line.lstrip().startswith("-O"):
             indent = line[: len(line) - len(line.lstrip())]
             out += [indent + "--hdr-enabled",
-                    indent + "--hdr-pq-internal-enable",
                     indent + "--hdr-sdr-content-nits 200"]
             inserted = True
     if not inserted:
