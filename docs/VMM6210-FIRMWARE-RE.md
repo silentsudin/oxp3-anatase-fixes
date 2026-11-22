@@ -262,3 +262,51 @@ Tune without rebuilding:
 (take effect on the next VRR enable — leave and re-enter Gamemode). Start at 5; widen
 (10, 20, 40…) while the picture stays clean to find the converter's tolerance; if any
 stretch breaks it, 1 gives the minimum non-zero band.
+
+# Bounded stretch result: any announced-vs-actual mismatch drifts (2026-11-22)
+
+Test matrix on the real dock, all with VRR+HDR enabled, no firmware changes:
+
+| Stretch cap | Announced MSA Vtotal | Actual frames | Result |
+|---|---|---|---|
+| off (fixed) | 2250 | 2250 | perfect |
+| 100% (none) | 6750 | 2250–6750 | duplicated rows / black |
+| 5% | 2362 | 2250–2362 | glitched |
+| 2% | 2295 | 2250–2295 | **vertical shake (drift), no duplication** |
+
+The 2% result is the decisive one. The converter emits output frames of the *announced*
+length and takes content from input frames as they arrive; when an input frame is shorter
+than the announced length, the next input frame's first lines are consumed to fill the
+tail, so the active content's position drifts within the output window every frame —
+that is the up/down shake. A mismatch of 3x multiplies rows; a mismatch of 45 lines
+drifts them. **Any** announced-vs-actual mismatch glitches; only announced == actual for
+every frame is clean.
+
+Intel PTL hardware announces **VMAX** (the stretch ceiling) as the MSA Vtotal during
+variable VRR (capture: 6750 while the driver programmed 2250; our tree already carries
+upstream's "program TRANS_VTOTAL from mode timing" fix, and the converter still saw
+VMAX). The actual frame length varies between vmin and vmax. Therefore announced == actual
+for every frame is only possible with vmax == vmin — i.e. no band, no variable refresh.
+amdgpu's advantage is that it announces the fixed stream vtotal (constant 2250) while
+frames stretch above it: the converter waits for each input frame and delivers it as one
+output frame at a variable interval — the TV sees 2250-line frames at 40–120 Hz, which is
+exactly VRR. Intel hardware cannot produce that combination: the announced value is the
+same register as the stretch ceiling (VMAX).
+
+Consequence: no stretch width can fix this from the kernel side while PTL announces VMAX.
+The parameter stays (`pcon_vrr_max_stretch_pct`) as the experiment carrier, but the two
+remaining paths are:
+
+1. **The decisive AMD-side capture**: run the same converter memory read on the Legion Go 2
+   (same dock, same TV) while AMD VRR is active in a game. If AMD's announced MSA Vtotal is
+   a constant 2250 during stretch, the Intel behavior is the sole difference and the
+   conclusion is final; if AMD also announces 6750 and still works, the converter's behavior
+   differs by signaling (FreeSync VSIF vs AS SDP handling) and AMD's exact packet set can be
+   replicated. Either answer ends the search.
+2. **The Intel bug report** (drafted from this doc): PTL hardware puts the VMAX register
+   value into the MSA Vtotal field during variable VRR, breaking DP-to-HDMI converters that
+   trust MSA per-frame timing, contrary to the DP adaptive-sync model where the sink uses
+   the AS SDP and ignores per-frame MSA when MSA_TIMING_PAR_IGNORE is set. Upstream
+   references: "hardware takes the MSA Vtotal from the VMAX register"
+   (mail-archive.com/intel-gfx msg354316) and "DP transcoder uses TRANS_VTOTAL to derive MSA
+   VTotal" (ratatoskr.run/intel-xe 2026/06/17144946).
