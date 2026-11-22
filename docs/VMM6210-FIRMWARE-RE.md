@@ -199,7 +199,34 @@ vendor config byte, JSAUX's config may differ from UGREEN's here.
 4. Ask JSAUX support for the HB1201B (HB1201BWSXS01) firmware package; a newer VMM6210
    build is the direct fix candidate if the code turns out to be the bug.
 
-## Prior kernel-route conclusions (kept for context)
+## Read-only firmware dump of the dock (in progress, 2026-11-22)
+
+The dock's own firmware can be read out — no flashing, no writes to flash. The channel is
+the same one the vendor updaters use, reverse-engineered from fwupd's `synaptics-vmm9`
+plugin (protocol `com.synaptics.mst-hid`, the RC command set: `ENABLE_RC` with the `PRIUS`
+token, `GET_ID`, `MEMORY_READ`, `READ_FLASH_DATA`; commands are 62-byte HID reports:
+`id=01, type=00, size, {cap, state, ctrl|0x80, sts, offset u32le, length u32le, fifo[32]}`,
+`checksum = 0x100 - sum8`). Only mode switches and reads are issued — no erase/write.
+
+- The dock's MCU is a WCH QinHeng **`1a86:fe00`** (bus 3, dev 4) with three HID
+  interfaces: `hidraw3`/`hidraw4` (root-only 0600 — the update interfaces, descriptors
+  unreadable without root) and `hidraw5` (0666, vendor-page FF00 with 64-byte
+  Input/Output reports — the RGB/OpenRGB interface; its descriptor has no feature
+  reports and it does not answer the RC handshake, confirmed by probe).
+- Script: `/var/home/holzr/git/linux_scratch/vmm6210-fw/vmm6210_hid_dump.py` —
+  auto-detects the interface, verifies `flash@0x4000` starts with the firmware version
+  header `06 05` before dumping, reads 1 MiB in 32-byte RC chunks, writes
+  `dock_flashdump_<pid>.bin` + `.sha256`. Run once as root:
+  `sudo python3 /var/home/holzr/git/linux_scratch/vmm6210-fw/vmm6210_hid_dump.py run`
+- Sanity anchor for the dump: the UGREEN fullrom has the same layout (EDID at 0x0, bank A
+  at 0x4000 starting `06 05`, identical bank B at 0x54000). The JSAUX dump is compared
+  against it for the adaptive-sync config bytes (`0x90000257`-region init) and the
+  re-timing/watchdog logic identified in the MSA trace.
+
+Once the dump lands: locate JSAUX's customer/board config (GET_ID `cid`/`bid` vs
+UGREEN's), diff the config table at bank `0x4000`, and check whether a newer
+`6.05.x` build exists (Unisynk 6.05.130) that changes the vertical-total re-timing
+behavior — that is the root-cause fix path.
 
 - Fixed-refresh 4K120 DSC through this PCON is stable on i915/xe; every variable-timing
   signaling attempt (AS SDP v1/v2/AVT, FreeSync SPD, HDMI-Forum translation) broke the
