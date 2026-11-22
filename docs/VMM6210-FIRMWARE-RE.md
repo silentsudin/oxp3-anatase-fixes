@@ -310,3 +310,22 @@ remaining paths are:
    references: "hardware takes the MSA Vtotal from the VMAX register"
    (mail-archive.com/intel-gfx msg354316) and "DP transcoder uses TRANS_VTOTAL to derive MSA
    VTotal" (ratatoskr.run/intel-xe 2026/06/17144946).
+
+# Windows works on this device — the wall is driver behavior, not hardware (2026-11-22)
+
+The user confirms VRR works on this same OXP3 + dock + TV under Windows. That invalidates
+any "Intel hardware cannot" framing: the Intel Windows driver presents the converter a
+configuration our stack does not. Current runtime-tunable candidates, no rebuild needed:
+
+1. `xe.pcon_vrr_max_stretch_pct=0` — announced 2251, frames pace at 2251: announced ==
+   actual whenever content is below ~120 fps. Isolates whether constant-MSA + VRR
+   signaling is stable. (Already testable with the installed 0201 kmod.)
+2. `xe.pcon_as_sdp=1` — v1 AS SDP with AVT payload (the packet carrying the VRR range to
+   the converter; a PCON translates AS SDP into HDMI VTEM per VESA).
+
+Either outcome discriminates the next move: if (1) is stable, the converter is purely
+MSA-driven and the search is for what register state Windows presents during stretch; if
+(1) still glitches, the signaling packets themselves are a lever (isolate AS SDP vs
+FreeSync SPD vs VTEM). A Windows-side capture of the converter's frame-header memory (the
+same registers Astra read from Linux) is the decisive comparison target now that the
+device dual-boots Windows.
