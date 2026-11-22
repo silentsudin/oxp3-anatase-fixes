@@ -1,0 +1,73 @@
+From 151f865beced540d68fd6b561e3cfc090ecb4396 Mon Sep 17 00:00:00 2001
+From: oxp3-fixes <oxp3-fixes@localhost>
+Date: Sun, 22 Nov 2026 02:05:21 +0000
+Subject: [PATCH] drm/i915/vrr: force a modeset for VRR transitions on FreeSync
+ PCONs
+
+vrr.enable is not compared in the fastset pass, so gamemode's
+fixed->variable switch runs with the DP stream up. The Synaptics
+VMM7100 only latches DP_DOWNSPREAD_CTRL MSA-timing-ignore during link
+training with the stream down (verified by readback over repeated
+attempts at commit time), so the stretched first frames break the link.
+
+Force a full modeset when VRR enables or disables on a FreeSync PCON.
+The retrain then runs with vrr.in_range and the training write leaves
+the bit set, the same window amdgpu uses in its stream-enable path.
+---
+ drivers/gpu/drm/i915/display/intel_display.c | 33 ++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/drivers/gpu/drm/i915/display/intel_display.c b/drivers/gpu/drm/i915/display/intel_display.c
+index 9dfd095f3..e6b072ea6 100644
+--- a/drivers/gpu/drm/i915/display/intel_display.c
++++ b/drivers/gpu/drm/i915/display/intel_display.c
+@@ -5867,6 +5867,30 @@ static bool lrr_params_changed(const struct intel_crtc_state *old_crtc_state,
+ 		old_crtc_state->set_context_latency != new_crtc_state->set_context_latency;
+ }
+ 
++/*
++ * oxp3: a FreeSync PCON latches the DPCD MSA-timing-ignore bit only during
++ * link training, with the stream down. vrr.enable is not part of the fastset
++ * comparison, so a fixed->variable fastset keeps the stream up and the bridge
++ * refuses the bit; the first stretched frames then break the link. Force a
++ * full modeset on VRR transitions for a FreeSync PCON so the retrain runs
++ * with vrr.in_range and intel_dp_update_downspread_ctrl() programs the bit
++ * in the training window, the way amdgpu drives these bridges.
++ */
++static bool intel_crtc_pcon_freesync_vrr(const struct intel_crtc_state *crtc_state)
++{
++	struct intel_display *display = to_intel_display(crtc_state);
++	struct intel_encoder *encoder;
++
++	for_each_intel_encoder_mask(display->drm, encoder,
++				    crtc_state->uapi.encoder_mask) {
++		if (encoder->type == INTEL_OUTPUT_DP &&
++		    enc_to_intel_dp(encoder)->pcon_freesync_ver)
++			return true;
++	}
++
++	return false;
++}
++
+ static void intel_crtc_check_fastset(const struct intel_crtc_state *old_crtc_state,
+ 				     struct intel_crtc_state *new_crtc_state)
+ {
+@@ -5886,6 +5910,15 @@ static void intel_crtc_check_fastset(const struct intel_crtc_state *old_crtc_sta
+ 		new_crtc_state->uapi.mode_changed = false;
+ 	}
+ 
++	/* oxp3: see intel_crtc_pcon_freesync_vrr() above. */
++	if (old_crtc_state->vrr.enable != new_crtc_state->vrr.enable &&
++	    intel_crtc_pcon_freesync_vrr(new_crtc_state)) {
++		new_crtc_state->uapi.mode_changed = true;
++		drm_info(display->drm,
++			 "[CRTC:%d:%s] oxp3-vrr: VRR transition on a FreeSync PCON forces a full modeset\n",
++			 crtc->base.base.id, crtc->base.name);
++	}
++
+ 	if (intel_compare_link_m_n(&old_crtc_state->dp_m_n,
+ 				   &new_crtc_state->dp_m_n))
+ 		new_crtc_state->update_m_n = false;
+-- 
+2.56.0
+
