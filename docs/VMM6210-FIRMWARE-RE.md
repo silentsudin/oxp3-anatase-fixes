@@ -1,13 +1,13 @@
 # VMM6210 (Cayenne) firmware reverse engineering log
 
 Working log for the firmware-RE route on the dock's DP-to-HDMI converter. Companion to
-[HDMI-VRR-PCON.md](HDMI-VRR-PCON.md); that file still says "VMM7100" in several places —
-the chip identification below supersedes it.
+[HDMI-VRR-PCON.md](HDMI-VRR-PCON.md), which describes the current driver state.
 
-Status: firmware obtained, image mapped, loaded in Ghidra, decompiler verified. The
-`override adaptive sync` logic and the VTEMP configuration path are the active targets.
-Nothing has been flashed to the dock and no kernel or display configuration has been
-changed for this route.
+Status (2026-11-22): this is a dated log. The patches it mentions after the root-cause
+section (0201 stretch cap, 0202-0204 4:2:0 and MSA-ignore switches, and the
+`pcon_vrr_*` module parameters they added) have been removed. All external VRR support
+is now the single patch 0200, with the full VRR range and no cap. Nothing has been
+flashed to the dock.
 
 ## Chip identification (correction)
 

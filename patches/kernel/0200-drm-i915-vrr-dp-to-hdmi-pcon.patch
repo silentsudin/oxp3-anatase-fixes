@@ -1,0 +1,672 @@
+From 1c0fe5af91ee893703de7e1d4b3b9de85559ec24 Mon Sep 17 00:00:00 2001
+From: oxp3-fixes <oxp3-fixes@localhost>
+Date: Sun, 22 Nov 2026 13:31:55 +0000
+Subject: [PATCH] drm/i915/vrr: VRR over a DP-to-HDMI 2.1 PCON
+
+Implement the TODOs in intel_vrr_is_capable() and intel_dp_needs_as_sdp()
+for a DP-to-HDMI 2.1 protocol converter, the way amdgpu drives one. The
+PCON converts the variable DP timing to HDMI VRR; the source:
+
+- detects that the PCON takes the header-only Adaptive-Sync SDP v1;
+- sends that packet whenever the mode is in the VRR range, at fixed and
+  variable refresh alike, so the packet and the guardband it needs stay
+  the same;
+- sends the AMD FreeSync SPD InfoFrame (DP 1.3 InfoFrame SDP) next to
+  that packet for an allow-listed PCON whose HDMI sink has an AMD
+  FreeSync VSDB, with the range from that VSDB - amdgpu's
+  FREESYNC_TYPE_PCON_IN_WHITELIST packet set; its flags follow VRR;
+- keeps the MSA VTotal at the mode's vtotal while VRR stretches frames
+  ("MSA hold"). With VRR enabled the transcoder announces TRANS_VRR_VMAX
+  as the MSA VTotal (converter-side capture: 2250 -> 6750 at 4K120 with
+  a 40 Hz floor), and the Synaptics VMM6210 rebuilds its HDMI output
+  from that value - a 40 Hz base timing, which gave duplicated rows,
+  black and dock resets. With DC balance adjust enabled the timing
+  generator takes its limits from the DCB VMAX/FLIPLINE registers, so on
+  such an output (pipe A/B, display 30+) TRANS_VRR_VMAX stays at the
+  vtotal and the real VMAX goes into the DCB registers; the DMC
+  balancing loop stays off and the adjust counters stay 0. Readout takes
+  VMAX from the DCB register while this is active;
+- sets MSA timing ignore (DP_DOWNSPREAD_CTRL) after the video stream is
+  running instead of during link training, as amdgpu does
+  (enable_stream_features() after unblank) and as the Windows driver
+  does (after its link-training loop);
+- reads the header-only packet back (the readout accepted only v2's
+  9-byte payload, which made the state checker fail);
+- takes the VRR range from the HDMI Forum VSDB when the EDID has no
+  EDID 1.4 range descriptor (common for TVs with EDID 1.3);
+- sends YCbCr 4:2:0 straight through a PCON that can pass it, instead of
+  YCbCr 4:4:4 for the PCON to convert (4K120 on a 2-lane HBR3 link still
+  needs DSC either way: DP carries 4:2:0 at the full pixel rate);
+- offers VRR on such an output; xe.pcon_vrr=0 turns it off;
+- logs the SPD bytes the hardware holds on DP outputs during state
+  readout ("DP SPD SDP readback:", drm.debug KMS), since the HDMI
+  unpack can't decode the DP-packed packet: bytes 11-13 are 03 78 78 at
+  fixed 120 Hz and 07 28 78 with VRR active on a 40-120 Hz sink.
+
+Replaces the OneXPlayer 3 series 0010-0029 and 0201-0204 (one change
+per test, a VRR range cap, 4:2:0 and MSA-ignore bisection switches)
+with this single change. The Anatase 7.3.4-an02 tag already carries the
+first of them ("drm/i915/vrr: allow VRR over a DP-to-HDMI 2.1 PCON");
+this patch applies on top of it and supersedes it.
+
+Hardware: OneXPlayer 3 (Panther Lake), JSAUX HB1201B USB-C dock with a
+Synaptics VMM6210 PCON (OUI 90-cc-24, DPCD 0x007 = 0xc2: MSA timing
+ignore supported; DPCD 0x2214 = 0x01: AS SDP, no FAVT), LG TV
+"LG TV SSCR2" (HF-VSDB VRR 40-120 Hz).
+---
+ drivers/gpu/drm/i915/display/intel_ddi.c      |   3 +
+ .../drm/i915/display/intel_display_types.h    |   7 +-
+ drivers/gpu/drm/i915/display/intel_dp.c       | 248 ++++++++++++++++--
+ drivers/gpu/drm/i915/display/intel_dp.h       |   3 +
+ .../drm/i915/display/intel_dp_link_training.c |   4 +-
+ drivers/gpu/drm/i915/display/intel_hdmi.c     |  10 +
+ drivers/gpu/drm/i915/display/intel_vrr.c      | 116 +++++++-
+ 7 files changed, 361 insertions(+), 30 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/display/intel_ddi.c b/drivers/gpu/drm/i915/display/intel_ddi.c
+index 50378f25e..572851327 100644
+--- a/drivers/gpu/drm/i915/display/intel_ddi.c
++++ b/drivers/gpu/drm/i915/display/intel_ddi.c
+@@ -3395,6 +3395,9 @@ static void intel_ddi_enable_dp(struct intel_atomic_state *state,
+ 		intel_dp_set_infoframes(encoder, true, crtc_state, conn_state);
+ 
+ 	trans_port_sync_stop_link_train(state, encoder, crtc_state);
++
++	/* The video stream is running now: MSA timing ignore for a VRR PCON. */
++	intel_dp_pcon_enable_msa_timing_par_ignore(intel_dp, crtc_state);
+ }
+ 
+ static intel_reg_t
+diff --git a/drivers/gpu/drm/i915/display/intel_display_types.h b/drivers/gpu/drm/i915/display/intel_display_types.h
+index 79f99f168..9bdbebe74 100644
+--- a/drivers/gpu/drm/i915/display/intel_display_types.h
++++ b/drivers/gpu/drm/i915/display/intel_display_types.h
+@@ -1403,6 +1403,8 @@ struct intel_crtc_state {
+ 	/* Variable Refresh Rate state */
+ 	struct {
+ 		bool enable, in_range;
++		/* PCON: TG limits in the DCB registers, MSA VTotal kept nominal */
++		bool msa_hold;
+ 		u8 pipeline_full;
+ 		u16 flipline, vmin, vmax, guardband;
+ 		u32 vsync_end, vsync_start;
+@@ -1879,8 +1881,11 @@ struct intel_dp {
+ 	/* connector directly attached - won't be use for modeset in mst world */
+ 	struct intel_connector *attached_connector;
+ 	bool as_sdp_supported;
+-	bool as_sdp_v1_supported;
+ 	bool as_sdp_v2_supported;
++	/* DP-to-HDMI PCON forwarding the header-only Adaptive-Sync SDP v1 */
++	bool as_sdp_v1_supported;
++	/* AMD FreeSync VSDB version of an HDMI sink behind such a PCON, 0 = none */
++	u8 pcon_freesync_ver;
+ 
+ 	struct drm_dp_tunnel *tunnel;
+ 	bool tunnel_suspended:1;
+diff --git a/drivers/gpu/drm/i915/display/intel_dp.c b/drivers/gpu/drm/i915/display/intel_dp.c
+index 9ca7e7543..06ae6f28c 100644
+--- a/drivers/gpu/drm/i915/display/intel_dp.c
++++ b/drivers/gpu/drm/i915/display/intel_dp.c
+@@ -1066,6 +1066,17 @@ intel_dp_output_format(struct intel_connector *connector,
+ 		drm_dbg_kms(display->drm, "Cannot force DSC output format\n");
+ 	}
+ 
++	/*
++	 * Send YCbCr 4:2:0 straight through a PCON that can pass it, rather than
++	 * YCbCr 4:4:4 for the PCON to convert. DP carries 4:2:0 at the full pixel
++	 * rate, so 4K120 (1188 MHz x 12 bpp) still needs DSC on a 2-lane HBR3
++	 * link; this only removes the PCON's 4:4:4 -> 4:2:0 conversion.
++	 */
++	if (sink_format == INTEL_OUTPUT_FORMAT_YCBCR420 &&
++	    drm_dp_is_branch(intel_dp->dpcd) && intel_dp->dfp.ycbcr420_passthrough &&
++	    source_can_output(intel_dp, INTEL_OUTPUT_FORMAT_YCBCR420))
++		return INTEL_OUTPUT_FORMAT_YCBCR420;
++
+ 	if (sink_format == INTEL_OUTPUT_FORMAT_RGB ||
+ 	    dfp_can_convert_from_rgb(intel_dp, sink_format))
+ 		output_format = INTEL_OUTPUT_FORMAT_RGB;
+@@ -3103,11 +3114,16 @@ static void intel_dp_compute_vsc_colorimetry(const struct intel_crtc_state *crtc
+ static bool intel_dp_needs_as_sdp(struct intel_dp *intel_dp,
+ 				  struct intel_crtc_state *crtc_state)
+ {
+-	if (!intel_dp->as_sdp_v2_supported && !intel_dp->as_sdp_v1_supported)
+-		return false;
++	/*
++	 * PCON: send the header-only v1 packet whenever the mode is in the VRR
++	 * range, at fixed and at variable refresh alike (as amdgpu does). The
++	 * packet, and the guardband it needs, then stay the same when VRR is
++	 * switched, so the switch is a fastset on the trained link.
++	 */
++	if (drm_dp_is_branch(intel_dp->dpcd))
++		return intel_dp->as_sdp_v1_supported && crtc_state->vrr.in_range;
+ 
+-	if (drm_dp_is_branch(intel_dp->dpcd) &&
+-	    !intel_dp->as_sdp_v1_supported)
++	if (!intel_dp->as_sdp_v2_supported)
+ 		return false;
+ 
+ 	if (intel_psr_needs_alpm_aux_less(intel_dp, crtc_state) &&
+@@ -3134,11 +3150,8 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
+ 
+ 	crtc_state->infoframes.enable |= intel_hdmi_infoframe_enable(DP_SDP_ADAPTIVE_SYNC);
+ 
+-	/*
+-	 * The PCON path uses the legacy header-only AS SDP v1.  The DP 2.1
+-	 * v2 payload is not parsed by a DP-to-HDMI 2.1 protocol converter.
+-	 */
+-	if (intel_dp->as_sdp_v1_supported && !intel_dp->as_sdp_v2_supported) {
++	/* PCON: header-only v1 packet, see intel_dp_needs_as_sdp() */
++	if (drm_dp_is_branch(intel_dp->dpcd)) {
+ 		as_sdp->sdp_type = DP_SDP_ADAPTIVE_SYNC;
+ 		as_sdp->revision = 0x1;
+ 		as_sdp->length = 0;
+@@ -3178,6 +3191,67 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
+ 		as_sdp->coasting_vtotal = crtc_state->vrr.vmax;
+ }
+ 
++
++/*
++ * FreeSync through the PCON, as amdgpu drives it (FREESYNC_TYPE_PCON_IN_WHITELIST):
++ * the AMD FreeSync SPD InfoFrame, packed as a DP 1.3 InfoFrame SDP, goes out
++ * next to the header-only AS SDP whenever the mode is in the VRR range. Its
++ * enable stays the same across a VRR switch (a fastset); its flags follow
++ * vrr.enable and intel_dp_set_infoframes() rewrites it on that fastset. The
++ * packet is kept out of infoframes.spd, so the switch stays a fastset; the
++ * readout can't unpack a DP-packed SPD and leaves infoframes.spd zero too.
++ */
++static void intel_dp_compute_pcon_freesync(struct intel_dp *intel_dp,
++					   struct intel_crtc_state *crtc_state)
++{
++	if (!intel_dp->pcon_freesync_ver || !intel_dp_is_vrr_pcon(intel_dp) ||
++	    !crtc_state->vrr.in_range)
++		return;
++
++	crtc_state->infoframes.enable |=
++		intel_hdmi_infoframe_enable(HDMI_INFOFRAME_TYPE_SPD);
++}
++
++static void intel_dp_write_pcon_freesync(struct intel_encoder *encoder,
++					 const struct intel_crtc_state *crtc_state)
++{
++	struct intel_digital_port *dig_port = enc_to_dig_port(encoder);
++	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
++	const struct drm_display_info *info =
++		&intel_dp->attached_connector->base.display_info;
++	int vrefresh = drm_mode_vrefresh(&crtc_state->hw.adjusted_mode);
++	u8 ver = intel_dp->pcon_freesync_ver == 1 ? 1 : 2;
++	u8 sdp[VIDEO_DIP_DATA_SIZE] = {};
++	u8 max_hz, min_hz;
++
++	if ((crtc_state->infoframes.enable &
++	     intel_hdmi_infoframe_enable(HDMI_INFOFRAME_TYPE_SPD)) == 0)
++		return;
++
++	max_hz = min_t(int, info->monitor_range.max_vfreq, vrefresh);
++	min_hz = min_t(int, info->monitor_range.min_vfreq, max_hz);
++
++	/* SDP header: InfoFrame SDP, 0x1d + 1 data bytes, SDP version 1.3 */
++	sdp[0] = 0x00;
++	sdp[1] = HDMI_INFOFRAME_TYPE_SPD;
++	sdp[2] = 0x1d;
++	sdp[3] = 0x13 << 2;
++	/* DB0 = InfoFrame version, DB1 = length, DB2.. = PB1.. (no checksum) */
++	sdp[4 + 0] = ver;
++	sdp[4 + 1] = ver == 1 ? 0x08 : 0x09;
++	sdp[4 + 2] = 0x1a;	/* AMD IEEE OUI 00-00-1a */
++	sdp[4 + 3] = 0x00;
++	sdp[4 + 4] = 0x00;
++	/* FreeSync supported | enabled, active while VRR is on */
++	sdp[4 + 7] = 0x03 | (crtc_state->vrr.enable ? 0x04 : 0);
++	/* range while active, otherwise the nominal rate */
++	sdp[4 + 8] = crtc_state->vrr.enable ? min_hz : max_hz;
++	sdp[4 + 9] = max_hz;
++
++	dig_port->write_infoframe(encoder, crtc_state, HDMI_INFOFRAME_TYPE_SPD,
++				  sdp, sizeof(sdp));
++}
++
+ static void intel_dp_compute_vsc_sdp(struct intel_dp *intel_dp,
+ 				     struct intel_crtc_state *crtc_state,
+ 				     const struct drm_connector_state *conn_state)
+@@ -3660,6 +3734,7 @@ intel_dp_compute_config(struct intel_atomic_state *state,
+ 	intel_vrr_compute_config(pipe_config, conn_state);
+ 	intel_psr_compute_config(intel_dp, pipe_config, conn_state);
+ 	intel_dp_compute_as_sdp(intel_dp, pipe_config);
++	intel_dp_compute_pcon_freesync(intel_dp, pipe_config);
+ 	intel_alpm_lobf_compute_config(intel_dp, pipe_config, conn_state);
+ 	intel_dp_drrs_compute_config(connector, pipe_config, link_bpp_x16);
+ 	intel_dp_compute_vsc_sdp(intel_dp, pipe_config, conn_state);
+@@ -5422,6 +5497,7 @@ void intel_dp_set_infoframes(struct intel_encoder *encoder,
+ 
+ 	intel_write_dp_sdp(encoder, crtc_state, DP_SDP_VSC);
+ 	intel_write_dp_sdp(encoder, crtc_state, DP_SDP_ADAPTIVE_SYNC);
++	intel_dp_write_pcon_freesync(encoder, crtc_state);
+ 
+ 	intel_write_dp_sdp(encoder, crtc_state, HDMI_PACKET_TYPE_GAMUT_METADATA);
+ }
+@@ -5443,7 +5519,9 @@ int intel_dp_as_sdp_unpack(struct drm_dp_as_sdp *as_sdp,
+ 	if (sdp->sdp_header.HB1 != DP_SDP_ADAPTIVE_SYNC)
+ 		return -EINVAL;
+ 
+-	if ((sdp->sdp_header.HB3 & 0x3F) != 9)
++	/* v2 carries a 9-byte payload; the PCON's v1 packet is header-only */
++	if ((sdp->sdp_header.HB3 & 0x3F) != 9 &&
++	    !(sdp->sdp_header.HB2 == 1 && (sdp->sdp_header.HB3 & 0x3F) == 0))
+ 		return -EINVAL;
+ 
+ 	as_sdp->sdp_type = sdp->sdp_header.HB1;
+@@ -6221,6 +6299,131 @@ intel_dp_update_420(struct intel_dp *intel_dp)
+ 		    str_yes_no(intel_dp->dfp.ycbcr_444_to_420));
+ }
+ 
++/* A DP-to-HDMI 2.1 PCON that does VRR from the Adaptive-Sync SDP. */
++bool intel_dp_is_vrr_pcon(const struct intel_dp *intel_dp)
++{
++	return drm_dp_is_branch(intel_dp->dpcd) && intel_dp->as_sdp_v1_supported;
++}
++
++/*
++ * A VRR PCON gets MSA timing ignore only once the video stream is running,
++ * the way amdgpu programs it (enable_stream_features() after unblanking the
++ * stream; its link training leaves the bit clear). Written during link
++ * training instead, as i915 does for a native sink, the Synaptics VMM6210
++ * reads the bit back clear with the stream up, keeps following the MSA's
++ * fixed vtotal, and loses the HDMI picture on the first stretched frame.
++ */
++void intel_dp_pcon_enable_msa_timing_par_ignore(struct intel_dp *intel_dp,
++					       const struct intel_crtc_state *crtc_state)
++{
++	struct intel_display *display = to_intel_display(intel_dp);
++	u8 val;
++
++	if (!intel_dp_is_vrr_pcon(intel_dp) || !crtc_state->vrr.in_range)
++		return;
++
++	if (drm_dp_dpcd_readb(&intel_dp->aux, DP_DOWNSPREAD_CTRL, &val) != 1)
++		return;
++
++	if (val & DP_MSA_TIMING_PAR_IGNORE_EN)
++		return;
++
++	if (drm_dp_dpcd_writeb(&intel_dp->aux, DP_DOWNSPREAD_CTRL,
++			       val | DP_MSA_TIMING_PAR_IGNORE_EN) != 1)
++		drm_dbg_kms(display->drm, "PCON: failed to set MSA_TIMING_PAR_IGNORE\n");
++}
++
++/* DP branch OUIs amdgpu drives FreeSync through (dm_freesync_pcon_whitelist) */
++static const u32 intel_dp_freesync_pcon_ouis[] = {
++	0x0060ad, 0x00e04c, 0x90cc24, 0x001cf8, 0x001ff2, 0x2b02f0,
++};
++
++/*
++ * FreeSync PCON detection, as amdgpu's dm_get_adaptive_sync_support_type():
++ * an allow-listed DP-to-HDMI PCON that can ignore the MSA timing parameters,
++ * and an HDMI sink whose EDID has an AMD FreeSync VSDB (v1/v2; the EDID core
++ * only parses v3). The VRR range then comes from that VSDB, as on amdgpu.
++ */
++static void intel_dp_pcon_update_freesync(struct intel_dp *intel_dp,
++					  const struct drm_edid *drm_edid)
++{
++	struct intel_display *display = to_intel_display(intel_dp);
++	struct intel_connector *connector = intel_dp->attached_connector;
++	struct drm_display_info *info = &connector->base.display_info;
++	const struct edid *edid = drm_edid_raw(drm_edid);
++	const u8 *oui = intel_dp->desc.ident.oui;
++	u32 branch_oui = oui[0] << 16 | oui[1] << 8 | oui[2];
++	int ext, i;
++
++	intel_dp->pcon_freesync_ver = 0;
++
++	if (!edid || !intel_dp_is_vrr_pcon(intel_dp) || !info->is_hdmi ||
++	    !drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd))
++		return;
++
++	for (i = 0; i < ARRAY_SIZE(intel_dp_freesync_pcon_ouis); i++)
++		if (intel_dp_freesync_pcon_ouis[i] == branch_oui)
++			break;
++	if (i == ARRAY_SIZE(intel_dp_freesync_pcon_ouis))
++		return;
++
++	for (ext = 1; ext <= edid->extensions; ext++) {
++		const u8 *blk = (const u8 *)edid + ext * EDID_LENGTH;
++		int end = blk[2];
++
++		/* CTA-861 extension, data blocks in [4, end) */
++		if (blk[0] != 0x02 || end < 4 || end > EDID_LENGTH - 1)
++			continue;
++
++		for (i = 4; i < end; i += 1 + (blk[i] & 0x1f)) {
++			int len = blk[i] & 0x1f;
++			const u8 *p = &blk[i + 1];
++
++			if (i + 1 + len > end)
++				break;
++			/* vendor-specific block, AMD OUI, version, caps, min, max */
++			if (blk[i] >> 5 != 3 || len < 7 ||
++			    p[0] != 0x1a || p[1] != 0x00 || p[2] != 0x00)
++				continue;
++			if (p[3] < 1 || p[3] > 2 || !(p[4] & 0x01) ||
++			    !p[5] || p[6] <= p[5] + 10)
++				continue;
++
++			intel_dp->pcon_freesync_ver = p[3];
++			info->monitor_range.min_vfreq = p[5];
++			info->monitor_range.max_vfreq = p[6];
++			drm_info(display->drm,
++				 "[CONNECTOR:%d:%s] oxp3-vrr: FreeSync PCON %06x, AMD VSDB v%u, range %u-%u Hz\n",
++				 connector->base.base.id, connector->base.name,
++				 branch_oui, p[3], p[5], p[6]);
++			return;
++		}
++	}
++}
++
++/*
++ * An HDMI 2.1 sink behind a PCON gives its VRR range in the HDMI Forum VSDB
++ * (display_info.hdmi.vrr_cap). display_info.monitor_range, which the VRR code
++ * uses, is only filled from an EDID 1.4 range descriptor, which TVs often lack
++ * (EDID 1.3), so take the range from the VSDB, as amdgpu does for HDMI sinks.
++ */
++static void intel_dp_pcon_update_vrr_range(struct intel_dp *intel_dp)
++{
++	struct drm_display_info *info =
++		&intel_dp->attached_connector->base.display_info;
++	const struct drm_hdmi_vrr_cap *vrr = &info->hdmi.vrr_cap;
++
++	if (!drm_dp_is_branch(intel_dp->dpcd) || !info->is_hdmi ||
++	    (info->monitor_range.min_vfreq && info->monitor_range.max_vfreq))
++		return;
++
++	if (!vrr->supported || !vrr->vrr_min || !vrr->vrr_max)
++		return;
++
++	info->monitor_range.min_vfreq = vrr->vrr_min;
++	info->monitor_range.max_vfreq = vrr->vrr_max;
++}
++
+ static void
+ intel_dp_set_edid(struct intel_dp *intel_dp)
+ {
+@@ -6235,6 +6438,8 @@ intel_dp_set_edid(struct intel_dp *intel_dp)
+ 
+ 	/* Below we depend on display info having been updated */
+ 	drm_edid_connector_update(&connector->base, drm_edid);
++	intel_dp_pcon_update_freesync(intel_dp, drm_edid);
++	intel_dp_pcon_update_vrr_range(intel_dp);
+ 
+ 	vrr_capable = intel_vrr_is_capable(connector);
+ 	drm_dbg_kms(display->drm, "[CONNECTOR:%d:%s] VRR capable: %s\n",
+@@ -6263,6 +6468,7 @@ intel_dp_unset_edid(struct intel_dp *intel_dp)
+ 	intel_dp->dfp.max_tmds_clock = 0;
+ 
+ 	intel_dp->dfp.pcon_max_frl_bw = 0;
++	intel_dp->pcon_freesync_ver = 0;
+ 
+ 	intel_dp->dfp.ycbcr_444_to_420 = false;
+ 	connector->base.ycbcr_420_allowed = false;
+@@ -6316,25 +6522,31 @@ intel_dp_detect_sdp_caps(struct intel_dp *intel_dp)
+ {
+ 	struct intel_display *display = to_intel_display(intel_dp);
+ 
++	/* Detect afresh, so a PCON's state never carries over to the next sink. */
++	intel_dp->as_sdp_v1_supported = false;
++	intel_dp->as_sdp_v2_supported = false;
++
+ 	intel_dp->as_sdp_supported = HAS_AS_SDP(display) &&
+ 		drm_dp_as_sdp_supported(&intel_dp->aux, intel_dp->dpcd);
+ 
+ 	if (!intel_dp->as_sdp_supported)
+ 		return;
+ 
++	/*
++	 * A DP-to-HDMI 2.1 PCON that accepts the Adaptive-Sync SDP converts the
++	 * variable DP timing to HDMI VRR itself; it takes the header-only v1
++	 * packet (as amdgpu sends it).
++	 */
++	if (drm_dp_is_branch(intel_dp->dpcd)) {
++		intel_dp->as_sdp_v1_supported = true;
++		return;
++	}
++
+ 	/* eDP Adaptive-Sync SDP always uses AS SDP v2 */
+ 	if (intel_dp_is_edp(intel_dp))
+ 		intel_dp->as_sdp_v2_supported =  true;
+ 	else
+ 		intel_dp->as_sdp_v2_supported = intel_dp_sink_supports_as_sdp_v2(intel_dp);
+-
+-	/*
+-	 * A DP-to-HDMI 2.1 PCON forwards the legacy AS SDP v1 packet.  The
+-	 * downstream HDMI sink still advertises its VRR range through the
+-	 * HDMI Forum VSDB, which is parsed into display_info.monitor_range.
+-	 */
+-	if (drm_dp_is_branch(intel_dp->dpcd))
+-		intel_dp->as_sdp_v1_supported = true;
+ }
+ 
+ static bool intel_dp_needs_dpcd_probe(struct intel_dp *intel_dp, bool force_on_external)
+diff --git a/drivers/gpu/drm/i915/display/intel_dp.h b/drivers/gpu/drm/i915/display/intel_dp.h
+index 04fae203b..df31f7c4b 100644
+--- a/drivers/gpu/drm/i915/display/intel_dp.h
++++ b/drivers/gpu/drm/i915/display/intel_dp.h
+@@ -238,6 +238,9 @@ bool intel_dp_joiner_candidate_valid(struct intel_connector *connector,
+ 		for_each_if(intel_dp_joiner_candidate_valid(__connector, (__mode)->hdisplay, __num_joined_pipes))
+ 
+ u8 intel_dp_as_sdp_transmission_time(void);
++bool intel_dp_is_vrr_pcon(const struct intel_dp *intel_dp);
++void intel_dp_pcon_enable_msa_timing_par_ignore(struct intel_dp *intel_dp,
++					       const struct intel_crtc_state *crtc_state);
+ 
+ int intel_dp_link_init(struct intel_dp *intel_dp);
+ void intel_dp_link_cleanup(struct intel_dp *intel_dp);
+diff --git a/drivers/gpu/drm/i915/display/intel_dp_link_training.c b/drivers/gpu/drm/i915/display/intel_dp_link_training.c
+index 9a692f4fd..74f2a5333 100644
+--- a/drivers/gpu/drm/i915/display/intel_dp_link_training.c
++++ b/drivers/gpu/drm/i915/display/intel_dp_link_training.c
+@@ -1143,9 +1143,11 @@ static void intel_dp_update_downspread_ctrl(struct intel_dp *intel_dp,
+ 	  * We need fastset support for setting the MSA ignore bit in DPCD,
+ 	  * especially on the first real commit when clearing the inherited flag.
+ 	  */
++	/* A VRR PCON gets the bit after the stream starts, see intel_ddi_enable_dp(). */
+ 	intel_dp_link_training_set_mode(intel_dp,
+ 					crtc_state->port_clock,
+-					crtc_state->vrr.in_range,
++					crtc_state->vrr.in_range &&
++					!intel_dp_is_vrr_pcon(intel_dp),
+ 					intel_dp_pr_with_as_sdp_enabled(intel_dp, crtc_state));
+ }
+ 
+diff --git a/drivers/gpu/drm/i915/display/intel_hdmi.c b/drivers/gpu/drm/i915/display/intel_hdmi.c
+index 7831fd229..9a6dad862 100644
+--- a/drivers/gpu/drm/i915/display/intel_hdmi.c
++++ b/drivers/gpu/drm/i915/display/intel_hdmi.c
+@@ -729,6 +729,16 @@ void intel_read_infoframe(struct intel_encoder *encoder,
+ 	dig_port->read_infoframe(encoder, crtc_state,
+ 				       type, buffer, sizeof(buffer));
+ 
++	/*
++	 * A DP-to-HDMI PCON gets the AMD FreeSync SPD as a DP-packed InfoFrame
++	 * SDP, which the HDMI unpack below can't decode; log what the hardware
++	 * holds (header 00 83 1d 4c, flags/min Hz/max Hz at bytes 11-13).
++	 */
++	if (type == HDMI_INFOFRAME_TYPE_SPD &&
++	    intel_crtc_has_dp_encoder(crtc_state))
++		drm_dbg_kms(encoder->base.dev, "DP SPD SDP readback: %*ph\n",
++			    (int)sizeof(buffer), buffer);
++
+ 	/* Fill the 'hole' (see big comment above) at position 3 */
+ 	memmove(&buffer[1], &buffer[0], 3);
+ 
+diff --git a/drivers/gpu/drm/i915/display/intel_vrr.c b/drivers/gpu/drm/i915/display/intel_vrr.c
+index 87b3c8059..131f5c5a4 100644
+--- a/drivers/gpu/drm/i915/display/intel_vrr.c
++++ b/drivers/gpu/drm/i915/display/intel_vrr.c
+@@ -34,6 +34,19 @@
+ #define DCB_CORRECTION_AGGRESSIVENESS	1000 /* ms × 100; 10 ms */
+ #define DCB_BLANK_TARGET		50
+ 
++/* VRR through a DP-to-HDMI 2.1 PCON (see intel_dp_needs_as_sdp()). */
++static bool pcon_vrr = true;
++module_param(pcon_vrr, bool, 0644);
++MODULE_PARM_DESC(pcon_vrr, "Offer VRR on DP-to-HDMI 2.1 PCON outputs (default: true)");
++
++static bool intel_vrr_pcon_connector(struct intel_connector *connector)
++{
++	return pcon_vrr &&
++	       connector->base.connector_type == DRM_MODE_CONNECTOR_DisplayPort &&
++	       !connector->mst.dp &&
++	       intel_dp_is_vrr_pcon(intel_attached_dp(connector));
++}
++
+ bool intel_vrr_is_capable(struct intel_connector *connector)
+ {
+ 	struct intel_display *display = to_intel_display(connector);
+@@ -59,18 +72,17 @@ bool intel_vrr_is_capable(struct intel_connector *connector)
+ 			return false;
+ 		intel_dp = intel_attached_dp(connector);
+ 		/*
+-		 * A non-MST DP branch device (PCON) can expose an HDMI 2.1 sink.
+-		 * Such a sink needs the Adaptive-Sync SDP v1 forwarding path; only
+-		 * enable VRR when the branch reports AS SDP support and the EDID is
+-		 * an HDMI sink.
++		 * Among non-MST DP branch devices, only an HDMI sink connected via
++		 * a PCON that forwards the Adaptive-Sync SDP can do VRR; the PCON
++		 * converts the variable DP timing to HDMI VRR.
+ 		 */
+-		if (drm_dp_is_branch(intel_dp->dpcd)) {
+-			if (!intel_dp->as_sdp_v1_supported ||
+-			    !intel_dp_has_hdmi_sink(intel_dp))
+-				return false;
+-		} else if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd)) {
++		if (drm_dp_is_branch(intel_dp->dpcd) &&
++		    (!pcon_vrr || !intel_dp->as_sdp_v1_supported ||
++		     !info->is_hdmi))
++			return false;
++
++		if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd))
+ 			return false;
+-		}
+ 
+ 		break;
+ 	default:
+@@ -479,6 +491,22 @@ intel_vrr_compute_config(struct intel_crtc_state *crtc_state,
+ 	}
+ 
+ 	intel_vrr_dc_balance_compute_config(crtc_state);
++
++	/*
++	 * With VRR enabled the transcoder announces TRANS_VRR_VMAX as the MSA
++	 * VTotal. A re-timing DP-to-HDMI PCON (Synaptics VMM62xx) rebuilds its
++	 * HDMI output from that value, so a 40 Hz VMAX (6750 lines at 4K120)
++	 * turns into a 40 Hz HDMI base timing: duplicated rows, black, or the
++	 * dock resetting. With DC balance adjust enabled the timing generator
++	 * takes its limits from the DCB VMAX/FLIPLINE registers instead, so on
++	 * such an output keep TRANS_VRR_VMAX at the mode's vtotal (constant MSA)
++	 * and put the real stretch limit there. The DMC balancing loop stays
++	 * off; the adjust counters stay 0, so the "final" values apply.
++	 */
++	crtc_state->vrr.msa_hold = crtc_state->vrr.enable &&
++		!crtc_state->vrr.dc_balance.enable &&
++		intel_vrr_dc_balance_possible(crtc_state) &&
++		intel_vrr_pcon_connector(connector);
+ }
+ 
+ static int
+@@ -833,6 +861,59 @@ static void intel_vrr_set_vrr_timings(const struct intel_crtc_state *crtc_state)
+ 		       intel_vrr_hw_flipline(crtc_state) - 1);
+ }
+ 
++static void intel_vrr_write_dcb_limits(struct intel_display *display,
++				       enum transcoder cpu_transcoder,
++				       u32 vmax, u32 flipline)
++{
++	intel_de_write(display, TRANS_VRR_DCB_VMAX(cpu_transcoder), vmax);
++	intel_de_write(display, TRANS_VRR_DCB_VMAX_LIVE(cpu_transcoder), vmax);
++	intel_de_write(display, TRANS_VRR_DCB_FLIPLINE(cpu_transcoder), flipline);
++	intel_de_write(display, TRANS_VRR_DCB_FLIPLINE_LIVE(cpu_transcoder), flipline);
++	intel_de_write(display, TRANS_VRR_DCB_ADJ_VMAX_CFG(cpu_transcoder), vmax);
++	intel_de_write(display, TRANS_VRR_DCB_ADJ_VMAX_CFG_LIVE(cpu_transcoder), vmax);
++	intel_de_write(display, TRANS_VRR_DCB_ADJ_FLIPLINE_CFG(cpu_transcoder), flipline);
++	intel_de_write(display, TRANS_VRR_DCB_ADJ_FLIPLINE_CFG_LIVE(cpu_transcoder), flipline);
++}
++
++/* See the vrr.msa_hold comment in intel_vrr_compute_config(). */
++static void intel_vrr_enable_msa_hold(const struct intel_crtc_state *crtc_state)
++{
++	struct intel_display *display = to_intel_display(crtc_state);
++	enum transcoder cpu_transcoder = crtc_state->cpu_transcoder;
++	int vmax = intel_vrr_hw_vmax(crtc_state) - 1;
++	int flipline = intel_vrr_hw_flipline(crtc_state) - 1;
++	int vtotal = intel_vrr_fixed_rr_hw_vmax(crtc_state);
++
++	if (!crtc_state->vrr.msa_hold)
++		return;
++
++	/* timing generator limits first, then switch it to them */
++	intel_vrr_write_dcb_limits(display, cpu_transcoder,
++				   VRR_DCB_VMAX(vmax), VRR_DCB_FLIPLINE(flipline));
++	intel_de_rmw(display, TRANS_VRR_CTL(display, cpu_transcoder),
++		     0, VRR_CTL_DCB_ADJ_ENABLE);
++	/* announced (MSA) vtotal stays the mode's vtotal */
++	intel_de_write(display, TRANS_VRR_VMAX(display, cpu_transcoder), vtotal - 1);
++
++	drm_info(display->drm,
++		 "[CRTC:%d:%s] oxp3-vrr: PCON MSA hold: MSA vtotal %d, VRR %d-%d lines\n",
++		 crtc_state->uapi.crtc->base.id, crtc_state->uapi.crtc->name,
++		 vtotal, crtc_state->vrr.flipline, crtc_state->vrr.vmax);
++}
++
++static void intel_vrr_disable_msa_hold(const struct intel_crtc_state *old_crtc_state)
++{
++	struct intel_display *display = to_intel_display(old_crtc_state);
++	enum transcoder cpu_transcoder = old_crtc_state->cpu_transcoder;
++
++	if (!old_crtc_state->vrr.msa_hold)
++		return;
++
++	intel_de_rmw(display, TRANS_VRR_CTL(display, cpu_transcoder),
++		     VRR_CTL_DCB_ADJ_ENABLE, 0);
++	intel_vrr_write_dcb_limits(display, cpu_transcoder, 0, 0);
++}
++
+ static void
+ intel_vrr_enable_dc_balancing(const struct intel_crtc_state *crtc_state)
+ {
+@@ -970,6 +1051,7 @@ void intel_vrr_enable(const struct intel_crtc_state *crtc_state)
+ 
+ 	intel_vrr_set_vrr_timings(crtc_state);
+ 	intel_vrr_enable_dc_balancing(crtc_state);
++	intel_vrr_enable_msa_hold(crtc_state);
+ 
+ 	if (!intel_vrr_always_use_vrr_tg(display))
+ 		intel_vrr_tg_enable(crtc_state, crtc_state->cmrr.enable);
+@@ -986,6 +1068,7 @@ void intel_vrr_disable(const struct intel_crtc_state *old_crtc_state)
+ 		intel_vrr_tg_disable(old_crtc_state);
+ 
+ 	intel_vrr_disable_dc_balancing(old_crtc_state);
++	intel_vrr_disable_msa_hold(old_crtc_state);
+ 	intel_vrr_set_fixed_rr_timings(old_crtc_state, old_crtc_state->cpu_transcoder);
+ }
+ 
+@@ -1097,6 +1180,19 @@ void intel_vrr_get_config(struct intel_crtc_state *crtc_state)
+ 							 TRANS_VRR_FLIPLINE(display, cpu_transcoder)) + 1;
+ 		crtc_state->vrr.vmax = intel_de_read(display,
+ 						     TRANS_VRR_VMAX(display, cpu_transcoder)) + 1;
++
++		/* PCON MSA hold: the stretch limit lives in the DCB register */
++		if (HAS_VRR_DC_BALANCE(display) &&
++		    (trans_vrr_ctl & VRR_CTL_DCB_ADJ_ENABLE)) {
++			u32 dcb_vmax = REG_FIELD_GET(VRR_DCB_VMAX_MASK,
++						     intel_de_read(display,
++								   TRANS_VRR_DCB_VMAX(cpu_transcoder)));
++
++			if (dcb_vmax + 1 > crtc_state->vrr.vmax) {
++				crtc_state->vrr.vmax = dcb_vmax + 1;
++				crtc_state->vrr.msa_hold = true;
++			}
++		}
+ 		crtc_state->vrr.vmin = intel_de_read(display,
+ 						     TRANS_VRR_VMIN(display, cpu_transcoder)) + 1;
+ 
+-- 
+2.56.0
+
