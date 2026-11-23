@@ -140,6 +140,14 @@ EOF
     case $tl in *01-radv-performance.conf*) export OXP3_HAS_RADV_PERF=1;; *) export OXP3_HAS_RADV_PERF=0;; esac
     case $tl in *src/vulkan/layers/anti_lag/*) export OXP3_HAS_ANTILAG_LAYER=1;; *) export OXP3_HAS_ANTILAG_LAYER=0;; esac
     case $tl in *src/virtio/*) export OXP3_HAS_VIRTIO=1;; *) export OXP3_HAS_VIRTIO=0;; esac
+    # main builds zink's VA-API driver (zink_drv_video.so), the 26.3 branch does not: the spec
+    # must only list that file when the tree's VA target links zink.
+    if tar -xzOf "$tarball" --wildcards '*/src/gallium/targets/va/meson.build' 2>/dev/null |
+           grep -q driver_zink; then
+        export OXP3_HAS_ZINK_VIDEO=1
+    else
+        export OXP3_HAS_ZINK_VIDEO=0
+    fi
     python3 - "$spec" "$MESA_VERSION" "$MESA_COMMIT" <<'EOF'
 import sys
 p, version, commit = sys.argv[1:]
@@ -205,9 +213,11 @@ for block in (
     s, n = re.subn(re.escape(block), "", s)
     if n != 1:
         sys.exit("mesa.spec: expected one dropped-driver file block")
-# with_vulkan_hw also builds zink's VA-API driver; the spec only lists zink_dri.so.
-rep("%{_libdir}/dri/zink_dri.so\n%{_datadir}/drirc.d/00-zink-defaults.conf\n",
-    "%{_libdir}/dri/zink_dri.so\n%{_libdir}/dri/zink_drv_video.so\n%{_datadir}/drirc.d/00-zink-defaults.conf\n")
+# On main, with_vulkan_hw also builds zink's VA-API driver and the spec only lists
+# zink_dri.so; 26.3's VA target does not link zink, so the entry must not be added there.
+if os.environ.get('OXP3_HAS_ZINK_VIDEO', '0') == '1':
+    rep("%{_libdir}/dri/zink_dri.so\n%{_datadir}/drirc.d/00-zink-defaults.conf\n",
+        "%{_libdir}/dri/zink_dri.so\n%{_libdir}/dri/zink_drv_video.so\n%{_datadir}/drirc.d/00-zink-defaults.conf\n")
 # i686: no rusticl/NVK (no i686 Rust std), and meson must use the 32-bit llvm-config
 # (Fedora installs it as /usr/lib/llvmNN/bin/llvm-config)
 rep('%global vulkan_drivers ', '%ifarch %{ix86}\n%undefine with_opencl\n%undefine with_nvk\n%endif\n\n%global vulkan_drivers ')

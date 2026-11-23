@@ -77,15 +77,17 @@ components:
     state: working
     group: driver-stack
     headline: true
-    summary: "Mesa main at the current pin (62b0e52f): Jay shader compiler (default on Xe2/Xe3), ANV compression/tiling, the Panther Lake hang fix, HPLOC TLAS, mesh fixes and fewer per-frame driver ioctls (patches/mesa 0200/0201/0206/0207/0212)."
+    summary: "One driver for native, Steam and Flatpak: Mesa 26.3.1 (the stable branch) with the 26.3 backports, the perf patches that apply to it (patches/mesa 0200/0201/0206), the CM kernel injection (patches/mesa-26.3) and Anatase's overrides. The 27.0.0-devel build is retired, and no separate XMX ICD is selected."
     implementation:
       - patches/mesa
+      - patches/mesa-26.3
+      - patches/mesa-26.3-backports
       - oxp3-fixes-fast.sh
       - oxp3-fixes.sh
     doc: docs/BEST-CONFIG.md
     root_required: "yes"
     install:
-      summary: "Anatase's Mesa package rebuilt at the pinned main commit with patches/mesa (x86_64 + i686), same overlay"
+      summary: "Anatase's Mesa package rebuilt as 26.3.1 with the ordered 26.3 series (x86_64 + i686), same overlay, plus the same tree as the Flatpak GL extension"
       entrypoint: "./oxp3-install.sh"
     verify:
       - id: gfx.gamescope
@@ -109,9 +111,8 @@ components:
     state: working
     group: driver-stack
     headline: true
-    summary: "XeSS SR/FG on the Arc XMX units instead of DP4a for native Steam and Heroic, with a dedicated Mesa 26.3.0 driver (release CM patches + our perf patches) selected per game; the host stays on Mesa main so gamescope/HDR use the fast driver. The package shim, ControlLib and IGC compiler are installed per game. Flatpak Steam has its own deployment (docs/hw/flatpak-xmx.md)."
+    summary: "XeSS SR/FG on the Arc XMX units instead of DP4a for native Steam and Heroic. The CM kernel injection is compiled into the one production Mesa (26.3.1, patches/mesa-26.3), so there is no separate driver and no VK_DRIVER_FILES override any more; the package shim, ControlLib and IGC compiler are installed per game. Flatpak Steam has its own deployment (docs/hw/flatpak-xmx.md)."
     implementation:
-      - patches/xess-26.3
       - patches/mesa-26.3
       - tools/build-xmx-driver-263.sh
       - tools/lib/install-common.sh
@@ -120,7 +121,7 @@ components:
     doc: docs/xess-xmx.md
     root_required: "yes"
     install:
-      summary: "Mesa 26.3.0 XMX driver built and installed per game, shim/ControlLib/IGC staged, per-game ICD and launch options written"
+      summary: "shim/ControlLib/IGC staged and per-game environment written; the CM driver is the installed Mesa, so no per-game ICD is selected"
       entrypoint: "./oxp3-install.sh (hardware step runs tools/oxp3-hw-install.sh --xmx)"
     verify:
       - id: gfx.xmx.driver
