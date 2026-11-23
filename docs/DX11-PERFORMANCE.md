@@ -123,13 +123,34 @@ tools/steam-compat-tool.sh restore                     # put the newest backup b
 
 Run it with Steam closed: Steam rewrites `config.vdf` when it exits.
 
-## What is left
+## Result 4 — the synchronisation primitive is not it either
 
-- **Synchronisation primitive** (`dx11-ab.sh`, `esync-only` / `server-sync`): this Proton runs
-  ntsync, and the sync path is a per-frame CPU cost as well.
-- If neither moves it, the conclusion is that ~15% is DXVK's inherent D3D11 overhead on this
-  driver, and the deliverable is this document plus an upstream report — not a workaround that
-  quietly trades away correctness.
+This Proton runs ntsync, and the sync path is a per-frame CPU cost, so it was worth checking:
+
+| variant | fps |
+|---|---:|
+| baseline (ntsync) | 81.6 |
+| `PROTON_NO_FSYNC=1` (esync) | 81.51 |
+| `PROTON_NO_FSYNC=1 PROTON_NO_ESYNC=1` (server) | 81.62 |
+
+Both inside the noise floor. The candidate space is now closed.
+
+## Conclusion
+
+On this machine, DX11's deficit has two separable parts:
+
+1. **~7.9% is the DXVK version.** 3.0.2 (82 fps) → 3.1.x (88 fps) is a runtime choice, and this
+   machine's Steam default was the slow one. Fixed by picking a Proton with DXVK >= 3.1; `status`
+   and `tools/steam-compat-tool.sh` make that one command.
+2. **The remaining ~7.6%** (88 against native Vulkan's 95.5) is DXVK's own cost of translating an
+   immediate-context D3D11 stream. It is constant per frame regardless of resolution, unchanged by
+   every knob DXVK exposes, unaffected by the sync primitive, and gets worse when the translation
+   threads are pinned to two cores. VKD3D-Proton pays only 3-4% for D3D12 on the same driver, so
+   this is specific to the D3D11 path, not to Wine's Vulkan plumbing in general.
+
+That residual is the part that would need work inside DXVK, not on this side: the evidence for an
+upstream report is the constant per-frame cost, the enabled fast paths in DXVK's startup dump, and
+the independence from resolution, configuration and scheduling.
 
 ## Traps this work paid for (now encoded in the tools)
 
