@@ -727,10 +727,20 @@ do_install() {
     for pkg in "${layer[@]}"; do want+=( "$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' "$pkg")" ); done
     # our layered packages that are not wanted any more (older builds, kmod-oxp3-xe, or firmware
     # Anatase now ships itself)
+    # A local package is only "unwanted" when there is a fresh RPM that replaces it. Without one -
+    # a cleaned build cache, or --skip-kernel - the installed package must stay: dropping
+    # oxp3-firmware because no new firmware RPM was staged would uninstall working firmware and,
+    # worse, hit the staging branch below and return before gamescope/MangoHud are installed.
+    local have_fw=0
+    compgen -G "$OUT/$FW_NAME-*.rpm" >/dev/null && have_fw=1
     for p in $locals; do
         [[ $p == kmod-oxp3-* || $p == "$FW_NAME"-* ]] || continue
-        (( SKIP_KERNEL )) && [[ $p == kmod-oxp3-* ]] && continue
-        (( SKIP_FIRMWARE )) && [[ $p == "$FW_NAME"-* ]] && continue
+        if [[ $p == kmod-oxp3-* ]]; then
+            (( SKIP_KERNEL )) && continue
+            [[ -f ${kmod[0]} ]] || continue
+        else
+            (( SKIP_FIRMWARE || !have_fw )) && continue
+        fi
         [[ " ${want[*]} " == *" $p "* ]] || un+=( "$p" )
     done
     local missing=() i
