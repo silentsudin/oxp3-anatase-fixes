@@ -592,6 +592,23 @@ rpms_fit_host() { # <rpm files...>
 # The patches are <patch dir>/<spec Version>/*.patch when that directory exists (gamescope: one
 # set per Anatase gamescope version, so an image update picks the matching set), otherwise
 # <patch dir>/*.patch. A version with neither stops the build instead of shipping it unpatched.
+# The shared build container also carries the i686 -devel packages the 32-bit target needs, and dnf
+# treats a BuildRequires without an arch as satisfied by the i686 package alone. The x86_64 build
+# then cannot find the .pc file even though dnf reports every BuildRequires installed: gamescope
+# failed on `xmu -> sm -> uuid` exactly this way, with only libuuid-devel.i686 present. Install the
+# 64-bit sibling of any -devel that exists only as i686 before the x86_64 build runs.
+ensure_native_devel() {
+    local names
+    names=$(ctr rpm -qa --qf '%{NAME} %{ARCH}\n' 2>/dev/null |
+        awk '$1 ~ /-devel$/ { if ($2 == "i686") i[$1] = 1; else x[$1] = 1 }
+             END { for (n in i) if (!(n in x)) print n }')
+    [[ -n $names ]] || return 0
+    # shellcheck disable=SC2086
+    ctr_root dnf -y -q install --skip-unavailable $(printf '%s.x86_64\n' $names) >/dev/null 2>&1 ||
+        echo "note: could not install the 64-bit sibling of: $(echo $names)"
+    return 0
+}
+
 build_card() {
     local name=$1 pdir=$2
     local top="$CACHE/rpmbuild/$name" spec key ver
@@ -630,6 +647,7 @@ build_card() {
     say "$name $ver: sources"
     ctr spectool -g -C "$top/SOURCES" "$spec" >/dev/null
     ctr_root dnf -y -q builddep "$spec" >/dev/null 2>&1 || ctr_root dnf -y builddep --skip-unavailable "$spec" | tail -3
+    ensure_native_devel
     say "$name $ver: x86_64"
     progress_run "$name $ver: x86_64 build" "$top/build.log" \
         ctr rpmbuild --define "_topdir $top" --define "dist .fc$FEDORA.oxp3.$STAMP" -bb "$spec" ||
