@@ -255,6 +255,10 @@ def cmd_run(a) -> int:
     label = a.label or "run"
     dest = Path(a.out or RES / f"gravitymark-{stamp}") / f"{api}-{a.width}x{a.height}-{label}"
     dest.mkdir(parents=True, exist_ok=True)
+    if getattr(a, "fresh_prefix", False) and PREFIX.exists():
+        # a prefix whose wineserver was killed deadlocks the next run right after swapchain
+        # creation (0% CPU, no frametime report), so start clean when asked
+        shutil.rmtree(PREFIX, ignore_errors=True)
     out(f"== GravityMark {api} {a.width}x{a.height} x{a.count}")
     extra = dict(kv.split("=", 1) for kv in (a.env or []))
     rc, log = run_gravitymark(api, a.width, a.height, a.count, dest, a.timeout, extra,
@@ -362,6 +366,8 @@ def main() -> int:
     s.add_argument("--windowed", action="store_true",
                    help="open a real window instead of gamescope headless (intrudes on the desktop)")
     s.add_argument("--refresh", type=int, default=60)
+    s.add_argument("--fresh-prefix", action="store_true",
+                   help="delete the Wine prefix first (required after a killed run)")
     s.set_defaults(func=cmd_run)
     s = sub.add_parser("matrix", help="every API, N repeats")
     s.add_argument("--apis", default=None)

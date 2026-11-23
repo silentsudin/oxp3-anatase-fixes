@@ -37,6 +37,14 @@ done
 out="$HOME/.cache/oxp3-fixes/gpu-bench/results/dx11-ab-$(date +%Y%m%d-%H%M%S)"
 echo "results: $out"
 
+# A prefix left behind by a killed run deadlocks the next one right after swapchain creation,
+# and one variant must not start from a different Wine state than the others: clear it once,
+# here, and let every run below share the prefix Proton recreates.
+prefix=${OXP3_GPU_BENCH_CACHE:-$HOME/.cache/oxp3-fixes/gpu-bench}/gm-prefix
+for p in $(pgrep -x wineserver) $(pgrep -x gamescopereaper); do kill -9 "$p" 2>/dev/null; done
+[[ -d $prefix ]] && { mv "$prefix" "$prefix-stale-$(date +%H%M%S)" || rm -rf "$prefix"; }
+echo "fresh Wine prefix for this A/B"
+
 run() { # <label> <api> [extra args...]
     local label=$1 api=$2; shift 2
     local i
