@@ -733,6 +733,7 @@ do_install() {
             xmx_retire_split_driver
         fi
         say "done - leave and re-enter Gamemode (no reboot needed)"
+        dxvk_advice
         if (( !SKIP_MESA )); then
             echo "Mesa $MESA_VERSION is restored automatically on every boot (oxp3-mesa-keep);"
             echo "run '$0 all' after an Anatase update to rebuild it against the new image."

@@ -1597,6 +1597,28 @@ dxvk_is_fast() { # <vX.Y.Z...>: fast when >= 3.1
     awk -v v="${1#v}" 'BEGIN { split(v, a, "[.]"); exit !(a[1] > 3 || (a[1] == 3 && a[2] >= 1)) }'
 }
 
+# One-line verdict for the install output: is the runtime Steam would launch with on the fast
+# DX11 path? (measured: DXVK 3.1.x ~88 fps vs 3.0.2 ~82 on the same D3D11 workload)
+dxvk_advice() {
+    local steam=${STEAM_DIR:-$HOME/.local/share/Steam} cfg tool d v
+    cfg=$steam/config/config.vdf
+    [[ -r $cfg ]] || return 0
+    tool=$(python3 "$here/tools/lib/dxvk-steam-default.py" "$cfg" 2>/dev/null) || return 0
+    [[ -n $tool ]] || return 0
+    if ! d=$(proton_dir_for "$tool"); then
+        echo "  Steam default Proton: $tool (not installed here)"
+        return 0
+    fi
+    v=$(dxvk_version "$d")
+    if dxvk_is_fast "${v:-3.0}"; then
+        echo "  Steam default Proton: $tool (DXVK ${v:-?}) - on the DX11 fast path"
+    else
+        echo "  Steam default Proton: $tool (DXVK ${v:-?}) - DX11 titles run ~8% slower than on DXVK 3.1.x"
+        echo "    pick a 3.1.x runtime for DX11 titles: tools/steam-compat-tool.sh list (docs/DX11-PERFORMANCE.md)"
+    fi
+    return 0
+}
+
 status_dxvk() {
     local steam=${STEAM_DIR:-$HOME/.local/share/Steam}
     [[ -d $steam ]] || { echo "  Steam not found - DXVK versions not checked"; return 0; }
