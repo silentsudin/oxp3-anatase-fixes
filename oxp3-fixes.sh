@@ -301,7 +301,10 @@ stage_mesa_override() {
     local -a mesa=()
     local out
     (( SKIP_MESA )) && return 0
-    mapfile -t mesa < <(mesa_rpms 2>/dev/null) || return 0
+    # x86_64 only: rpm-ostree resolves an override by package name, and passing the i686 and
+    # x86_64 RPMs of the same NEVRA fails with "Multiple packages match". The 64-bit stack is
+    # what runs the games (Proton is WoW64), so the 32-bit packages stay at the image's version.
+    mapfile -t mesa < <(mesa_rpms 2>/dev/null | grep -E '\.x86_64\.rpm$') || return 0
     (( ${#mesa[@]} )) || return 0
     if mesa_override_staged; then
         echo "  Mesa $MESA_VERSION: base-image replacement already staged (active after the next reboot)"
@@ -311,6 +314,7 @@ stage_mesa_override() {
     if out=$(sudo rpm-ostree override replace "${mesa[@]}" 2>&1); then
         printf '%s\n' "$out" | sed 's/^/  /'
         echo "  one Mesa after the next reboot: the deployment carries the whole stack (GL, gallium, DRI, Vulkan)"
+        echo "  (64-bit packages are replaced; the i686 Mesa stays at the image's version)"
     else
         printf '%s\n' "$out" | sed 's/^/  /' >&2
         echo "  WARNING: rpm-ostree could not stage the Mesa override: this session keeps the overlay copy," >&2
@@ -340,7 +344,9 @@ for r in dep.get("requested-base-local-replacements") or []:
 # name prefix: mesa-libGLU(-devel) is a different project (GLU, its own source RPM) that this
 # build never produces, and matching it by name made `install` die on systems that have GLU.
 mesa_installed_pkgs() {
-    rpm -qa 'mesa-*' --qf '%{NAME} %{ARCH} %{SOURCERPM}\n' |
+    # 2>/dev/null: the rpmdb inside the /usr overlay can lack .keyring.lock and then every
+    # query prints "can't create keyring lock" twice before answering
+    rpm -qa 'mesa-*' --qf '%{NAME} %{ARCH} %{SOURCERPM}\n' 2>/dev/null |
         awk '{ src = $3; sub(/-[^-]+-[^-]+\.src\.rpm$/, "", src) } src == "mesa" { print $1, $2 }' |
         grep -vE -- '-devel |-debug' | sort -u
 }
@@ -746,7 +752,12 @@ do_install() {
             xmx_retire_split_driver
         fi
         say "done - leave and re-enter Gamemode (no reboot needed)"
-        echo "This lasts until the next Anatase update; run '$0 all' after updating."
+        if (( !SKIP_MESA )) && ! mesa_override_staged; then
+            echo "The overlay copy lives until the next boot; the base-image replacement above"
+            echo "makes Mesa $MESA_VERSION permanent once it is staged and you reboot."
+        else
+            echo "Mesa $MESA_VERSION is in the deployment; run '$0 all' after an Anatase update."
+        fi
     fi
 }
 
