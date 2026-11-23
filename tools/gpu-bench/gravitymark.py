@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -175,11 +176,15 @@ def summarise(deltas: list[float], warmup: int = 0) -> dict:
 # --- runs ------------------------------------------------------------------------------------
 def run_gravitymark(api: str, width: int, height: int, count: int, dest: Path,
                     timeout: int, extra_env: dict | None = None,
-                    taskset: str | None = None) -> tuple[int, str]:
+                    taskset: str | None = None, headless: bool = True,
+                    refresh: int = 60) -> tuple[int, str]:
     times = dest / "times.csv"
+    # Headless by default: `gamescope --backend headless` gives the client a virtual display, so
+    # a measurement never opens a window over the operator's desktop (and every API runs through
+    # the same compositor, which is what makes the comparison fair).
     common = ["-benchmark", "1", "-close", "1", "-count", str(count),
               "-width", str(width), "-height", str(height), "-vsync", "0",
-              "-fullscreen", "0", *APIS[api]]
+              "-fullscreen", "1" if headless else "0", *APIS[api]]
     env = os.environ.copy()
     env["DISPLAY"] = env.get("DISPLAY", ":0")
     if api == "vk-native":
@@ -206,12 +211,39 @@ def run_gravitymark(api: str, width: int, height: int, count: int, dest: Path,
         cwd = WIN_DIR / "bin"
     if extra_env:
         env.update({k: v for k, v in extra_env.items() if v is not None})
+    if headless:
+        cmd = ["gamescope", "--backend", "headless", "-W", str(width), "-H", str(height),
+               "-w", str(width), "-h", str(height), "-r", str(refresh), "--", *cmd]
     if taskset:
         cmd = ["taskset", "-c", taskset, *cmd]
-    t0 = time.time()
-    p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True,
-                       timeout=timeout, stdin=subprocess.DEVNULL)
-    return p.returncode, (p.stdout + p.stderr)[-4000:]
+    # gamescope keeps its reaper alive after the client exits, so wait for the signal that the
+    # benchmark finished - the frametime report - instead of for the process tree to disappear.
+    raw = dest / "raw.log"
+    with open(raw, "w") as logf:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=logf, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+        deadline = time.time() + timeout
+        try:
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    break
+                if times.exists() and time.time() - times.stat().st_mtime > 5:
+                    break
+                time.sleep(1)
+        finally:
+            if proc.poll() is None:
+                for sig in (signal.SIGTERM, signal.SIGKILL):
+                    try:
+                        os.killpg(proc.pid, sig)
+                    except OSError:
+                        pass
+                    try:
+                        proc.wait(timeout=10)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+    text = raw.read_text(errors="replace")
+    return (proc.returncode if proc.returncode is not None else -1), text[-4000:]
 
 
 def cmd_run(a) -> int:
@@ -226,7 +258,9 @@ def cmd_run(a) -> int:
     out(f"== GravityMark {api} {a.width}x{a.height} x{a.count}")
     extra = dict(kv.split("=", 1) for kv in (a.env or []))
     rc, log = run_gravitymark(api, a.width, a.height, a.count, dest, a.timeout, extra,
-                              getattr(a, "taskset", None))
+                              getattr(a, "taskset", None),
+                              headless=getattr(a, "headless", True),
+                              refresh=getattr(a, "refresh", 60))
     (dest / "log.txt").write_text(log)
     times = dest / "times.csv"
     deltas = parse_times(times) if times.exists() else []
@@ -235,6 +269,8 @@ def cmd_run(a) -> int:
         "passes": a.count, "label": label, "rc": rc,
         "note": a.note, "started": stamp, "env": extra,
         "taskset": getattr(a, "taskset", None),
+        "headless": getattr(a, "headless", True),
+        "refresh": getattr(a, "refresh", 60),
         "stack": stack_versions(),
         "summary": summarise(deltas, a.warmup),
     }
@@ -258,7 +294,9 @@ def cmd_matrix(a) -> int:
             sub = argparse.Namespace(api=api, width=a.width, height=a.height, count=a.count,
                                      label=label, out=str(root), timeout=a.timeout,
                                      warmup=0, note=a.note, env=a.env,
-                                     taskset=getattr(a, "taskset", None))
+                                     taskset=getattr(a, "taskset", None),
+                                     headless=getattr(a, "headless", True),
+                                     refresh=getattr(a, "refresh", 60))
             rc |= cmd_run(sub)
     (root / "matrix.json").write_text(json.dumps({"apis": apis, "repeats": a.repeats,
                                                   "resolution": [a.width, a.height],
@@ -321,6 +359,9 @@ def main() -> int:
     s.add_argument("--env", action="append", metavar="K=V",
                    help="extra environment for the run, e.g. DXVK_CONFIG='dxvk.enableGraphicsPipelineLibrary = False'")
     s.add_argument("--taskset", default=None, help="CPU list for the run, e.g. 0-1")
+    s.add_argument("--windowed", action="store_true",
+                   help="open a real window instead of gamescope headless (intrudes on the desktop)")
+    s.add_argument("--refresh", type=int, default=60)
     s.set_defaults(func=cmd_run)
     s = sub.add_parser("matrix", help="every API, N repeats")
     s.add_argument("--apis", default=None)
@@ -333,11 +374,14 @@ def main() -> int:
     s.add_argument("--timeout", type=int, default=900)
     s.add_argument("--env", action="append", metavar="K=V")
     s.add_argument("--taskset", default=None)
+    s.add_argument("--windowed", action="store_true")
+    s.add_argument("--refresh", type=int, default=60)
     s.set_defaults(func=cmd_matrix)
     s = sub.add_parser("report", help="compare result files")
     s.add_argument("paths", nargs="+")
     s.set_defaults(func=cmd_report)
     a = ap.parse_args()
+    a.headless = not getattr(a, "windowed", False)
     return a.func(a)
 
 
