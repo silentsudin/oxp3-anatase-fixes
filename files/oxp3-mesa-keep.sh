@@ -30,20 +30,20 @@ gal=/usr/lib64/libgallium-$want.so
 rtdrv=$rt/overrides/lib64/libvulkan_intel.so
 
 host_ok=0; [ -e "$gal" ] && host_ok=1
-runtime_needed=0
-if [ -r "$listfile" ] && [ -d "$rt/overrides" ]; then
-    if [ ! -e "$rtdrv" ]; then
-        runtime_needed=1
-    elif [ "$host_ok" = 1 ] && ! cmp -s /usr/lib64/libvulkan_intel.so "$rtdrv"; then
-        runtime_needed=1
-    fi
-fi
-if [ "$host_ok" = 1 ] && [ "$runtime_needed" = 0 ]; then exit 0; fi
+runtime_wanted=0
+[ -r "$listfile" ] && [ -d "$rt/overrides" ] && runtime_wanted=1
+runtime_differs() {
+    (( runtime_wanted )) || return 1
+    [ -e "$rtdrv" ] || return 0
+    ! cmp -s /usr/lib64/libvulkan_intel.so "$rtdrv"
+}
+# nothing to do when the host tree is there and the runtime overrides match it
+if [ "$host_ok" = 1 ] && ! runtime_differs; then exit 0; fi
 
 rpms=()
 shopt -s nullglob
 for d in /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
-    rpms+=("$d"/mesa-*oxp3*"$want"*.x86_64.rpm "$d"/mesa-*oxp3*"$want"*.i686.rpm)
+    rpms+=("$d"/mesa-*"$want"*oxp3*.x86_64.rpm "$d"/mesa-*"$want"*oxp3*.i686.rpm)
 done
 shopt -u nullglob
 (( ${#rpms[@]} )) || { log "no cached Mesa $want RPMs; run ./oxp3-install.sh"; exit 0; }
@@ -78,7 +78,7 @@ fi
 
 # Flatpak runtime overrides: the same files with the leading usr/ stripped, which is how the
 # runtime is mounted inside the sandbox. The list is written by `install`.
-if [ "$runtime_needed" = 1 ] && [ -r "$listfile" ] && [ -d "$rt/overrides" ]; then
+if runtime_differs; then
     tmp=$(mktemp -d) || exit 0
     for rpm in "${rpms[@]}"; do
         [ -r "$rpm" ] || continue
