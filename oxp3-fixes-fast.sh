@@ -106,8 +106,8 @@ source "$install_common_lib"
 # Kept local: _mpick/build_mesa/install_mesa_fast/remove_mesa_fast are the podman/meson
 # pipeline that makes this script different from oxp3-fixes.sh (RPM packaging), so they are
 # not part of tools/lib/install-common.sh.
-MESA_COMMIT=62b0e52f875e5cb37b38776908f1b8f85588b385     # Mesa main, 2026-11-10 15:36 UTC (bumped from ea40598a)
-MESA_VERSION="27.0.0~devel.20261110git${MESA_COMMIT:0:8}"  # no "^": Cargo.toml needs semver
+MESA_COMMIT=fec8830e9c94b1d67f3d8469467d5529fb2978cd     # Mesa tag mesa-26.3.1, 2026-11-18
+MESA_VERSION="26.3.1"                                     # the stable branch: devel is retired
 MESA_URL=https://gitlab.freedesktop.org/mesa/mesa/-/archive/$MESA_COMMIT/mesa-$MESA_COMMIT.tar.gz
 # i686 -devel packages the 32-bit build needs beyond the container's (dnf builddep is x86_64 only)
 MESA_I686_DEVEL="llvm-devel.i686 clang-devel.i686 spirv-llvm-translator-devel.i686 spirv-tools-devel.i686
@@ -180,9 +180,10 @@ keep = [x for x in parts if not x.startswith('diff --git a/src/amd/vulkan/00-rad
 open(sys.argv[2], 'w').write(''.join(keep))
 PYEOF
     git -C "$src" apply -p1 "$CACHE/mesa-fast/overrides.patch" || die "overrides.patch does not apply"
-    for f in "$here"/patches/mesa/*.patch "$here"/patches/xess-main/*.patch; do
-        git -C "$src" apply -p1 "$f" || die "$(basename "$f") does not apply to $MESA_COMMIT"
-    done
+    git -C "$src" init -q 2>/dev/null || true
+    while IFS= read -r f; do
+        git -C "$src" apply -p1 "$f" || die "$(basename "$f") does not apply to $MESA_VERSION"
+    done < <(mesa_patch_list "$src")
     say "mesa: podman meson build (fedora:45)"
     podman run --rm -v "$src":/src:ro,z -v "$CACHE/mesa-fast":/out:z registry.fedoraproject.org/fedora:45 bash -lc '
 set -e

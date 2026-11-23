@@ -96,8 +96,8 @@ source "$install_common_lib"
 # ---------------------------------------------------------------------------------------------
 # Kept local: build_mesa()/mesa_rpms() are the RPM pipeline that makes this script different
 # from oxp3-fixes-fast.sh (podman/meson), so they are not part of tools/lib/install-common.sh.
-MESA_COMMIT=62b0e52f875e5cb37b38776908f1b8f85588b385     # Mesa main, 2026-11-10 15:36 UTC (bumped from ea40598a)
-MESA_VERSION="27.0.0~devel.20261110git${MESA_COMMIT:0:8}"  # no "^": Cargo.toml needs semver
+MESA_COMMIT=fec8830e9c94b1d67f3d8469467d5529fb2978cd     # Mesa tag mesa-26.3.1, 2026-11-18
+MESA_VERSION="26.3.1"                                     # the stable branch: devel is retired
 MESA_URL=https://gitlab.freedesktop.org/mesa/mesa/-/archive/$MESA_COMMIT/mesa-$MESA_COMMIT.tar.gz
 # i686 -devel packages the 32-bit build needs beyond the container's (dnf builddep is x86_64 only)
 MESA_I686_DEVEL="llvm-devel.i686 clang-devel.i686 spirv-llvm-translator-devel.i686 spirv-tools-devel.i686
@@ -111,8 +111,9 @@ build_mesa() {
     local top="$CACHE/rpmbuild/mesa" spec tarball="$CACHE/mesa/mesa-$MESA_COMMIT.tar.gz" key
     key=$( { echo "$MESA_VERSION $MESA_COMMIT"
              find "$CACHE/anatase/cards/drivers/mesa" -type f -print 2>/dev/null | sort | xargs -r sha256sum
-             sha256sum "$here"/patches/mesa/*.patch 2>/dev/null || true
-             sha256sum "$here"/patches/xess-main/*.patch 2>/dev/null || true
+             sha256sum "$here"/patches/mesa/0200*.patch "$here"/patches/mesa/0201*.patch \
+                 "$here"/patches/mesa/0206*.patch "$here"/patches/mesa-26.3/*.patch \
+                 "$here"/patches/mesa-26.3-backports/*.patch 2>/dev/null || true
              sha256sum "$here/container/Containerfile" 2>/dev/null || true
            } | sha256sum | cut -c1-32 )
     if cache_valid mesa "$key" && compgen -G "$OUT/mesa-*.rpm" >/dev/null; then
@@ -214,13 +215,21 @@ rep('%meson \\\n', "%ifarch %{ix86}\nprintf \"[binaries]\\nllvm-config = '%%s'\\
 open(p, 'w').write(s)
 EOF
     # our patches after Anatase's own (overrides.patch), in order; refuses a spec they can't go into
-    # patches/mesa (perf) + patches/xess-main (the CM kernel injection): one driver with
-    # everything, so the host Mesa is also the XMX driver and no second Vulkan ICD is needed.
-    local f names=()
-    for f in "$here"/patches/mesa/*.patch "$here"/patches/xess-main/*.patch; do
+    # One series, validated against the real tree before a 30-minute build: the 26.3
+    # backports, the perf patches that apply to 26.3, and the CM (XMX) kernel-injection
+    # series, so this single driver is also the XMX driver and no second ICD is needed.
+    local f names=() chk
+    chk=$(mktemp -d) || die "mesa: cannot create a check tree"
+    tar xzf "$tarball" -C "$chk" --strip-components=1
+    git -C "$chk" init -q 2>/dev/null || true
+    while IFS= read -r f; do
+        git -C "$chk" apply --check -p1 "$f" 2>/dev/null ||
+            { rm -rf "$chk"; die "mesa: $(basename "$f") does not apply to $MESA_VERSION"; }
+        git -C "$chk" apply -p1 "$f"
         cp "$f" "$top/SOURCES/"; names+=( "$(basename "$f")" )
-    done
-    spec_add_patches "$spec" "${names[@]}" || die "mesa: could not add patches/mesa and patches/xess-main to mesa.spec"
+    done < <(mesa_patch_list "$chk")
+    rm -rf "$chk"
+    spec_add_patches "$spec" "${names[@]}" || die "mesa: could not add the 26.3 series to mesa.spec"
     ctr spectool -g -C "$top/SOURCES" "$spec" >/dev/null
     ctr_root dnf -y -q builddep "$spec" >/dev/null 2>&1 || ctr_root dnf -y builddep --skip-unavailable "$spec" | tail -3
     # the Rust crates are dynamic build requirements (%generate_buildrequires)

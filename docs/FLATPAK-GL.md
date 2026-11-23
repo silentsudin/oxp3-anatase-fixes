@@ -1,9 +1,9 @@
 # Our Mesa in Flathub apps: `org.freedesktop.Platform.GL.oxp3`
 
-The extension is built from exactly the same inputs as the host RPM build - MESA_COMMIT,
-Anatase's overrides.patch and **both** `patches/mesa` and `patches/xess-main` (the CM kernel
-injection) - so a Flathub app and a native/Steam game run the same Mesa version with the same
-features. Keep the two lists in step: a patch added to one build and not the other is how the
+The extension is built from exactly the same inputs as the host RPM build - MESA_COMMIT
+(Mesa 26.3.1), the ordered series from `mesa_patch_list()` (26.3 backports, perf patches, the
+CM kernel-injection series) and Anatase's overrides.patch - so a Flathub app and a
+native/Steam game run the same Mesa version with the same features. Keep the two lists in step: a patch added to one build and not the other is how the
 stack splits again.
 
 ## Problem (measured 2026-11-21)

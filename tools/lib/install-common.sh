@@ -1358,6 +1358,22 @@ fetch_flatpak_gl_sources() { # <dl dir>
     echo cb42dec3830d3ac67fa449ecdc0c0f73d5e74498 > "$dl/translator-headers.rev"
 }
 
+# Ordered patch series for the 26.3.x tree, the same for the host RPM build and the Flatpak
+# extension (the working XMX recipe: the 26.3 backports, the perf patches that apply to 26.3,
+# then the CM/XMX kernel-injection series). Backports already upstream in the point release are
+# skipped, so a new 26.3.x only needs MESA_COMMIT bumped. Prints paths, applies nothing.
+mesa_patch_list() { # <extracted mesa tree>
+    local tree=$1 f
+    for f in "$here"/patches/mesa-26.3-backports/*.patch; do
+        git -C "$tree" apply --check -R -p1 "$f" 2>/dev/null && continue
+        echo "$f"
+    done
+    for f in "$here"/patches/mesa/0200*.patch "$here"/patches/mesa/0201*.patch \
+             "$here"/patches/mesa/0206*.patch "$here"/patches/mesa-26.3/*.patch; do
+        echo "$f"
+    done
+}
+
 # Patched Mesa tree: the same inputs as the host build (MESA_COMMIT, Anatase's overrides.patch
 # without its AMD-only RADV hunk, patches/mesa). Needs fetch_anatase.
 prepare_mesa_src() { # <dest>
@@ -1375,12 +1391,13 @@ parts = re.split(r'(?m)^(?=diff --git )', s)
 keep = [x for x in parts if not x.startswith('diff --git a/src/amd/vulkan/00-radv-defaults.conf')]
 open(sys.argv[2], 'w').write(''.join(keep))
 PYEOF
-    git -C "$dest" apply -p1 "$dest/.oxp3-overrides.patch" || die "overrides.patch does not apply to $MESA_COMMIT"
+    git -C "$dest" apply -p1 "$dest/.oxp3-overrides.patch" || die "overrides.patch does not apply to $MESA_VERSION"
     # Same series as the host RPM build, CM injection included: Flatpak apps then run the
     # same Mesa, with XeSS XMX working there too.
-    for f in "$here"/patches/mesa/*.patch "$here"/patches/xess-main/*.patch; do
-        git -C "$dest" apply -p1 "$f" || die "$(basename "$f") does not apply to $MESA_COMMIT"
-    done
+    git -C "$dest" init -q 2>/dev/null || true
+    while IFS= read -r f; do
+        git -C "$dest" apply -p1 "$f" || die "$(basename "$f") does not apply to $MESA_VERSION"
+    done < <(mesa_patch_list "$dest")
 }
 
 # org.freedesktop.Sdk//<branch> and its LLVM 22 extension, from any installation; installs
@@ -1405,7 +1422,9 @@ build_flatpak_gl() {
         flatpak_gl_sdk "$branch"
         key=$( { echo "$branch $MESA_COMMIT"
                  sha256sum "$CACHE/anatase/cards/drivers/mesa/overrides.patch" 2>/dev/null || true
-                 sha256sum "$here"/patches/mesa/*.patch "$here"/patches/xess-main/*.patch \
+                 sha256sum "$here"/patches/mesa/0200*.patch "$here"/patches/mesa/0201*.patch \
+                     "$here"/patches/mesa/0206*.patch "$here"/patches/mesa-26.3/*.patch \
+                     "$here"/patches/mesa-26.3-backports/*.patch \
                      "$here/tools/flatpak-gl/build-in-sdk.sh" 2>/dev/null || true
                  flatpak_gl_sources
                  flatpak info --show-commit "org.freedesktop.Sdk//$branch"

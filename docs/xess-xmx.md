@@ -1,22 +1,41 @@
 # XeSS XMX (DPAS) on our Mesa driver - state and results
 
-> **2026-11-23: one Mesa for everything.** The CM kernel injection now ships *inside* the
-> production Mesa instead of a second 26.3-based driver selected per game. Host RPM build
-> (`build_mesa()` in `oxp3-fixes.sh`) and the Flatpak GL extension
-> (`prepare_mesa_src()`/`build-in-sdk.sh`) both apply `patches/mesa/*` **and**
-> `patches/xess-main/0101-anv-cm-kernel-injection-for-main-27.patch` to the same tree, so
-> native, Steam/Proton and Flathub apps all run Mesa `27.0.0~devel` (commit `62b0e52f`) with
-> the perf patches and CM. `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` are no longer set: the
-> installer (`xmx_retire_split_driver()`) removes those lines from
-> `~/.config/environment.d/*xmx*.conf` as soon as the host driver carries CM, and
-> `tools/xmx-enable.sh` only writes them when it does not. The sections below describe the
-> earlier two-driver arrangement and are kept as the history of how CM got here; the
-> binaries they name (`~/.cache/oxp3-fixes/xmx-driver/`, the 26.3 builds,
-> `icd-xmx.json`) are reproduction artifacts, not the installed driver.
+> **2026-11-23: one Mesa, on the stable 26.3 branch.** The stack is consolidated on
+> **Mesa 26.3.1** (tag `mesa-26.3.1`, commit `fec8830e`) - the branch the XMX/CM work was
+> developed and validated on - and the `27.0.0-devel` build is retired: a devel snapshot is a
+> moving target, and it split the machine into two Intel Vulkan devices at two Mesa versions
+> (host `27.0.0-devel` at `/usr/lib64` plus the Mesa 26.3 XMX build through
+> `~/.config/vulkan/icd.d/*.json` and `VK_DRIVER_FILES`).
 >
-> Verify one driver: `vulkaninfo --summary | grep -E 'deviceName|driverInfo|driverVersion'`
-> lists a single Intel device at `Mesa 27.0.0-devel`, and
-> `strings /usr/lib64/libvulkan_intel.so | grep -c ANV_CM_HELPER` is non-zero.
+> One series, applied by both build paths (`mesa_patch_list()` in
+> `tools/lib/install-common.sh`), in this order:
+>
+> 1. `patches/mesa-26.3-backports/` - the 26.3 branch fixes; one already upstream in the point
+>    release is skipped automatically, so bumping `MESA_COMMIT` to a newer 26.3.x just works.
+> 2. `patches/mesa/0200`, `0201`, `0206` - the perf patches that apply to 26.3.
+> 3. `patches/mesa-26.3/` - the CM (C-for-Metal) kernel-injection series, i.e. the XMX path.
+> 4. Anatase's `overrides.patch`, without its AMD-only RADV hunk.
+>
+> That tree is built as the host RPMs (`build_mesa()` in `oxp3-fixes.sh`) **and** as the
+> Flatpak GL extension (`prepare_mesa_src()` + `tools/flatpak-gl/build-in-sdk.sh`), so native,
+> Steam/Proton and Flathub apps all run the same driver with the same features.
+> `patches/xess-main/0101` (the main-27 port of the CM series) is no longer built, and
+> `patches/mesa/0212`, `0213`, `0214` and `0215` are deliberately not in the shipping series:
+> they were validated on main, not on 26.3, so they stay available for A/B builds.
+>
+> `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` are no longer set. `xmx_retire_split_driver()` strips
+> them from `~/.config/environment.d/*xmx*.conf` and disables user-scope `*xmx*.json` ICD
+> manifests as soon as the installed driver carries the CM injection; `tools/xmx-enable.sh`,
+> `tools/xmx-session.sh`, `tools/xmx-write-env.sh` and the fast variant only fall back to a
+> separate ICD when it does not.
+>
+> Verify one driver: `vulkaninfo --summary` lists a single Intel device at
+> `Mesa 26.3.1`, and `strings /usr/lib64/libvulkan_intel.so | grep -c ANV_CM_HELPER` is
+> non-zero.
+>
+> The sections below describe the earlier two-driver arrangement and are kept as the history
+> of how CM got here; the binaries they name (`~/.cache/oxp3-fixes/xmx-driver/`, the 26.3
+> standalone builds, `icd-xmx.json`) are reproduction artifacts, not the installed driver.
 
 ## What it is
 
