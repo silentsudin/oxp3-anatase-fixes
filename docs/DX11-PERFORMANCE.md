@@ -152,6 +152,33 @@ That residual is the part that would need work inside DXVK, not on this side: th
 upstream report is the constant per-frame cost, the enabled fast paths in DXVK's startup dump, and
 the independence from resolution, configuration and scheduling.
 
+## Levers that need root (runbook, not yet measured)
+
+The machine measured here runs sched_ext `cosmos_1.1.7` with the `powersave` governor and
+`balance_power` EPP on every core. Those are legitimate variables for a latency-sensitive
+submission path, and they are the one group this investigation could not test from the agent
+session (no passwordless sudo). To measure one, apply it, run the batch, restore:
+
+```sh
+# governor + EPP: the two P-cores (0-1) at full speed, the rest as the repo's scheduler script does
+for c in 0 1; do
+    echo performance | sudo tee /sys/devices/system/cpu/cpu$c/cpufreq/scaling_governor
+    echo performance | sudo tee /sys/devices/system/cpu/cpu$c/cpufreq/energy_performance_preference
+done
+
+tools/gpu-bench/dx11-fixed-cost.sh -n 2        # any batch; it only reads the environment
+
+# restore
+for c in 0 1; do
+    echo powersave | sudo tee /sys/devices/system/cpu/cpu$c/cpufreq/scaling_governor
+    echo balance_power | sudo tee /sys/devices/system/cpu/cpu$c/cpufreq/energy_performance_preference
+done
+```
+
+`tools/cpu-sched-test.sh` already knows these combinations (`epp-perf`, `gov-perf`,
+`cosmos-gaming-epp`, `cake-epp`, `p2dq-epp`) and applies/restores them, but it drives Cyberpunk
+2077 as its workload; the tags are the useful part, not the harness.
+
 ## Traps this work paid for (now encoded in the tools)
 
 - GravityMark's API flags are `-direct3d11` / `-direct3d12` / `-vulkan`; `-dx11` exits 1 silently
