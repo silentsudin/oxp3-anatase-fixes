@@ -288,6 +288,19 @@ mesa_rpms() {
 # resolves an override by package name alone, so it stops with "Multiple packages match".
 MESA_STATE_DIR=/var/lib/oxp3-fixes
 
+# Deploy a component's boot-time restore unit (idempotent). Mesa's own deployment runs it
+# immediately as well; gamescope/mangohud are extracted by install itself, so they only need the
+# unit enabled for the next boot's cleared overlay.
+install_overlay_keep() { # <component>
+    local n=$1 svc="oxp3-$1-keep"
+    [[ -r $here/files/$svc.sh && -r $here/files/$svc.service ]] || return 0
+    sudo install -D -m0755 "$here/files/$svc.sh" "/usr/local/libexec/$svc"
+    sudo install -D -m0644 "$here/files/$svc.service" "/etc/systemd/system/$svc.service"
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$svc.service" >/dev/null 2>&1 || true
+    echo "  $svc.service: enabled, restores the patched $n from the durable RPMs on every boot"
+}
+
 install_mesa_keep() {
     (( SKIP_MESA )) && return 0
     sudo install -D -m0755 "$here/files/oxp3-mesa-keep.sh" /usr/local/libexec/oxp3-mesa-keep
@@ -301,6 +314,26 @@ install_mesa_keep() {
     sudo systemctl start oxp3-mesa-keep.service >/dev/null 2>&1 || true
     echo "  oxp3-mesa-keep.service: enabled and applied, restores the full Mesa $MESA_VERSION"
     echo "  tree on every boot (host + Flatpak runtime overrides)"
+}
+
+record_rpm_state() {
+    # Gamescope and MangoHud are restored into the /usr overlay at boot from their RPMs. Keeping
+    # only a copy in ~/.cache means a cleaned cache leaves the stock package in place, which is how
+    # the patched MangoHud (Intel iGPU power/usage) quietly stopped being used. Keep one durable
+    # copy of each component's RPMs next to the recorded state.
+    local comp rpm
+    sudo mkdir -p "$MESA_STATE_DIR/rpms"
+    for comp in gamescope mangohud kmod-oxp3-xe; do
+        case $comp in
+            gamescope)    (( SKIP_GAMESCOPE )) && continue ;;
+            mangohud)     (( SKIP_MANGOHUD )) && continue ;;
+            kmod-oxp3-xe) (( SKIP_KERNEL )) && continue ;;
+        esac
+        sudo rm -f "$MESA_STATE_DIR"/rpms/"$comp"-*.rpm
+        for rpm in "$OUT"/"$comp"-*.rpm; do
+            [[ -f $rpm ]] && sudo cp -f "$rpm" "$MESA_STATE_DIR/rpms/"
+        done
+    done
 }
 
 record_mesa_state() { # <flatpak list file, may be empty>
@@ -718,8 +751,11 @@ do_install() {
                 install_flatpak_mesa
             fi
             (( SKIP_MESA )) || record_mesa_state "$FLATPAK_MESA_LIST"
+            record_rpm_state
         fi
         install_mesa_keep
+        (( SKIP_GAMESCOPE )) || install_overlay_keep gamescope
+        (( SKIP_MANGOHUD )) || install_overlay_keep mangohud
         if (( !SKIP_EXTRAS )); then
             say "hhd patches: OneXPlayer 3 power limits, volume rocker (sudo)"
             install_hhd_patches

@@ -3,7 +3,7 @@
 # Install the patched gamescope (PQ HDR on the AMS881KB01 OLED) into the writable
 # /usr overlay, and re-apply it on every boot because rpm-ostree clears the overlay.
 #
-# The packaged build is gamescope-…oxp3 (patches/gamescope/0001-oxp3-hdr-pq.patch);
+# The packaged build is gamescope-…oxp3 (patches/gamescope/<version>/0001-oxp3-hdr-pq.patch);
 # the image ships the stock lodos build, which has no PQ HDR and shows either a black
 # or a washed-out Gamemode output with --hdr-enabled.
 set -uo pipefail
@@ -12,14 +12,22 @@ sha_file=$state/gamescope.sha256
 bin=/usr/bin/gamescope
 log() { printf 'oxp3-gamescope-keep: %s\n' "$*"; }
 case $(rpm -q --qf '%{RELEASE}\n' gamescope 2>/dev/null | head -1) in
-    *oxp3*) exit 0 ;;
+    *oxp3*)
+        # Installed by `install` (rpm -Uvh into the overlay). Record this binary as the
+        # known-good one: check-working/oxp3-verify compare against it, and without this
+        # a rebuilt gamescope read as "stock" until the next boot re-extracted it.
+        mkdir -p "$state"
+        sha256sum "$bin" 2>/dev/null | cut -d' ' -f1 > "$sha_file"
+        exit 0 ;;
 esac
 want=""
 [ -r "$sha_file" ] && want=$(cat "$sha_file")
 if [ -n "$want" ] && [ "$(sha256sum "$bin" 2>/dev/null | cut -d' ' -f1)" = "$want" ]; then exit 0; fi
 rpms=()
 shopt -s nullglob
-for d in /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
+# the durable copy comes first: ~/.cache is user-writable and gets cleaned, and when it
+# was emptied the boot restore silently left the stock package in place (no Intel stats)
+for d in /var/lib/oxp3-fixes/rpms /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
     rpms+=("$d"/gamescope-*oxp3*.x86_64.rpm "$d"/gamescope-*oxp3*.i686.rpm)
 done
 shopt -u nullglob
@@ -33,6 +41,14 @@ if ! install -m 000 /dev/null "$probe" 2>/dev/null; then
     install -m 000 /dev/null "$probe" 2>/dev/null || { log "usroverlay did not become writable"; exit 0; }
 fi
 rm -f "$probe"
+# Only extract a build that fits the booted image. cpio bypasses rpm's dependency check, so an
+# RPM built for another Anatase image (an update since the last ./oxp3-install.sh) could put a
+# binary into /usr whose libraries are missing, e.g. a gamescope needing wlroots 0.20. Ask rpm
+# itself; --test changes nothing. Any failure keeps the stock package, which always works.
+if ! rpm -U --test --replacepkgs --oldpackage --nosignature "${rpms[@]}" >/dev/null 2>&1; then
+    log "cached RPMs do not fit this image (rpm dependency check failed): keeping the stock gamescope; run ./oxp3-install.sh"
+    exit 0
+fi
 mkdir -p "$state"
 failed=0
 for rpm in "${rpms[@]}"; do

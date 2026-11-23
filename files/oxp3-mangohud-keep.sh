@@ -14,7 +14,9 @@ case $(rpm -q --qf '%{RELEASE}' mangohud 2>/dev/null | head -1) in
 esac
 rpms=()
 shopt -s nullglob
-for d in /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
+# the durable copy comes first: ~/.cache is user-writable and gets cleaned, and when it
+# was emptied the boot restore silently left the stock package in place (no Intel stats)
+for d in /var/lib/oxp3-fixes/rpms /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
     rpms+=("$d"/mangohud-*oxp3*.x86_64.rpm "$d"/mangohud-*oxp3*.i686.rpm)
 done
 shopt -u nullglob
@@ -30,6 +32,14 @@ if ! install -m 000 /dev/null "$probe" 2>/dev/null; then
     install -m 000 /dev/null "$probe" 2>/dev/null || { log "usroverlay did not become writable"; exit 0; }
 fi
 rm -f "$probe"
+# Only extract a build that fits the booted image. cpio bypasses rpm's dependency check, so an
+# RPM built for another Anatase image (an update since the last ./oxp3-install.sh) could put a
+# binary into /usr whose libraries are missing, e.g. a gamescope needing wlroots 0.20. Ask rpm
+# itself; --test changes nothing. Any failure keeps the stock package, which always works.
+if ! rpm -U --test --replacepkgs --oldpackage --nosignature "${rpms[@]}" >/dev/null 2>&1; then
+    log "cached RPMs do not fit this image (rpm dependency check failed): keeping the stock MangoHud; run ./oxp3-install.sh"
+    exit 0
+fi
 failed=0
 for rpm in "${rpms[@]}"; do
     [ -r "$rpm" ] || continue
