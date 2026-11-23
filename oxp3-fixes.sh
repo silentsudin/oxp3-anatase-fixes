@@ -274,10 +274,21 @@ EOF
 mesa_rpms() {
     local pkg arch f
     while read -r pkg arch; do
-        f=$(ls "$OUT/$pkg-$MESA_VERSION-"*".$arch.rpm" 2>/dev/null | head -1)
+        # the fresh build first, then the durable copy install keeps for the boot restore: a
+        # cleaned ~/.cache must not leave install unable to reinstall the stack it already has
+        f=$(ls "$OUT/$pkg-$MESA_VERSION-"*".$arch.rpm" \
+               "$MESA_STATE_DIR/rpms/$pkg-$MESA_VERSION-"*".$arch.rpm" 2>/dev/null | head -1)
         [[ -n $f ]] || die "no built $pkg.$arch - run '$0 build' first"
         echo "$f"
     done < <(mesa_installed_pkgs)
+}
+
+# <component>: the freshly built RPMs, or the durable copies recorded by the last install.
+component_rpms() {
+    local comp=$1 glob
+    for glob in "$OUT/$comp"-*.rpm "$MESA_STATE_DIR/rpms/$comp"-*.rpm; do
+        ls $glob 2>/dev/null | while read -r f; do printf '%s\n' "$f"; done | head -2
+    done | awk '!seen[$0]++'
 }
 
 # The /usr overlay ("usroverlay") does not survive a reboot, and the image's Mesa comes back
@@ -608,7 +619,8 @@ install_flatpak_mesa() {
     # The list comes from the RPMs this run installed, not from `rpm -q`: an install into the
     # /usr overlay can leave the rpmdb reporting the base image's Mesa while the overlay holds
     # ours, and then this step would copy the wrong tree (or miss files) in the runtime.
-    list=$(rpm -qlp "$OUT"/mesa-*.x86_64.rpm 2>/dev/null | grep '^/usr/' |
+    local src; src=$(ls "$OUT"/mesa-*.x86_64.rpm "$MESA_STATE_DIR"/rpms/mesa-*.x86_64.rpm 2>/dev/null | head -1)
+    list=$(rpm -qlp "${src:-"$OUT"/mesa-*.x86_64.rpm}" 2>/dev/null | grep '^/usr/' |
            grep -vE "$FLATPAK_MESA_SKIP" | sort -u)
     if [[ -z $list ]]; then
         pkgs=$(mesa_installed_pkgs | awk '{ print $1 "." $2 }')
@@ -648,8 +660,8 @@ install_flatpak_mesa() {
 
 do_install() {
     local rpms=() kmod=() kver info staged locals p un=()
-    (( SKIP_GAMESCOPE )) || rpms+=( "$OUT"/gamescope-*.x86_64.rpm "$OUT"/gamescope-*.i686.rpm )
-    (( SKIP_MANGOHUD )) || rpms+=( "$OUT"/mangohud-*.x86_64.rpm "$OUT"/mangohud-*.i686.rpm )
+    if (( !SKIP_GAMESCOPE )); then local gr; gr=$(component_rpms gamescope); mapfile -t -O "${#rpms[@]}" rpms <<<"$gr"; fi
+    if (( !SKIP_MANGOHUD )); then local mr2; mr2=$(component_rpms mangohud); mapfile -t -O "${#rpms[@]}" rpms <<<"$mr2"; fi
     if (( !SKIP_MESA )); then local mr; mr=$(mesa_rpms); mapfile -t -O "${#rpms[@]}" rpms <<<"$mr"; fi
     local f; for f in "${rpms[@]}"; do [[ -f $f ]] || die "missing $f - run '$0 build' first"; done
     kver=$(anatase_kver)
@@ -684,16 +696,28 @@ do_install() {
     local layer=() want=() pkg
     if (( !SKIP_KERNEL )) && [[ ! -e $OUT/.kernel-not-needed ]]; then
         kmod=( "$OUT/$KMOD_NAME"-*.rpm )
-        [[ -f ${kmod[0]} ]] || die "no $KMOD_NAME package - run '$0 build' first"
-        rpm -qp --qf '%{VERSION}\n' "${kmod[0]}" | grep -qF "${kver//-/_}" ||
-            die "$KMOD_NAME was built for another kernel than $kver - rebuild"
-        if ! mok_trusted; then
-            echo "WARNING: the MOK in $MOK_DIR is not in the kernel's machine keyring."
-            echo "         The signed modules would be rejected and the screen stay dark at boot."
-            mok_usage_ok || echo "         The key isn't a CA with keyCertSign only: run '$0 mok-setup'."
-            echo "         Skipping the kernel part (README: Secure Boot key)."
-        else
-            layer+=( "${kmod[0]}" )
+        [[ -f ${kmod[0]} ]] || kmod=( "$MESA_STATE_DIR/rpms/$KMOD_NAME"-*.rpm )
+        if [[ ! -f ${kmod[0]} ]]; then
+            # already layered in the deployment (and a kmod cannot be rebuilt for a kernel the
+            # module was not built against anyway): skip rather than abort the whole install
+            if grep -qwE "$KMOD_NAME|kmod-oxp3-.*" <<<"$locals"; then
+                echo "  no fresh $KMOD_NAME RPM to layer - the installed one stays"
+                SKIP_KERNEL=1
+            else
+                die "no $KMOD_NAME package - run '$0 build' first"
+            fi
+        fi
+        if [[ -f ${kmod[0]} ]]; then
+            rpm -qp --qf '%{VERSION}\n' "${kmod[0]}" | grep -qF "${kver//-/_}" ||
+                die "$KMOD_NAME was built for another kernel than $kver - rebuild"
+            if ! mok_trusted; then
+                echo "WARNING: the MOK in $MOK_DIR is not in the kernel's machine keyring."
+                echo "         The signed modules would be rejected and the screen stay dark at boot."
+                mok_usage_ok || echo "         The key isn't a CA with keyCertSign only: run '$0 mok-setup'."
+                echo "         Skipping the kernel part (README: Secure Boot key)."
+            else
+                layer+=( "${kmod[0]}" )
+            fi
         fi
     fi
     if (( !SKIP_FIRMWARE )); then

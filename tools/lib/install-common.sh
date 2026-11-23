@@ -755,7 +755,12 @@ xmx_retire_split_driver() {
 }
 
 install_xess() {
-    [[ -d $OUT/xess-xmx ]] || die "missing $OUT/xess-xmx - run '$0 build' first"
+    if [[ ! -d $OUT/xess-xmx ]]; then
+        # already installed and nothing new was built: leave it alone instead of failing install
+        [[ -d ${XESS_PKG:-$HOME/.local/share/xess-xmx} ]] &&
+            { echo "  XeSS XMX already installed, no fresh build staged - leaving it"; return 0; }
+        die "missing $OUT/xess-xmx - run '$0 build' first"
+    fi
     if ! grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so; then
         echo "  the installed Mesa has no CM kernel injection (built before patches/xess-main?) - XeSS XMX skipped"
         return 0
