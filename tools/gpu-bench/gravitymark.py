@@ -47,7 +47,7 @@ RES = CACHE / "results"
 PROTON = Path(os.environ.get(
     "OXP3_PROTON", HOME / ".local/share/Steam/compatibilitytools.d/Proton-CachyOS Latest/proton"))
 SNIPER = HOME / ".local/share/Steam/steamapps/common/SteamLinuxRuntime_sniper/run"
-PREFIX = CACHE / "gm-prefix"
+PREFIX = Path(os.environ.get("OXP3_GM_PREFIX", CACHE / "gm-prefix"))
 
 APIS = {
     "d3d11": ["-direct3d11"],
