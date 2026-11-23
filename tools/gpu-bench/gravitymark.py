@@ -174,7 +174,8 @@ def summarise(deltas: list[float], warmup: int = 0) -> dict:
 
 # --- runs ------------------------------------------------------------------------------------
 def run_gravitymark(api: str, width: int, height: int, count: int, dest: Path,
-                    timeout: int) -> tuple[int, str]:
+                    timeout: int, extra_env: dict | None = None,
+                    taskset: str | None = None) -> tuple[int, str]:
     times = dest / "times.csv"
     common = ["-benchmark", "1", "-close", "1", "-count", str(count),
               "-width", str(width), "-height", str(height), "-vsync", "0",
@@ -190,12 +191,23 @@ def run_gravitymark(api: str, width: int, height: int, count: int, dest: Path,
         env.update({
             "STEAM_COMPAT_CLIENT_INSTALL_PATH": str(HOME / ".local/share/Steam"),
             "STEAM_COMPAT_DATA_PATH": str(PREFIX),
+            # DXVK's startup dump lists which Vulkan features it enabled and which it fell back
+            # on; without it a slow d3d11 run says nothing about why. The path is a Windows one
+            # (Z: is the host root inside the prefix).
+            "DXVK_LOG_LEVEL": "info",
+            "DXVK_LOG_PATH": "Z:" + str(dest).replace("/", "\\"),
+            "DXVK_HUD": "0",
+            "VKD3D_DEBUG": "warn",
         })
         PREFIX.mkdir(parents=True, exist_ok=True)
         # Z: is the host root inside the prefix, so the report lands where we want it
         zpath = "Z:" + str(times).replace("/", "\\")
         cmd = [str(PROTON), "run", "./GravityMark.exe", *common, "-times", zpath]
         cwd = WIN_DIR / "bin"
+    if extra_env:
+        env.update({k: v for k, v in extra_env.items() if v is not None})
+    if taskset:
+        cmd = ["taskset", "-c", taskset, *cmd]
     t0 = time.time()
     p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True,
                        timeout=timeout, stdin=subprocess.DEVNULL)
@@ -212,14 +224,17 @@ def cmd_run(a) -> int:
     dest = Path(a.out or RES / f"gravitymark-{stamp}") / f"{api}-{a.width}x{a.height}-{label}"
     dest.mkdir(parents=True, exist_ok=True)
     out(f"== GravityMark {api} {a.width}x{a.height} x{a.count}")
-    rc, log = run_gravitymark(api, a.width, a.height, a.count, dest, a.timeout)
+    extra = dict(kv.split("=", 1) for kv in (a.env or []))
+    rc, log = run_gravitymark(api, a.width, a.height, a.count, dest, a.timeout, extra,
+                              getattr(a, "taskset", None))
     (dest / "log.txt").write_text(log)
     times = dest / "times.csv"
     deltas = parse_times(times) if times.exists() else []
     res = {
         "tool": "gravitymark", "api": api, "width": a.width, "height": a.height,
         "passes": a.count, "label": label, "rc": rc,
-        "note": a.note, "started": stamp,
+        "note": a.note, "started": stamp, "env": extra,
+        "taskset": getattr(a, "taskset", None),
         "stack": stack_versions(),
         "summary": summarise(deltas, a.warmup),
     }
@@ -242,7 +257,8 @@ def cmd_matrix(a) -> int:
             label = f"warm{i}" if i == 0 else f"r{i}"
             sub = argparse.Namespace(api=api, width=a.width, height=a.height, count=a.count,
                                      label=label, out=str(root), timeout=a.timeout,
-                                     warmup=0, note=a.note)
+                                     warmup=0, note=a.note, env=a.env,
+                                     taskset=getattr(a, "taskset", None))
             rc |= cmd_run(sub)
     (root / "matrix.json").write_text(json.dumps({"apis": apis, "repeats": a.repeats,
                                                   "resolution": [a.width, a.height],
@@ -302,6 +318,9 @@ def main() -> int:
     s.add_argument("--note", default="")
     s.add_argument("--out", default=None)
     s.add_argument("--timeout", type=int, default=900)
+    s.add_argument("--env", action="append", metavar="K=V",
+                   help="extra environment for the run, e.g. DXVK_CONFIG='dxvk.enableGraphicsPipelineLibrary = False'")
+    s.add_argument("--taskset", default=None, help="CPU list for the run, e.g. 0-1")
     s.set_defaults(func=cmd_run)
     s = sub.add_parser("matrix", help="every API, N repeats")
     s.add_argument("--apis", default=None)
@@ -312,6 +331,8 @@ def main() -> int:
     s.add_argument("--note", default="")
     s.add_argument("--out", default=None)
     s.add_argument("--timeout", type=int, default=900)
+    s.add_argument("--env", action="append", metavar="K=V")
+    s.add_argument("--taskset", default=None)
     s.set_defaults(func=cmd_matrix)
     s = sub.add_parser("report", help="compare result files")
     s.add_argument("paths", nargs="+")
