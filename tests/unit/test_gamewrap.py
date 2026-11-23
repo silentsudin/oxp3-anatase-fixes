@@ -96,10 +96,11 @@ class GamewrapTest(unittest.TestCase):
             "INTC_ALT_DRIVER_EXTENSIONS_PATH": shim,
         }
         if missing_path:
-            values["VK_DRIVER_FILES"] = base / "does-not-exist.json"
+            # a required path (there is no separate ICD any more, so break the helper)
+            values["ANV_CM_HELPER"] = base / "does-not-exist.sh"
         lines = [
             "export VK_DRIVER_FILES=%s" % values["VK_DRIVER_FILES"],
-            "export ANV_CM_HELPER=%s" % helper,
+            "export ANV_CM_HELPER=%s" % values["ANV_CM_HELPER"],
             "export XMX_IGC_DIR=%s" % igc,
             "export INTC_ALT_DRIVER_EXTENSIONS_PATH=%s" % shim,
             "export VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer",
@@ -253,12 +254,21 @@ xmx = "off"
                          "C:/windows/system32/driverstore/filerepository/"
                          "igd_faux.inf_1")
 
-    def test_xmx_missing_driver_path_is_refused(self):
+    def test_xmx_missing_required_path_is_refused(self):
         self.xmx_fixture(missing_path=True)
         cfg, _ = self.write_config(BASE + CYBERPUNK)
         plan = GW.build_plan(cfg, ["proton"], self.env, self.home, "cyberpunk2077")
         self.assertEqual(plan.features["xmx"].state, "off")
         self.assertIn("does not exist", plan.features["xmx"].detail)
+
+    def test_xmx_env_without_icd_override_is_accepted(self):
+        # One Mesa: the host driver has the CM injection, so the env file has no
+        # VK_DRIVER_FILES and XMX must still be considered available.
+        self.xmx_fixture(drop="VK_DRIVER_FILES")
+        cfg = GW.validate_config(GW.builtin_config())
+        plan = GW.build_plan(cfg, ["proton"], dict(self.env, OXP3_XMX="1"),
+                             self.home, None)
+        self.assertEqual(plan.features["xmx"].state, "on")
 
     def test_xmx_default_off_stays_off(self):
         cfg, _ = self.write_config(BASE + '[defaults]\nxmx = "off"\n')

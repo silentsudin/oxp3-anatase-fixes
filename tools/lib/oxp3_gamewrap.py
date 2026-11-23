@@ -91,8 +91,9 @@ def builtin_config() -> dict:
         },
         "xmx": {
             "env_file": "~/.config/xess-xmx/oxp3-env.sh",
+            # No VK_DRIVER_FILES: the host Mesa carries the CM injection now, and exporting
+            # a second ICD would split the stack across two Mesa versions.
             "require": [
-                "VK_DRIVER_FILES",
                 "ANV_CM_HELPER",
                 "XMX_IGC_DIR",
                 "INTC_ALT_DRIVER_EXTENSIONS_PATH",

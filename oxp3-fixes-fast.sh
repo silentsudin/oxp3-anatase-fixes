@@ -32,8 +32,12 @@
 #                              (--skip-sched leaves the gaming CPU scheduler alone; --stock-dmc keeps
 #                               Anatase's display DMC firmware; --skip-hw leaves the hardware fixes
 #                               (home button/LEDs, power units) from tools/oxp3-hw-install.sh alone)
+#                              --skip-flatpak-gl (Flathub apps keep Flathub's Mesa instead of the
+#                                                 org.freedesktop.Platform.GL.oxp3 extension)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
 #              OXP3_CACHE   (default ~/.cache/oxp3-fixes)
+#              OXP3_FLATPAK_GL_BRANCHES  Flatpak runtime branches to build our Mesa for
+#                                        (default 26.08; e.g. "26.08 25.08")
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -60,7 +64,7 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_FLATPAK=0 SKIP_SCHED=0 SKIP_HW=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_FLATPAK=0 SKIP_SCHED=0 SKIP_HW=0 SKIP_FLATPAK_GL=0
 [[ ${OXP3_SKIP_HW:-0} == 1 ]] && SKIP_HW=1
 cmd="${1:-}"; shift || true
 for a in "$@"; do
@@ -72,6 +76,7 @@ for a in "$@"; do
         --stock-dmc) SKIP_DMC=1 ;;
         --skip-extras) SKIP_EXTRAS=1 ;;
         --skip-mesa) SKIP_MESA=1 ;;
+        --skip-flatpak-gl) SKIP_FLATPAK_GL=1 ;;
         --skip-flatpak) SKIP_FLATPAK=1 ;;
         --skip-sched) SKIP_SCHED=1 ;;
         --skip-hw) SKIP_HW=1 ;;
@@ -125,6 +130,14 @@ _mpick() {
 # per-game ICD/environment. Runs during `build` as the invoking user.
 build_xmx_driver() {
     local script=$here/tools/build-xmx-driver-263.sh drv key
+    # One Mesa: when the build this script ships carries the CM injection, no second driver
+    # and no ICD override. The 26.3 build stays as the fallback for a Mesa without CM.
+    if grep -aq ANV_CM_HELPER "$CACHE/mesa-fast/usr/local/lib64/libvulkan_intel.so" 2>/dev/null ||
+       grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so 2>/dev/null; then
+        echo "  XMX driver: the Mesa build carries the CM injection; no separate driver"
+        "$here/tools/xmx-write-env.sh" >/dev/null 2>&1 || true
+        return 0
+    fi
     [[ -x $script ]] || { echo "  no $script; XMX driver not built"; return 0; }
     drv="$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so"
     key=$( { sha256sum "$script" 2>/dev/null || true
@@ -146,7 +159,10 @@ build_xmx_driver() {
 
 build_mesa() {
     local out="$CACHE/mesa-fast/usr/local" src="$CACHE/mesa-fast/src" tarball="$CACHE/mesa/mesa-$MESA_COMMIT.tar.gz" f
-    if [[ -x $out/lib64/libvulkan_intel.so && -z ${OXP3_MESA_REBUILD:-} ]]; then
+    # Reuse only a build that has the CM injection: an older one makes the separate XMX
+    # driver necessary again, which is exactly the split this consolidation removes.
+    if [[ -x $out/lib64/libvulkan_intel.so && -z ${OXP3_MESA_REBUILD:-} ]] &&
+       grep -aq ANV_CM_HELPER "$out/lib64/libvulkan_intel.so"; then
         say "mesa: reusing the podman build in $out"
         MESA_BUILD_DIR=$out; return 0
     fi
@@ -164,7 +180,7 @@ keep = [x for x in parts if not x.startswith('diff --git a/src/amd/vulkan/00-rad
 open(sys.argv[2], 'w').write(''.join(keep))
 PYEOF
     git -C "$src" apply -p1 "$CACHE/mesa-fast/overrides.patch" || die "overrides.patch does not apply"
-    for f in "$here"/patches/mesa/*.patch; do
+    for f in "$here"/patches/mesa/*.patch "$here"/patches/xess-main/*.patch; do
         git -C "$src" apply -p1 "$f" || die "$(basename "$f") does not apply to $MESA_COMMIT"
     done
     say "mesa: podman meson build (fedora:45)"
@@ -294,6 +310,9 @@ KMODS=(
     "drivers/gpu/drm/xe|xe"
     "drivers/net/wireless/intel/iwlwifi|iwlwifi dvm/iwldvm mvm/iwlmvm mld/iwlmld"
     "drivers/bluetooth|btintel btintel_pcie"
+    # livepatch: relax interrupt intervals behind a TT when the PTL xHCI rejects them (Steam
+    # Controller puck on a dock); usbcore/xhci are built in, hence a livepatch, loaded at boot
+    "drivers/usb/oxp3|oxp3_usb_tt_quirk|autoload"
 )
 
 # ---------------------------------------------------------------------------------------------
@@ -406,7 +425,7 @@ uninstall_extras() {
 # update drops both and the rocker keeps working (just unfixed) until the next install.
 HHD_PATCHES=("$here"/patches/hhd/*.patch)
 VOLUME_HWDB=/usr/lib/udev/hwdb.d/84-oxp3-volume-keys.hwdb
-# The patch list above is consumed by hhd_site/install_volume_fix/hhd_volume_unpatch in
+# The patch list above is consumed by hhd_site/install_hhd_patches/hhd_volume_unpatch in
 # tools/lib/install-common.sh.
 
 # Mesa for the Steam Flatpak. Anatase builds the org.anatase.Platform runtime from the composefs /usr
@@ -494,6 +513,13 @@ do_install() {
         say "hardware fixes: home button/LEDs + power units (sudo)"
         sudo "$here/tools/oxp3-hw-install.sh" --leds --power ||
             echo "WARNING: hardware fixes (leds/power units) failed - see above" >&2
+    fi
+
+    # Flathub apps: our Mesa as a Flatpak GL driver extension. It lives in /var/lib/flatpak and
+    # /etc (not the /usr overlay), so it survives Anatase updates and needs no reboot.
+    if (( !SKIP_MESA && !SKIP_FLATPAK_GL )); then
+        say "Mesa for Flathub apps: Flatpak GL driver extension (sudo)"
+        install_flatpak_gl
     fi
 
     # 1. kernel modules + firmware: xe loads from the initramfs, so both are layered with
@@ -587,8 +613,8 @@ do_install() {
             install_sched
         fi
         if (( !SKIP_EXTRAS )); then
-            say "volume rocker (sudo)"
-            install_volume_fix
+            say "hhd patches: OneXPlayer 3 power limits, volume rocker (sudo)"
+            install_hhd_patches
         fi
         if (( !SKIP_XESS )); then
             say "XeSS on XMX (xess-xmx-linux)"
@@ -621,6 +647,7 @@ do_uninstall() {
             echo "WARNING: removing the hardware units failed - see above" >&2
     fi
     uninstall_xess
+    uninstall_flatpak_gl
     if [[ -r $FLATPAK_MESA_LIST ]]; then remove_flatpak_mesa; refresh_flatpak_runtime; fi
     remove_mesa_fast
     if [[ -e $VOLUME_HWDB ]]; then

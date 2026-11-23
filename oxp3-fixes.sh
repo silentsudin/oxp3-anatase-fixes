@@ -112,6 +112,7 @@ build_mesa() {
     key=$( { echo "$MESA_VERSION $MESA_COMMIT"
              find "$CACHE/anatase/cards/drivers/mesa" -type f -print 2>/dev/null | sort | xargs -r sha256sum
              sha256sum "$here"/patches/mesa/*.patch 2>/dev/null || true
+             sha256sum "$here"/patches/xess-main/*.patch 2>/dev/null || true
              sha256sum "$here/container/Containerfile" 2>/dev/null || true
            } | sha256sum | cut -c1-32 )
     if cache_valid mesa "$key" && compgen -G "$OUT/mesa-*.rpm" >/dev/null; then
@@ -213,11 +214,13 @@ rep('%meson \\\n', "%ifarch %{ix86}\nprintf \"[binaries]\\nllvm-config = '%%s'\\
 open(p, 'w').write(s)
 EOF
     # our patches after Anatase's own (overrides.patch), in order; refuses a spec they can't go into
+    # patches/mesa (perf) + patches/xess-main (the CM kernel injection): one driver with
+    # everything, so the host Mesa is also the XMX driver and no second Vulkan ICD is needed.
     local f names=()
-    for f in "$here"/patches/mesa/*.patch; do
+    for f in "$here"/patches/mesa/*.patch "$here"/patches/xess-main/*.patch; do
         cp "$f" "$top/SOURCES/"; names+=( "$(basename "$f")" )
     done
-    spec_add_patches "$spec" "${names[@]}" || die "mesa: could not add patches/mesa to mesa.spec"
+    spec_add_patches "$spec" "${names[@]}" || die "mesa: could not add patches/mesa and patches/xess-main to mesa.spec"
     ctr spectool -g -C "$top/SOURCES" "$spec" >/dev/null
     ctr_root dnf -y -q builddep "$spec" >/dev/null 2>&1 || ctr_root dnf -y builddep --skip-unavailable "$spec" | tail -3
     # the Rust crates are dynamic build requirements (%generate_buildrequires)
@@ -340,6 +343,9 @@ KMODS=(
     "drivers/gpu/drm/xe|xe"
     "drivers/net/wireless/intel/iwlwifi|iwlwifi dvm/iwldvm mvm/iwlmvm mld/iwlmld"
     "drivers/bluetooth|btintel btintel_pcie"
+    # livepatch: relax interrupt intervals behind a TT when the PTL xHCI rejects them (Steam
+    # Controller puck on a dock); usbcore/xhci are built in, hence a livepatch, loaded at boot
+    "drivers/usb/oxp3|oxp3_usb_tt_quirk|autoload"
 )
 
 # ---------------------------------------------------------------------------------------------

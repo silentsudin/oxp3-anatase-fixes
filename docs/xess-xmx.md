@@ -1,5 +1,23 @@
 # XeSS XMX (DPAS) on our Mesa driver - state and results
 
+> **2026-11-23: one Mesa for everything.** The CM kernel injection now ships *inside* the
+> production Mesa instead of a second 26.3-based driver selected per game. Host RPM build
+> (`build_mesa()` in `oxp3-fixes.sh`) and the Flatpak GL extension
+> (`prepare_mesa_src()`/`build-in-sdk.sh`) both apply `patches/mesa/*` **and**
+> `patches/xess-main/0101-anv-cm-kernel-injection-for-main-27.patch` to the same tree, so
+> native, Steam/Proton and Flathub apps all run Mesa `27.0.0~devel` (commit `62b0e52f`) with
+> the perf patches and CM. `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` are no longer set: the
+> installer (`xmx_retire_split_driver()`) removes those lines from
+> `~/.config/environment.d/*xmx*.conf` as soon as the host driver carries CM, and
+> `tools/xmx-enable.sh` only writes them when it does not. The sections below describe the
+> earlier two-driver arrangement and are kept as the history of how CM got here; the
+> binaries they name (`~/.cache/oxp3-fixes/xmx-driver/`, the 26.3 builds,
+> `icd-xmx.json`) are reproduction artifacts, not the installed driver.
+>
+> Verify one driver: `vulkaninfo --summary | grep -E 'deviceName|driverInfo|driverVersion'`
+> lists a single Intel device at `Mesa 27.0.0-devel`, and
+> `strings /usr/lib64/libvulkan_intel.so | grep -c ANV_CM_HELPER` is non-zero.
+
 ## What it is
 
 XeSS' XMX path needs two things that stock Wine/Proton + Mesa do not provide:

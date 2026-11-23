@@ -68,6 +68,7 @@ install_common_guard() {
     fi
     for v in here CACHE OUT MOK_DIR ANATASE_REPO PATCHWORK_REPO FEDORA IMAGE CTR KMOD_NAME STAMP \
              SKIP_KERNEL SKIP_GAMESCOPE SKIP_MANGOHUD SKIP_FIRMWARE SKIP_DMC SKIP_MESA SKIP_XESS \
+             SKIP_FLATPAK_GL MESA_COMMIT MESA_URL \
              XESS_COMMIT XESS_SRC_URL XESS_ZIP_URL XESS_ZIP_SHA XESS_DLLS XESS_PKG \
              FIRMWARE FW_NAME HHD_PATCHES VOLUME_HWDB FLATPAK_RT FLATPAK_MESA_LIST \
              FLATPAK_RT_FILES EXTRA_UNITS; do
@@ -497,20 +498,115 @@ ensure_container() {
 # gamescope / MangoHud: Anatase's packaging + our patches, rebuilt as RPMs
 # ---------------------------------------------------------------------------------------------
 
-fetch_anatase() {
-    if [[ -d $CACHE/anatase/.git ]]; then
-        git -C "$CACHE/anatase" fetch -q --depth 1 origin HEAD
-        git -C "$CACHE/anatase" reset -q --hard FETCH_HEAD
-    else
-        git clone -q --depth 1 "$ANATASE_REPO" "$CACHE/anatase"
-    fi
-    echo "anatase packaging: $(git -C "$CACHE/anatase" log -1 --format='%h %cd %s' --date=short)"
+# The anatase-org/anatase commit the booted image was built from (its OCI
+# org.opencontainers.image.revision label); empty when the image carries none.
+anatase_image_revision() {
+    rpm-ostree status --booted --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = [x for x in json.load(sys.stdin)["deployments"] if x.get("booted")][0]
+    meta = d.get("base-commit-meta") or {}
+    for key in ("ostree.manifest", "ostree.container.image-config"):
+        raw = meta.get(key)
+        if not raw:
+            continue
+        m = json.loads(raw)
+        labels = dict(m.get("annotations") or {}, **((m.get("config") or {}).get("Labels") or {}))
+        rev = labels.get("org.opencontainers.image.revision", "")
+        if len(rev) == 40 and all(c in "0123456789abcdef" for c in rev):
+            print(rev); break
+except Exception:
+    pass' 2>/dev/null || true
 }
 
-# build_card <name> <patch-line-regex> <patch files...>
+# Anatase's packaging at the commit the BOOTED IMAGE was built from, not the repo tip: our RPMs
+# must link against the libraries that image ships. On 2026-11-21 the tip moved gamescope to an0.8
+# (wlroots 0.20, libliftoff), which the Stable image 20261109.7 lacks: that RPM failed rpm's
+# dependency check, and the boot-time keep unit would have extracted it anyway.
+fetch_anatase() {
+    local rev what
+    rev=$(anatase_image_revision)
+    if [[ ! -d $CACHE/anatase/.git ]]; then
+        git init -q "$CACHE/anatase"
+        git -C "$CACHE/anatase" remote add origin "$ANATASE_REPO"
+    fi
+    if [[ -n $rev ]]; then
+        git -C "$CACHE/anatase" fetch -q --depth 1 origin "$rev" ||
+            die "cannot fetch Anatase packaging $rev (the booted image's revision) from $ANATASE_REPO"
+        what="booted image's revision"
+    else
+        echo "  WARNING: the booted image names no packaging revision; building from the tip of $ANATASE_REPO" >&2
+        git -C "$CACHE/anatase" fetch -q --depth 1 origin HEAD
+        what="repository tip"
+    fi
+    git -C "$CACHE/anatase" reset -q --hard FETCH_HEAD
+    echo "anatase packaging: $(git -C "$CACHE/anatase" log -1 --format='%h %cd %s' --date=short) ($what)"
+}
+
+# Add Patch<N> lines for our patches to an Anatase spec, after its last Patch line (or its last
+# Source line), numbered from 2000 - or above the spec's highest number - so %autosetup/%autopatch
+# apply them after the packaging's own patches, in file order. This used to anchor on a specific
+# "overrides.patch" line, which Anatase dropped from gamescope.spec with the an0.8 rebase
+# (2026-11-21). Refuses a spec whose %prep does not apply patches automatically: our Patch lines
+# would then be silently ignored.
+spec_add_patches() { # <spec> <patch basenames...>
+    python3 - "$@" <<'PYEOF'
+import re, sys
+path, names = sys.argv[1], sys.argv[2:]
+s = open(path).read()
+autosetup = re.search(r'(?m)^%autosetup\b.*$', s)
+if not re.search(r'(?m)^%autopatch\b', s) and not (autosetup and not re.search(r'\s-N\b', autosetup.group(0))):
+    sys.exit(f"{path}: %prep applies no patches through %autosetup/%autopatch - Anatase packaging changed")
+# existing patch numbers; an unnumbered "Patch:" takes the previous number + 1 (first is 0)
+nums, last = [], -1
+for m in re.finditer(r'(?m)^Patch(\d*):', s):
+    last = int(m.group(1)) if m.group(1) else last + 1
+    nums.append(last)
+start = max([2000] + [n + 1 for n in nums])
+add = "".join(f"Patch{start + i}: {n}\n" for i, n in enumerate(names))
+anchors = list(re.finditer(r'(?m)^Patch\d*:.*\n', s)) or list(re.finditer(r'(?m)^Source\d*:.*\n', s))
+if not anchors:
+    sys.exit(f"{path}: no Patch or Source line - Anatase packaging changed")
+pos = anchors[-1].end()
+open(path, 'w').write(s[:pos] + add + s[pos:])
+PYEOF
+}
+
+# Would these RPMs install on the booted system? rpm's own transaction check against a copy of
+# the host rpmdb (no root, no lock). Catches a build that linked against libraries the image
+# lacks - e.g. the shared build container gaining wlroots 0.20 from another spec's builddep -
+# before such an RPM reaches `install` or the boot-time keep units.
+rpms_fit_host() { # <rpm files...>
+    local db rc=0
+    db=$(mktemp -d "${TMPDIR:-/tmp}/oxp3-rpmdb.XXXXXX")
+    if cp -a "$(rpm -E %_dbpath)/." "$db/"; then
+        rpm --dbpath "$db" -U --test --replacepkgs --oldpackage --nosignature "$@" || rc=1
+    else
+        rc=1
+    fi
+    rm -rf "$db"
+    return "$rc"
+}
+
+# build_card <name> <patch dir>
+# The patches are <patch dir>/<spec Version>/*.patch when that directory exists (gamescope: one
+# set per Anatase gamescope version, so an image update picks the matching set), otherwise
+# <patch dir>/*.patch. A version with neither stops the build instead of shipping it unpatched.
 build_card() {
-    local name=$1 anchor=$2; shift 2
-    local top="$CACHE/rpmbuild/$name" spec key
+    local name=$1 pdir=$2
+    local top="$CACHE/rpmbuild/$name" spec key ver
+    ver=$(sed -n 's/^Version:[[:space:]]*//p' "$CACHE/anatase/cards/gaming/$name/$name.spec" | head -1)
+    local patches=()
+    if [[ -d $pdir/$ver ]]; then
+        patches=( "$pdir/$ver"/*.patch )
+    else
+        shopt -s nullglob; patches=( "$pdir"/*.patch ); shopt -u nullglob
+        if (( ! ${#patches[@]} )); then
+            local have; have=$(cd "$pdir" && ls -d */ 2>/dev/null | tr -d / | tr '\n' ' ')
+            die "$name: Anatase's packaging is $name $ver, but $pdir has patches only for: ${have:-none}. Rebase them to $ver (as $pdir/$ver/)."
+        fi
+    fi
+    set -- "${patches[@]}"
     key=$( { git -C "$CACHE/anatase" rev-parse HEAD 2>/dev/null || true
              find "$CACHE/anatase/cards/gaming/$name" -type f -print 2>/dev/null | sort | xargs -r sha256sum
              sha256sum "$@" 2>/dev/null || true
@@ -522,15 +618,12 @@ build_card() {
     rm -rf "$top"; mkdir -p "$top/SOURCES"
     cp -r "$CACHE/anatase/cards/gaming/$name/." "$top/SOURCES/"
     spec="$top/SOURCES/$name.spec"
-    # add our patches right after Anatase's overrides.patch, in order
-    local n=2000 lines="" p
+    # our patches after Anatase's own, in order
+    local p names=()
     for p in "$@"; do
-        cp "$p" "$top/SOURCES/"
-        lines+="Patch$n: $(basename "$p")\n"; n=$((n + 1))
+        cp "$p" "$top/SOURCES/"; names+=( "$(basename "$p")" )
     done
-    grep -qE "$anchor" "$spec" || die "$name.spec: no '$anchor' line - Anatase packaging changed"
-    sed -i -E "0,/$anchor/s//&\n${lines%\\n}/" "$spec"
-    local ver; ver=$(sed -n 's/^Version:[[:space:]]*//p' "$spec")
+    spec_add_patches "$spec" "${names[@]}" || die "$name: could not add our patches to $name.spec"
     local inst; inst=$(rpm -q "$name" --qf '%{VERSION}\n' 2>/dev/null | head -1 || true)
     [[ -z $inst || $inst == "$ver" ]] || echo "note: installed $name $inst, Anatase packaging has $ver"
 
@@ -547,6 +640,10 @@ build_card() {
         { tail -30 "$top/build-i686.log"; die "$name i686 build failed (full log: $top/build-i686.log)"; }
     rm -f "$OUT/$name"-*.rpm
     find "$top/RPMS" -name "$name-$ver-*.rpm" ! -name '*debug*' -exec cp {} "$OUT/" \;
+    if ! rpms_fit_host "$OUT/$name"-*.rpm; then
+        rm -f "$OUT/$name"-*.rpm
+        die "$name $ver: the built RPMs would not install on this Anatase image (see rpm's message above), so they were discarded"
+    fi
     cache_store "$name" "$key"
     ls "$OUT/$name"-*.rpm
 }
@@ -600,10 +697,42 @@ seed_xess_compiler() {
     done
 }
 
+# The host Mesa now carries the CM kernel injection (patches/xess-main in the RPM build),
+# so a second Vulkan ICD only splits the stack: VK_DRIVER_FILES pointed the whole session
+# at the old Mesa 26.3 build, and processes ended up on different Mesa versions. Once the
+# host driver has CM, drop those overrides; the ANV_CM_*/shim variables stay because the CM
+# path lives in the host driver now.
+xmx_retire_split_driver() {
+    local f tmp n=0 d
+    grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so 2>/dev/null || return 0
+    # 1. environment drop-ins that point the whole session at the old driver
+    for f in "$HOME"/.config/environment.d/*xmx*.conf; do
+        [[ -f $f ]] || continue
+        grep -Eq '^[[:space:]]*(VK_DRIVER_FILES|VK_ICD_FILENAMES)=' "$f" || continue
+        tmp=$(mktemp) || return 0
+        grep -Ev '^[[:space:]]*(VK_DRIVER_FILES|VK_ICD_FILENAMES)=' "$f" > "$tmp" && mv "$tmp" "$f"
+        echo "  dropped the separate-ICD override from ${f/#$HOME/~} (host Mesa has the CM injection)"
+        n=$((n + 1))
+    done
+    # 2. user-scope ICD manifests: the loader reads ~/.config/vulkan/icd.d and
+    # ~/.local/share/vulkan/icd.d too, so one left there adds a second Intel device at the
+    # old Mesa version even with no VK_DRIVER_FILES. Keep the file, disabled, for rollback.
+    for d in "$HOME"/.config/vulkan/icd.d "$HOME"/.local/share/vulkan/icd.d; do
+        [[ -d $d ]] || continue
+        for f in "$d"/*xmx*.json; do
+            [[ -f $f ]] || continue
+            mv "$f" "$f.disabled" && echo "  disabled the extra ICD ${f/#$HOME/~} (one Mesa now)"
+            n=$((n + 1))
+        done
+    done
+    [[ $n -gt 0 ]] && echo "  one Mesa now: restart Steam (leave and re-enter Gamemode) to drop the old ICD"
+    return 0
+}
+
 install_xess() {
     [[ -d $OUT/xess-xmx ]] || die "missing $OUT/xess-xmx - run '$0 build' first"
     if ! grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so; then
-        echo "  the installed Mesa has no CM kernel injection (built before patches/mesa 0101?) - XeSS XMX skipped"
+        echo "  the installed Mesa has no CM kernel injection (built before patches/xess-main?) - XeSS XMX skipped"
         return 0
     fi
     mkdir -p "$XESS_PKG"
@@ -612,6 +741,7 @@ install_xess() {
         "$OUT/xess-xmx/" "$XESS_PKG/"
     seed_xess_compiler
     bash "$XESS_PKG/install.sh" | sed 's/^/  /' || echo "  WARNING: xess-xmx-linux's install.sh failed"
+    xmx_retire_split_driver
     echo "  Restart Steam (leave and re-enter Gamemode) so games get the new environment."
 }
 
@@ -623,6 +753,16 @@ uninstall_xess() {
 
 status_xess() {
     local f; f=$(xmx_override_file)
+    if grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so 2>/dev/null; then
+        echo "    Host Mesa carries the CM injection (single driver, no separate XMX ICD)"
+    else
+        echo "    Host Mesa has no CM injection - XeSS XMX needs a Mesa built with patches/xess-main"
+    fi
+    local g
+    for g in "$HOME"/.config/environment.d/*xmx*.conf; do
+        [[ -f $g ]] && grep -Eq '^[[:space:]]*(VK_DRIVER_FILES|VK_ICD_FILENAMES)=' "$g" &&
+            echo "    WARNING: ${g/#$HOME/~} still points at a separate Vulkan ICD (run install again)"
+    done
     echo "  XeSS XMX: $(head -c 200 "${XDG_CACHE_HOME:-$HOME/.cache}/xess-xmx/driver-status" 2>/dev/null || echo 'no driver check yet')"
     grep -q '^ANV_CM_HELPER=' "$f" 2>/dev/null && echo "    Steam Flatpak override: $(grep -E '^(ANV_CM_HELPER|VKD3D_DISABLE_EXTENSIONS|force_vk_vendor)=' "$f" | tr '\n' ' ')"
     local p n=0 no=""
@@ -681,7 +821,7 @@ apply_kernel_patches() {
                 skipped+=( "$(basename "$p")" )
             fi
         else
-            git -C "$src" am --abort >/dev/null 2>&1 || true
+            git -C "$src" -c user.name=oxp3-fixes -c user.email=oxp3-fixes@localhost am --abort >/dev/null 2>&1 || true
             rm -rf "$src/.git/rebase-apply"
             if git -C "$src" apply --check -R "$p" >/dev/null 2>&1; then
                 skipped+=( "$(basename "$p")" )
@@ -697,7 +837,7 @@ apply_kernel_patches() {
                     skipped+=( "$(basename "$p")" )
                 fi
             else
-                git -C "$src" am --abort >/dev/null 2>&1 || true
+                git -C "$src" -c user.name=oxp3-fixes -c user.email=oxp3-fixes@localhost am --abort >/dev/null 2>&1 || true
                 rm -rf "$src/.git/rebase-apply"
                 die "kernel patch $(basename "$p") doesn't apply to this kernel - it needs updating"
             fi
@@ -775,8 +915,11 @@ build_kmods() {
     hash=$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$cfg"); hash=${hash:-sha512}
     local stage="$CACHE/kernel/stage-$tag" ko rel_path files=()
     rm -rf "$stage"; mkdir -p "$stage"
+    local autoload=()
     for entry in "${KMODS[@]}"; do
-        dir=${entry%%|*}; mods=${entry#*|}
+        # <dir>|<modules>[|autoload] - autoload: load at boot through modules-load.d
+        dir=${entry%%|*}; mods=${entry#*|}; mods=${mods%%|*}
+        [[ $entry == *'|autoload' ]] && autoload+=( $mods )
         for m in $mods; do
             ko="$src/$dir/$m.ko"
             [[ -f $ko ]] || die "$dir/$m.ko not produced"
@@ -818,7 +961,10 @@ tar -xf %{SOURCE0}
 %install
 mkdir -p %{buildroot}/usr/lib/modules/$kver/updates
 cp -a drivers %{buildroot}/usr/lib/modules/$kver/updates/
+mkdir -p %{buildroot}/usr/lib/modules-load.d
+printf '%s\n' ${autoload[*]} > %{buildroot}/usr/lib/modules-load.d/oxp3-kmods.conf
 %files
+/usr/lib/modules-load.d/oxp3-kmods.conf
 EOF
         for f in "${files[@]}"; do echo "/usr/lib/modules/$kver/updates/$f"; done
         cat <<EOF
@@ -927,9 +1073,10 @@ do_build() {
     command -v podman >/dev/null || die "podman is required"
     ensure_container
     if (( !SKIP_GAMESCOPE || !SKIP_MANGOHUD || !SKIP_MESA )); then fetch_anatase; fi
-    (( SKIP_GAMESCOPE )) || build_card gamescope '^Patch:[[:space:]]+overrides\.patch' "$here"/patches/gamescope/*.patch
-    (( SKIP_MANGOHUD )) || build_card mangohud '^Patch1000:[[:space:]]+overrides\.patch' "$here"/patches/mangohud/*.patch
+    (( SKIP_GAMESCOPE )) || build_card gamescope "$here/patches/gamescope"
+    (( SKIP_MANGOHUD )) || build_card mangohud "$here/patches/mangohud"
     (( SKIP_MESA )) || build_mesa
+    (( SKIP_MESA || SKIP_FLATPAK_GL )) || build_flatpak_gl
     (( SKIP_XESS )) || build_xess
     (( SKIP_KERNEL )) || build_kmods
     (( SKIP_FIRMWARE )) || build_firmware
@@ -1037,13 +1184,19 @@ hhd_backup_patch_files() { # SITE PATCH -> prints "<stamp>	<key>	<pre_sha>" line
         done
 }
 
-install_volume_fix() {
-    local site p changed=0 rows row rk; site=$(hhd_site)
-    [[ -n $site ]] || { echo "  hhd not found, volume rocker fix skipped"; return 0; }
-    # each patch: already there, or applied now; one that does neither leaves the rocker stock
+# Our hhd patches (patches/hhd): OneXPlayer 3 power limits and volume rocker taps. Each patch is
+# applied on its own - one that no longer fits Anatase's hhd is reported and skipped, the others
+# still apply (this used to undo all of them, so a stale volume patch silently cost the rest).
+# hhd lives in /usr, whose overlay is discarded at reboot, so oxp3-hhd-keep re-applies the
+# deployed copies before hhd starts on every boot.
+install_hhd_patches() {
+    local site p changed=0 rows row rk vol_total=0 vol_ok=0 keep_dir=/usr/local/share/oxp3-fixes/hhd-patches
+    site=$(hhd_site)
+    [[ -n $site ]] || { echo "  hhd not found, hhd patches skipped"; return 0; }
     for p in "${HHD_PATCHES[@]}"; do
+        [[ ${p##*/} == *volume-rocker* ]] && vol_total=$((vol_total + 1))
         if git -C "$site" apply --check -R -p1 "$p" >/dev/null 2>&1; then
-            continue
+            echo "  ${p##*/}: already applied"
         elif git -C "$site" apply --check -p1 "$p" >/dev/null 2>&1; then
             rows=$(hhd_backup_patch_files "$site" "$p")
             sudo git -C "$site" apply -p1 "$p"; changed=1
@@ -1053,34 +1206,50 @@ install_volume_fix() {
                 oxp3_manifest_record "/${rk#abs/}" "install-common/hhd" \
                     "${row%%$'\t'*}" backup "${p##*/}" 2>/dev/null || true
             done <<<"$rows"
+            echo "  ${p##*/}: applied"
         else
-            echo "  WARNING: ${p##*/} doesn't apply to this hhd - volume rocker left stock"
-            hhd_volume_unpatch "$site"
-            [[ -e $VOLUME_HWDB ]] && { sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update; }
-            sudo systemctl restart hhd.service
-            return 0
+            echo "  WARNING: ${p##*/} does not fit this hhd ($(rpm -q hhd 2>/dev/null | head -1)) - skipped" >&2
+            continue
         fi
+        [[ ${p##*/} == *volume-rocker* ]] && vol_ok=$((vol_ok + 1))
     done
-    sudo find "$site/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} +
-    echo "  hhd: volume rocker presses become taps$( ((changed)) || echo ' (already patched)')"
-    if ! cmp -s "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"; then
-        sudo install -m 0644 "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"
-        sudo systemd-hwdb update
-        sudo udevadm trigger --subsystem-match=input --action=change
+    sudo find "$site/hhd" "$site/adjustor" -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+    # volume rocker: the atkbd force-release only belongs next to hhd's tap handling
+    if (( vol_total && vol_ok == vol_total )); then
+        if ! cmp -s "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"; then
+            sudo install -m 0644 "$here/files/84-oxp3-volume-keys.hwdb" "$VOLUME_HWDB"
+            sudo systemd-hwdb update
+            sudo udevadm trigger --subsystem-match=input --action=change
+        fi
+        echo "  hhd: volume rocker presses become taps"
+    elif [[ -e $VOLUME_HWDB ]]; then
+        sudo rm -f "$VOLUME_HWDB"; sudo systemd-hwdb update
     fi
+    # re-apply at every boot, before hhd starts
+    sudo rm -rf "$keep_dir"; sudo install -d -m 0755 "$keep_dir"
+    sudo install -m 0644 "${HHD_PATCHES[@]}" "$keep_dir/"
+    sudo install -D -m 0755 "$here/files/oxp3-hhd-keep.sh" /usr/local/libexec/oxp3-hhd-keep
+    sudo install -m 0644 "$here/files/oxp3-hhd-keep.service" /etc/systemd/system/oxp3-hhd-keep.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable oxp3-hhd-keep.service >/dev/null 2>&1
     sudo systemctl restart hhd.service
+    (( changed )) || echo "  hhd patches: nothing new to apply"
 }
 
 # take our hhd patches out again, newest first (only those that are fully applied)
-hhd_volume_unpatch() { # <site>
+hhd_volume_unpatch() { # <site>   (undo install_hhd_patches: patches, keep unit, patch copies)
     local i p k real pending=0
+    sudo systemctl disable oxp3-hhd-keep.service >/dev/null 2>&1 || true
+    sudo rm -f /etc/systemd/system/oxp3-hhd-keep.service /usr/local/libexec/oxp3-hhd-keep
+    sudo rm -rf /usr/local/share/oxp3-fixes/hhd-patches
+    sudo systemctl daemon-reload 2>/dev/null || true
     for (( i=${#HHD_PATCHES[@]} - 1; i >= 0; i-- )); do
         p=${HHD_PATCHES[$i]}
         git -C "$1" apply --check -R -p1 "$p" >/dev/null 2>&1 && sudo git -C "$1" apply -R -p1 "$p"
     done
-    sudo find "$1/hhd/device/oxp" -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+    sudo find "$1/hhd" "$1/adjustor" -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
     # The reverse patch is the normal undo. If it did not apply (a newer hhd, a rejected hunk),
-    # the pre-patch bytes recorded by install_volume_fix are the fallback; restoring needs root
+    # the pre-patch bytes recorded by install_hhd_patches are the fallback; restoring needs root
     # for /usr, so this only tries and otherwise points at the rollback tool.
     for k in $(oxp3_manifest_keys 2>/dev/null); do
         case $k in abs/*) real=/${k#abs/} ;; *) continue ;; esac
@@ -1123,6 +1292,218 @@ remove_flatpak_mesa() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# Our Mesa for Flathub apps: the GL driver extension org.freedesktop.Platform.GL.oxp3
+# ---------------------------------------------------------------------------------------------
+# Flathub apps (Horizon, Heroic, emulators...) run on org.freedesktop.Platform and take Mesa from
+# its GL driver extension, not from the host or from the Anatase Steam runtime above, so they ran
+# Flathub's Mesa 26.2.x. A host-built driver cannot simply be pointed at either: it needs host
+# libraries the runtime lacks (libdisplay-info, libSPIRV-Tools, a newer libexpat).
+#
+# So the same Mesa (MESA_COMMIT + Anatase's overrides.patch + patches/mesa) is built inside
+# org.freedesktop.Sdk//<branch> (tools/flatpak-gl/build-in-sdk.sh) and exported as the extension
+# org.freedesktop.Platform.GL.oxp3//<branch> with priority=100. It is enabled next to Flathub's
+# driver with FLATPAK_GL_DRIVERS=oxp3:default (/etc/environment.d):
+#   - priority=100 makes our files win where both provide one (vulkan/icd.d/intel_icd.*.json,
+#     libEGL_mesa/libGLX_mesa/libgbm, lib/dri) - measured: without it GL.default wins;
+#   - "default" stays active for everything not built here: 32-bit GL (GL32.default), apps on
+#     other runtime branches, other vendors' drivers, lavapipe, OpenCL, Vulkan layers.
+# The extension is installed system-wide from a local no-GPG remote and pinned, so
+# `flatpak uninstall --unused` run without the variable does not prune it.
+# Build: user, needs org.freedesktop.Sdk + Sdk.Extension.llvm22 for the branch (installed --user
+# from Flathub when missing). Install/uninstall: root.
+
+flatpak_gl_name() { echo oxp3; }
+flatpak_gl_branches() { echo "${OXP3_FLATPAK_GL_BRANCHES:-26.08}"; }
+flatpak_gl_work() { echo "$CACHE/flatpak-gl"; }
+flatpak_gl_sysrepo() { echo /var/lib/oxp3-fixes/flatpak-gl-repo; }
+flatpak_gl_env_file() { echo /etc/environment.d/60-oxp3-flatpak-gl.conf; }
+flatpak_gl_ref() { echo "runtime/org.freedesktop.Platform.GL.$(flatpak_gl_name)/x86_64/$1"; }
+# "Mesa 27.0.0-devel" from the libgallium-<version>.so in an extension's files/ (the version
+# string inside the driver binaries is not contiguous, so grep on them truncates it)
+flatpak_gl_mesa_version() { # <files dir>
+    local g; g=$(ls "$1"/lib/libgallium-*.so 2>/dev/null | head -1)
+    [[ -n $g ]] || { echo "Mesa ?"; return 0; }
+    g=${g##*/libgallium-}; echo "Mesa ${g%.so}"
+}
+
+# Pinned build dependencies the SDK does not have: <file>|<url>|<sha256>. The translator release
+# must match the SDK extension's LLVM (22.1.x); each project gets the SPIRV-Headers commit it
+# names (SPIRV-Tools DEPS, SPIRV-LLVM-Translator spirv-headers-tag.conf).
+flatpak_gl_sources() {
+    cat <<'EOF'
+SPIRV-Tools-vulkan-sdk-1.4.363.0.tar.gz|https://codeload.github.com/KhronosGroup/SPIRV-Tools/tar.gz/refs/tags/vulkan-sdk-1.4.363.0|e6c83a215538fbfd265ccf398d3877985055df1273dbed73912bd05307664688
+SPIRV-Headers-496543121ce6419f23d6fa5d7194ba66c36212d2.tar.gz|https://codeload.github.com/KhronosGroup/SPIRV-Headers/tar.gz/496543121ce6419f23d6fa5d7194ba66c36212d2|a9bb9c48713245eacf97cc539b6f1d45405a92d8813f8b82e635f0a085ee9898
+SPIRV-LLVM-Translator-v22.1.8.tar.gz|https://codeload.github.com/KhronosGroup/SPIRV-LLVM-Translator/tar.gz/refs/tags/v22.1.8|895bca0285fd4118800912a54527c0ae0d0c6e62591e807c3c96c6b342c4c5e2
+SPIRV-Headers-cb42dec3830d3ac67fa449ecdc0c0f73d5e74498.tar.gz|https://codeload.github.com/KhronosGroup/SPIRV-Headers/tar.gz/cb42dec3830d3ac67fa449ecdc0c0f73d5e74498|117010e525fe36b1ce006e0e58a6e0a3b415aabc9179d912b92737f41f3f994f
+pyyaml-6.0.4.tar.gz|https://files.pythonhosted.org/packages/76/b8/c0b780928e2fb1c87e9e375818c6f121da2398b071012d1747be300b83f4/pyyaml-6.0.4.tar.gz|e24bf71af8a432d7808fabff134d38dfe16d3cbb41f2873bb4b1e42422de0a1a
+EOF
+}
+
+fetch_flatpak_gl_sources() { # <dl dir>
+    local dl=$1 file url sha
+    mkdir -p "$dl"
+    while IFS='|' read -r file url sha; do
+        if [[ ! -s $dl/$file ]] || ! sha256sum -c --status <<<"$sha  $dl/$file"; then
+            curl -sfL --retry 3 -o "$dl/$file.part" "$url" || die "download failed: $url"
+            sha256sum -c --status <<<"$sha  $dl/$file.part" ||
+                { rm -f "$dl/$file.part"; die "checksum mismatch: $file ($url)"; }
+            mv "$dl/$file.part" "$dl/$file"
+        fi
+    done < <(flatpak_gl_sources)
+    # remove tarballs from older pins so build-in-sdk.sh's globs stay unambiguous
+    local f; for f in "$dl"/*.tar.gz; do
+        flatpak_gl_sources | cut -d'|' -f1 | grep -qxF "${f##*/}" || rm -f "$f"
+    done
+    echo 496543121ce6419f23d6fa5d7194ba66c36212d2 > "$dl/spirv-tools-headers.rev"
+    echo cb42dec3830d3ac67fa449ecdc0c0f73d5e74498 > "$dl/translator-headers.rev"
+}
+
+# Patched Mesa tree: the same inputs as the host build (MESA_COMMIT, Anatase's overrides.patch
+# without its AMD-only RADV hunk, patches/mesa). Needs fetch_anatase.
+prepare_mesa_src() { # <dest>
+    local dest=$1 tarball="$CACHE/mesa/mesa-$MESA_COMMIT.tar.gz" f
+    local ov="$CACHE/anatase/cards/drivers/mesa/overrides.patch"
+    [[ -r $ov ]] || die "no $ov (fetch_anatase first)"
+    mkdir -p "$CACHE/mesa"
+    [[ -s $tarball ]] || curl -sfL --retry 3 -o "$tarball" "$MESA_URL" || die "download failed: $MESA_URL"
+    rm -rf "$dest"; mkdir -p "$dest"
+    tar -xzf "$tarball" -C "$dest" --strip-components=1
+    python3 - "$ov" "$dest/.oxp3-overrides.patch" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+parts = re.split(r'(?m)^(?=diff --git )', s)
+keep = [x for x in parts if not x.startswith('diff --git a/src/amd/vulkan/00-radv-defaults.conf')]
+open(sys.argv[2], 'w').write(''.join(keep))
+PYEOF
+    git -C "$dest" apply -p1 "$dest/.oxp3-overrides.patch" || die "overrides.patch does not apply to $MESA_COMMIT"
+    # Same series as the host RPM build, CM injection included: Flatpak apps then run the
+    # same Mesa, with XeSS XMX working there too.
+    for f in "$here"/patches/mesa/*.patch "$here"/patches/xess-main/*.patch; do
+        git -C "$dest" apply -p1 "$f" || die "$(basename "$f") does not apply to $MESA_COMMIT"
+    done
+}
+
+# org.freedesktop.Sdk//<branch> and its LLVM 22 extension, from any installation; installs
+# whatever is missing into the user installation (no root needed for the build).
+flatpak_gl_sdk() { # <branch>
+    local branch=$1 ref
+    for ref in "org.freedesktop.Sdk//$branch" "org.freedesktop.Sdk.Extension.llvm22//$branch"; do
+        flatpak info "$ref" >/dev/null 2>&1 && continue
+        echo "  installing $ref (user, from Flathub)"
+        flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+        flatpak install --user -y --noninteractive flathub "$ref" >/dev/null ||
+            die "could not install $ref from Flathub"
+    done
+}
+
+build_flatpak_gl() {
+    local work branch key name log ext ver
+    work=$(flatpak_gl_work); name=$(flatpak_gl_name)
+    command -v flatpak >/dev/null || { echo "  no flatpak - Flatpak GL driver skipped"; return 0; }
+    mkdir -p "$work"
+    for branch in $(flatpak_gl_branches); do
+        flatpak_gl_sdk "$branch"
+        key=$( { echo "$branch $MESA_COMMIT"
+                 sha256sum "$CACHE/anatase/cards/drivers/mesa/overrides.patch" 2>/dev/null || true
+                 sha256sum "$here"/patches/mesa/*.patch "$here"/patches/xess-main/*.patch \
+                     "$here/tools/flatpak-gl/build-in-sdk.sh" 2>/dev/null || true
+                 flatpak_gl_sources
+                 flatpak info --show-commit "org.freedesktop.Sdk//$branch"
+                 flatpak info --show-commit "org.freedesktop.Sdk.Extension.llvm22//$branch"
+               } | sha256sum | cut -c1-32 )
+        if cache_valid "flatpak-gl-$branch" "$key" &&
+           ostree --repo="$work/repo" rev-parse "$(flatpak_gl_ref "$branch")" >/dev/null 2>&1; then
+            echo "  Flatpak GL driver $branch: build cached (${key:0:8})"; continue
+        fi
+        say "Flatpak GL driver: Mesa for org.freedesktop.Platform//$branch (SDK build, 20-40 min)"
+        fetch_flatpak_gl_sources "$work/dl"
+        prepare_mesa_src "$work/mesa-src"
+        install -m 0755 "$here/tools/flatpak-gl/build-in-sdk.sh" "$work/build-in-sdk.sh"
+        log="$work/build-$branch.log"
+        progress_run "Flatpak GL $branch: SDK build" "$log" \
+            flatpak run --filesystem="$work" --unshare=network --command=bash \
+                "org.freedesktop.Sdk//$branch" "$work/build-in-sdk.sh" "$work" "$branch" "$name" "$work/mesa-src" ||
+            { tail -30 "$log"; die "Flatpak GL build failed (full log: $log)"; }
+        grep -q FLATPAK_GL_BUILD_DONE "$log" || { tail -30 "$log"; die "Flatpak GL build incomplete (log: $log)"; }
+
+        # package: <ext>/metadata + <ext>/files, committed to a local OSTree repo
+        ext="$work/ext-$branch"; rm -rf "$ext"; mkdir -p "$ext"
+        mv "$work/stage-$branch/usr/lib/x86_64-linux-gnu/GL/$name" "$ext/files"
+        cat > "$ext/metadata" <<EOF
+[Runtime]
+name=org.freedesktop.Platform.GL.$name
+runtime=org.freedesktop.Platform/x86_64/$branch
+sdk=org.freedesktop.Sdk/x86_64/$branch
+
+[ExtensionOf]
+ref=runtime/org.freedesktop.Platform/x86_64/$branch
+priority=100
+EOF
+        ver=$(flatpak_gl_mesa_version "$ext/files")
+        flatpak build-export --runtime --files=files \
+            --subject="$ver ${MESA_COMMIT:0:12} + patches/mesa" "$work/repo" "$ext" "$branch" >/dev/null ||
+            die "flatpak build-export failed"
+        cache_store "flatpak-gl-$branch" "$key"
+        echo "  $(flatpak_gl_ref "$branch"): $ver ($(du -sh "$ext/files" | cut -f1))"
+    done
+}
+
+install_flatpak_gl() {
+    local work repo sys branch ref env_file
+    work=$(flatpak_gl_work); repo="$work/repo"; sys=$(flatpak_gl_sysrepo); env_file=$(flatpak_gl_env_file)
+    command -v flatpak >/dev/null || return 0
+    [[ -d $repo/refs ]] || { echo "  no Flatpak GL build in $repo - skipped (run build)"; return 0; }
+    sudo mkdir -p "$sys"
+    sudo rsync -a --delete "$repo/" "$sys/"
+    sudo flatpak remote-add --system --if-not-exists --no-gpg-verify --prio=1 \
+        --title="OneXPlayer 3 Mesa (local)" oxp3-gl "file://$sys"
+    for branch in $(flatpak_gl_branches); do
+        ref=$(flatpak_gl_ref "$branch")
+        ostree --repo="$sys" rev-parse "$ref" >/dev/null 2>&1 || { echo "  $ref not built - skipped"; continue; }
+        if flatpak info --system "$ref" >/dev/null 2>&1; then
+            sudo flatpak update --system -y --noninteractive "$ref" >/dev/null
+        else
+            sudo flatpak install --system -y --noninteractive oxp3-gl "$ref" >/dev/null
+        fi
+        flatpak pin --system 2>/dev/null | grep -qxF "$ref" || sudo flatpak pin --system "$ref" >/dev/null
+        echo "  $ref: $(flatpak info --system --show-commit "$ref" | cut -c1-12) installed and pinned"
+    done
+    sudo mkdir -p "$(dirname "$env_file")"
+    printf '# oxp3-fixes: our Mesa (org.freedesktop.Platform.GL.%s) for Flatpak apps, Flathub'"'"'s as fallback\nFLATPAK_GL_DRIVERS=%s:default\n' \
+        "$(flatpak_gl_name)" "$(flatpak_gl_name)" | sudo tee "$env_file" >/dev/null
+    echo "  $env_file: FLATPAK_GL_DRIVERS=$(flatpak_gl_name):default (log out and back in to apply)"
+}
+
+uninstall_flatpak_gl() {
+    local ref
+    command -v flatpak >/dev/null || return 0
+    for ref in $(flatpak list --system --runtime --columns=ref 2>/dev/null | grep "^org.freedesktop.Platform.GL.$(flatpak_gl_name)/"); do
+        ref="runtime/$ref"
+        flatpak pin --system 2>/dev/null | grep -qxF "$ref" && sudo flatpak pin --system --remove "$ref" >/dev/null
+        sudo flatpak uninstall --system -y --noninteractive "$ref" >/dev/null && echo "  removed $ref"
+    done
+    flatpak remotes --system --columns=name 2>/dev/null | grep -qx oxp3-gl && sudo flatpak remote-delete --system --force oxp3-gl
+    sudo rm -rf "$(flatpak_gl_sysrepo)" "$(flatpak_gl_env_file)"
+}
+
+status_flatpak_gl() {
+    local branch ref lib env_file
+    env_file=$(flatpak_gl_env_file)
+    command -v flatpak >/dev/null || return 0
+    for branch in $(flatpak_gl_branches); do
+        ref=$(flatpak_gl_ref "$branch")
+        if lib=$(flatpak info --system --show-location "$ref" 2>/dev/null); then
+            echo "  Flatpak GL driver $branch: $(flatpak_gl_mesa_version "$lib/files"), commit $(flatpak info --system --show-commit "$ref" | cut -c1-12)"
+        else
+            echo "  Flatpak GL driver $branch: not installed (Flathub apps use Flathub's Mesa)"
+        fi
+    done
+    if [[ -r $env_file ]]; then
+        echo "  $(grep -h '^FLATPAK_GL_DRIVERS=' "$env_file") ($env_file); this session: ${FLATPAK_GL_DRIVERS:-<unset>}"
+    fi
+}
+
+# ---------------------------------------------------------------------------------------------
 # deployment state and the read-only status report
 # ---------------------------------------------------------------------------------------------
 
@@ -1162,13 +1543,18 @@ do_status() {
     echo "  package PL1: MSR $(( $(cat /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 )) W," \
          "MMIO $(( $(cat /sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw 2>/dev/null || echo 0) / 1000000 )) W"
     local site; site=$(hhd_site)
-    local hp n=0; for hp in "${HHD_PATCHES[@]}"; do
-        [[ -n $site ]] && git -C "$site" apply --check -R -p1 "$hp" >/dev/null 2>&1 && n=$((n + 1))
+    local hp st; for hp in "${HHD_PATCHES[@]}"; do
+        if [[ -z $site ]]; then st="hhd not found"
+        elif git -C "$site" apply --check -R -p1 "$hp" >/dev/null 2>&1; then st=applied
+        elif git -C "$site" apply --check -p1 "$hp" >/dev/null 2>&1; then st="not applied (run ./oxp3-install.sh)"
+        else st="does not fit this hhd"; fi
+        echo "  hhd ${hp##*/}: $st"
     done
-    echo "  volume rocker: $n/${#HHD_PATCHES[@]} hhd patches applied$( [[ -e $VOLUME_HWDB ]] && echo ', force-release on')"
+    echo "  oxp3-hhd-keep.service: $(systemctl is-enabled oxp3-hhd-keep.service 2>/dev/null || echo missing)$( [[ -e $VOLUME_HWDB ]] && echo ', volume force-release on')"
     if [[ -x $here/tools/oxp3-hw-install.sh ]]; then
         "$here/tools/oxp3-hw-install.sh" --status 2>/dev/null | tail -n +2 | sed 's/^/  /' || true
     fi
+    status_flatpak_gl
     status_xess
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }

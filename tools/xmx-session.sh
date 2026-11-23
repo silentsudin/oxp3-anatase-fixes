@@ -24,12 +24,20 @@ case ${1:-status} in
         if [ -r "$conf" ]; then log "session environment: $conf"; sed 's/^/  /' "$conf"; else log "session environment not installed"; fi
         ;;
     install)
-        [ -f "$icd" ] || { echo "missing ICD: $icd" >&2; exit 1; }
+        # The host Mesa carries the CM injection when it was built with patches/xess-main;
+        # then the session must NOT export a second ICD, or some processes end up on the
+        # standalone XMX driver (a different Mesa version) and others on the host one.
+        if grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so 2>/dev/null; then
+            icd_lines="# the host Mesa has the CM injection: no separate ICD is selected"
+        else
+            [ -f "$icd" ] || { echo "missing ICD: $icd" >&2; exit 1; }
+            icd_lines="VK_DRIVER_FILES=$icd
+VK_ICD_FILENAMES=$icd"
+        fi
         mkdir -p "$(dirname "$conf")"
         cat > "$conf" <<CONF
-# XeSS XMX: use the XMX/CM Vulkan driver for games (written by tools/xmx-session.sh).
-VK_DRIVER_FILES=$icd
-VK_ICD_FILENAMES=$icd
+# XeSS XMX: CM kernel injection for games (written by tools/xmx-session.sh).
+$icd_lines
 ANV_CM_KERNEL_DIR=$kernels
 ANV_CM_HELPER=$helper
 VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer
