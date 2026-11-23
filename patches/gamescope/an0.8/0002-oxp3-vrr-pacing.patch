@@ -1,0 +1,163 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 14:13:37 +0000
+Subject: [PATCH 2/2] VRR pacing: deep-idle pre-wake from upstream + 30-47 Hz
+ on the SDC AMS881KB01 OLED
+
+Applies on top of 0001-oxp3-hdr-pq.patch (Anatase gamescope an0.8).
+an0.8 already carries five of the six upstream commits the 3.16.23.3 version of this patch
+backported (Anatase merged them on 2026-11-14 against their frame generation):
+  3521d6bf uncapped frame rates with adaptive sync, c8fecc6c cursor repaint pacing,
+  c70f95e7 native gamut blend on HDR10, 62707e1e frame limiter paced by vblank,
+  261b9be1 VRR frame limiter on its schedule.
+What is left:
+  - 055902ca vblankmanager: leave deep idle ahead of a fixed refresh (Matthew Schwartz)
+    (ported to an0.8's CalcNextWakeupTimeLocked and vblank bookkeeping)
+  - scripts: offer 30-47 Hz on the SDC AMS881KB01 OLED (silentsudin)
+---
+ .../displays/lenovo.legiongo2.oled.lua        | 10 +++-
+ src/vblankmanager.cpp                         | 50 +++++++++++++++++--
+ src/vblankmanager.hpp                         |  6 +++
+ 3 files changed, 62 insertions(+), 4 deletions(-)
+
+diff --git a/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua b/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
+index 671664e..49dcb09 100644
+--- a/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
++++ b/scripts/00-gamescope/displays/lenovo.legiongo2.oled.lua
+@@ -1,4 +1,6 @@
+ local legiongo2_oled_refresh_rates = {
++    30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
++    40, 41, 42, 43, 44, 45, 46, 47,
+     48, 49, 50, 51, 52, 53, 54, 55, 56, 57,
+     58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+     68, 69, 70, 71, 72, 73, 74, 75, 76, 77,
+@@ -28,7 +30,13 @@ gamescope.config.known_displays.lenovo_legiongo2_oled = {
+     dynamic_refresh_rates = legiongo2_oled_refresh_rates,
+     dynamic_modegen = function(base_mode, refresh)
+         debug("Generating mode "..refresh.."Hz for Lenovo Legion Go 2 OLED with fixed pixel clock")
++        -- The EDID allows 30-144 Hz. Fixed pixel clock: vtotal 1320 at 144 Hz, so
++        -- vfp = round(190080 / refresh) - 1264 below 48 Hz.
+         local vfps = {
++            5072, 4868, 4676, 4496, 4327,
++            4167, 4016, 3873, 3738, 3610,
++            3488, 3372, 3262, 3156, 3056,
++            2960, 2868, 2780,
+             2696, 2615, 2538, 2463, 2391,
+             2322, 2256, 2192, 2130, 2071,
+             2013, 1958, 1904, 1852, 1802,
+@@ -50,7 +58,7 @@ gamescope.config.known_displays.lenovo_legiongo2_oled = {
+             113,  103,  94,   84,   75,
+             65,   56
+         }
+-        local vfp = vfps[zero_index(refresh - 48)]
++        local vfp = vfps[zero_index(refresh - 30)]
+         if vfp == nil then
+             warn("Couldn't do refresh "..refresh.." on Lenovo Legion Go 2 OLED")
+             return base_mode
+diff --git a/src/vblankmanager.cpp b/src/vblankmanager.cpp
+index b612b25..fa50ffa 100644
+--- a/src/vblankmanager.cpp
++++ b/src/vblankmanager.cpp
+@@ -7,6 +7,8 @@
+ #include <chrono>
+ #include <atomic>
+ #include <condition_variable>
++#include <filesystem>
++#include <fstream>
+ 
+ #include <assert.h>
+ #include <fcntl.h>
+@@ -28,6 +30,27 @@ namespace gamescope
+ {
+ 	ConVar<bool> vblank_debug( "vblank_debug", false, "Enable vblank debug spew to stderr." );
+ 
++	// Target residency of the deepest idle state a CPU may enter, zero without cpuidle.
++	static uint64_t GetDeepestIdleResidency()
++	{
++		uint64_t ulResidency = 0;
++		std::error_code ec;
++		for ( const auto &cpu : std::filesystem::directory_iterator( "/sys/devices/system/cpu", ec ) )
++		{
++			std::error_code ecStates;
++			for ( const auto &state : std::filesystem::directory_iterator( cpu.path() / "cpuidle", ecStates ) )
++			{
++				int nDisabled = 1;
++				uint64_t ulStateResidency = 0;
++				std::ifstream( state.path() / "disable" ) >> nDisabled;
++				std::ifstream( state.path() / "residency" ) >> ulStateResidency;
++				if ( !nDisabled )
++					ulResidency = std::max( ulResidency, ulStateResidency * 1'000 );
++			}
++		}
++		return ulResidency;
++	}
++
+ 	CVBlankTimer::CVBlankTimer()
+ 	{
+ 		m_ulTargetVBlank = get_time_in_nanos();
+@@ -38,6 +61,8 @@ namespace gamescope
+ 			// Majority of backends fall down this optimal
+ 			// timerfd path, vs nudge thread.
+ 			g_VBlankLog.infof( "Using timerfd." );
++
++			m_ulPreWakeLead = GetDeepestIdleResidency();
+ 		}
+ 		else
+ 		{
+@@ -266,7 +291,15 @@ namespace gamescope
+ 		{
+ 			m_TimerFDSchedule = CalcNextWakeupTimeLocked( bPreemptive );
+ 
+-			ITimerWaitable::ArmTimer( m_TimerFDSchedule.ulScheduledWakeupPoint );
++			// VRR only delays a late flip, a fixed refresh misses the vblank.
++			const uint64_t ulWakeup = m_TimerFDSchedule.ulScheduledWakeupPoint;
++			const bool bVRR = GetBackend()->GetCurrentConnector() && GetBackend()->GetCurrentConnector()->IsVRRActive();
++			// Within the lead already reserved before vblank, so deep idle stays available for most of a frame.
++			m_bPreWake = !bVRR && m_ulPreWakeLead && m_ulPreWakeLead <= m_TimerFDSchedule.ulTargetVBlank - ulWakeup &&
++				ulWakeup > get_time_in_nanos() + m_ulPreWakeLead;
++
++			m_ulTimerFDArmedPoint = m_bPreWake ? ulWakeup - m_ulPreWakeLead : ulWakeup;
++			ITimerWaitable::ArmTimer( m_ulTimerFDArmedPoint );
+ 		}
+ 	}
+ 
+@@ -286,9 +319,20 @@ namespace gamescope
+ 		{
+ 			std::unique_lock lock( m_ScheduleMutex );
+ 
+-			// Disarm the timer if it was armed.
+-			if ( !m_bArmed.exchange( false ) )
++			// Readiness from before another thread rearmed the timer is stale.
++			if ( !m_bArmed || get_time_in_nanos() < m_ulTimerFDArmedPoint )
++				return;
++
++			// A late pre-wake counts as the real wakeup.
++			if ( std::exchange( m_bPreWake, false ) && get_time_in_nanos() < m_TimerFDSchedule.ulScheduledWakeupPoint )
++			{
++				m_ulTimerFDArmedPoint = m_TimerFDSchedule.ulScheduledWakeupPoint;
++				ITimerWaitable::ArmTimer( m_ulTimerFDArmedPoint );
+ 				return;
++			}
++
++			// Disarm the timer if it was armed.
++			m_bArmed = false;
+ 
+ 
+ 			m_ulLastProcessedVBlank = m_TimerFDSchedule.ulTargetVBlank;
+diff --git a/src/vblankmanager.hpp b/src/vblankmanager.hpp
+index fd675c1..8e89e05 100644
+--- a/src/vblankmanager.hpp
++++ b/src/vblankmanager.hpp
+@@ -77,6 +77,12 @@ namespace gamescope
+         // Does not cover m_ulLastVBlank, this is just atomic.
+         std::mutex m_ScheduleMutex;
+         VBlankScheduleTime m_TimerFDSchedule{};
++        // The timerfd is armed for the pre-wake ahead of m_TimerFDSchedule.
++        bool m_bPreWake = false;
++        // When the timerfd is armed to fire.
++        uint64_t m_ulTimerFDArmedPoint = 0;
++        // How far ahead of a fixed refresh wakeup to leave deep idle.
++        uint64_t m_ulPreWakeLead = 0;
+ 
+         std::thread m_NudgeThread;
+         int m_nNudgePipe[2] = { -1, -1 };

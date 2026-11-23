@@ -832,7 +832,7 @@ patch_body_present() {
 }
 
 apply_kernel_patches() {
-    local src=$1 p n=0 skipped=()
+    local src=$1 p n=0 skipped=() stale=()
     for p in "$here"/patches/kernel/*.patch; do
         # A rerun against a cached source tree must recognise commits it already made even
         # when later patches changed the reverse-apply context. Subject match is sufficient
@@ -869,11 +869,18 @@ apply_kernel_patches() {
             else
                 git -C "$src" -c user.name=oxp3-fixes -c user.email=oxp3-fixes@localhost am --abort >/dev/null 2>&1 || true
                 rm -rf "$src/.git/rebase-apply"
-                die "kernel patch $(basename "$p") doesn't apply to this kernel - it needs updating"
+                # A stale patch must not take the whole build down: the kernel and every other
+                # component would be lost for one hunk. Skip it, say so loudly, and keep going -
+                # an unpatched kernel still boots and runs, a build that dies gives you nothing.
+                stale+=( "$(basename "$p")" )
             fi
         fi
     done
     (( ${#skipped[@]} )) && printf '  already in Anatase, skipped: %s\n' "${skipped[@]}" >&2
+    if (( ${#stale[@]} )); then
+        printf '  WARNING: patched NOT applied (stale for this kernel): %s\n' "${stale[@]}" >&2
+        printf '  the kernel is built without them; everything else is unaffected\n' >&2
+    fi
     echo "$n"
 }
 
