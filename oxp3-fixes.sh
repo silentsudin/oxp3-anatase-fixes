@@ -392,6 +392,16 @@ XESS_PKG=${OXP3_XESS_DIR:-$HOME/.local/share/xess-xmx}
 # Build the XMX driver (Mesa 26.3.0 final + vendored CM + our patches) and write the
 # per-game ICD/environment; the fast variant has the same hook.
 build_xmx_driver() {
+    # The consolidated Mesa carries the CM kernel injection itself (patches/mesa 0200/0201/0206
+    # plus patches/mesa-26.3), so XeSS XMX runs on the shipping driver and a second CM-enabled
+    # Mesa tree is not needed. It used to be built here and then immediately retired by
+    # xmx_retire_split_driver in the same run - and worse, building it reinstates exactly what the
+    # consolidation removed: two Mesa trees, with an ICD and VK_DRIVER_FILES pointing games at the
+    # older one. Only build when the host driver cannot act as the XMX driver.
+    if grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so 2>/dev/null; then
+        echo "  XMX driver: the shipping Mesa carries the CM injection - no second driver needed"
+        return 0
+    fi
     local script=$here/tools/build-xmx-driver-263.sh drv key
     [[ -x $script ]] || { echo "  no $script; XMX driver not built"; return 0; }
     drv="$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so"
