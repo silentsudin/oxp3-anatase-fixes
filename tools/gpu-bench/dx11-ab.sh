@@ -62,6 +62,10 @@ run cached-dyn d3d11 --env "DXVK_CONFIG=d3d11.cachedDynamicResources = a"
 run no-desc-heap d3d11 --env "DXVK_CONFIG=dxvk.enableDescriptorHeap = False"
 run pcores d3d11 --taskset 0-1
 run pcores-d3d12 d3d12 --taskset 0-1
+# Synchronisation is a per-frame CPU cost too, and this Proton runs ntsync: if fsync is the
+# cheaper primitive for D3D11 submission, disabling it is a one-line launch option.
+run esync-only d3d11 --env PROTON_NO_FSYNC=1
+run server-sync d3d11 --env PROTON_NO_FSYNC=1 --env PROTON_NO_ESYNC=1
 
 echo
 python3 "$gm" report "$out"
