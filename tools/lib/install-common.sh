@@ -725,7 +725,14 @@ xmx_retire_split_driver() {
             n=$((n + 1))
         done
     done
-    [[ $n -gt 0 ]] && echo "  one Mesa now: restart Steam (leave and re-enter Gamemode) to drop the old ICD"
+    # 3. the user manager keeps its own copy of the environment from the last login: a game
+    # started by it would still see the old VK_DRIVER_FILES even with the file clean.
+    systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES 2>/dev/null || true
+    if (( n > 0 )); then
+        echo "  one Mesa now: restart Steam (leave and re-enter Gamemode) to drop the old ICD"
+    else
+        echo "  one Mesa already: no separate Vulkan ICD selected"
+    fi
     return 0
 }
 

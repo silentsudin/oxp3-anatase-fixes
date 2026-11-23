@@ -280,6 +280,62 @@ mesa_rpms() {
     done < <(mesa_installed_pkgs)
 }
 
+# The /usr overlay ("usroverlay") does not survive a reboot, and oxp3-mesa-keep only restores
+# the Vulkan driver into it, so an overlay install leaves 26.3.1 Vulkan on top of the image's
+# GL/gallium after a reboot. Replacing the base packages through rpm-ostree makes the whole
+# stack one version, permanently, which is what "one Mesa" has to mean.
+mesa_override_staged() { # 0 when the booted deployment replaces Mesa with our MESA_VERSION
+    rpm-ostree status --booted --json 2>/dev/null | python3 -c '
+import json, sys
+want = sys.argv[1]
+try:
+    dep = [d for d in json.load(sys.stdin)["deployments"] if d.get("booted")][0]
+except Exception:
+    sys.exit(1)
+reps = dep.get("requested-base-local-replacements") or []
+sys.exit(0 if any(r.startswith("mesa-") and want in r for r in reps) else 1)
+' "$MESA_VERSION"
+}
+
+stage_mesa_override() {
+    local -a mesa=()
+    local out
+    (( SKIP_MESA )) && return 0
+    mapfile -t mesa < <(mesa_rpms 2>/dev/null) || return 0
+    (( ${#mesa[@]} )) || return 0
+    if mesa_override_staged; then
+        echo "  Mesa $MESA_VERSION: base-image replacement already staged (active after the next reboot)"
+        return 0
+    fi
+    say "Mesa $MESA_VERSION: replacing the base image's Mesa (sudo, active after a reboot)"
+    if out=$(sudo rpm-ostree override replace "${mesa[@]}" 2>&1); then
+        printf '%s\n' "$out" | sed 's/^/  /'
+        echo "  one Mesa after the next reboot: the deployment carries the whole stack (GL, gallium, DRI, Vulkan)"
+    else
+        printf '%s\n' "$out" | sed 's/^/  /' >&2
+        echo "  WARNING: rpm-ostree could not stage the Mesa override: this session keeps the overlay copy," >&2
+        echo "           and after a reboot the image's Mesa comes back (the keep unit restores only the driver)" >&2
+    fi
+}
+
+reset_mesa_override() {
+    local -a names=()
+    mesa_override_staged || return 0
+    mapfile -t names < <(rpm-ostree status --booted --json 2>/dev/null | python3 -c '
+import json, re, sys
+try:
+    dep = [d for d in json.load(sys.stdin)["deployments"] if d.get("booted")][0]
+except Exception:
+    sys.exit(0)
+for r in dep.get("requested-base-local-replacements") or []:
+    m = re.match(r"(mesa-[a-z0-9-]+?)-[0-9]", r)
+    if m:
+        print(m.group(1))
+')
+    (( ${#names[@]} )) || return 0
+    sudo rpm-ostree override reset "${names[@]}" || true
+}
+
 # Installed subpackages of the Mesa source package. Selected by SOURCERPM, not by the "mesa-"
 # name prefix: mesa-libGLU(-devel) is a different project (GLU, its own source RPM) that this
 # build never produces, and matching it by name made `install` die on systems that have GLU.
@@ -529,17 +585,37 @@ record_known_good() { # <host|runtime> <driver file>
 
 install_flatpak_mesa() {
     [[ -d $FLATPAK_RT/overrides ]] || { echo "  no Anatase Flatpak runtime overrides - Steam keeps Anatase's Mesa"; return 0; }
-    local pkgs list
-    pkgs=$(mesa_installed_pkgs | awk '{ print $1 "." $2 }')
-    # shellcheck disable=SC2086
-    list=$(rpm -ql $pkgs | grep '^/usr/' | grep -vE "$FLATPAK_MESA_SKIP" | sort -u)
+    local pkgs list p
+    # The list comes from the RPMs this run installed, not from `rpm -q`: an install into the
+    # /usr overlay can leave the rpmdb reporting the base image's Mesa while the overlay holds
+    # ours, and then this step would copy the wrong tree (or miss files) in the runtime.
+    list=$(rpm -qlp "$OUT"/mesa-*.x86_64.rpm 2>/dev/null | grep '^/usr/' |
+           grep -vE "$FLATPAK_MESA_SKIP" | sort -u)
+    if [[ -z $list ]]; then
+        pkgs=$(mesa_installed_pkgs | awk '{ print $1 "." $2 }')
+        # shellcheck disable=SC2086
+        list=$(rpm -ql $pkgs | grep '^/usr/' | grep -vE "$FLATPAK_MESA_SKIP" | sort -u)
+    fi
+    local -a present=()
+    while IFS= read -r p; do [[ -e $p ]] && present+=( "$p" ); done <<<"$list"
+    if (( ${#present[@]} == 0 )); then
+        echo "  WARNING: no Mesa file is installed at the expected paths - runtime overrides left empty"
+        return 0
+    fi
     remove_flatpak_mesa
-    # /usr/<path> -> overrides/<path> (the runtime is mounted at /usr in the sandbox)
-    sed 's,^/,,' <<<"$list" | sudo tar -C / --no-recursion -cf - -T - |
+    # /usr/<path> -> overrides/<path> (the runtime is mounted at /usr in the sandbox). The list
+    # is pre-filtered to existing paths, so one missing file cannot abort the extraction and
+    # leave the runtime holding a partial tree.
+    printf '%s\n' "${present[@]}" | sed 's,^/,,' |
+        sudo tar -C / --no-recursion -cf - -T - 2>/dev/null |
         sudo tar -C "$FLATPAK_RT/overrides" -xf - --transform 's,^usr/,,'
-    sed 's,^/usr/,,' <<<"$list" | sudo tee "$FLATPAK_MESA_LIST" >/dev/null
-    echo "  $(wc -l <<<"$list") Mesa files in the Steam Flatpak runtime overrides"
-    record_known_good runtime "$FLATPAK_RT/overrides/lib64/libvulkan_intel.so"
+    printf '%s\n' "${present[@]}" | sed 's,^/usr/,,' | sudo tee "$FLATPAK_MESA_LIST" >/dev/null
+    echo "  ${#present[@]} Mesa files in the Steam Flatpak runtime overrides"
+    if [[ ! -e $FLATPAK_RT/overrides/lib64/libvulkan_intel.so ]]; then
+        echo "  WARNING: the runtime overrides have no libvulkan_intel.so - Flatpak Steam keeps Anatase's Mesa"
+    else
+        record_known_good runtime "$FLATPAK_RT/overrides/lib64/libvulkan_intel.so"
+    fi
     refresh_flatpak_runtime
 }
 
@@ -651,6 +727,7 @@ do_install() {
             sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
             rpm -q gamescope mangohud mesa-vulkan-drivers | sed 's/^/  /'
             (( SKIP_MESA )) || record_known_good host /usr/lib64/libvulkan_intel.so
+            (( SKIP_MESA )) || stage_mesa_override
             if (( !SKIP_MESA )); then
                 say "Mesa for the Steam Flatpak (sudo)"
                 install_flatpak_mesa
@@ -663,6 +740,10 @@ do_install() {
         if (( !SKIP_XESS )); then
             say "XeSS on XMX (xess-xmx-linux)"
             install_xess
+        else
+            # independent of the XMX package: keep one driver even when that step is skipped
+            say "one Vulkan driver: retire any separate XMX ICD"
+            xmx_retire_split_driver
         fi
         say "done - leave and re-enter Gamemode (no reboot needed)"
         echo "This lasts until the next Anatase update; run '$0 all' after updating."
@@ -687,6 +768,7 @@ do_uninstall() {
         sudo "$here/tools/oxp3-hw-install.sh" --uninstall --leds --power ||
             echo "WARNING: removing the hardware units failed - see above" >&2
     fi
+    reset_mesa_override
     uninstall_xess
     uninstall_flatpak_gl
     if [[ -r $FLATPAK_MESA_LIST ]]; then remove_flatpak_mesa; refresh_flatpak_runtime; fi

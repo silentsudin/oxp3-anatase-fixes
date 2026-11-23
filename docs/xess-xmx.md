@@ -33,7 +33,16 @@
 > `Mesa 26.3.1`, and `strings /usr/lib64/libvulkan_intel.so | grep -c ANV_CM_HELPER` is
 > non-zero.
 >
-> The sections below describe the earlier two-driver arrangement and are kept as the history
+> **Persistence matters here.** The `/usr` overlay (`rpm-ostree usroverlay`) is cleared at every
+> boot and `oxp3-mesa-keep` restores only the Vulkan driver into it, so an overlay install leaves
+> one version of `libvulkan_intel.so` on top of the image's GL/gallium (measured 2026-11-23:
+> 26.3.1 Vulkan with `libgallium-26.2.6.so`). `install` therefore also stages
+> `rpm-ostree override replace` with the built Mesa RPMs (`stage_mesa_override()`), which puts the
+> whole stack - GL, gallium, DRI, Vulkan - into the deployment; it takes effect on the next reboot
+> and survives later ones. `uninstall` runs `rpm-ostree override reset` for those packages. The
+> overlay install still runs first so the running session is usable without a reboot.
+>
+> > The sections below describe the earlier two-driver arrangement and are kept as the history
 > of how CM got here; the binaries they name (`~/.cache/oxp3-fixes/xmx-driver/`, the 26.3
 > standalone builds, `icd-xmx.json`) are reproduction artifacts, not the installed driver.
 
