@@ -70,7 +70,10 @@ failed=0
 if [ "$host_ok" = 0 ]; then
     for rpm in "${rpms[@]}"; do
         [ -r "$rpm" ] || continue
-        rpm2cpio "$rpm" | ( cd / && cpio -idm --quiet ) || failed=1
+        # -u: overwrite unconditionally. Without it cpio keeps a file whose mtime is newer
+        # than the payload's ("newer or same age version exists"), which can leave part of the
+        # image's Mesa in place.
+        rpm2cpio "$rpm" | ( cd / && cpio -idmu --quiet ) || failed=1
     done
     (( failed )) && { log "one or more Mesa RPMs failed to extract"; exit 0; }
     log "host Mesa $want restored"
