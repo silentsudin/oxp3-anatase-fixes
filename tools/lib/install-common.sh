@@ -1272,10 +1272,22 @@ hhd_volume_unpatch() { # <site>   (undo install_hhd_patches: patches, keep unit,
 
 # Mesa version of the host (from its libgallium-<version>.so) and whether the Steam Flatpak runtime
 # runs the same Intel Vulkan driver
-host_mesa() { local g; g=$(ls /usr/lib64/libgallium-*.so 2>/dev/null | head -1); g=${g##*/libgallium-}; echo "${g%.so}"; }
+# The image and the /usr overlay can both carry a libgallium (the image's 26.2.6 under ours), and
+# `rpm -q` reports the image's package because the overlay's rpmdb is not what it reads - so report
+# the highest version present, which is the one the driver in use links against.
+host_mesa() {
+    local g
+    g=$(ls -1 /usr/lib64/libgallium-*.so 2>/dev/null | sed 's,.*/libgallium-,,; s,\.so$,,')
+    g=$(printf '%s\n' $g | sort -V | tail -1)
+    printf '%s\n' "${g:-unknown}"
+}
 
 flatpak_mesa() {
-    if cmp -s /usr/lib64/libvulkan_intel.so "$FLATPAK_RT_FILES/lib64/libvulkan_intel.so"; then
+    # The overrides directory is what the runtime merges; /run holds the copy made at boot, so a
+    # restore done after boot would still read as the image's Mesa through it.
+    local ref=$FLATPAK_RT/overrides/lib64/libvulkan_intel.so
+    [[ -e $ref ]] || ref=$FLATPAK_RT_FILES/lib64/libvulkan_intel.so
+    if [[ -e $ref ]] && cmp -s /usr/lib64/libvulkan_intel.so "$ref"; then
         echo "same as the host"
     else
         echo "Anatase's (not ours)"
