@@ -81,11 +81,36 @@ enables `VK_EXT_graphics_pipeline_library`, `VK_EXT_descriptor_heap`,
 `VK_EXT_extended_dynamic_state3`, `VK_EXT_multi_draw`, `VK_EXT_transform_feedback`,
 `VK_EXT_robustness2` on Mesa 26.3.1.
 
+## Result 3 — DXVK 3.1.x is worth ~7% and is a runtime choice, not a patch
+
+The same D3D11 workload through every installed Proton (1280x720, headless, one run per variant;
+all three 3.1.1 builds agree to within 0.4%, so this is a version effect and not a build quirk):
+
+| Proton | DXVK | fps |
+|---|---|---:|
+| Proton-CachyOS Latest | 3.0.2 | 82.39 |
+| Proton 11.0 | 2.7.1 | 81.09 |
+| Proton Experimental | 3.1.1 | **88.23** |
+| Proton Hotfix | 3.1.1-200 | **88.36** |
+| GE-Proton11-12 | 3.1.1-174 | **88.03** |
+
+DXVK 3.1.x recovers about half of the D3D11 deficit: 88.2 fps against native Vulkan's 95.5 is 92.4%,
+where DXVK 3.0.2 sits at 85.2%. Nothing is patched — the runtime is simply chosen.
+
+And this machine's default is the slow one: Steam's `CompatToolMapping` "0" entry is
+`Proton-CachyOS Latest` (DXVK 3.0.2). `oxp3-fixes.sh status` now prints every installed Proton with
+its DXVK version, marks which are on the fast path, and names the default — so the gap is visible
+without reading this document.
+
+```sh
+./oxp3-fixes.sh status      # "Steam default compat tool: Proton-CachyOS Latest (DXVK 3.0.2)"
+```
+
+Set the default in Steam (Settings → Compatibility → Steam Play: Proton Experimental), or per title
+in Properties → Compatibility, for anything that runs through D3D11.
+
 ## What is left
 
-- **DXVK version** (`dx11-protons.sh`): the same D3D11 workload through CachyOS (3.0.2), Proton 11.0
-  (2.7.1), Experimental (3.1.1), Hotfix (3.1.1-200) and GE (3.1.1-174). If one translates D3D11
-  measurably cheaper, the fix is a launch recommendation rather than a patch.
 - **Synchronisation primitive** (`dx11-ab.sh`, `esync-only` / `server-sync`): this Proton runs
   ntsync, and the sync path is a per-frame CPU cost as well.
 - If neither moves it, the conclusion is that ~15% is DXVK's inherent D3D11 overhead on this

@@ -1552,6 +1552,70 @@ print(" ".join(b.get("requested-local-packages",[])))'
 
 hotfix_active() { rpm-ostree status --booted | grep -q 'Unlocked: hotfix'; }
 
+# DXVK version behind each installed Proton, and what Steam will actually use.
+#
+# Measured on this machine (docs/DX11-PERFORMANCE.md, GravityMark, D3D11, headless, 1280x720):
+# DXVK 3.1.x runs the D3D11 path at ~88 fps where 3.0.2 gives ~82 and 2.7.1 ~81, against native
+# Vulkan's ~95. DXVK is what translates D3D11, so for a DX11-heavy library the Proton that ships
+# DXVK >= 3.1 is worth ~7-8% on its own - no patch, just picking the right runtime.
+dxvk_version() { # <proton dir>
+    local d=$1 f
+    for f in "$d"/files/lib64/wine/dxvk/version "$d"/files/lib/wine/dxvk/version; do
+        [[ -r $f ]] || continue
+        awk '{ v = $NF; gsub(/[()]/, "", v); print v }' "$f"
+        return 0
+    done
+}
+
+proton_dir_for() { # <compat tool name>
+    local name=$1 d steam=${STEAM_DIR:-$HOME/.local/share/Steam}
+    for d in "$steam/compatibilitytools.d/$name" "$steam/steamapps/common/$name"; do
+        [[ -d $d ]] && { printf '%s' "$d"; return 0; }
+    done
+    case ${name,,} in
+        *experimental*) d="$steam/steamapps/common/Proton - Experimental" ;;
+        *hotfix*)       d="$steam/steamapps/common/Proton Hotfix" ;;
+        *stable*|proton_9*) d="$steam/steamapps/common/Proton 11.0" ;;
+        *) return 1 ;;
+    esac
+    [[ -d $d ]] && printf '%s' "$d"
+}
+
+dxvk_is_fast() { # <vX.Y.Z...>: fast when >= 3.1
+    awk -v v="${1#v}" 'BEGIN { split(v, a, "[.]"); exit !(a[1] > 3 || (a[1] == 3 && a[2] >= 1)) }'
+}
+
+status_dxvk() {
+    local steam=${STEAM_DIR:-$HOME/.local/share/Steam}
+    [[ -d $steam ]] || { echo "  Steam not found - DXVK versions not checked"; return 0; }
+    local d v low=0
+    for d in "$steam"/compatibilitytools.d/*/ "$steam"/steamapps/common/Proton*/; do
+        [[ -d $d ]] || continue
+        v=$(dxvk_version "${d%/}")
+        [[ -n $v ]] || continue
+        printf '  %-30s DXVK %s' "$(basename "${d%/}")" "$v"
+        if dxvk_is_fast "$v"; then echo "  (dx11 fast path)"
+        else echo "  (dx11 ~7-8% slower than 3.1.x)"; low=1; fi
+    done
+    local cfg=$steam/config/config.vdf tool=""
+    if [[ -r $cfg ]]; then
+        tool=$(python3 "$here/tools/lib/dxvk-steam-default.py" "$cfg" 2>/dev/null || true)
+        if [[ -n $tool ]]; then
+            printf '  Steam default compat tool: %s' "$tool"
+            if d=$(proton_dir_for "$tool"); then
+                v=$(dxvk_version "$d")
+                printf ' (DXVK %s)' "${v:-?}"
+                dxvk_is_fast "${v:-3.0}" || low=1
+                echo
+            else
+                echo " (not installed)"
+            fi
+        fi
+    fi
+    (( low )) && echo "  for DX11-heavy titles pick a Proton with DXVK >= 3.1 (docs/DX11-PERFORMANCE.md)"
+    return 0
+}
+
 do_status() {
     echo "kernel (deployment): $(anatase_kver)   booted: $(uname -r)"
     rpm -q gamescope mangohud mesa-vulkan-drivers kmod-oxp3-xe "$KMOD_NAME" "$FW_NAME" 2>&1 | grep -v 'is not installed' | sed 's/^/  /' || true
@@ -1589,5 +1653,6 @@ do_status() {
     fi
     status_flatpak_gl
     status_xess
+    status_dxvk
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }
