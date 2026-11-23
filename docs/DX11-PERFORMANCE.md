@@ -123,6 +123,22 @@ tools/steam-compat-tool.sh restore                     # put the newest backup b
 
 Run it with Steam closed: Steam rewrites `config.vdf` when it exits.
 
+## Result 3b — the baseline after the switch, and the asymptote
+
+With Proton Experimental (DXVK 3.1.1), headless, medians of three runs at 1280x720:
+
+| path | fps | vs native |
+|---|---:|---:|
+| native Vulkan | 95.02 | — |
+| D3D12 (VKD3D) | 91.10 | −4.1% |
+| **D3D11 (DXVK 3.1.1)** | **88.10** | **−7.3%** |
+
+At 320x180 — where the GPU has essentially nothing to do — D3D11 reaches 103.98 fps against native
+Vulkan's 111.51: **−6.8%**, and the 1% low still trails. The gap therefore does not narrow as the
+GPU is unloaded, which rules out "DXVK generates more GPU work per pixel" and pins the residual to
+a fixed cost per frame, about **0.65 ms at the asymptote** (1.9 ms at 720p including the
+resolution-dependent part).
+
 ## Result 4 — the synchronisation primitive is not it either
 
 This Proton runs ntsync, and the sync path is a per-frame CPU cost, so it was worth checking:
@@ -134,6 +150,22 @@ This Proton runs ntsync, and the sync path is a per-frame CPU cost, so it was wo
 | `PROTON_NO_FSYNC=1 PROTON_NO_ESYNC=1` (server) | 81.62 |
 
 Both inside the noise floor. The candidate space is now closed.
+
+## What is shipped
+
+- `docs/DX11-PERFORMANCE.md` (this file): the measurements, the method, and the traps.
+- `./oxp3-fixes.sh status`: every installed Proton with its DXVK version, the fast-path marks, and
+  Steam's default.
+- `./oxp3-fixes.sh install`: ends with the same verdict, so a slow default is visible when the
+  stack is installed.
+- `tools/steam-compat-tool.sh`: `list`, `default`, `set-default`, `set-app`, `unset-app`,
+  `restore` — edits only the relevant `CompatToolMapping` entry, with a backup.
+- `tools/gpu-bench/`: `gravitymark.py` (cross-API, headless), `dx11-ab.sh`, `dx11-protons.sh`,
+  `dx11-fixed-cost.sh`, `dx11-wine-cpu.sh`, `thread-cpu.py`, plus `tests/unit/test_gravitymark.py`,
+  `test_d3d_api.py` and `test_dxvk_steam_default.py`.
+
+The one measured win is the runtime: **DXVK 3.1.x, +8.3%** on the D3D11 path (81.34 → 88.10 fps
+at 1280x720), which turns a 14.8% deficit against native Vulkan into 7.3%.
 
 ## Conclusion
 
@@ -151,6 +183,28 @@ On this machine, DX11's deficit has two separable parts:
 That residual is the part that would need work inside DXVK, not on this side: the evidence for an
 upstream report is the constant per-frame cost, the enabled fast paths in DXVK's startup dump, and
 the independence from resolution, configuration and scheduling.
+
+## Result 5 — the fixed-cost candidates (all noise or worse)
+
+On the Experimental baseline with a drift control (baseline 88.31 at the start, 87.77 at the end,
+so ±0.6% is session drift, not signal):
+
+| variant | fps | verdict |
+|---|---:|---|
+| baseline | 88.31 | — |
+| `dxvk.tearFree = False` | 88.45 | +0.48%, inside drift |
+| `d3d11.ignoreExplicitFlush = True` | 88.45 | +0.48%, inside drift |
+| `d3d11.relaxedGraphicsBarriers` | 88.32 | +0.33%, inside drift |
+| `MESA_VK_ENABLE_SUBMIT_THREAD=1` | 88.06 | no effect |
+| `dxgi.maxFrameLatency = 1` | 87.81 | −0.25%, inside drift |
+| `dxvk.enableDescriptorBuffer = True` | 86.86 | **−1.3%, worse** |
+| `dxvk.tilerMode = Linear` / `= Color` | 87.67 / 87.67 | **−0.7%, worse** |
+| `dxvk.enableUnifiedImageLayouts = True` | 88.08 | −0.26%, inside drift |
+| `dxvk.lowerSinCos = True` | 87.60 | −0.8%, worse |
+
+Twelve configuration levers, none of which recovers anything. Mesa's own submission thread makes no
+difference either, which agrees with the thread data: with DXVK 3.1.1 the whole process uses 0.2–0.4
+cores, so nothing on the CPU side is saturated to begin with.
 
 ## Levers that need root (runbook, not yet measured)
 
