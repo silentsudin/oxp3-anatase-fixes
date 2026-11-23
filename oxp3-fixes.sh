@@ -280,64 +280,33 @@ mesa_rpms() {
     done < <(mesa_installed_pkgs)
 }
 
-# The /usr overlay ("usroverlay") does not survive a reboot, and oxp3-mesa-keep only restores
-# the Vulkan driver into it, so an overlay install leaves 26.3.1 Vulkan on top of the image's
-# GL/gallium after a reboot. Replacing the base packages through rpm-ostree makes the whole
-# stack one version, permanently, which is what "one Mesa" has to mean.
-mesa_override_staged() { # 0 when the booted deployment replaces Mesa with our MESA_VERSION
-    rpm-ostree status --booted --json 2>/dev/null | python3 -c '
-import json, sys
-want = sys.argv[1]
-try:
-    dep = [d for d in json.load(sys.stdin)["deployments"] if d.get("booted")][0]
-except Exception:
-    sys.exit(1)
-reps = dep.get("requested-base-local-replacements") or []
-sys.exit(0 if any(r.startswith("mesa-") and want in r for r in reps) else 1)
-' "$MESA_VERSION"
-}
+# The /usr overlay ("usroverlay") does not survive a reboot, and the image's Mesa comes back
+# with it. So `install` records what to restore - the version and, for the Flatpak runtime
+# overrides, the file list - and files/oxp3-mesa-keep.sh reads both at boot and extracts the
+# cached RPMs with cpio, the same model as the gamescope and MangoHud keep units.
+# `rpm-ostree override replace` is not an option: Mesa is a multilib package set and rpm-ostree
+# resolves an override by package name alone, so it stops with "Multiple packages match".
+MESA_STATE_DIR=/var/lib/oxp3-fixes
 
-stage_mesa_override() {
-    local -a mesa=()
-    local out
+install_mesa_keep() {
     (( SKIP_MESA )) && return 0
-    # x86_64 only: rpm-ostree resolves an override by package name, and passing the i686 and
-    # x86_64 RPMs of the same NEVRA fails with "Multiple packages match". The 64-bit stack is
-    # what runs the games (Proton is WoW64), so the 32-bit packages stay at the image's version.
-    mapfile -t mesa < <(mesa_rpms 2>/dev/null | grep -E '\.x86_64\.rpm$') || return 0
-    (( ${#mesa[@]} )) || return 0
-    if mesa_override_staged; then
-        echo "  Mesa $MESA_VERSION: base-image replacement already staged (active after the next reboot)"
-        return 0
-    fi
-    say "Mesa $MESA_VERSION: replacing the base image's Mesa (sudo, active after a reboot)"
-    if out=$(sudo rpm-ostree override replace "${mesa[@]}" 2>&1); then
-        printf '%s\n' "$out" | sed 's/^/  /'
-        echo "  one Mesa after the next reboot: the deployment carries the whole stack (GL, gallium, DRI, Vulkan)"
-        echo "  (64-bit packages are replaced; the i686 Mesa stays at the image's version)"
-    else
-        printf '%s\n' "$out" | sed 's/^/  /' >&2
-        echo "  WARNING: rpm-ostree could not stage the Mesa override: this session keeps the overlay copy," >&2
-        echo "           and after a reboot the image's Mesa comes back (the keep unit restores only the driver)" >&2
-    fi
+    sudo install -D -m0755 "$here/files/oxp3-mesa-keep.sh" /usr/local/libexec/oxp3-mesa-keep
+    sudo install -D -m0644 "$here/files/oxp3-mesa-keep.service" \
+        /etc/systemd/system/oxp3-mesa-keep.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable oxp3-mesa-keep.service >/dev/null 2>&1 || true
+    echo "  oxp3-mesa-keep.service: restores the recorded Mesa $MESA_VERSION tree on every boot"
 }
 
-reset_mesa_override() {
-    local -a names=()
-    mesa_override_staged || return 0
-    mapfile -t names < <(rpm-ostree status --booted --json 2>/dev/null | python3 -c '
-import json, re, sys
-try:
-    dep = [d for d in json.load(sys.stdin)["deployments"] if d.get("booted")][0]
-except Exception:
-    sys.exit(0)
-for r in dep.get("requested-base-local-replacements") or []:
-    m = re.match(r"(mesa-[a-z0-9-]+?)-[0-9]", r)
-    if m:
-        print(m.group(1))
-')
-    (( ${#names[@]} )) || return 0
-    sudo rpm-ostree override reset "${names[@]}" || true
+record_mesa_state() { # <flatpak list file, may be empty>
+    local list=${1:-}
+    (( SKIP_MESA )) && return 0
+    sudo mkdir -p "$MESA_STATE_DIR"
+    printf '%s\n' "$MESA_VERSION" | sudo tee "$MESA_STATE_DIR/mesa.version" >/dev/null
+    if [[ -n $list && -r $list ]]; then
+        sudo cp -f "$list" "$MESA_STATE_DIR/mesa-flatpak.list"
+    fi
+    echo "  recorded Mesa $MESA_VERSION for the boot-time restore ($MESA_STATE_DIR)"
 }
 
 # Installed subpackages of the Mesa source package. Selected by SOURCERPM, not by the "mesa-"
@@ -733,11 +702,12 @@ do_install() {
             sudo rpm -Uvh --replacepkgs --oldpackage --nosignature "${rpms[@]}"
             rpm -q gamescope mangohud mesa-vulkan-drivers | sed 's/^/  /'
             (( SKIP_MESA )) || record_known_good host /usr/lib64/libvulkan_intel.so
-            (( SKIP_MESA )) || stage_mesa_override
             if (( !SKIP_MESA )); then
                 say "Mesa for the Steam Flatpak (sudo)"
                 install_flatpak_mesa
             fi
+            (( SKIP_MESA )) || record_mesa_state "$FLATPAK_MESA_LIST"
+            install_mesa_keep
         fi
         if (( !SKIP_EXTRAS )); then
             say "hhd patches: OneXPlayer 3 power limits, volume rocker (sudo)"
@@ -752,11 +722,11 @@ do_install() {
             xmx_retire_split_driver
         fi
         say "done - leave and re-enter Gamemode (no reboot needed)"
-        if (( !SKIP_MESA )) && ! mesa_override_staged; then
-            echo "The overlay copy lives until the next boot; the base-image replacement above"
-            echo "makes Mesa $MESA_VERSION permanent once it is staged and you reboot."
+        if (( !SKIP_MESA )); then
+            echo "Mesa $MESA_VERSION is restored automatically on every boot (oxp3-mesa-keep);"
+            echo "run '$0 all' after an Anatase update to rebuild it against the new image."
         else
-            echo "Mesa $MESA_VERSION is in the deployment; run '$0 all' after an Anatase update."
+            echo "This lasts until the next Anatase update; run '$0 all' after updating."
         fi
     fi
 }
@@ -779,7 +749,6 @@ do_uninstall() {
         sudo "$here/tools/oxp3-hw-install.sh" --uninstall --leds --power ||
             echo "WARNING: removing the hardware units failed - see above" >&2
     fi
-    reset_mesa_override
     uninstall_xess
     uninstall_flatpak_gl
     if [[ -r $FLATPAK_MESA_LIST ]]; then remove_flatpak_mesa; refresh_flatpak_runtime; fi

@@ -87,7 +87,7 @@ components:
     doc: docs/BEST-CONFIG.md
     root_required: "yes"
     install:
-      summary: "Anatase's Mesa package rebuilt as 26.3.1 with the ordered 26.3 series (x86_64 + i686): overlay install for the running session plus rpm-ostree override replace for every later boot, and the same tree as the Flatpak GL extension"
+      summary: "Anatase's Mesa package rebuilt as 26.3.1 with the ordered 26.3 series (x86_64 + i686): installed into the /usr overlay and re-extracted at boot by oxp3-mesa-keep, and the same tree as the Flatpak GL extension"
       entrypoint: "./oxp3-install.sh"
     verify:
       - id: gfx.gamescope
@@ -100,7 +100,7 @@ components:
         expect: "install-common.sh sys_fw/host_mesa/flatpak_mesa resolve against the live host paths"
     dependencies: []
     caveats:
-      - "the whole Mesa stack is replaced: rpm-ostree override replace on the built RPMs, active after a reboot; the /usr overlay install only covers the running session"
+      - "the whole Mesa stack is restored into the /usr overlay on every boot by oxp3-mesa-keep from the recorded version and the cached RPMs; the image's Mesa comes back with the overlay otherwise"
       - "rejected patches 0210 and 0209 stay in patches/rejected and are not applied"
     last_validated:
       date: 2026-11-08

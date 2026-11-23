@@ -1,70 +1,98 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Restore the recorded known-good host Mesa and Flatpak runtime Mesa at boot.
+# Restore our Mesa into the writable /usr overlay at boot, for the host and for the Anatase
+# Flatpak runtime overrides.
 #
-# rpm-ostree clears the /usr overlay ("usroverlay") on every boot, so the patched
-# host libvulkan_intel.so installed there does not survive a reboot, and
-# the Decky health line then reports a Mesa mismatch.  This runs before the
-# display manager, re-enters the usroverlay only when the digest differs, restores
-# the known-good binary, refreshes the Flatpak runtime override and restarts the
-# extension service.  It is a no-op when everything already matches.
+# rpm-ostree clears the /usr overlay ("usroverlay") on every boot, so what `install` put there
+# is gone afterwards. The other keep units re-extract one package each; Mesa is a whole stack
+# (libvulkan_intel.so, libgallium, the DRI/EGL/GL/GBM libraries, the ICD manifests), and
+# restoring only the Vulkan driver leaves one version of it on top of the image's gallium/GL -
+# measured 2026-11-23: 26.3.1 Vulkan with libgallium-26.2.6.so.
+#
+# So: re-enter the overlay, check that the recorded version is really there, and if not extract
+# the cached Mesa RPMs with cpio (bypassing rpm's dependency resolution, like the gamescope and
+# MangoHud keep units) into / and into the Flatpak runtime overrides. Idempotent: it exits
+# immediately when the tree already matches.
 set -uo pipefail
+state=/var/lib/oxp3-fixes
+verfile=$state/mesa.version
+listfile=$state/mesa-flatpak.list
+rt=/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable
 log() { printf 'oxp3-mesa-keep: %s\n' "$*"; }
-find_known() {
-    local f
-    for f in /var/home/*/.cache/oxp3-fixes/known-good "${HOME:-/root}/.cache/oxp3-fixes/known-good"; do
-        [ -e "$f" ] && { printf '%s' "$f"; return 0; }
-    done
-    return 1
-}
-kd=$(find_known) || { log "no known-good directory; nothing to do"; exit 0; }
-host_known=$kd/host-current
-[ -e "$host_known" ] || host_known=$(ls -t "$kd"/host-*-libvulkan_intel.so 2>/dev/null | head -1)
-runtime_known=$kd/runtime-current
-[ -e "$runtime_known" ] || runtime_known=$(ls -t "$kd"/runtime-*-libvulkan_intel.so 2>/dev/null | head -1)
-restore_host=0 restore_runtime=0
-want_host=$(sha256sum "$host_known" 2>/dev/null | cut -d' ' -f1)
-want_runtime=$(sha256sum "$runtime_known" 2>/dev/null | cut -d' ' -f1)
-if [ -n "$want_host" ] && [ -r "$host_known" ]; then
-    cur=$(sha256sum /usr/lib64/libvulkan_intel.so 2>/dev/null | cut -d' ' -f1)
-    [ "$cur" = "$want_host" ] || restore_host=1
+
+[ -r "$verfile" ] || { log "no recorded Mesa version; nothing to restore"; exit 0; }
+want=$(cat "$verfile")
+[ -n "$want" ] || { log "empty Mesa version file; nothing to restore"; exit 0; }
+
+# Canaries: the gallium library carries the version in its name, and the driver hash is what
+# known-good/oxp3-verify compare against.
+gal=/usr/lib64/libgallium-$want.so
+rtdrv=$rt/overrides/lib64/libvulkan_intel.so
+
+host_ok=0; [ -e "$gal" ] && host_ok=1
+runtime_needed=0
+if [ -r "$listfile" ] && [ -d "$rt/overrides" ]; then
+    if [ ! -e "$rtdrv" ]; then
+        runtime_needed=1
+    elif [ "$host_ok" = 1 ] && ! cmp -s /usr/lib64/libvulkan_intel.so "$rtdrv"; then
+        runtime_needed=1
+    fi
 fi
-if [ -n "$want_runtime" ] && [ -r "$runtime_known" ]; then
-    cur_rt=$(sha256sum /usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides/lib64/libvulkan_intel.so 2>/dev/null | cut -d' ' -f1)
-    [ "$cur_rt" = "$want_runtime" ] || restore_runtime=1
-fi
-(( restore_host || restore_runtime )) || exit 0
+if [ "$host_ok" = 1 ] && [ "$runtime_needed" = 0 ]; then exit 0; fi
+
+rpms=()
+shopt -s nullglob
+for d in /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
+    rpms+=("$d"/mesa-*oxp3*"$want"*.x86_64.rpm "$d"/mesa-*oxp3*"$want"*.i686.rpm)
+done
+shopt -u nullglob
+(( ${#rpms[@]} )) || { log "no cached Mesa $want RPMs; run ./oxp3-install.sh"; exit 0; }
+
 # Probe the filesystem, not "rpm-ostree status": a deployment can still report
 # Unlocked: development while /usr is read-only after a reboot.
 probe=/usr/.oxp3-rw-probe.$$
 if ! install -m 000 /dev/null "$probe" 2>/dev/null; then
-    # "Deployment is already in unlocked state" is a non-zero exit that still means
-    # the overlay is (or is about to be) writable, and at boot two keep units race
-    # into it. Ignore the status and decide by probing the filesystem instead.
+    # "Deployment is already in unlocked state" is a non-zero exit that still means the overlay
+    # is (or is about to be) writable, and at boot several keep units race into it.
     rpm-ostree usroverlay >/dev/null 2>&1 || true
     install -m 000 /dev/null "$probe" 2>/dev/null || { log "usroverlay did not become writable"; exit 0; }
 fi
 rm -f "$probe"
-if (( restore_host )); then
-    cp -f -- "$host_known" /usr/lib64/libvulkan_intel.so && log "host Mesa restored"
+
+# Only extract a build that fits the booted image: cpio bypasses rpm's checks, so an RPM built
+# for another Anatase image could drop libraries into /usr that the image does not have.
+if ! rpm -U --test --replacepkgs --oldpackage --nosignature "${rpms[@]}" >/dev/null 2>&1; then
+    log "cached Mesa $want RPMs do not fit this image; keeping the image's Mesa (run ./oxp3-install.sh)"
+    exit 0
 fi
-if (( restore_runtime )); then
-    # The runtime overlay lowerdir is rebuilt from this overrides tree by
-    # anatase-flatpak-extensions.service; the lib64 directory may not exist yet.
-    rt=/usr/lib/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/overrides/lib64
-    mkdir -p "$rt" || log "could not create $rt"
-    if cp -f -- "$runtime_known" "$rt/libvulkan_intel.so"; then
-        log "Flatpak runtime Mesa override restored"
-        systemctl try-restart anatase-flatpak-extensions.service >/dev/null 2>&1 || true
-        # The service regenerates /run/anatase/flatpak; give the overlay a moment
-        # and confirm the runtime now reports the recorded build.
-        for _ in 1 2 3 4 5; do
-            got=$(sha256sum /run/anatase/flatpak/runtime/org.anatase.Platform/x86_64/stable/files/lib64/libvulkan_intel.so 2>/dev/null | cut -d' ' -f1)
-            [ "$got" = "$want_runtime" ] && { log "runtime reports the recorded build"; break; }
-            sleep 1
-        done
-    else
-        log "could not write the runtime override"
-    fi
+
+failed=0
+if [ "$host_ok" = 0 ]; then
+    for rpm in "${rpms[@]}"; do
+        [ -r "$rpm" ] || continue
+        rpm2cpio "$rpm" | ( cd / && cpio -idm --quiet ) || failed=1
+    done
+    (( failed )) && { log "one or more Mesa RPMs failed to extract"; exit 0; }
+    log "host Mesa $want restored"
 fi
+
+# Flatpak runtime overrides: the same files with the leading usr/ stripped, which is how the
+# runtime is mounted inside the sandbox. The list is written by `install`.
+if [ "$runtime_needed" = 1 ] && [ -r "$listfile" ] && [ -d "$rt/overrides" ]; then
+    tmp=$(mktemp -d) || exit 0
+    for rpm in "${rpms[@]}"; do
+        [ -r "$rpm" ] || continue
+        rpm2cpio "$rpm" | ( cd "$tmp" && cpio -idm --quiet ) || failed=1
+    done
+    ( cd "$tmp/usr" 2>/dev/null && grep -vE '^/|(^|/)\.\.(/|$)' "$listfile" |
+        while IFS= read -r p; do
+            [ -e "$p" ] || continue
+            mkdir -p "$rt/overrides/$(dirname "$p")" &&
+                cp -a --remove-destination "$p" "$rt/overrides/$p"
+        done ) || failed=1
+    rm -rf "$tmp"
+    (( failed )) && log "one or more Mesa files failed to reach the Flatpak runtime"
+    [ -e "$rtdrv" ] && log "Flatpak runtime Mesa $want restored"
+fi
+
 exit 0
