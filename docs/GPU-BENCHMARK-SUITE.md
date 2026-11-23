@@ -528,3 +528,26 @@ over repeated runs.  The harness now applies `-hint none -pin YES` to CPU tests
 For deployment this maps to an OpenVINO `NUM_STREAMS`/thread-affinity policy or a
 cpuset that excludes LP-E for latency-sensitive inference; pinning to only P+E
 (0-9) was less consistent than OpenVINO's own pinning.
+
+## D3D API comparison: d3d11 (DXVK) vs d3d12 (VKD3D) vs Vulkan
+
+The synthetic suite above cannot answer why one API path is slower than another in the same
+content, because DXVK/VKD3D live between the game and the driver. `tools/gpu-bench/d3d-api.py`
+covers that:
+
+    tools/gpu-bench/d3d-api.py titles
+    tools/gpu-bench/d3d-api.py run --title witcher3 --api dx11 --note "White Orchard, ultra"
+    tools/gpu-bench/d3d-api.py run --title witcher3 --api dx12 --note "White Orchard, ultra"
+    tools/gpu-bench/d3d-api.py report ~/.cache/oxp3-fixes/gpu-bench/results/d3d-api-*/witcher3-*
+
+It launches the title with the API flag that title understands (`-dx11`, `-dx12`, `-vulkan`),
+records frametimes with MangoHud to CSV with no overlay, marks the measured window with two
+Enters so the same scene is compared, then cuts the recording to it (the game is stopped right
+after the window, and the tail is exactly that many MangoHud rows). Each run writes
+`result.json` with fps/1% low, the GPU and CPU load the recording saw (which separates a
+CPU-bound submission path from a GPU-bound one), the DXVK/VKD3D logs, and the stack versions.
+
+Rules for a usable comparison: same scene, same settings, same resolution and refresh rate,
+VRR off in the test window (a variable refresh rate moves the frame budget), shader cache warm
+(run each API once before measuring - first-run compilation is not steady state), and at least
+three runs per API before believing a difference.
