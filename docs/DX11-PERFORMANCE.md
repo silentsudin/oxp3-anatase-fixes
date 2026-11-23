@@ -106,8 +106,22 @@ without reading this document.
 ./oxp3-fixes.sh status      # "Steam default compat tool: Proton-CachyOS Latest (DXVK 3.0.2)"
 ```
 
-Set the default in Steam (Settings → Compatibility → Steam Play: Proton Experimental), or per title
-in Properties → Compatibility, for anything that runs through D3D11.
+Repeat runs confirm the delta (three runs each): CachyOS/DXVK 3.0.2 at 82.39, 81.51 and 81.73 fps,
+Experimental/DXVK 3.1.1 at 88.23, 88.37 and 88.14 fps - **+7.9% at the medians**, with no overlap
+between the two groups.
+
+Set it in Steam (Settings → Compatibility → Steam Play: Proton Experimental), per title in
+Properties → Compatibility, or with the helper, which edits only the relevant `CompatToolMapping`
+entry and keeps a backup:
+
+```sh
+tools/steam-compat-tool.sh list                        # which tools carry which DXVK
+tools/steam-compat-tool.sh set-default "Proton - Experimental"
+tools/steam-compat-tool.sh set-app 1623730 "Proton Hotfix"
+tools/steam-compat-tool.sh restore                     # put the newest backup back
+```
+
+Run it with Steam closed: Steam rewrites `config.vdf` when it exits.
 
 ## What is left
 
