@@ -75,12 +75,18 @@ def stack_versions() -> dict:
             if line.startswith("26.") or line.startswith("27."):
                 v["mesa"] = line.strip()
                 break
-    for key, pat in (("dxvk", "files/lib64/wine/dxvk/version"),
-                     ("vkd3d", "files/lib64/wine/vkd3d-proton/version")):
-        try:
-            v[key] = (PROTON.parent / pat).read_text().strip().split()[-1]
-        except OSError:
-            v[key] = None
+    for key, pats in (("dxvk", ("files/lib64/wine/dxvk/version", "files/lib/wine/dxvk/version")),
+                      ("vkd3d", ("files/lib64/wine/vkd3d-proton/version",
+                                 "files/lib/wine/vkd3d-proton/version"))):
+        # Proton trees differ: some ship lib64, some only lib
+        v[key] = None
+        for pat in pats:
+            try:
+                text = (PROTON.parent / pat).read_text()
+            except OSError:
+                continue
+            v[key] = text.strip().split()[-1].strip("()")
+            break
     v["proton"] = PROTON.parent.name
     return v
 
