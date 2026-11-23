@@ -1287,8 +1287,15 @@ refresh_flatpak_runtime() {
 
 remove_flatpak_mesa() {
     [[ -r $FLATPAK_MESA_LIST ]] || return 0
-    (cd "$FLATPAK_RT/overrides" && grep -v '/$' "$FLATPAK_MESA_LIST" | sudo xargs -r -d '\n' rm -f --)
-    sudo rm -f "$FLATPAK_MESA_LIST"
+    # `rpm -ql` lists directories as well as files, and `rm -f` refuses a directory: that made
+    # this pipeline return non-zero, which under `set -e` aborted the install before the XMX
+    # and ICD-retirement steps. Remove the listed entries with -rf (they are paths relative to
+    # the overrides dir and the current tree is re-extracted right after), never follow an
+    # absolute or parent-relative entry, and never fail an install over a stale one.
+    (cd "$FLATPAK_RT/overrides" &&
+        grep -vE '^/|(^|/)\.\.(/|$)' "$FLATPAK_MESA_LIST" |
+        sudo xargs -r -d '\n' rm -rf --) || true
+    sudo rm -f "$FLATPAK_MESA_LIST" || true
 }
 
 # ---------------------------------------------------------------------------------------------
