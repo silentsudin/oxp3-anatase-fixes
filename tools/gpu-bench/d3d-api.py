@@ -41,17 +41,17 @@ LOGS = Path.home() / ".cache/oxp3-fixes/gpu-bench/results"
 # Per-title launch flags. `exe` is used only to notice the game came up and to stop it
 # again; the API flags are the ones the title itself documents.
 TITLES = {
-    "witcher3": {
-        "appid": "292030",
-        "name": "The Witcher 3",
-        "exe": ["witcher3.exe"],
+    # Only titles actually installed on this machine: Satisfactory, The Witcher 3, Hogwarts
+    # Legacy and No Man's Sky had install directories but no appmanifest, so they cannot be
+    # launched by appid. Add a title here (appid, exe basename, per-API flags) after installing
+    # one that exposes DX11 and DX12 in the same content.
+    "palworld": {
+        "appid": "1623730",
+        "name": "Palworld",
+        "exe": ["Palworld-Win64-Shipping.exe"],
+        # UE5.1 keeps an SM5/DX11 path; if the game ignores -dx11 the run still produces
+        # VKD3D logs instead of DXVK ones, which the result records.
         "apis": {"dx11": ["-dx11"], "dx12": ["-dx12"]},
-    },
-    "satisfactory": {
-        "appid": "526870",
-        "name": "Satisfactory",
-        "exe": ["FactoryGame-Win64-Shipping.exe"],
-        "apis": {"dx11": ["-dx11"], "dx12": ["-dx12"], "vk": ["-vulkan"]},
     },
     "talos2": {
         "appid": "835960",
@@ -59,10 +59,11 @@ TITLES = {
         "exe": ["Talos2.exe"],
         "apis": {"dx12": ["-dx12"], "vk": ["-vulkan"]},
     },
-    "hogwarts": {
-        "appid": "990080",
-        "name": "Hogwarts Legacy",
-        "exe": ["HogwartsLegacy.exe"],
+    "blackmyth": {
+        "appid": "3132990",
+        "name": "Black Myth Wukong Benchmark Tool",
+        "exe": ["b1-Win64-Shipping.exe"],
+        # built-in benchmark loop: the closest thing to a repeatable scene here
         "apis": {"dx12": ["-dx12"]},
     },
     "eldenring": {
@@ -71,15 +72,11 @@ TITLES = {
         "exe": ["eldenring.exe"],
         "apis": {"dx12": ["-dx12"]},
     },
-    "blackmyth": {
-        "appid": "3132990",
-        "name": "Black Myth Wukong Benchmark Tool",
-        "exe": ["b1-Win64-Shipping.exe"],
-        "apis": {"dx12": ["-dx12"]},
-    },
 }
 
-MANGOHUD_KEYS = "fps,frametime,cpu_load,gpu_load,gpu_core_clock,cpu_mhz"
+# no metric names: MangoHud logs its available columns by default, and naming one the
+# driver does not expose (gpu_load on this build) makes it discard the whole config
+MANGOHUD_KEYS = ""
 INTERVAL_MS = 100
 
 
@@ -134,7 +131,9 @@ def game_running(exes: list[str]) -> list[int]:
 
 
 def detect_mangohud_csv(d: Path) -> Path | None:
-    cands = sorted(d.glob("*.csv")) + sorted(Path.home().glob("*.csv"))
+    # output_folder: MangoHud writes its own timestamped name there
+    cands = sorted(d.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True) + \
+        sorted(Path.home().glob("*.csv"))
     for c in cands:
         try:
             head = c.read_text(errors="replace")[:400]
@@ -163,9 +162,10 @@ def parse_mangohud(csv: Path, window_s: float) -> dict:
         rows.append(row)
     if not rows:
         return {"samples": 0}
-    # The log covers the whole session and MangoHud rows carry no wall clock, so take the
-    # tail: the game is killed right after the marked window ends, and at a fixed
-    # log_interval the last window_s seconds are exactly that many rows.
+    # Take the tail: the measured window is the end of the run (the operator marks it, then quits
+    # the game), and at a fixed log_interval the last window_s seconds are that many rows.
+    # MangoHud's own `elapsed` column is not used on purpose: 0.8.4 writes it in *nanoseconds*
+    # (101261773 for 0.1 s), which silently turns a seconds-based window into "everything".
     n = max(1, int(round(window_s * 1000 / INTERVAL_MS)))
     win = rows[-n:] if len(rows) > n else rows
     ft = [r["frametime"] for r in win if r.get("frametime")]
@@ -224,8 +224,7 @@ def cmd_run(a) -> int:
     env = os.environ.copy()
     env.update({
         "MANGOHUD": "1",
-        "MANGOHUD_CONFIG": (f"no_display,output_file={csv},log_interval={INTERVAL_MS},"
-                            f"autostart_log=1,{MANGOHUD_KEYS}"),
+        "MANGOHUD_CONFIG": mangohud_config(res),
         "DXVK_LOG_LEVEL": "info",
         "DXVK_LOG_PATH": str(res),
         "DXVK_HUD": "0",
@@ -266,21 +265,41 @@ def cmd_run(a) -> int:
     t1 = time.time()
     out(f"   window {t1 - t0:.1f}s")
 
-    if not a.keep_running:
+    # MangoHud writes its CSV when the process exits cleanly: killing it (SIGTERM) loses the
+    # whole log, which is why the first measurements produced no file at all.
+    if a.kill:
         for pid in game_running(t["exe"]):
             try:
                 os.kill(pid, signal.SIGTERM)
             except OSError:
                 pass
-    time.sleep(2)
+    else:
+        out("   Quit the game normally now (Steam > Exit, Alt+F4) - MangoHud only writes its log")
+        out(f"   on a clean exit. Waiting up to {a.quit_timeout}s for it to close...")
+        quit_deadline = time.time() + a.quit_timeout
+        while time.time() < quit_deadline and game_running(t["exe"]):
+            time.sleep(2)
+        if game_running(t["exe"]):
+            out("   still running: terminating it, the log may be missing (use a clean exit)")
+            for pid in game_running(t["exe"]):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+    time.sleep(3)
     found = detect_mangohud_csv(res)
     summary = parse_mangohud(found, t1 - t0) if found else {"error": "no mangohud csv"}
     if found and found != csv:
         shutil.copy2(found, csv)
+    logs = sorted(p.name for p in res.iterdir()
+                  if p.suffix in (".log", ".txt") or "dxvk" in p.name.lower() or "vkd3d" in p.name.lower())
+    if not found:
+        out("   no MangoHud CSV: it only writes on a clean exit, and the game did not exit by itself")
     logline.update({
         "finished": datetime.now(timezone.utc).isoformat(),
         "stack": stack_versions(),
         "mangohud_csv": found.name if found else None,
+        "logs": logs,
         "summary": summary,
     })
     (res / "result.json").write_text(json.dumps(logline, indent=2) + "\n")
@@ -317,8 +336,14 @@ def cmd_report(a) -> int:
     return 0
 
 
-MANGOHUD_CONFIG_PREVIEW = (f"no_display,log_interval={INTERVAL_MS},autostart_log=1,"
-                           f"{MANGOHUD_KEYS}")
+def mangohud_config(folder: Path) -> str:
+    """MangoHud 0.8.4: logs go to output_folder (output_file is deprecated and ignored), and
+    autostart_log needs log_duration (0 = until the process exits)."""
+    return (f"output_folder={folder},log_interval={INTERVAL_MS},"
+            f"autostart_log=1,log_duration=0")
+
+
+MANGOHUD_CONFIG_PREVIEW = "output_folder=<result dir>,log_interval=100,autostart_log=1,log_duration=0"
 
 
 def main() -> int:
@@ -333,7 +358,10 @@ def main() -> int:
     s.add_argument("--note", default="", help="what scene/settings were used")
     s.add_argument("--out", default=None)
     s.add_argument("--timeout", type=int, default=300, help="seconds to wait for the game")
-    s.add_argument("--keep-running", action="store_true")
+    s.add_argument("--kill", action="store_true",
+                   help="terminate the game instead of asking for a clean exit (loses the log)")
+    s.add_argument("--quit-timeout", type=int, default=180,
+                   help="seconds to wait for the game to close after the window")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(func=cmd_run)
 

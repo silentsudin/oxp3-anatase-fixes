@@ -551,3 +551,22 @@ Rules for a usable comparison: same scene, same settings, same resolution and re
 VRR off in the test window (a variable refresh rate moves the frame budget), shader cache warm
 (run each API once before measuring - first-run compilation is not steady state), and at least
 three runs per API before believing a difference.
+
+Three facts about this machine's MangoHud (0.8.4) that the harness is built around, each found
+by measurement rather than assumption:
+
+- it writes the CSV only when the game exits **cleanly**; a SIGTERM loses the whole log, so the
+  harness asks for a normal quit after the window (`--kill` skips that and will usually produce
+  no log);
+- `output_file` is gone (it is ignored and logged as deprecated); logs go to `output_folder=`,
+  and `autostart_log=1` needs `log_duration` (0 = until exit);
+- `gpu_load` is not readable on this iGPU. Passing it explicitly makes MangoHud discard the
+  entire config ("Unknown option 'gpu_load'"), and the column it writes is a constant 0. So the
+  harness never forces metric names and does not report a GPU load percentage.
+
+Because there is no usable GPU utilisation counter here (Xe's `fdinfo` exposes memory stats, not
+engine busy time, and `intel_gpu_top` is not installed), CPU-bound versus GPU-bound is decided by
+**resolution scaling**: measure the same scene at the target resolution and at a much lower one.
+If the frame rate does not move, the API path is bound by CPU/submission and the fix space is
+DXVK/Proton configuration; if it scales with the pixel count, the path is GPU-bound and the
+question becomes the quality of the pipelines DXVK generates.
