@@ -271,13 +271,24 @@ EOF
 }
 
 # the built mesa RPMs for the mesa packages installed on this system (they must all change together)
+# first existing file among shell globs; no `head`, so pipefail cannot trip on SIGPIPE
+first_glob() {
+    local g f
+    for g in "$@"; do
+        for f in $g; do
+            [[ -f $f ]] && { printf '%s\n' "$f"; return 0; }
+        done
+    done
+    return 1
+}
+
 mesa_rpms() {
     local pkg arch f
     while read -r pkg arch; do
         # the fresh build first, then the durable copy install keeps for the boot restore: a
         # cleaned ~/.cache must not leave install unable to reinstall the stack it already has
-        f=$(ls "$OUT/$pkg-$MESA_VERSION-"*".$arch.rpm" \
-               "$MESA_STATE_DIR/rpms/$pkg-$MESA_VERSION-"*".$arch.rpm" 2>/dev/null | head -1)
+        f=$(first_glob "$OUT/$pkg-$MESA_VERSION-"*".$arch.rpm" \
+                        "$MESA_STATE_DIR/rpms/$pkg-$MESA_VERSION-"*".$arch.rpm" || true)
         [[ -n $f ]] || die "no built $pkg.$arch - run '$0 build' first"
         echo "$f"
     done < <(mesa_installed_pkgs)
@@ -285,10 +296,15 @@ mesa_rpms() {
 
 # <component>: the freshly built RPMs, or the durable copies recorded by the last install.
 component_rpms() {
-    local comp=$1 glob
+    local comp=$1 glob f
+    # no `head` here: closing the pipe early raises SIGPIPE, and this script runs under
+    # `set -euo pipefail`, so the command substitution would take the whole install down
+    # silently (which is exactly how a plain install appeared to do nothing).
     for glob in "$OUT/$comp"-*.rpm "$MESA_STATE_DIR/rpms/$comp"-*.rpm; do
-        ls $glob 2>/dev/null | while read -r f; do printf '%s\n' "$f"; done | head -2
-    done | awk '!seen[$0]++'
+        for f in $glob; do
+            [[ -f $f ]] && printf '%s\n' "$f"
+        done
+    done | awk '!seen[$0]++' || true
 }
 
 # The /usr overlay ("usroverlay") does not survive a reboot, and the image's Mesa comes back
@@ -629,7 +645,7 @@ install_flatpak_mesa() {
     # The list comes from the RPMs this run installed, not from `rpm -q`: an install into the
     # /usr overlay can leave the rpmdb reporting the base image's Mesa while the overlay holds
     # ours, and then this step would copy the wrong tree (or miss files) in the runtime.
-    local src; src=$(ls "$OUT"/mesa-*.x86_64.rpm "$MESA_STATE_DIR"/rpms/mesa-*.x86_64.rpm 2>/dev/null | head -1)
+    local src; src=$(first_glob "$OUT"/mesa-*.x86_64.rpm "$MESA_STATE_DIR"/rpms/mesa-*.x86_64.rpm || true)
     list=$(rpm -qlp "${src:-"$OUT"/mesa-*.x86_64.rpm}" 2>/dev/null | grep '^/usr/' |
            grep -vE "$FLATPAK_MESA_SKIP" | sort -u)
     if [[ -z $list ]]; then
@@ -670,8 +686,8 @@ install_flatpak_mesa() {
 
 do_install() {
     local rpms=() kmod=() kver info staged locals p un=()
-    if (( !SKIP_GAMESCOPE )); then local gr; gr=$(component_rpms gamescope); mapfile -t -O "${#rpms[@]}" rpms <<<"$gr"; fi
-    if (( !SKIP_MANGOHUD )); then local mr2; mr2=$(component_rpms mangohud); mapfile -t -O "${#rpms[@]}" rpms <<<"$mr2"; fi
+    if (( !SKIP_GAMESCOPE )); then local gr; gr=$(component_rpms gamescope || true); mapfile -t -O "${#rpms[@]}" rpms <<<"$gr"; fi
+    if (( !SKIP_MANGOHUD )); then local mr2; mr2=$(component_rpms mangohud || true); mapfile -t -O "${#rpms[@]}" rpms <<<"$mr2"; fi
     if (( !SKIP_MESA )); then local mr; mr=$(mesa_rpms); mapfile -t -O "${#rpms[@]}" rpms <<<"$mr"; fi
     local f; for f in "${rpms[@]}"; do [[ -f $f ]] || die "missing $f - run '$0 build' first"; done
     kver=$(anatase_kver)
