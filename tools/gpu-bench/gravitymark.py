@@ -174,10 +174,36 @@ def summarise(deltas: list[float], warmup: int = 0) -> dict:
 
 
 # --- runs ------------------------------------------------------------------------------------
+def reap_run(marker: str) -> int:
+    """Kill every process belonging to one run.
+
+    Killing the process group is not enough: gamescope starts the client in its own session, so a
+    SIGKILL on the group left GravityMark running - and an orphan rendering at 100% steals the
+    GPU from every later measurement. The run's result directory name is unique and appears in
+    the client's command line (as a Windows path under Z:), so match on that.
+    """
+    killed = 0
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            cmd = (d / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        if marker and marker in cmd and "gravitymark.py" not in cmd:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.kill(int(d.name), sig)
+                    killed += 1
+                except OSError:
+                    break
+    return killed
+
+
 def run_gravitymark(api: str, width: int, height: int, count: int, dest: Path,
                     timeout: int, extra_env: dict | None = None,
                     taskset: str | None = None, headless: bool = True,
-                    refresh: int = 60) -> tuple[int, str]:
+                    refresh: int = 60, stall_timeout: int = 240) -> tuple[int, str]:
     times = dest / "times.csv"
     # Headless by default: `gamescope --backend headless` gives the client a virtual display, so
     # a measurement never opens a window over the operator's desktop (and every API runs through
@@ -223,11 +249,15 @@ def run_gravitymark(api: str, width: int, height: int, count: int, dest: Path,
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=logf, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, start_new_session=True)
         deadline = time.time() + timeout
+        stall = time.time() + stall_timeout
         try:
             while time.time() < deadline:
                 if proc.poll() is not None:
                     break
                 if times.exists() and time.time() - times.stat().st_mtime > 5:
+                    break
+                if not times.exists() and time.time() > stall:
+                    out(f"   no frametime report after {stall_timeout}s: aborting this run")
                     break
                 time.sleep(1)
         finally:
@@ -242,6 +272,10 @@ def run_gravitymark(api: str, width: int, height: int, count: int, dest: Path,
                         break
                     except subprocess.TimeoutExpired:
                         continue
+            # always reap by identity as well, even on success: gamescope's client is in its own
+            # session and survives the group kill
+            time.sleep(1)
+            reap_run(dest.name)
     text = raw.read_text(errors="replace")
     return (proc.returncode if proc.returncode is not None else -1), text[-4000:]
 
@@ -264,7 +298,8 @@ def cmd_run(a) -> int:
     rc, log = run_gravitymark(api, a.width, a.height, a.count, dest, a.timeout, extra,
                               getattr(a, "taskset", None),
                               headless=getattr(a, "headless", True),
-                              refresh=getattr(a, "refresh", 60))
+                              refresh=getattr(a, "refresh", 60),
+                              stall_timeout=getattr(a, "stall_timeout", 240))
     (dest / "log.txt").write_text(log)
     times = dest / "times.csv"
     deltas = parse_times(times) if times.exists() else []
@@ -366,6 +401,8 @@ def main() -> int:
     s.add_argument("--windowed", action="store_true",
                    help="open a real window instead of gamescope headless (intrudes on the desktop)")
     s.add_argument("--refresh", type=int, default=60)
+    s.add_argument("--stall-timeout", type=int, default=240,
+                   help="abort a run that produces no frametime report within this many seconds")
     s.add_argument("--fresh-prefix", action="store_true",
                    help="delete the Wine prefix first (required after a killed run)")
     s.set_defaults(func=cmd_run)
