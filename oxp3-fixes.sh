@@ -295,13 +295,24 @@ install_mesa_keep() {
         /etc/systemd/system/oxp3-mesa-keep.service
     sudo systemctl daemon-reload
     sudo systemctl enable oxp3-mesa-keep.service >/dev/null 2>&1 || true
-    echo "  oxp3-mesa-keep.service: restores the recorded Mesa $MESA_VERSION tree on every boot"
+    # Run it now as well: the unit is idempotent and this is what makes the tree consistent
+    # (gallium/GL/DRI from the same build as the Vulkan driver) before the next boot, instead
+    # of relying on the next boot to do it.
+    sudo systemctl start oxp3-mesa-keep.service >/dev/null 2>&1 || true
+    echo "  oxp3-mesa-keep.service: enabled and applied, restores the full Mesa $MESA_VERSION"
+    echo "  tree on every boot (host + Flatpak runtime overrides)"
 }
 
 record_mesa_state() { # <flatpak list file, may be empty>
-    local list=${1:-}
+    local list=${1:-} rpm
     (( SKIP_MESA )) && return 0
-    sudo mkdir -p "$MESA_STATE_DIR"
+    sudo mkdir -p "$MESA_STATE_DIR/rpms"
+    # The boot restore needs the RPMs themselves, and ~/.cache can be cleaned: keep a copy of
+    # this build next to the recorded version (old versions are dropped).
+    sudo rm -f "$MESA_STATE_DIR"/rpms/mesa-*.rpm
+    for rpm in "$OUT"/mesa-*"$MESA_VERSION"*.rpm; do
+        [[ -f $rpm ]] && sudo cp -f "$rpm" "$MESA_STATE_DIR/rpms/"
+    done
     printf '%s\n' "$MESA_VERSION" | sudo tee "$MESA_STATE_DIR/mesa.version" >/dev/null
     if [[ -n $list && -r $list ]]; then
         sudo cp -f "$list" "$MESA_STATE_DIR/mesa-flatpak.list"
@@ -707,8 +718,8 @@ do_install() {
                 install_flatpak_mesa
             fi
             (( SKIP_MESA )) || record_mesa_state "$FLATPAK_MESA_LIST"
-            install_mesa_keep
         fi
+        install_mesa_keep
         if (( !SKIP_EXTRAS )); then
             say "hhd patches: OneXPlayer 3 power limits, volume rocker (sudo)"
             install_hhd_patches
@@ -744,6 +755,12 @@ do_uninstall() {
     sudo rm -f /etc/systemd/system/rapl-power.service /usr/local/libexec/rapl-power
     sudo systemctl daemon-reload
     remove_rapl_udev_rules
+    # the boot-time Mesa restore is ours: disabling it and dropping the recorded version makes
+    # the next boot the image's Mesa again, with no leftover state.
+    sudo systemctl disable --now oxp3-mesa-keep.service 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/oxp3-mesa-keep.service /usr/local/libexec/oxp3-mesa-keep
+    sudo rm -f /var/lib/oxp3-fixes/mesa.version /var/lib/oxp3-fixes/mesa-flatpak.list
+    sudo systemctl daemon-reload 2>/dev/null || true
     uninstall_extras
     if [[ -x $here/tools/oxp3-hw-install.sh ]]; then
         sudo "$here/tools/oxp3-hw-install.sh" --uninstall --leds --power ||

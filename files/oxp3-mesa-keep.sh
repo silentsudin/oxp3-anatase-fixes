@@ -42,7 +42,8 @@ if [ "$host_ok" = 1 ] && ! runtime_differs; then exit 0; fi
 
 rpms=()
 shopt -s nullglob
-for d in /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
+# the durable copy `install` leaves next to the recorded version first, then the build caches
+for d in "$state/rpms" /var/home/*/.cache/oxp3-fixes/out "${HOME:-/root}/.cache/oxp3-fixes/out"; do
     rpms+=("$d"/mesa-*"$want"*oxp3*.x86_64.rpm "$d"/mesa-*"$want"*oxp3*.i686.rpm)
 done
 shopt -u nullglob

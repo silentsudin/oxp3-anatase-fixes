@@ -34,9 +34,10 @@
 > non-zero.
 >
 > **Persistence.** The `/usr` overlay (`rpm-ostree usroverlay`) is cleared at every boot, so
-> `install` records the version in `/var/lib/oxp3-fixes/mesa.version` (plus the Flatpak file list
-> in `mesa-flatpak.list`) and `oxp3-mesa-keep.service` re-extracts the cached Mesa RPMs with
-> `rpm2cpio | cpio` at boot - the same model as the gamescope and MangoHud keep units. Without
+> `install` records the version in `/var/lib/oxp3-fixes/mesa.version`, the Flatpak file list in
+> `mesa-flatpak.list` and a copy of the built RPMs in `/var/lib/oxp3-fixes/rpms/` (so a cleaned
+> build cache cannot break the restore), then deploys and applies
+> `oxp3-mesa-keep.service`, which re-extracts those RPMs with `rpm2cpio | cpio` at boot - the same model as the gamescope and MangoHud keep units. Without
 > that, only the Vulkan driver came back and the box ran 26.3.1 Vulkan on top of the image's
 > `libgallium-26.2.6.so` (measured 2026-11-23). `rpm-ostree override replace` cannot do this job:
 > Mesa is a multilib package set and rpm-ostree resolves an override by package name only, so it
