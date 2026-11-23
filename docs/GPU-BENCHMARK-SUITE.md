@@ -552,6 +552,43 @@ VRR off in the test window (a variable refresh rate moves the frame budget), sha
 (run each API once before measuring - first-run compilation is not steady state), and at least
 three runs per API before believing a difference.
 
+## Cross-API comparison with GravityMark: one scene, four paths
+
+`tools/gpu-bench/gravitymark.py` removes the two things that make a game-based API comparison
+unreliable: different content per API, and an operator who has to mark the timing window.
+GravityMark ships the *same* scene as a Windows build (D3D11, D3D12, Vulkan) and a Linux build
+(Vulkan), with a deterministic benchmark mode and a per-frame time report:
+
+| path | what it measures |
+|---|---|
+| `d3d11` | Windows build under Proton -> DXVK over ANV |
+| `d3d12` | Windows build under Proton -> VKD3D-Proton over ANV |
+| `vk-win` | Windows build under Proton -> Vulkan (holds the API constant, exposes the Wine cost) |
+| `vk-native` | Linux build on host Mesa -> the ceiling for this GPU |
+
+    tools/gpu-bench/gravitymark.py setup
+    tools/gpu-bench/gravitymark.py matrix --repeats 3 --width 1280 --height 720
+    tools/gpu-bench/gravitymark.py matrix --repeats 3 --width 640 --height 360   # CPU-bound probe
+    tools/gpu-bench/gravitymark.py report ~/.cache/oxp3-fixes/gpu-bench/results/gravitymark-*
+
+The second resolution is the point: if lowering the pixel count does not lift an API's frame
+rate, that path is bound by CPU/submission rather than by the GPU.
+
+Details that cost time to learn, now encoded in the tool:
+
+- the API flags are `-direct3d11`, `-direct3d12` and `-vulkan` (from the shipped manual).
+  `-dx11`/`-dx12` are invalid and the engine exits 1 with no console output, because its errors go
+  to a dialog;
+- both builds expect `bin/<exe>` with `data.zip` one level up. The Windows MSI drops the exe at
+  the archive root, and from there it dies with `Image::load(): can't open "textures/splash.image"`
+  (the "Path not found" lines in its log);
+- the Linux `.run` is a Makeself archive whose inner installer prompts for its licence, so with
+  stdin at EOF it loops forever asking "type y to accept". The tool cuts the gzip payload out and
+  unpacks it instead;
+- `-times <file>` gives the per-frame report (`<index>: <timestamp> <delta seconds> <flags>`), and
+  the metrics are computed from it: mean fps, mean frametime, the p99 frametime and the 1% low as
+  the mean of the slowest 1% of frames.
+
 Three facts about this machine's MangoHud (0.8.4) that the harness is built around, each found
 by measurement rather than assumption:
 
