@@ -257,34 +257,9 @@ remove_mesa_fast() {
     echo "  stock driver restored"
 }
 
-# Install the XMX stack per game instead of the package's session-wide install.sh:
-# a session VK_DRIVER_FILES would put gamescope/desktop on the 26.3 CM driver and
-# break PQ HDR. The shim/IGC live in the user's package; the driver and ICD are
-# already in place from the build phase.
-install_xess() {
-    [[ -d $OUT/xess-xmx ]] || die "missing $OUT/xess-xmx - run '$0 build' first"
-    rm -rf "$XESS_PKG"; mkdir -p "$XESS_PKG"
-    rsync -a --exclude /lib/ "$OUT/xess-xmx/" "$XESS_PKG/"
-    seed_xess_compiler
-    # Fresh installs have no seed in ~/Downloads: fetch IGC/ocloc the same way the
-    # upstream install.sh would (the CM helper cannot work without it).
-    if ! ls "$XESS_PKG"/igc/neo/bin/ocloc* >/dev/null 2>&1; then
-        if [[ -x $XESS_PKG/tools/get-igc.sh ]]; then
-            ( cd "$XESS_PKG" && bash tools/get-igc.sh ) | sed 's/^/  /' || warn "IGC fetch failed; XMX kernels cannot compile until tools/get-igc.sh runs"
-        else
-            warn "no tools/get-igc.sh in $XESS_PKG; XMX kernels cannot compile without IGC"
-        fi
-    fi
-    mkdir -p "$HOME/.config/xess-xmx"
-    printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s","api_version":"1.4.0"}}\n' \
-        "$HOME/.cache/oxp3-fixes/xmx-driver/libvulkan_intel.so" > "$HOME/.config/xess-xmx/icd-xmx.json"
-    "$here/tools/xmx-write-env.sh" >/dev/null 2>&1 || true
-    if [[ ${EUID:-$(id -u)} -eq 0 && -n ${SUDO_USER:-} ]]; then
-        chown -R "$SUDO_USER": "$XESS_PKG" "$HOME/.config/xess-xmx" 2>/dev/null || true
-    fi
-    echo "  per-game XMX env written; no session-wide VK_DRIVER_FILES (gamescope keeps the host driver)"
-    echo "  run tools/xmx-steam-enable.sh --all (or --appid <id>) to put it into a game's LaunchOptions"
-}
+# install_xess lives in tools/lib/install-common.sh. A copy here used to override it: an old
+# per-game split-driver install that deleted the package while games ran and never put the
+# shim into Proton, so XeSS fell back to DP4a (2026-11-24).
 
 # ---------------------------------------------------------------------------------------------
 # XeSS on XMX (xess-xmx-linux, our fork with Anatase support): the Mesa patches are in

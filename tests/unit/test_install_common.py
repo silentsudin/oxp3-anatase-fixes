@@ -404,5 +404,67 @@ class FlatpakGlTest(ShellCase):
                           "26.08", "26.08 25.08"])
 
 
+class XessRepairTest(ShellCase):
+    """The checks that keep XeSS off a silent DP4a fallback (2026-11-24: stock igdext in Proton,
+    a stale compile_failed.txt, a kernel cache shared between helpers)."""
+
+    def steam(self):
+        home = self.tree.path("home")
+        pkg = home / ".local/share/xess-xmx"
+        (pkg / "tools").mkdir(parents=True)
+        (pkg / "igdext64.dll").write_text("shim IGDEXT_\n")
+        (pkg / "tools/cm-compile.sh").write_text("helper v1\n")
+        common = home / ".local/share/Steam/steamapps/common"
+        for name, body in (("Proton - Experimental", "stock\n"), ("Proton Hotfix", "shim IGDEXT_\n")):
+            d = common / name / "files/lib/wine/igdext/x86_64-windows"
+            d.mkdir(parents=True)
+            (d / "igdext64.dll").write_text(body)
+        pfx = home / ".local/share/Steam/steamapps/compatdata/4225980/pfx/drive_c"
+        store = pfx / "windows/system32/DriverStore/FileRepository/igd_faux.inf_1"
+        store.mkdir(parents=True)
+        (store / "igdext64.dll").write_text("stock\n")
+        (pfx / "igdext_kernels").mkdir()
+        (pfx / "igdext_kernels/compile_failed.txt").write_text("-1 9a15b4d01dcd93a0\n")
+        return home, pkg, pfx
+
+    def test_verify_names_the_proton_with_a_stock_igdext(self):
+        home, pkg, _ = self.steam()
+        res = self.bash(f'XESS_PKG="{pkg}"; xess_verify_shim')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("in 1 of 2 Proton(s), 0 of 1 prefix(es)", res.stdout)
+        self.assertIn("Proton - Experimental", res.stdout)
+        self.assertNotIn("Proton Hotfix", res.stdout)
+
+    def test_failed_markers_are_cleared(self):
+        home, pkg, pfx = self.steam()
+        res = self.bash(f'XESS_PKG="{pkg}"; xess_clear_failed_markers')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("cleared 1", res.stdout)
+        self.assertFalse((pfx / "igdext_kernels/compile_failed.txt").exists())
+
+    def test_kernel_cache_reset_once_per_helper(self):
+        home, pkg, _ = self.steam()
+        kernels = home / ".cache/xess-xmx/kernels"
+        kernels.mkdir(parents=True)
+        (kernels / "a_b080_1.cmk").write_text("k")
+        script = f'XESS_PKG="{pkg}"; xess_reset_kernel_cache; echo ---; xess_reset_kernel_cache'
+        res = self.bash(script)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        first, second = res.stdout.split("---")
+        self.assertIn("kernels.stale", first)
+        self.assertEqual(second.strip(), "")
+        self.assertTrue((home / ".cache/xess-xmx/kernels.stale/a_b080_1.cmk").exists())
+        (pkg / "tools/cm-compile.sh").write_text("helper v2\n")
+        kernels.mkdir()
+        res = self.bash(f'XESS_PKG="{pkg}"; xess_reset_kernel_cache')
+        self.assertIn("kernels.stale", res.stdout)
+
+    def test_entry_scripts_do_not_override_install_xess(self):
+        # an override in oxp3-fixes.sh silently replaced this library's install_xess for two weeks
+        for name in ("oxp3-fixes.sh", "oxp3-fixes-fast.sh"):
+            text = (support.REPO / name).read_text()
+            self.assertNotRegex(text, r"(?m)^install_xess\(\)", name)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -673,7 +673,10 @@ build_card() {
 
 build_xess() {
     local dl="$CACHE/xess" stage="$OUT/xess-xmx" zip src entry name sha key
-    key=$(printf '%s\n' "$XESS_COMMIT" "$XESS_ZIP_SHA" "$XESS_DLLS" | sha256sum | cut -c1-32)
+    # the system-mode port is part of the build: a change to it must rebuild the package
+    key=$( { printf '%s\n' "$XESS_COMMIT" "$XESS_ZIP_SHA" "$XESS_DLLS"
+             find "$here/files/xess-system-mode" -type f -print 2>/dev/null | sort | xargs -r sha256sum
+           } | sha256sum | cut -c1-32 )
     if cache_valid xess "$key" && [[ -d $stage ]]; then
         echo "  XeSS XMX: build cached (${key:0:8})"
     else
@@ -756,7 +759,8 @@ xmx_retire_split_driver() {
     done
     # 3. the user manager keeps its own copy of the environment from the last login: a game
     # started by it would still see the old VK_DRIVER_FILES even with the file clean.
-    systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES 2>/dev/null || true
+    # as the invoking user: under sudo a bare `systemctl --user` reaches root's manager
+    xess_user_run systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES 2>/dev/null || true
     if (( n > 0 )); then
         echo "  one Mesa now: restart Steam (leave and re-enter Gamemode) to drop the old ICD"
     else
@@ -765,49 +769,181 @@ xmx_retire_split_driver() {
     return 0
 }
 
-install_xess() {
-    if [[ ! -d $OUT/xess-xmx ]]; then
-        # already installed and nothing new was built: leave it alone instead of failing install
-        [[ -d ${XESS_PKG:-$HOME/.local/share/xess-xmx} ]] &&
-            { echo "  XeSS XMX already installed, no fresh build staged - leaving it"; return 0; }
-        die "missing $OUT/xess-xmx - run '$0 build' first"
+# Run a command as the person who started the install. oxp3-install.sh runs `sudo oxp3-fixes.sh
+# install`: as root, `systemctl --user` talks to root's user manager - not the session Steam and
+# the games inherit their environment from - and files written into Steam's folders become
+# root's. Not root: the command runs as is.
+xess_user_run() {
+    if [[ ${EUID:-$(id -u)} -ne 0 ]]; then "$@"; return; fi
+    local u=${OXP3_USER:-${SUDO_USER:-}} uid
+    if [[ -z $u || $u == root ]]; then
+        echo "  no unprivileged user to run as (start the install from your session): $*" >&2
+        return 1
     fi
+    uid=$(id -u "$u") || return 1
+    sudo -u "$u" env HOME="$HOME" XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
+}
+
+# Steam library roots (the package's own detection, SD card and second disks included); the
+# default library when the package is not there yet.
+xess_steam_libraries() {
+    local libs=""
+    [[ -r $XESS_PKG/tools/steam-libraries.sh ]] &&
+        libs=$(bash "$XESS_PKG/tools/steam-libraries.sh" 2>/dev/null || true)
+    [[ -n $libs ]] || libs="$HOME/.local/share/Steam"
+    printf '%s\n' "$libs"
+}
+
+# Every igdext64.dll XeSS can load: the copy each Proton bundles (Proton Experimental copies it
+# into the prefix at every launch, so a stock one there undoes any prefix copy) and the one in
+# each prefix's driver store. Prints "proton|prefix<TAB>path".
+xess_shim_targets() {
+    local lib f
+    while IFS= read -r lib; do
+        [[ -n $lib ]] || continue
+        for f in "$lib"/steamapps/common/Proton*/files/lib/wine/igdext/x86_64-windows/igdext64.dll; do
+            [[ -f $f ]] && printf 'proton\t%s\n' "$f"
+        done
+        shopt -s nocaseglob
+        for f in "$lib"/steamapps/compatdata/*/pfx/drive_c/windows/system32/[d]riverstore/[f]ilerepository/[i]gd_faux.inf_1/igdext64.dll; do
+            [[ -f $f ]] && printf 'prefix\t%s\n' "$f"
+        done
+        shopt -u nocaseglob
+    done < <(xess_steam_libraries)
+    for f in "$HOME"/.local/share/Steam/compatibilitytools.d/*/files/lib/wine/igdext/x86_64-windows/igdext64.dll; do
+        [[ -f $f ]] && printf 'proton\t%s\n' "$f"
+    done
+    return 0
+}
+
+# After install.sh: is the package's shim really what games load? It was not for days - Proton
+# Experimental's update of 2026-11-14 brought back its stock igdext64.dll, nothing put the shim
+# back, and every XeSS game ran on DP4a (about 12% slower) with no error anywhere.
+xess_verify_shim() {
+    local shim=$XESS_PKG/igdext64.dll kind f np=0 okp=0 nx=0 okx=0 bad=""
+    [[ -f $shim ]] || { echo "  WARNING: no shim at $shim"; return 0; }
+    while IFS=$'\t' read -r kind f; do
+        if [[ $kind == proton ]]; then
+            np=$((np + 1))
+            if cmp -s "$f" "$shim"; then okp=$((okp + 1)); else bad+="    ${f/#"$HOME"/"~"}"$'\n'; fi
+        else
+            nx=$((nx + 1)); cmp -s "$f" "$shim" && okx=$((okx + 1))
+        fi
+    done < <(xess_shim_targets)
+    echo "  XeSS shim: in $okp of $np Proton(s), $okx of $nx prefix(es) (Proton refreshes a prefix at its next launch)"
+    if [[ -n $bad ]]; then
+        echo "  WARNING: these Protons still bundle a stock igdext64.dll - XeSS games on them run on DP4a:"
+        printf '%s' "$bad"
+    fi
+}
+
+# compile_failed.txt in a prefix makes the shim choose DP4a there until the driver's retry
+# succeeds. A failure from a moment when the helper was missing (rc 127 while the package was
+# being replaced, 2026-11-24 11:48) kept Trails on DP4a after the cause was gone. With a fresh
+# package and environment every kernel deserves a new try.
+xess_clear_failed_markers() {
+    local lib m n=0
+    while IFS= read -r lib; do
+        [[ -n $lib ]] || continue
+        for m in "$lib"/steamapps/compatdata/*/pfx/drive_c/igdext_kernels/compile_failed.txt; do
+            [[ -f $m ]] || continue
+            rm -f "$m" && n=$((n + 1))
+        done
+    done < <(xess_steam_libraries)
+    (( n )) && echo "  cleared $n XMX compile-failure marker(s): those games try XMX again at the next launch"
+    return 0
+}
+
+# The driver's kernel cache names a kernel after the helper's folder (it hashes
+# <folder>/cm-compile.sh), not after the helper script itself, and ignores CM_MAX_GRF. Kernels a
+# different helper or register-file policy built - every A/B test of 2026-11-24 - are reused as
+# if they were this package's. Start a clean cache whenever the helper changes.
+xess_reset_kernel_cache() {
+    local base=${XDG_CACHE_HOME:-$HOME/.cache}/xess-xmx helper=$XESS_PKG/tools/cm-compile.sh want have
+    [[ -f $helper ]] || return 0
+    want="$(sha256sum "$helper" | cut -c1-16) $helper CM_MAX_GRF="
+    have=$(cat "$base/kernels.policy" 2>/dev/null || true)
+    [[ $have == "$want" ]] && return 0
+    if [[ -d $base/kernels ]]; then
+        rm -rf "$base/kernels.stale"
+        mv "$base/kernels" "$base/kernels.stale"
+        echo "  XMX kernel cache built by another helper/policy moved to ${base/#"$HOME"/"~"}/kernels.stale"
+        echo "  (the first XeSS launch compiles its kernels again, a few seconds)"
+    fi
+    mkdir -p "$base" && printf '%s\n' "$want" > "$base/kernels.policy"
+}
+
+# The XMX part of the live user-manager environment: what games inherit (environment.d is read at
+# login only). Clears what a split-driver install, the old check's fallback or an A/B test left.
+xess_reset_live_env() {
+    systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES ANV_CM_KERNEL_DIR CM_MAX_GRF \
+        XMX_IGC_DIR 2>/dev/null || true
+}
+
+install_xess() {
     if ! grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so; then
         echo "  the installed Mesa has no CM kernel injection (built before patches/xess-main?) - XeSS XMX skipped"
         return 0
     fi
-    mkdir -p "$XESS_PKG"
-    # the package's own state (compiler, XeSS SDK, kernels, ICD file) stays
-    rsync -a --delete --exclude /igc/ --exclude /xess/ --exclude /kernels/ --exclude /run/ --exclude /lib/ \
-        "$OUT/xess-xmx/" "$XESS_PKG/"
-    seed_xess_compiler
-    bash "$XESS_PKG/install.sh" | sed 's/^/  /' || echo "  WARNING: xess-xmx-linux's install.sh failed"
-    xmx_retire_split_driver
-    # The shim and the package's tools/cm-compile.sh are one unit: a shim from one release with a
-    # helper from another builds kernels with the wrong register-file flags, which showed up as
-    # ghosting behind movement in games using XeSS. Say so loudly if the session environment still
-    # points somewhere else (an older helper, a stale ANV_CM_KERNEL_DIR).
-    # A package-driver check left over from a split-driver install fails in system mode and its
-    # fallback clears ANV_CM_HELPER / ANV_CM_KERNEL_DIR, so XeSS silently drops to DP4a. Remove it.
-    if grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so 2>/dev/null; then
-        local u ud=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
-        for u in xess-xmx-check.service xess-xmx-session-check.service; do
-            systemctl --user disable --now "$u" >/dev/null 2>&1 || true
-            rm -f "$ud/$u" "$ud/default.target.wants/$u" "$ud/graphical-session-pre.target.wants/$u"
-        done
+    if [[ ${EUID:-$(id -u)} -eq 0 && ( -z ${OXP3_USER:-${SUDO_USER:-}} || ${OXP3_USER:-${SUDO_USER:-}} == root ) ]]; then
+        echo "  XeSS XMX skipped: it belongs to a user session (run ./oxp3-install.sh as yourself, not as root)"
+        return 0
     fi
+    if [[ -d $OUT/xess-xmx ]]; then
+        xess_user_run mkdir -p "$XESS_PKG" || die "xess: cannot create $XESS_PKG as the session user"
+        # the package's own state (compiler, XeSS SDK, kernels, ICD file) stays. Never rm -rf the
+        # package: a game running now would lose its helper mid-compile (rc 127) and mark its
+        # kernels failed. rsync replaces each file by a rename, so the old one stays whole.
+        xess_user_run rsync -a --delete --exclude /igc/ --exclude /xess/ --exclude /kernels/ --exclude /run/ \
+            --exclude /lib/ "$OUT/xess-xmx/" "$XESS_PKG/" || die "xess: copying the package to $XESS_PKG failed"
+        seed_xess_compiler
+    elif [[ -f $XESS_PKG/install.sh ]]; then
+        # nothing new built: still re-run the package's installer - a Proton update replaces the
+        # shim without telling anyone, and this is what puts it back
+        echo "  no fresh XeSS build staged - re-applying the installed package"
+    else
+        die "missing $OUT/xess-xmx - run '$0 build' first"
+    fi
+    if [[ ${EUID:-$(id -u)} -eq 0 && -n ${OXP3_USER:-${SUDO_USER:-}} ]]; then
+        chown -R "${OXP3_USER:-$SUDO_USER}": "$XESS_PKG" 2>/dev/null || true
+    fi
+    xess_user_run bash -c "$(declare -f xess_reset_live_env); xess_reset_live_env"
+    # as the user: its shim pass writes into Steam's folders, and it sets the live session
+    # environment and starts the shim watcher in the user's manager
+    xess_user_run bash "$XESS_PKG/install.sh" | sed 's/^/  /' ||
+        echo "  WARNING: xess-xmx-linux's install.sh failed"
+    xmx_retire_split_driver
+    # A package-driver check left over from a split-driver install fails in system mode and its
+    # fallback clears ANV_CM_HELPER / ANV_CM_KERNEL_DIR, so XeSS silently drops to DP4a. Remove it,
+    # its drop-in, and the ICD file it checked (it names a driver that no longer exists).
+    local u ud=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+    for u in xess-xmx-check.service xess-xmx-session-check.service; do
+        xess_user_run systemctl --user disable --now "$u" >/dev/null 2>&1 || true
+        rm -f "$ud/$u" "$ud/default.target.wants/$u" "$ud/graphical-session-pre.target.wants/$u"
+        rm -rf "$ud/$u.d"
+    done
+    if [[ -f $HOME/.config/xess-xmx/icd-xmx.json ]] &&
+       ! grep -q "$XESS_PKG/lib/" "$HOME/.config/xess-xmx/icd-xmx.json"; then
+        rm -f "$HOME/.config/xess-xmx/icd-xmx.json"
+    fi
+    xess_user_run systemctl --user daemon-reload 2>/dev/null || true
+    xess_user_run bash -c "XESS_PKG='$XESS_PKG'; $(declare -f xess_reset_kernel_cache); xess_reset_kernel_cache"
+    xess_user_run bash -c "XESS_PKG='$XESS_PKG'; $(declare -f xess_steam_libraries xess_clear_failed_markers); xess_clear_failed_markers"
+    xess_verify_shim
+    # The shim and the package's tools/cm-compile.sh are one unit: a shim from one release with a
+    # helper from another builds kernels with the wrong register-file flags (ghosting in XeSS).
     local envf=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/50-xess-xmx.conf
     if [[ -r $envf ]] && ! grep -q "ANV_CM_HELPER=$XESS_PKG/tools/cm-compile.sh" "$envf"; then
         echo "  WARNING: $envf does not point ANV_CM_HELPER at $XESS_PKG/tools/cm-compile.sh"
-        echo "           that mixes the shim with another release's kernel helper (ghosting in XeSS);"
-        echo "           re-run: bash $XESS_PKG/install.sh"
+        echo "           that mixes the shim with another release's kernel helper (ghosting in XeSS)"
     fi
     echo "  Restart Steam (leave and re-enter Gamemode) so games get the new environment."
 }
 
 uninstall_xess() {
     [[ -x $XESS_PKG/uninstall.sh ]] || return 0
-    bash "$XESS_PKG/uninstall.sh" | sed 's/^/  /' || true
+    xess_user_run bash "$XESS_PKG/uninstall.sh" | sed 's/^/  /' || true
     echo "  $XESS_PKG (compiler, kernel cache) left in place; delete it to free about 300 MB"
 }
 
@@ -831,6 +967,21 @@ status_xess() {
         if grep -aq IGDEXT_ "$p/files/lib/wine/igdext/x86_64-windows/igdext64.dll" 2>/dev/null; then n=$((n + 1)); else no+=" ${p##*/};"; fi
     done
     echo "    Protons with the shim: $n${no:+; without:${no%;}}"
+    # what decides XMX vs DP4a at the next launch, besides the shim
+    local m lib nm=0 live
+    while IFS= read -r lib; do
+        for m in "$lib"/steamapps/compatdata/*/pfx/drive_c/igdext_kernels/compile_failed.txt; do
+            [[ -f $m ]] && nm=$((nm + 1))
+        done
+    done < <(xess_steam_libraries)
+    (( nm )) && echo "    WARNING: $nm prefix(es) hold compile_failed.txt - XeSS uses DP4a there (install clears them)"
+    live=$(xess_user_run systemctl --user show-environment 2>/dev/null | sed -n 's/^ANV_CM_HELPER=//p')
+    if [[ -n $live && $live != "$XESS_PKG/tools/cm-compile.sh" ]]; then
+        echo "    WARNING: the live session's ANV_CM_HELPER is $live, not the package's (install resets it)"
+    elif [[ -z $live ]]; then
+        echo "    WARNING: no ANV_CM_HELPER in the live session - XeSS runs on DP4a until install or a re-login"
+    fi
+    return 0
 }
 
 xmx_override_file() { echo "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak/overrides/org.anatase.Steam"; }

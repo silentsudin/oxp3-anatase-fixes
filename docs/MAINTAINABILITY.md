@@ -46,6 +46,14 @@ GL extension: `flatpak_gl_*` helpers, `fetch_flatpak_gl_sources`, `prepare_mesa_
 `status_flatpak_gl` (docs/FLATPAK-GL.md). The guard now also requires `SKIP_FLATPAK_GL`,
 `MESA_COMMIT` and `MESA_URL`.
 
+Added 2026-11-24 for XeSS: `xess_user_run`, `xess_steam_libraries`, `xess_shim_targets`,
+`xess_verify_shim`, `xess_clear_failed_markers`, `xess_reset_kernel_cache`, `xess_reset_live_env`.
+Both entry scripts had kept their own `install_xess` (an old per-game split-driver install) defined
+after sourcing the library, which silently replaced the library's: the package's installer never ran,
+no shim reached Proton, and XeSS ran on DP4a. Those copies are gone and a unit test
+(`test_entry_scripts_do_not_override_install_xess`) keeps a library function from being redefined
+there again.
+
 ## 2. What stayed local, and why
 
 Each is marked in the source with a `# Kept local: …` / `# Local to this variant: …` comment.
