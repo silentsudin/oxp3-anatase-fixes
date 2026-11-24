@@ -57,7 +57,7 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_HW=0 SKIP_FLATPAK_GL=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_HW=0 SKIP_FLATPAK_GL=0 SKIP_CPUTOP=0
 [[ ${OXP3_SKIP_HW:-0} == 1 ]] && SKIP_HW=1
 cmd="${1:-}"; shift || true
 for a in "$@"; do
@@ -65,6 +65,7 @@ for a in "$@"; do
         --skip-kernel) SKIP_KERNEL=1 ;;
         --skip-gamescope) SKIP_GAMESCOPE=1 ;;
         --skip-mangohud) SKIP_MANGOHUD=1 ;;
+        --skip-cpu-topology) SKIP_CPUTOP=1 ;;
         --skip-firmware) SKIP_FIRMWARE=1 ;;
         --stock-dmc) SKIP_DMC=1 ;;
         --skip-hw) SKIP_HW=1 ;;
@@ -326,6 +327,36 @@ install_overlay_keep() { # <component>
     sudo systemctl daemon-reload
     sudo systemctl enable "$svc.service" >/dev/null 2>&1 || true
     echo "  $svc.service: enabled, restores the patched $n from the durable RPMs on every boot"
+}
+
+# Session CPU topology: keep the Gamemode session on the ten cores that share the L3 cache, so no
+# game thread lands on the four LP E-cores. One drop-in on anatase-gamemode.service covers gamescope,
+# Steam and every Proton game at once - no per-game launch options (measured on this hardware by
+# kas5852/oxp3-game-pack: Cyberpunk 2077 +2.0 fps and better 1% lows; on GravityMark the same setting
+# changed nothing, so it is a real-game effect).
+CPUTOP_DIR=/etc/systemd/user/anatase-gamemode.service.d
+CPUTOP_FILE=$CPUTOP_DIR/oxp3-cpus.conf
+
+install_cpu_topology() {
+    local src=$here/files/anatase-gamemode-cpus.conf u uid
+    [[ -r $src ]] || return 0
+    sudo install -D -m0644 "$src" "$CPUTOP_FILE"
+    # the user manager caches unit files: reload it as the session's user so the drop-in is read at
+    # the next Gamemode start (a running session keeps the old affinity until it restarts)
+    u=${OXP3_USER:-${SUDO_USER:-}}
+    if [[ -n $u && $u != root ]]; then
+        uid=$(id -u "$u" 2>/dev/null) || uid=""
+        if [[ -n $uid ]]; then
+            sudo -u "$u" XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user daemon-reload 2>/dev/null || true
+        fi
+    fi
+    echo "  session CPU topology: cpu0-9 (L3-sharing cores), WINE_CPU_TOPOLOGY=10 cores"
+    echo "  $CPUTOP_FILE takes effect at the next Gamemode start"
+}
+
+remove_cpu_topology() {
+    sudo rm -f "$CPUTOP_FILE" 2>/dev/null || true
+    sudo rmdir "$CPUTOP_DIR" 2>/dev/null || true
 }
 
 install_mesa_keep() {
@@ -729,6 +760,11 @@ do_install() {
         fi
     fi
 
+    if (( !SKIP_CPUTOP )); then
+        say "session CPU topology: game threads off the LP E-cores (sudo)"
+        install_cpu_topology
+    fi
+
     # Flathub apps: our Mesa as a Flatpak GL driver extension. It lives in /var/lib/flatpak and
     # /etc (not the /usr overlay), so it survives Anatase updates and needs no reboot.
     if (( !SKIP_MESA && !SKIP_FLATPAK_GL )); then
@@ -878,6 +914,7 @@ do_uninstall() {
     sudo rm -f /etc/systemd/system/oxp3-mesa-keep.service /usr/local/libexec/oxp3-mesa-keep
     sudo rm -f /var/lib/oxp3-fixes/mesa.version /var/lib/oxp3-fixes/mesa-flatpak.list
     sudo systemctl daemon-reload 2>/dev/null || true
+    remove_cpu_topology
     uninstall_extras
     if [[ -x $here/tools/oxp3-hw-install.sh ]]; then
         sudo "$here/tools/oxp3-hw-install.sh" --uninstall --leds --power ||

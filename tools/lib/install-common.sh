@@ -1698,6 +1698,17 @@ status_dxvk() {
     return 0
 }
 
+# Is the Gamemode session pinned to the L3-sharing cores?
+status_cpu_topology() {
+    local f=/etc/systemd/user/anatase-gamemode.service.d/oxp3-cpus.conf aff
+    if [[ -r $f ]]; then
+        aff=$(grep -h '^CPUAffinity=' "$f" 2>/dev/null | cut -d= -f2)
+        printf '  session CPU topology: cpu%s only (WINE_CPU_TOPOLOGY set), applies to every game\n' "${aff:-?}"
+    else
+        echo "  session CPU topology: unrestricted (install writes $f)"
+    fi
+}
+
 do_status() {
     echo "kernel (deployment): $(anatase_kver)   booted: $(uname -r)"
     rpm -q gamescope mangohud mesa-vulkan-drivers kmod-oxp3-xe "$KMOD_NAME" "$FW_NAME" 2>&1 | grep -v 'is not installed' | sed 's/^/  /' || true
@@ -1735,6 +1746,7 @@ do_status() {
     fi
     status_flatpak_gl
     status_xess
+    status_cpu_topology
     status_dxvk
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }

@@ -607,3 +607,35 @@ engine busy time, and `intel_gpu_top` is not installed), CPU-bound versus GPU-bo
 If the frame rate does not move, the API path is bound by CPU/submission and the fix space is
 DXVK/Proton configuration; if it scales with the pixel count, the path is GPU-bound and the
 question becomes the quality of the pipelines DXVK generates.
+
+## Session CPU topology (every game, not per title)
+
+The ten cores that share the L3 cache are `cpu0-9`; `cpu10-13` are the 3.1 GHz LP E-cores
+(`/sys/devices/system/cpu/cpu0/cache/index3/shared_cpu_list`). Keeping a game's worker threads off
+the LP cores is worth per-title gains elsewhere in this family of fixes: kas5852/oxp3-game-pack
+measures **Cyberpunk 2077 +2.0 fps and better 1% lows** from it, and does it per game with
+`taskset` plus a Proton patch that derives the Wine topology from the launch affinity on x86 (Wine
+only does that on aarch64).
+
+Here it is applied to the whole session instead, so it needs no launch options:
+
+`/etc/systemd/user/anatase-gamemode.service.d/oxp3-cpus.conf`
+
+```ini
+[Service]
+CPUAffinity=0-9
+Environment=WINE_CPU_TOPOLOGY=10:0,1,2,3,4,5,6,7,8,9
+```
+
+`anatase-gamemode.service` starts gamescope and Steam, so everything a game launches inherits both
+settings. `CPUAffinity` rather than `AllowedCPUs`: the cpuset controller is not delegated to user
+managers, and `AllowedCPUs` there fails to start the unit. `WINE_CPU_TOPOLOGY` is what makes Wine
+report ten cores without the Proton patch.
+
+**What it does and does not buy.** On GravityMark, headless 1280x720, this exact affinity +
+topology combination measured **+0.15% on D3D11 and −0.25% on D3D12** — i.e. nothing, because that
+workload's submission is not starved (thread sampling: 0.2–0.4 cores busy). The wins the pack
+reports come from games with real worker-thread pools, so the setting is a no-lose default rather
+than a measured gain everywhere: `./oxp3-fixes.sh install --skip-cpu-topology` leaves it out, and
+`remove_cpu_topology` (via `uninstall`) deletes the drop-in. It takes effect at the next Gamemode
+start; a running session keeps the old affinity until it restarts.
