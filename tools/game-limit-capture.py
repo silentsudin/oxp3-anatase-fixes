@@ -9,11 +9,12 @@ verdict. No root, no game restart, no A/B runs. Read your fps off the overlay wh
     tools/game-limit-capture.py --exe Cyberpunk2077.exe --seconds 180
 
 Per second it records:
-  GPU   actual clock vs its maximum, busy % (from xe's gtidle residency), throttle reasons
+  GPU   actual clock vs its maximum, % of time out of RC6 (xe gtidle; not engine load), throttle reasons
   power package, CPU-core and GPU (uncore) watts from /run/rapl-power, the PL1 limit
   CPU   load of the P-cores (cpu0-1), E-cores (cpu2-9) and LP E-cores (cpu10-13)
   game  its busiest thread: % of one core and which core it ran on
-plus, once, the XeSS environment the game process got (which helper, CM_MAX_GRF).
+plus, once, the XeSS environment the game process got (which helper, CM_MAX_GRF), and at the
+end the CPU clock caps per core type (hhd's Smart CPU boost) and the EPP.
 
 Verdicts:
   GPU-bound at full clock       GPU busy, clock at max: more fps only from less GPU work
@@ -72,6 +73,18 @@ def find_game(exe: str) -> int | None:
     return best
 
 
+def avg_mhz(n: int) -> float:
+    """The clock the core actually ran at recently (cpufreq's cpuinfo_avg_freq), MHz."""
+    return num(f"/sys/devices/system/cpu/cpu{n}/cpufreq/cpuinfo_avg_freq") / 1000
+
+
+def pkg_temp() -> float:
+    for h in glob.glob("/sys/class/hwmon/hwmon*"):
+        if read(h + "/name") == "coretemp":
+            return num(h + "/temp1_input") / 1000
+    return 0.0
+
+
 def cpu_times() -> dict[int, tuple[int, int]]:
     out = {}
     for line in read("/proc/stat").splitlines():
@@ -100,6 +113,8 @@ def main() -> int:
     ap.add_argument("--exe", default="sora_2nd.exe", help="game executable (default: sora_2nd.exe)")
     ap.add_argument("--seconds", type=int, default=120)
     ap.add_argument("--wait", type=int, default=1800, help="how long to wait for the game to start")
+    ap.add_argument("--out", help="write the samples here instead of ~/.local/state/oxp3-reports")
+    ap.add_argument("--skip", type=int, default=20, help="seconds of loading to skip (default 20)")
     a = ap.parse_args()
 
     gt = gt_dir()
@@ -115,8 +130,8 @@ def main() -> int:
     if not pid:
         print("the game did not start", file=sys.stderr)
         return 1
-    print(f"found {a.exe} (pid {pid}); skipping 20 s of loading, then {a.seconds} s of samples", flush=True)
-    time.sleep(20)
+    print(f"found {a.exe} (pid {pid}); skipping {a.skip} s of loading, then {a.seconds} s of samples", flush=True)
+    time.sleep(a.skip)
 
     env = {}
     for kv in read(f"/proc/{pid}/environ").split("\0"):
@@ -126,9 +141,10 @@ def main() -> int:
 
     out_dir = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "oxp3-reports"
     out_dir.mkdir(parents=True, exist_ok=True)
-    tsv = out_dir / f"limit-{a.exe.split('.')[0]}-{time.strftime('%Y%m%d-%H%M%S')}.tsv"
+    tsv = Path(a.out) if a.out else out_dir / f"limit-{a.exe.split('.')[0]}-{time.strftime('%Y%m%d-%H%M%S')}.tsv"
     cols = ["t", "gpu_mhz", "gpu_max", "gpu_busy", "throttle", "pkg_w", "gpu_w", "core_w", "pl1_w",
-            "P", "E", "LP", "top_thread", "top_pct", "top_cpu"]
+            "P", "E", "LP", "top_thread", "top_pct", "top_cpu", "p_cap_mhz", "e_cap_mhz",
+            "hot_core_mhz", "p_mhz", "e_mhz", "pkg_c", "threads"]
     rows = []
     max_mhz = num(gt + "/freq0/max_freq") or num(gt + "/freq0/rp0_freq")
     pl1 = num("/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw") / 1e6
@@ -152,17 +168,26 @@ def main() -> int:
                 tot = sum(cpu[n][0] - prev_cpu[n][0] for n in rng if n in cpu and n in prev_cpu)
                 idl = sum(cpu[n][1] - prev_cpu[n][1] for n in rng if n in cpu and n in prev_cpu)
                 load[c] = 100 * (1 - idl / tot) if tot else 0.0
-            top = ("-", 0.0, -1)
+            busy_threads = []
             for tid, (name, ticks, core) in thr.items():
                 if tid in prev_thr:
                     pct = (ticks - prev_thr[tid][1]) / hz / (now - prev_t) * 100
-                    if pct > top[1]:
-                        top = (name, pct, core)
+                    busy_threads.append((pct, name, core, tid))
+            busy_threads.sort(reverse=True)
+            top = (busy_threads[0][1], busy_threads[0][0], busy_threads[0][2]) if busy_threads else ("-", 0.0, -1)
+            # the three busiest: who competes for the two P-cores (name:% @cpu, tid tells same-named apart)
+            three = " ".join(f"{n.replace(' ', '_')}#{t}:{p:.0f}@{c}" for p, n, c, t in busy_threads[:3])
             reasons = read(gt + "/freq0/throttle/reasons", "?").replace(" ", ",") or "none"
             row = [i + 1, num(gt + "/freq0/act_freq"), max_mhz, round(busy, 1), reasons,
                    num("/run/rapl-power/package-0"), num("/run/rapl-power/uncore"),
                    num("/run/rapl-power/core"), pl1, round(load["P"]), round(load["E"]), round(load["LP"]),
-                   top[0], round(top[1]), top[2]]
+                   top[0], round(top[1]), top[2],
+                   int(num("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq") / 1000),
+                   int(num("/sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq") / 1000),
+                   round(avg_mhz(top[2])) if top[2] >= 0 else 0,
+                   round(statistics.mean(avg_mhz(n) for n in CLUSTERS["P"])),
+                   round(statistics.mean(avg_mhz(n) for n in CLUSTERS["E"])),
+                   pkg_temp(), three]
             rows.append(row)
             f.write("\t".join(map(str, row)) + "\n")
             f.flush()
@@ -183,11 +208,38 @@ def main() -> int:
         print(f"  {k:34s} {env.get(k, '<unset>')}")
     print(f"GPU    busy {busy:.0f} %, clock {mhz:.0f} of {max_mhz:.0f} MHz, throttled {throttled:.0%} of the time")
     print(f"power  package {pkg:.1f} W (PL1 {pl1:.0f} W), GPU {med('gpu_w'):.1f} W, CPU cores {med('core_w'):.1f} W")
+    caps = []
+    for c, rng in CLUSTERS.items():
+        mx = num(f"/sys/devices/system/cpu/cpu{rng[0]}/cpufreq/scaling_max_freq") / 1e6
+        top = num(f"/sys/devices/system/cpu/cpu{rng[0]}/cpufreq/cpuinfo_max_freq") / 1e6
+        caps.append(f"{c} {mx:.1f}" + (f"/{top:.1f}" if mx < top else ""))
+    epp = read("/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference", "?")
+    print(f"CPU    max clock (GHz, cap/top when capped): {', '.join(caps)}; EPP {epp}")
+    pc = sorted({r[cols.index("p_cap_mhz")] for r in rows})
+    if len(pc) > 1:
+        print(f"CPU    P-core cap moved during the run (Smart levels): {', '.join(map(str, pc))} MHz")
     print(f"CPU    P {med('P'):.0f} %, E {med('E'):.0f} %, LP {med('LP'):.0f} %; "
           f"busiest game thread '{main_thread}' {top_pct:.0f} % of a core")
+    cpu_bound = [r for r in rows if r[cols.index("top_pct")] >= 90]
+    rest = [r for r in rows if r[cols.index("top_pct")] < 90]
+    if cpu_bound and rest:
+        def phase(rs, label):
+            m = lambda k: statistics.median(r[cols.index(k)] for r in rs)
+            on_p = 100 * sum(r[cols.index("top_cpu")] in CLUSTERS["P"] for r in rs) / len(rs)
+            print(f"phase  {label:12s} {len(rs):3d} s: GPU {m('gpu_w'):4.1f} W, package {m('pkg_w'):4.1f} W, "
+                  f"hot thread {m('top_pct'):.0f} % on a P-core {on_p:.0f} % of the time at "
+                  f"{m('hot_core_mhz'):.0f} MHz (P avg {m('p_mhz'):.0f}, E avg {m('e_mhz'):.0f}), {m('pkg_c'):.0f} C")
+        print("the run alternates between a saturated game thread and headroom:")
+        phase(cpu_bound, "CPU-bound")
+        phase(rest, "headroom")
     near_max = mhz >= 0.9 * max_mhz
     power_bound = throttled > 0.3 or pkg >= 0.9 * pl1
-    if busy >= 90 and near_max:
+    # gtidle counts time out of RC6, not engine load: a GPU fed small batches by a saturated thread
+    # never sleeps and still reads 100 % (GravityMark at 640x360: 100 % "busy" at 13 W). A saturated
+    # game thread therefore decides first.
+    if top_pct >= 90:
+        verdict = f"CPU-bound on one thread ('{main_thread}'): CPU clock or core placement, not the GPU"
+    elif busy >= 90 and near_max:
         verdict = "GPU-bound at full clock: more fps only from less GPU work (XeSS mode, settings, driver)"
     elif busy >= 90:
         verdict = ("GPU-bound, power-limited: the GPU is busy but held below its clock"
