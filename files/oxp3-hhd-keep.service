@@ -1,0 +1,12 @@
+[Unit]
+Description=OXP3: re-apply our hhd patches (OneXPlayer 3 power limits, volume rocker) before hhd starts
+After=local-fs.target
+Before=hhd.service display-manager.service
+ConditionPathExists=/usr/local/libexec/oxp3-hhd-keep
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/oxp3-hhd-keep
+
+[Install]
+WantedBy=multi-user.target
