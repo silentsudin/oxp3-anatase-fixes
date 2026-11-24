@@ -1537,6 +1537,20 @@ install_hhd_patches() {
     local site p changed=0 rows row rk vol_total=0 vol_ok=0 keep_dir=/usr/local/share/oxp3-fixes/hhd-patches
     site=$(hhd_site)
     [[ -n $site ]] || { echo "  hhd not found, hhd patches skipped"; return 0; }
+    # A patch we changed (or dropped) since the last install is still applied in its old form,
+    # and the new form does not fit on top of it: take the old one out first, from the copy the
+    # last install kept. (After a reboot hhd is stock again and only the new form goes in.)
+    local kept new i olds=("$keep_dir"/*.patch)
+    for (( i = ${#olds[@]} - 1; i >= 0; i-- )); do     # newest first: they stack
+        kept=${olds[i]}
+        [[ -f $kept ]] || continue
+        new="$here/patches/hhd/${kept##*/}"
+        cmp -s "$kept" "$new" && continue
+        if git -C "$site" apply --check -R -p1 "$kept" >/dev/null 2>&1; then
+            sudo git -C "$site" apply -R -p1 "$kept" && changed=1 &&
+                echo "  ${kept##*/}: previous version taken out"
+        fi
+    done
     for p in "${HHD_PATCHES[@]}"; do
         [[ ${p##*/} == *volume-rocker* ]] && vol_total=$((vol_total + 1))
         if git -C "$site" apply --check -R -p1 "$p" >/dev/null 2>&1; then
