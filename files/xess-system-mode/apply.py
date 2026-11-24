@@ -84,14 +84,17 @@ def main() -> int:
             '    echo "force_vk_vendor=0"\n'
             '    echo "# Protons without Intel\'s driver store never load the shim from the prefix; XeSS looks here first"\n'
             '    echo "INTC_ALT_DRIVER_EXTENSIONS_PATH=\'$XMX_ALT_EXT\'"\n'
-            '    echo "# Xe3 sizes the register file per shader; 128 GRF is the faster choice for XeSS\'s kernels"\n'
-            '    echo "CM_MAX_GRF=128"\n'
+            # No CM_MAX_GRF here. In upstream's stock mode its *layer* sets that variable because the
+            # unpatched driver gives every thread 128 GRF; on the driver-injection path this repo uses,
+            # the driver sizes the register file per shader, and forcing 128 made the package's helper
+            # drop XeSS's own -ze-opt-large-register-file / -ze-exp-register-file-size flags, which
+            # measured 10 fps slower (Trails, 2026-11-24: 75 vs 85 fps) with no visual gain.
             '  } > "$ENVD/50-xess-xmx.conf"\n'
             '  systemctl --user set-environment "ANV_CM_HELPER=$PKG/tools/cm-compile.sh" \\\n'
             '    "VKD3D_DISABLE_EXTENSIONS=$XMX_VKD3D_OFF" "force_vk_vendor=0" \\\n'
-            '    "INTC_ALT_DRIVER_EXTENSIONS_PATH=$XMX_ALT_EXT" "CM_MAX_GRF=128" 2>/dev/null\n'
+            '    "INTC_ALT_DRIVER_EXTENSIONS_PATH=$XMX_ALT_EXT" 2>/dev/null\n'
             '  echo "== environment: $ENVD/50-xess-xmx.conf (system mode, applies to Steam after a reboot / re-login)"\n'
-            '  echo "   driver: the host\'s patched ANV ($SYSTEM_ANV), kernels at 128 GRF (CM_MAX_GRF)"\n'
+            '  echo "   driver: the host\'s patched ANV ($SYSTEM_ANV), kernels compiled with XeSS\'s own register-file flags"\n'
             'elif [ "${XMX_NO_ENV:-0}" != 1 ]; then\n'
             '  # VK_DRIVER_FILES replaces')
 
