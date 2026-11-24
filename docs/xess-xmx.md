@@ -115,6 +115,46 @@ Cyberpunk (`~/.var/app/com.heroicgameslauncher.hgl/config/heroic/GamesConfig/142
 runs XMX like our test runs. If artifacts reappear there, compare against a launch with
 `IGDEXT_FORCE_FALLBACK=1` added, and check `compile.log` for a failed compile.
 
+## Why the package pin is the fork, not an upstream release (2026-11-24)
+
+Upstream HHHHanasak1/xess-xmx-linux has moved on considerably since our fork
+(`silentsudin/xess-xmx-linux`, branch `anatase`, 9532c79ce of 2026-10-30) and is
+now 277 commits ahead of the merge base (aa175730f, 2026-10-29). What those
+releases carry, and why we cannot simply bump `XESS_COMMIT`:
+
+- **release 20261120** — `patches/mesa-26.3/0007`, the Jay helper-predication
+  backport that fixes a render-engine hang on Mesa 26.3.1
+  (`Engine reset: engine_class=rcs`, then `E_OUTOFMEMORY`). **Taken**: it is in
+  `patches/mesa-26.3/` here and applies cleanly to our pinned 26.3.1.
+- **release 20261119** — XeSS kernels at **128 GRF on Xe3** (16–18% faster
+  upscaling kernels on Panther Lake; `XMX_LAYER_FORCE_GRF=256` reverts), and
+  `XESS_ASYNC=1` (frame generation's Present on its own thread: Forza Horizon 6
+  on Arc B390, 3x, 105 → 109 fps, stutters ~100 → 35).
+- **release 20261115** — black image with `VK_EXT_descriptor_heap` on newer
+  Proton, `XESS=auto` launch options, parallel kernel compile, HDR stutter fix.
+
+**The blocker is architectural, not effort.** Upstream's `install.sh` requires the
+package's own driver:
+
+```sh
+for f in "$SHIM" "$PKG/lib/libvulkan_intel.so" "$PKG/tools/cm-compile.sh"; do
+    [ -f "$f" ] || { echo "missing $f - run this from the unpacked package"; exit 1; }
+```
+
+Our fork has a **system mode** that we depend on: it sources
+`tools/system-anv.sh`, resolves `SYSTEM_ANV=$(xmx_system_anv)`, and is content
+with the system's patched ANV (`${SYSTEM_ANV:-$PKG/lib/libvulkan_intel.so}`).
+That is what allows this repo's single consolidated Mesa to serve XMX with no
+second driver — `install_xess` deliberately stages the package **without** `/lib/`
+(`rsync ... --exclude /lib/`), so upstream's check would fail, and shipping the
+packaged stock-26.3 ANV to satisfy it would reintroduce exactly the two-driver
+setup the consolidation removed.
+
+To take those three releases we must first port system mode onto upstream's
+package (re-apply `tools/system-anv.sh` + the `install.sh` branch and keep
+staging without `/lib/`), or rebase the fork onto upstream. Until then the pin
+stays at the fork release 20261029.
+
 ## Status / open items
 
 - Driver built and verified loading (vkcube selects the B390 on the CM driver).
