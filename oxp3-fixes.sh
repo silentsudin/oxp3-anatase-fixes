@@ -348,21 +348,25 @@ record_rpm_state() {
     # only a copy in ~/.cache means a cleaned cache leaves the stock package in place, which is how
     # the patched MangoHud (Intel iGPU power/usage) quietly stopped being used. Keep one durable
     # copy of each component's RPMs next to the recorded state.
-    local comp rpm
-    sudo mkdir -p "$MESA_STATE_DIR/rpms"
-    for comp in gamescope mangohud kmod-oxp3-xe; do
-        # if/then rather than `(( SKIP )) && continue`: a false arithmetic test returns 1, and under
-        # `set -e` that ended the whole install silently right after the Mesa state was recorded
+    #
+    # The kernel module's package name carries the kernel version (KMOD_NAME), so it is not
+    # "kmod-oxp3-xe": globbing the wrong name matches nothing, the loop ends non-zero, and because
+    # this is a plain call under `set -e` the whole install stopped silently right here. The
+    # explicit return 0 makes a missing component a no-op instead of a failure.
+    local comp pat rpm
+    sudo mkdir -p "$MESA_STATE_DIR/rpms" || return 0
+    for comp in gamescope mangohud kmod; do
         case $comp in
-            gamescope)    if (( SKIP_GAMESCOPE )); then continue; fi ;;
-            mangohud)     if (( SKIP_MANGOHUD )); then continue; fi ;;
-            kmod-oxp3-xe) if (( SKIP_KERNEL )); then continue; fi ;;
+            gamescope) if (( SKIP_GAMESCOPE )); then continue; fi; pat=gamescope ;;
+            mangohud)  if (( SKIP_MANGOHUD ));  then continue; fi; pat=mangohud ;;
+            kmod)      if (( SKIP_KERNEL ));    then continue; fi; pat=$KMOD_NAME ;;
         esac
-        sudo rm -f "$MESA_STATE_DIR"/rpms/"$comp"-*.rpm
-        for rpm in "$OUT"/"$comp"-*.rpm; do
+        sudo rm -f "$MESA_STATE_DIR"/rpms/"$pat"-*.rpm
+        for rpm in "$OUT"/"$pat"-*.rpm; do
             [[ -f $rpm ]] && sudo cp -f "$rpm" "$MESA_STATE_DIR/rpms/"
         done
     done
+    return 0
 }
 
 record_mesa_state() { # <flatpak list file, may be empty>
