@@ -9,28 +9,70 @@
 #
 #   tools/xess-probe.sh                 # auto-detect a running Proton game
 #   tools/xess-probe.sh --exe Trails    # by executable substring
+#   tools/xess-probe.sh --list         # every candidate game process, then pick one
 #   tools/xess-probe.sh --pid 12345
 set -uo pipefail
-exe=""; pid=""
+exe=""; pid=""; list=0
 while (( $# )); do
     case $1 in
         --exe) exe=${2:-}; shift 2 ;;
         --pid) pid=${2:-}; shift 2 ;;
+        --list) list=1; shift ;;
         -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "usage: $0 [--exe SUBSTRING] [--pid PID]" >&2; exit 2 ;;
     esac
 done
 
-if [[ -z $pid ]]; then
-    # gamescope and proton carry the game's name in their own command lines, so match the process
-    # name (comm) - the game's exe - and never a wrapper. Same rule as tools/gpu-bench/thread-cpu.py.
+candidates() {
+    # Under Wine the process name (comm) is truncated to 15 characters and usually keeps no ".exe",
+    # so match the first token of the command line - the exe Wine was asked to run - and skip the
+    # Wine/Steam infrastructure, which also ends in .exe.
+    local d first comm
     for d in /proc/[0-9]*; do
-        comm=$(cat "$d/comm" 2>/dev/null) || continue
-        case $comm in *.exe) ;; *) continue ;; esac
-        case $comm in steam.exe|services.exe|plugplay.exe|winemenubuilder.exe|winedevice.exe|explorer.exe|rpcss.exe|svchost.exe|conhost.exe) continue ;; esac
-        if [[ -n $exe ]]; then [[ ${comm,,} == *"${exe,,}"* ]] || continue; fi
-        pid=${d#/proc/}; break
+        first=$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -1) || continue
+        [[ -n $first ]] || continue
+        first=${first##*\\}                      # c:\windows\system32\steam.exe -> steam.exe
+        case ${first,,} in
+            *.exe) ;;
+            *) continue ;;
+        esac
+        case ${first,,} in
+            steam.exe|services.exe|plugplay.exe|winemenubuilder.exe|winedevice.exe|explorer.exe|\
+            rpcss.exe|svchost.exe|conhost.exe|tabtip.exe|start.exe|wineboot.exe|gameoverlayui.exe|\
+            gravitymark.exe) : ;;   # gravitymark.exe is this repo's benchmark, not a game
+            *) ;;
+        esac
+        case ${first,,} in
+            steam.exe|services.exe|plugplay.exe|winemenubuilder.exe|winedevice.exe|explorer.exe|\
+            rpcss.exe|svchost.exe|conhost.exe|tabtip.exe|start.exe|wineboot.exe|gameoverlayui.exe|\
+            gravitymark.exe) continue ;;
+        esac
+        comm=$(cat "$d/comm" 2>/dev/null)
+        printf '%s\t%s\t%s\n' "${d#/proc/}" "$comm" "${first:0:48}"
     done
+}
+
+if [[ $list == 1 ]]; then
+    echo "candidate game processes:"
+    c=$(candidates); [[ -n $c ]] || die "none found - is the game running?"
+    printf '%s\n' "$c" | awk -F'\t' '{printf "  pid %-8s %-22s %s\n", $1, $2, $3}'
+    exit 0
+fi
+
+if [[ -z $pid ]]; then
+    while IFS=$'\t' read -r p comm first; do
+        [[ -n $p ]] || continue
+        if [[ -n $exe ]]; then
+            [[ ${comm,,} == *"${exe,,}"* || ${first,,} == *"${exe,,}"* ]] || continue
+        fi
+        pid=$p; break
+    done < <(candidates)
+    if [[ -z $pid ]]; then
+        echo "no game process found${exe:+ matching '$exe'} - candidates:" >&2
+        candidates | awk -F'\t' '{printf "  pid %-8s %-22s %s\n", $1, $2, $3}' >&2
+        echo "rerun with --pid N or drop --exe" >&2
+        exit 1
+    fi
 fi
 [[ -n $pid && -r /proc/$pid/cmdline ]] || { echo "no running game process found${exe:+ matching '$exe'}" >&2; exit 1; }
 
