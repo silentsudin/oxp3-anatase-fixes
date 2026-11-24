@@ -1,0 +1,244 @@
+From 7120d4745eb629e354458f8edffb1b80ec58d087 Mon Sep 17 00:00:00 2001
+From: oxp3-fixes <oxp3-fixes@localhost>
+Date: Sat, 21 Nov 2026 22:39:30 +0000
+Subject: [PATCH] usb: oxp3: leave unused puck interfaces out instead of
+ relaxing intervals
+
+On hardware the livepatch from the previous commit retried the Steam
+Controller puck (28de:1304) behind the dock's hub at every relaxation
+level - interrupt OUT >= 8/16/32 ms, IN >= 4/8 ms - and the Panther Lake
+xHCI answered each with Secondary Bandwidth Error:
+
+  usb 3-1.3.2: host rejected the bandwidth behind its TT even with relaxed intervals (-28)
+
+Longer intervals don't lower what the host counts, so its TT limit is on
+the number of periodic endpoints (the puck has eleven), not their
+bandwidth. Drop the interval relaxation. Instead, when the host rejects a
+listed device behind a TT, configure the interfaces from the new "trim"
+parameter without endpoints, one more per retry, until the host accepts:
+by default controller slots 4, 3 and 2 (interfaces 5, 4, 3), then the
+pogo-pin interface (6), then the CDC notification endpoint (0). One
+controller in slot 1 keeps working. The log names the interfaces left out;
+if the host still refuses, the descriptors are restored.
+
+Also require a hub between the device and the root port: on xHCI a
+root-port full-speed device has udev->tt set too.
+---
+ drivers/usb/oxp3/oxp3_usb_tt_quirk.c | 159 ++++++++++++++-------------
+ 1 file changed, 80 insertions(+), 79 deletions(-)
+
+diff --git a/drivers/usb/oxp3/oxp3_usb_tt_quirk.c b/drivers/usb/oxp3/oxp3_usb_tt_quirk.c
+index e6ca3e962..92ebc1ce4 100644
+--- a/drivers/usb/oxp3/oxp3_usb_tt_quirk.c
++++ b/drivers/usb/oxp3/oxp3_usb_tt_quirk.c
+@@ -1,30 +1,32 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /*
+- * oxp3_usb_tt_quirk - relax interrupt intervals for full-speed devices behind a
+- * Transaction Translator when the host controller rejects their bandwidth.
++ * oxp3_usb_tt_quirk - configure a full-speed device behind a Transaction
++ * Translator without the interfaces the host has no room for.
+  *
+  * The Intel Panther Lake xHCI in the OneXPlayer 3 answers the Configure
+  * Endpoint command for a Steam Controller puck (28de:1304) behind any USB 2.0
+  * hub with "Secondary Bandwidth Error" (its TT budget check), so the puck is
+- * left unconfigured ("can't set config #1, error -28"). The puck has four
+- * controller-slot HID interfaces, each with a 64-byte interrupt IN and OUT
+- * endpoint at bInterval 2 ms, plus a 32 ms management interface and a CDC
+- * serial interface. The endpoint contexts Linux programs are correct; the
+- * same puck behind the same dock works on AMD hosts, and directly on this
+- * host's root port.
++ * left unconfigured ("can't set config #1, error -28"). The puck has eleven
++ * periodic endpoints: a CDC notification endpoint (interface 0), an interrupt
++ * IN and OUT endpoint for each of its four controller slots (interfaces 2-5)
++ * and for its pogo-pin interface (6). The same puck behind the same dock works
++ * on AMD hosts, and directly on this host's root port.
+  *
+- * usbcore and xhci-hcd are built into the kernel, so this is a livepatch of
+- * usb_hcd_alloc_bandwidth(): the function body is the kernel's own, and only
+- * when the host rejects a listed device behind a TT with -ENOSPC are the
+- * interrupt intervals raised step by step and the configuration retried:
+- *
+- *   level 1: OUT >= 8 ms                 (feedback/rumble, input untouched)
+- *   level 2: OUT >= 16 ms, IN >= 4 ms
+- *   level 3: OUT >= 32 ms, IN >= 8 ms
++ * Raising the interrupt intervals (OUT up to 32 ms, IN up to 8 ms) does not
++ * help: the host rejects every such set, so its limit is on the number of
++ * periodic endpoints behind the TT rather than their bandwidth. So when the
++ * host rejects a listed device behind a TT with -ENOSPC, the interfaces in
++ * the "trim" list are configured without endpoints, one more per retry, until
++ * the host accepts. By default that is controller slots 4, 3 and 2, then the
++ * pogo-pin interface, then the CDC notification endpoint: one controller in
++ * slot 1 keeps working. Trimmed interfaces show up with no endpoints, and
++ * their drivers do not bind.
+  *
+- * The first level the host accepts is kept. Devices not listed, devices on a
+- * root port and configurations the host accepts as they are stay unchanged.
+- * Devices already left unconfigured when the patch loads are configured again.
++ * usbcore and xhci-hcd are built into the kernel, so this is a livepatch of
++ * usb_hcd_alloc_bandwidth(); the function body is the kernel's own. Devices
++ * not listed, devices on a root port and configurations the host accepts as
++ * they are stay unchanged. Devices already left unconfigured when the patch
++ * loads are configured again.
+  */
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+@@ -38,17 +40,31 @@
+ static char *devices = "28de:1304";
+ module_param(devices, charp, 0444);
+ MODULE_PARM_DESC(devices,
+-		 "Comma-separated vid:pid list to relax behind a TT when the host rejects them (default 28de:1304, Steam Controller puck)");
+-
+-static const struct {
+-	u8 out_ms;
+-	u8 in_ms;
+-} oxp3_levels[] = {
+-	{ 0, 0 },
+-	{ 8, 0 },
+-	{ 16, 4 },
+-	{ 32, 8 },
+-};
++		 "Comma-separated vid:pid list to handle behind a TT when the host rejects them (default 28de:1304, Steam Controller puck)");
++
++static char *trim = "5,4,3,6,0";
++module_param(trim, charp, 0444);
++MODULE_PARM_DESC(trim,
++		 "Interfaces configured without endpoints, one more per retry, when the host rejects a listed device behind a TT (default 5,4,3,6,0: puck controller slots 4-2, pogo pins, CDC notification)");
++
++#define OXP3_MAX_TRIM 8
++
++static int oxp3_trim_list(u8 *ifnums)
++{
++	const char *p = trim;
++	int n = 0;
++
++	while (p && *p && n < OXP3_MAX_TRIM) {
++		unsigned int v;
++
++		if (sscanf(p, "%u", &v) == 1 && v < 256)
++			ifnums[n++] = v;
++		p = strchr(p, ',');
++		if (p)
++			p++;
++	}
++	return n;
++}
+ 
+ static bool oxp3_listed(struct usb_device *udev)
+ {
+@@ -68,47 +84,14 @@ static bool oxp3_listed(struct usb_device *udev)
+ 	return false;
+ }
+ 
+-/* Only full/low-speed devices behind a high-speed hub go through a TT. */
++/* Full/low-speed devices behind a high-speed hub (not a root port) use a TT. */
+ static bool oxp3_applies(struct usb_device *udev)
+ {
+-	return udev->tt && (udev->speed == USB_SPEED_FULL || udev->speed == USB_SPEED_LOW) &&
++	return udev->tt && udev->parent && udev->parent->parent &&
++	       (udev->speed == USB_SPEED_FULL || udev->speed == USB_SPEED_LOW) &&
+ 	       oxp3_listed(udev);
+ }
+ 
+-static void oxp3_relax_alt(struct usb_host_interface *alt, int level)
+-{
+-	int j;
+-
+-	for (j = 0; j < alt->desc.bNumEndpoints; j++) {
+-		struct usb_endpoint_descriptor *d = &alt->endpoint[j].desc;
+-		u8 floor = usb_endpoint_dir_out(d) ? oxp3_levels[level].out_ms :
+-						     oxp3_levels[level].in_ms;
+-
+-		/* full/low speed: bInterval is in 1 ms frames */
+-		if (usb_endpoint_xfer_int(d) && floor && d->bInterval < floor)
+-			d->bInterval = floor;
+-	}
+-}
+-
+-static void oxp3_relax(struct usb_host_config *new_config,
+-		       struct usb_host_interface *new_alt, int level)
+-{
+-	int i;
+-
+-	if (new_config) {
+-		for (i = 0; i < new_config->desc.bNumInterfaces; i++) {
+-			struct usb_host_interface *first_alt =
+-				&new_config->intf_cache[i]->altsetting[0];
+-			struct usb_host_interface *alt =
+-				usb_find_alt_setting(new_config, first_alt->desc.bInterfaceNumber, 0);
+-
+-			oxp3_relax_alt(alt ? alt : first_alt, level);
+-		}
+-	}
+-	if (new_alt)
+-		oxp3_relax_alt(new_alt, level);
+-}
+-
+ /* usb_hcd_alloc_bandwidth() from drivers/usb/core/hcd.c, unchanged. */
+ static int oxp3_alloc_bandwidth_once(struct usb_device *udev,
+ 				     struct usb_host_config *new_config,
+@@ -208,24 +191,42 @@ static int oxp3_usb_hcd_alloc_bandwidth(struct usb_device *udev,
+ 					struct usb_host_interface *cur_alt,
+ 					struct usb_host_interface *new_alt)
+ {
++	struct usb_host_interface *alts[OXP3_MAX_TRIM] = {};
++	u8 ifnums[OXP3_MAX_TRIM], saved[OXP3_MAX_TRIM];
+ 	int ret = oxp3_alloc_bandwidth_once(udev, new_config, cur_alt, new_alt);
+-	int level;
++	char left_out[4 * OXP3_MAX_TRIM] = "";
++	int n, k, len = 0;
+ 
+-	if (ret != -ENOSPC || !(new_config || new_alt) || !oxp3_applies(udev))
++	if (ret != -ENOSPC || !new_config || cur_alt || new_alt || !oxp3_applies(udev))
+ 		return ret;
+ 
+-	for (level = 1; level < ARRAY_SIZE(oxp3_levels) && ret == -ENOSPC; level++) {
+-		oxp3_relax(new_config, new_alt, level);
++	n = oxp3_trim_list(ifnums);
++	for (k = 0; k < n && ret == -ENOSPC; k++) {
++		alts[k] = usb_find_alt_setting(new_config, ifnums[k], 0);
++		if (!alts[k] || !alts[k]->desc.bNumEndpoints) {
++			alts[k] = NULL;
++			continue;
++		}
++		saved[k] = alts[k]->desc.bNumEndpoints;
++		alts[k]->desc.bNumEndpoints = 0;
++		len += scnprintf(left_out + len, sizeof(left_out) - len, "%s%u",
++				 len ? "," : "", ifnums[k]);
+ 		ret = oxp3_alloc_bandwidth_once(udev, new_config, cur_alt, new_alt);
+-		if (!ret)
+-			dev_info(&udev->dev,
+-				 "host rejected the bandwidth behind its TT; configured with interrupt OUT >= %u ms, IN >= %u ms (0 = unchanged)\n",
+-				 oxp3_levels[level].out_ms, oxp3_levels[level].in_ms);
+ 	}
+-	if (ret)
+-		dev_warn(&udev->dev,
+-			 "host rejected the bandwidth behind its TT even with relaxed intervals (%d)\n",
+-			 ret);
++
++	if (!ret) {
++		dev_info(&udev->dev,
++			 "host rejected the full configuration behind its TT; configured without the endpoints of interface(s) %s\n",
++			 left_out);
++		return 0;
++	}
++
++	while (k--)
++		if (alts[k])
++			alts[k]->desc.bNumEndpoints = saved[k];
++	dev_warn(&udev->dev,
++		 "host rejected the bandwidth behind its TT even without interface(s) %s (%d)\n",
++		 left_out[0] ? left_out : "-", ret);
+ 	return ret;
+ }
+ 
+@@ -287,5 +288,5 @@ static void __exit oxp3_usb_tt_quirk_exit(void)
+ module_init(oxp3_usb_tt_quirk_init);
+ module_exit(oxp3_usb_tt_quirk_exit);
+ MODULE_LICENSE("GPL");
+-MODULE_DESCRIPTION("Relax interrupt intervals behind a TT when the xHCI rejects the bandwidth (OneXPlayer 3)");
++MODULE_DESCRIPTION("Configure a device behind a TT without unused interfaces when the xHCI rejects it (OneXPlayer 3)");
+ MODULE_INFO(livepatch, "Y");
+-- 
+2.56.0
+

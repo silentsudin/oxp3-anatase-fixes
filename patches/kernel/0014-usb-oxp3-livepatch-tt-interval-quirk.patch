@@ -1,0 +1,333 @@
+From fd58c5a6202be81d3b5c6c6d88fa85dbc7c09cd4 Mon Sep 17 00:00:00 2001
+From: oxp3-fixes <oxp3-fixes@localhost>
+Date: Sat, 21 Nov 2026 22:14:52 +0000
+Subject: [PATCH] usb: oxp3: livepatch relaxing intervals behind a TT on
+ bandwidth rejection
+
+The Panther Lake xHCI of the OneXPlayer 3 rejects the Configure Endpoint
+command for a Steam Controller puck (28de:1304) behind any USB 2.0 hub
+with Secondary Bandwidth Error, so the puck stays unconfigured ("can't set
+config #1, error -28"). Linux programs the endpoint contexts correctly
+(xhci trace: 8 interrupt endpoints at 2 ms / 64 bytes, TT think time 0);
+the same dock and puck work on AMD hosts, and directly on this host's
+root port.
+
+usbcore and xhci-hcd are built into the Anatase kernel, so add a small
+livepatch module: it replaces usb_hcd_alloc_bandwidth() with the same
+body, and only for a listed device behind a TT that the host rejected
+with -ENOSPC it raises the interrupt intervals step by step (OUT >= 8 ms;
+then OUT >= 16, IN >= 4 ms; then OUT >= 32, IN >= 8 ms) and retries. The
+first accepted level is kept. Devices already left unconfigured when the
+module loads are configured again.
+---
+ drivers/usb/oxp3/Makefile            |   2 +
+ drivers/usb/oxp3/oxp3_usb_tt_quirk.c | 291 +++++++++++++++++++++++++++
+ 2 files changed, 293 insertions(+)
+ create mode 100644 drivers/usb/oxp3/Makefile
+ create mode 100644 drivers/usb/oxp3/oxp3_usb_tt_quirk.c
+
+diff --git a/drivers/usb/oxp3/Makefile b/drivers/usb/oxp3/Makefile
+new file mode 100644
+index 000000000..7891b7ae9
+--- /dev/null
++++ b/drivers/usb/oxp3/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0
++obj-m += oxp3_usb_tt_quirk.o
+diff --git a/drivers/usb/oxp3/oxp3_usb_tt_quirk.c b/drivers/usb/oxp3/oxp3_usb_tt_quirk.c
+new file mode 100644
+index 000000000..e6ca3e962
+--- /dev/null
++++ b/drivers/usb/oxp3/oxp3_usb_tt_quirk.c
+@@ -0,0 +1,291 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * oxp3_usb_tt_quirk - relax interrupt intervals for full-speed devices behind a
++ * Transaction Translator when the host controller rejects their bandwidth.
++ *
++ * The Intel Panther Lake xHCI in the OneXPlayer 3 answers the Configure
++ * Endpoint command for a Steam Controller puck (28de:1304) behind any USB 2.0
++ * hub with "Secondary Bandwidth Error" (its TT budget check), so the puck is
++ * left unconfigured ("can't set config #1, error -28"). The puck has four
++ * controller-slot HID interfaces, each with a 64-byte interrupt IN and OUT
++ * endpoint at bInterval 2 ms, plus a 32 ms management interface and a CDC
++ * serial interface. The endpoint contexts Linux programs are correct; the
++ * same puck behind the same dock works on AMD hosts, and directly on this
++ * host's root port.
++ *
++ * usbcore and xhci-hcd are built into the kernel, so this is a livepatch of
++ * usb_hcd_alloc_bandwidth(): the function body is the kernel's own, and only
++ * when the host rejects a listed device behind a TT with -ENOSPC are the
++ * interrupt intervals raised step by step and the configuration retried:
++ *
++ *   level 1: OUT >= 8 ms                 (feedback/rumble, input untouched)
++ *   level 2: OUT >= 16 ms, IN >= 4 ms
++ *   level 3: OUT >= 32 ms, IN >= 8 ms
++ *
++ * The first level the host accepts is kept. Devices not listed, devices on a
++ * root port and configurations the host accepts as they are stay unchanged.
++ * Devices already left unconfigured when the patch loads are configured again.
++ */
++#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
++
++#include <linux/kernel.h>
++#include <linux/livepatch.h>
++#include <linux/module.h>
++#include <linux/usb.h>
++#include <linux/usb/hcd.h>
++#include <linux/workqueue.h>
++
++static char *devices = "28de:1304";
++module_param(devices, charp, 0444);
++MODULE_PARM_DESC(devices,
++		 "Comma-separated vid:pid list to relax behind a TT when the host rejects them (default 28de:1304, Steam Controller puck)");
++
++static const struct {
++	u8 out_ms;
++	u8 in_ms;
++} oxp3_levels[] = {
++	{ 0, 0 },
++	{ 8, 0 },
++	{ 16, 4 },
++	{ 32, 8 },
++};
++
++static bool oxp3_listed(struct usb_device *udev)
++{
++	u16 vid = le16_to_cpu(udev->descriptor.idVendor);
++	u16 pid = le16_to_cpu(udev->descriptor.idProduct);
++	const char *p = devices;
++
++	while (p && *p) {
++		unsigned int v, d;
++
++		if (sscanf(p, "%x:%x", &v, &d) == 2 && v == vid && d == pid)
++			return true;
++		p = strchr(p, ',');
++		if (p)
++			p++;
++	}
++	return false;
++}
++
++/* Only full/low-speed devices behind a high-speed hub go through a TT. */
++static bool oxp3_applies(struct usb_device *udev)
++{
++	return udev->tt && (udev->speed == USB_SPEED_FULL || udev->speed == USB_SPEED_LOW) &&
++	       oxp3_listed(udev);
++}
++
++static void oxp3_relax_alt(struct usb_host_interface *alt, int level)
++{
++	int j;
++
++	for (j = 0; j < alt->desc.bNumEndpoints; j++) {
++		struct usb_endpoint_descriptor *d = &alt->endpoint[j].desc;
++		u8 floor = usb_endpoint_dir_out(d) ? oxp3_levels[level].out_ms :
++						     oxp3_levels[level].in_ms;
++
++		/* full/low speed: bInterval is in 1 ms frames */
++		if (usb_endpoint_xfer_int(d) && floor && d->bInterval < floor)
++			d->bInterval = floor;
++	}
++}
++
++static void oxp3_relax(struct usb_host_config *new_config,
++		       struct usb_host_interface *new_alt, int level)
++{
++	int i;
++
++	if (new_config) {
++		for (i = 0; i < new_config->desc.bNumInterfaces; i++) {
++			struct usb_host_interface *first_alt =
++				&new_config->intf_cache[i]->altsetting[0];
++			struct usb_host_interface *alt =
++				usb_find_alt_setting(new_config, first_alt->desc.bInterfaceNumber, 0);
++
++			oxp3_relax_alt(alt ? alt : first_alt, level);
++		}
++	}
++	if (new_alt)
++		oxp3_relax_alt(new_alt, level);
++}
++
++/* usb_hcd_alloc_bandwidth() from drivers/usb/core/hcd.c, unchanged. */
++static int oxp3_alloc_bandwidth_once(struct usb_device *udev,
++				     struct usb_host_config *new_config,
++				     struct usb_host_interface *cur_alt,
++				     struct usb_host_interface *new_alt)
++{
++	int num_intfs, i, j;
++	struct usb_host_interface *alt = NULL;
++	int ret = 0;
++	struct usb_hcd *hcd;
++	struct usb_host_endpoint *ep;
++
++	hcd = bus_to_hcd(udev->bus);
++	if (!hcd->driver->check_bandwidth)
++		return 0;
++
++	/* Configuration is being removed - set configuration 0 */
++	if (!new_config && !cur_alt) {
++		for (i = 1; i < 16; ++i) {
++			ep = udev->ep_out[i];
++			if (ep)
++				hcd->driver->drop_endpoint(hcd, udev, ep);
++			ep = udev->ep_in[i];
++			if (ep)
++				hcd->driver->drop_endpoint(hcd, udev, ep);
++		}
++		hcd->driver->check_bandwidth(hcd, udev);
++		return 0;
++	}
++	if (new_config) {
++		num_intfs = new_config->desc.bNumInterfaces;
++		for (i = 1; i < 16; ++i) {
++			ep = udev->ep_out[i];
++			if (ep) {
++				ret = hcd->driver->drop_endpoint(hcd, udev, ep);
++				if (ret < 0)
++					goto reset;
++			}
++			ep = udev->ep_in[i];
++			if (ep) {
++				ret = hcd->driver->drop_endpoint(hcd, udev, ep);
++				if (ret < 0)
++					goto reset;
++			}
++		}
++		for (i = 0; i < num_intfs; ++i) {
++			struct usb_host_interface *first_alt;
++			int iface_num;
++
++			first_alt = &new_config->intf_cache[i]->altsetting[0];
++			iface_num = first_alt->desc.bInterfaceNumber;
++			alt = usb_find_alt_setting(new_config, iface_num, 0);
++			if (!alt)
++				alt = first_alt;
++
++			for (j = 0; j < alt->desc.bNumEndpoints; j++) {
++				ret = hcd->driver->add_endpoint(hcd, udev, &alt->endpoint[j]);
++				if (ret < 0)
++					goto reset;
++			}
++		}
++	}
++	if (cur_alt && new_alt) {
++		struct usb_interface *iface = usb_ifnum_to_if(udev,
++				cur_alt->desc.bInterfaceNumber);
++
++		if (!iface)
++			return -EINVAL;
++		if (iface->resetting_device) {
++			cur_alt = usb_altnum_to_altsetting(iface, 0);
++			if (!cur_alt)
++				cur_alt = &iface->altsetting[0];
++		}
++
++		for (i = 0; i < cur_alt->desc.bNumEndpoints; i++) {
++			ret = hcd->driver->drop_endpoint(hcd, udev,
++					&cur_alt->endpoint[i]);
++			if (ret < 0)
++				goto reset;
++		}
++		for (i = 0; i < new_alt->desc.bNumEndpoints; i++) {
++			ret = hcd->driver->add_endpoint(hcd, udev,
++					&new_alt->endpoint[i]);
++			if (ret < 0)
++				goto reset;
++		}
++	}
++	ret = hcd->driver->check_bandwidth(hcd, udev);
++reset:
++	if (ret < 0)
++		hcd->driver->reset_bandwidth(hcd, udev);
++	return ret;
++}
++
++static int oxp3_usb_hcd_alloc_bandwidth(struct usb_device *udev,
++					struct usb_host_config *new_config,
++					struct usb_host_interface *cur_alt,
++					struct usb_host_interface *new_alt)
++{
++	int ret = oxp3_alloc_bandwidth_once(udev, new_config, cur_alt, new_alt);
++	int level;
++
++	if (ret != -ENOSPC || !(new_config || new_alt) || !oxp3_applies(udev))
++		return ret;
++
++	for (level = 1; level < ARRAY_SIZE(oxp3_levels) && ret == -ENOSPC; level++) {
++		oxp3_relax(new_config, new_alt, level);
++		ret = oxp3_alloc_bandwidth_once(udev, new_config, cur_alt, new_alt);
++		if (!ret)
++			dev_info(&udev->dev,
++				 "host rejected the bandwidth behind its TT; configured with interrupt OUT >= %u ms, IN >= %u ms (0 = unchanged)\n",
++				 oxp3_levels[level].out_ms, oxp3_levels[level].in_ms);
++	}
++	if (ret)
++		dev_warn(&udev->dev,
++			 "host rejected the bandwidth behind its TT even with relaxed intervals (%d)\n",
++			 ret);
++	return ret;
++}
++
++static struct klp_func oxp3_funcs[] = {
++	{
++		.old_name = "usb_hcd_alloc_bandwidth",
++		.new_func = oxp3_usb_hcd_alloc_bandwidth,
++	},
++	{ }
++};
++
++static struct klp_object oxp3_objs[] = {
++	{
++		/* name NULL: vmlinux (usbcore is built in) */
++		.funcs = oxp3_funcs,
++	},
++	{ }
++};
++
++static struct klp_patch oxp3_patch = {
++	.mod = THIS_MODULE,
++	.objs = oxp3_objs,
++};
++
++/* Devices that enumerated before the patch and were left unconfigured. */
++static int oxp3_reconfigure_one(struct usb_device *udev, void *unused)
++{
++	if (udev->actconfig || udev->state != USB_STATE_ADDRESS || !udev->config ||
++	    !oxp3_applies(udev))
++		return 0;
++	dev_info(&udev->dev, "retrying the configuration that the host rejected before\n");
++	usb_driver_set_configuration(udev, udev->config[0].desc.bConfigurationValue);
++	return 0;
++}
++
++static void oxp3_rescan_fn(struct work_struct *work)
++{
++	usb_for_each_dev(NULL, oxp3_reconfigure_one);
++}
++static DECLARE_DELAYED_WORK(oxp3_rescan, oxp3_rescan_fn);
++
++static int __init oxp3_usb_tt_quirk_init(void)
++{
++	int ret = klp_enable_patch(&oxp3_patch);
++
++	if (ret)
++		return ret;
++	/* let the livepatch transition finish before reconfiguring */
++	schedule_delayed_work(&oxp3_rescan, 3 * HZ);
++	pr_info("active for %s\n", devices);
++	return 0;
++}
++
++static void __exit oxp3_usb_tt_quirk_exit(void)
++{
++	cancel_delayed_work_sync(&oxp3_rescan);
++}
++
++module_init(oxp3_usb_tt_quirk_init);
++module_exit(oxp3_usb_tt_quirk_exit);
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Relax interrupt intervals behind a TT when the xHCI rejects the bandwidth (OneXPlayer 3)");
++MODULE_INFO(livepatch, "Y");
