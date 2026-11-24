@@ -115,6 +115,26 @@ kd=$HOME/.cache/xess-xmx/kernels
 [[ -d $kd ]] && echo "  kernel cache: $(ls "$kd" | wc -l) kernels" || echo "  kernel cache: absent (run-time compile only)"
 
 echo
+echo "== GPU and power state right now (throttling versus a CPU/XeSS limit)"
+for dev in /sys/class/drm/card*/device; do
+    [ -d "$dev/gt" ] || [ -d "$dev/gt0" ] || continue
+    for gt in "$dev"/gt*; do
+        f=$gt/gt_cur_freq_mhz; [ -r "$f" ] && printf '  GPU clock (%s): %s MHz\n' "$(basename "$gt")" "$(cat "$f")"
+    done
+    for f in "$dev"/gt_max_freq_mhz "$dev"/gt_boost_freq_mhz; do
+        [ -r "$f" ] && printf '  %-18s %s MHz\n' "$(basename "$f"):" "$(cat "$f")"
+    done
+done 2>/dev/null
+for f in /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw; do
+    [ -r "$f" ] && printf '  package PL1:       %s W\n' "$(( $(cat "$f") / 1000000 ))"
+done
+for z in /sys/class/thermal/thermal_zone*; do
+    [ -r "$z/temp" ] || continue
+    t=$(cat "$z/temp"); (( t > 30000 && t < 120000 )) || continue
+    printf '  %-18s %s C\n' "$(cat "$z/type" 2>/dev/null):" "$(( t / 1000 ))"
+done 2>/dev/null | head -4
+
+echo
 echo "== verdict"
 h=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | sed -n 's/^ANV_CM_HELPER=//p' | head -1)
 k=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | sed -n 's/^ANV_CM_KERNEL_DIR=//p' | head -1)
