@@ -781,6 +781,16 @@ install_xess() {
     seed_xess_compiler
     bash "$XESS_PKG/install.sh" | sed 's/^/  /' || echo "  WARNING: xess-xmx-linux's install.sh failed"
     xmx_retire_split_driver
+    # The shim and the package's tools/cm-compile.sh are one unit: a shim from one release with a
+    # helper from another builds kernels with the wrong register-file flags, which showed up as
+    # ghosting behind movement in games using XeSS. Say so loudly if the session environment still
+    # points somewhere else (an older helper, a stale ANV_CM_KERNEL_DIR).
+    local envf=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/50-xess-xmx.conf
+    if [[ -r $envf ]] && ! grep -q "ANV_CM_HELPER=$XESS_PKG/tools/cm-compile.sh" "$envf"; then
+        echo "  WARNING: $envf does not point ANV_CM_HELPER at $XESS_PKG/tools/cm-compile.sh"
+        echo "           that mixes the shim with another release's kernel helper (ghosting in XeSS);"
+        echo "           re-run: bash $XESS_PKG/install.sh"
+    fi
     echo "  Restart Steam (leave and re-enter Gamemode) so games get the new environment."
 }
 

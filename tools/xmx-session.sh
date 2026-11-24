@@ -12,8 +12,12 @@ set -uo pipefail
 icd=${HOME:?}/.config/xess-xmx/icd-xmx.json
 kernels=$HOME/.cache/xess-xmx/kernels
 repo=$(cd "$(dirname "$0")/.." && pwd)
-helper=$repo/tools/xmx-cm-compile-nodgrf.sh
-[ -x "$helper" ] || helper=$HOME/.local/share/xess-xmx/tools/cm-compile.sh
+# Prefer the installed package's own helper: its shim and cm-compile.sh are one unit, and mixing a
+# shim with our older nodgrf helper made the new shim compile with the wrong register-file flags
+# (ghosting behind movement in games using XeSS, seen 2026-11-24). Only fall back to the repo's
+# helper when no package is installed.
+helper=$HOME/.local/share/xess-xmx/tools/cm-compile.sh
+[ -x "$helper" ] || helper=$repo/tools/xmx-cm-compile-nodgrf.sh
 conf=$HOME/.config/environment.d/90-oxp3-xmx.conf
 log() { printf 'xmx-session: %s\n' "$*"; }
 case ${1:-status} in
