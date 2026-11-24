@@ -103,9 +103,16 @@ def main() -> int:
     s = sub(s, '#    stock drivers\nif [ "${XMX_NO_ENV:-0}" != 1 ]; then',
             '#    stock drivers\n'
             'if [ -n "$SYSTEM_ANV" ]; then\n'
-            '  unit="xess-xmx-session-check.service"\n'
-            '  systemctl --user disable --now "$unit" >/dev/null 2>&1 || true\n'
-            '  rm -f "$UNITD/$unit" "$CFGD/session-check.sh"\n'
+            '  # In system mode there is no package driver to check, and the check\'s fallback PATH\n'
+            '  # clears ANV_CM_HELPER / ANV_CM_KERNEL_DIR - it strips the XMX environment every session\n'
+            '  # and leaves XeSS on DP4a (measured: 75 vs 85 fps in Trails). Remove it by its real name\n'
+            '  # (20261120 uses xess-xmx-check.service; older packages used xess-xmx-session-check).\n'
+            '  for unit in xess-xmx-check.service xess-xmx-session-check.service; do\n'
+            '    systemctl --user disable --now "$unit" >/dev/null 2>&1 || true\n'
+            '    rm -f "$UNITD/$unit" "$UNITD/default.target.wants/$unit" \\\n'
+            '          "$UNITD/graphical-session-pre.target.wants/$unit"\n'
+            '  done\n'
+            '  rm -f "$CFGD/session-check.sh"\n'
             'fi\n'
             'if [ "${XMX_NO_ENV:-0}" != 1 ] && [ -z "$SYSTEM_ANV" ]; then')
 

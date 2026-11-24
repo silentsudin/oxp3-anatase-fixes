@@ -787,6 +787,15 @@ install_xess() {
     # helper from another builds kernels with the wrong register-file flags, which showed up as
     # ghosting behind movement in games using XeSS. Say so loudly if the session environment still
     # points somewhere else (an older helper, a stale ANV_CM_KERNEL_DIR).
+    # A package-driver check left over from a split-driver install fails in system mode and its
+    # fallback clears ANV_CM_HELPER / ANV_CM_KERNEL_DIR, so XeSS silently drops to DP4a. Remove it.
+    if grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so 2>/dev/null; then
+        local u ud=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+        for u in xess-xmx-check.service xess-xmx-session-check.service; do
+            systemctl --user disable --now "$u" >/dev/null 2>&1 || true
+            rm -f "$ud/$u" "$ud/default.target.wants/$u" "$ud/graphical-session-pre.target.wants/$u"
+        done
+    fi
     local envf=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/50-xess-xmx.conf
     if [[ -r $envf ]] && ! grep -q "ANV_CM_HELPER=$XESS_PKG/tools/cm-compile.sh" "$envf"; then
         echo "  WARNING: $envf does not point ANV_CM_HELPER at $XESS_PKG/tools/cm-compile.sh"
