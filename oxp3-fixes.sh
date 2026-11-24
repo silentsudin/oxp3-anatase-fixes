@@ -29,6 +29,8 @@
 #                              --stock-dmc (keep Anatase's display DMC firmware)
 #                              --skip-hw (leave the hardware fixes - home button/LEDs, power units -
 #                                         from tools/oxp3-hw-install.sh alone)
+#                              --skip-sched (leave the CPU scheduler as it is; the install uses the
+#                              kernel's EEVDF and retires scx_cosmos)
 #                              --skip-flatpak-gl (Flathub apps keep Flathub's Mesa instead of the
 #                                                 org.freedesktop.Platform.GL.oxp3 extension)
 # Environment: OXP3_MOK_DIR (default ~/.local/share/oxp3-fixes/mok, needs MOK.key + MOK.der)
@@ -57,7 +59,7 @@ CTR="oxp3-fixes-build-f$FEDORA"
 KMOD_NAME="kmod-oxp3"
 STAMP=$(date +%Y%m%d%H%M)
 
-SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_HW=0 SKIP_FLATPAK_GL=0 SKIP_CPUTOP=0
+SKIP_KERNEL=0 SKIP_GAMESCOPE=0 SKIP_MANGOHUD=0 SKIP_FIRMWARE=0 SKIP_DMC=0 SKIP_EXTRAS=0 SKIP_MESA=0 SKIP_XESS=0 SKIP_HW=0 SKIP_FLATPAK_GL=0 SKIP_CPUTOP=0 SKIP_SCHED=0
 [[ ${OXP3_SKIP_HW:-0} == 1 ]] && SKIP_HW=1
 cmd="${1:-}"; shift || true
 for a in "$@"; do
@@ -66,6 +68,7 @@ for a in "$@"; do
         --skip-gamescope) SKIP_GAMESCOPE=1 ;;
         --skip-mangohud) SKIP_MANGOHUD=1 ;;
         --skip-cpu-topology) SKIP_CPUTOP=1 ;;
+        --skip-sched) SKIP_SCHED=1 ;;
         --skip-firmware) SKIP_FIRMWARE=1 ;;
         --stock-dmc) SKIP_DMC=1 ;;
         --skip-hw) SKIP_HW=1 ;;
@@ -737,6 +740,11 @@ do_install() {
             echo "  hardware fixes (user-scope parts) skipped: no unprivileged user to wire them for"
             echo "  run ./oxp3-install.sh from your desktop session, or pass --user NAME"
         fi
+    fi
+
+    if (( !SKIP_SCHED )); then
+        say "CPU scheduler: the kernel's EEVDF (sudo)"
+        use_kernel_scheduler
     fi
 
     if (( !SKIP_CPUTOP )); then

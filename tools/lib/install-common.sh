@@ -2006,6 +2006,38 @@ status_dxvk() {
     return 0
 }
 
+# CPU scheduler: the kernel's own EEVDF. scx_cosmos (oxp3-gaming-sched.service) won on kernel 7.2.7
+# (Cyberpunk +4.8 %, 2026-11-08), but on 7.3.4, with the kernel's hybrid placement fixes, only EEVDF
+# puts the thread that limits the frame rate on a P-core: GravityMark D3D11 640x360, main thread at
+# 98 % of a core, 2 mirrored rounds (tools/sched-bench.py, 2026-11-24) - EEVDF 100 % on the P-cores,
+# 96.4 fps / 1% low 51.7; every sched_ext scheduler 3-22 % (cosmos 94.7 / 49.8, the others within
+# 0.2 %, LAVD -1.7 %). Retire the cosmos unit and its profile drop-ins; tools/oxp3-scx-profile.sh
+# still switches by hand.
+use_kernel_scheduler() {
+    local unit=oxp3-gaming-sched.service
+    if [[ -e /etc/systemd/system/$unit || -d /etc/systemd/system/$unit.d ]] ||
+       systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+        sudo systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        sudo rm -f "/etc/systemd/system/$unit"
+        sudo rm -rf "/etc/systemd/system/$unit.d"
+        sudo systemctl daemon-reload
+        echo "  CPU scheduler: kernel EEVDF (scx_cosmos retired - it kept the frame-limiting thread off the P-cores)"
+    else
+        echo "  CPU scheduler: kernel EEVDF"
+    fi
+}
+
+status_scheduler() {
+    local ops=""
+    [[ $(cat /sys/kernel/sched_ext/state 2>/dev/null) == enabled ]] &&
+        ops=$(cat /sys/kernel/sched_ext/root/ops 2>/dev/null)
+    if [[ -n $ops ]]; then
+        echo "  CPU scheduler: sched_ext ${ops%%_*} (the install uses the kernel's EEVDF; run it again to switch)"
+    else
+        echo "  CPU scheduler: kernel EEVDF"
+    fi
+}
+
 # Is the Gamemode session pinned to the L3-sharing cores?
 status_cpu_topology() {
     local f=/etc/systemd/user/anatase-gamemode.service.d/oxp3-cpus.conf aff
@@ -2055,6 +2087,7 @@ do_status() {
     status_flatpak_gl
     status_xess
     status_cpu_topology
+    status_scheduler
     status_dxvk
     [[ -d $OUT ]] && { echo "built packages in $OUT:"; ls "$OUT" | sed 's/^/  /'; }
 }

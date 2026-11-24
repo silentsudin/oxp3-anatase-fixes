@@ -1,5 +1,40 @@
 # OXP3 RecompLauncher CPU/hybrid-scheduler investigation (parked checklist)
 
+## Decision 2026-11-24: the kernel's EEVDF replaces scx_cosmos
+
+On kernel 7.3.4, which has the kernel's hybrid placement fixes, EEVDF is the only scheduler that
+keeps the thread limiting the frame rate on a P-core. The install now retires
+`oxp3-gaming-sched.service` (`use_kernel_scheduler` in `tools/lib/install-common.sh`, and
+hw-install's `sched` component). `--skip-sched` leaves the scheduler as it is, and
+`tools/oxp3-scx-profile.sh` still switches by hand.
+
+Measured with `tools/sched-bench.py`, unattended:
+- workload: GravityMark D3D11 at 640x360, CPU-bound on its main thread (98 % of a core);
+- 2 mirrored rounds (A B C … C B A);
+- hhd Smart caps P 3.0 / E 2.0 / LP 1.5 GHz;
+- "hot thread on P" is the share of 1 s samples where that thread ran on cpu0-1.
+
+| scheduler | fps | 1% low | hot thread on P | package W |
+|---|---|---|---|---|
+| **EEVDF** | **96.37** | **51.74** | **100 %** | 23.9 |
+| scx_beerland -m performance | 94.88 | 49.75 | 10 % | 22.2 |
+| scx_cosmos -m performance -P | 94.78 | 49.55 | 6 % | 22.2 |
+| scx_p2dq | 94.75 | 49.82 | 18 % | 22.4 |
+| scx_cosmos -m performance | 94.69 | 49.75 | 6 % | 22.1 |
+| scx_cosmos -c 0 -p 0 (was the default) | 94.66 | 49.83 | 7 % | 22.0 |
+| scx_bpfland | 94.59 | 49.56 | 10 % | 22.0 |
+| scx_lavd (autopilot) | 93.09 | 49.34 | 10 % | 22.1 |
+
+What the table shows:
+- Even the "prefer the fastest CPUs" modes (`-m performance`) left the hot thread on the E-cores.
+- In this benchmark a 50 % faster core buys only +1.8 % fps. Its main thread mostly waits on the
+  GPU, so GravityMark ranks placement well and performance weakly. CPU-heavy games such as Elden
+  Ring should gain more from the right core.
+- The Nov 8 result below (cosmos +4.8 % over EEVDF in Cyberpunk) was on kernel 7.2.7, before
+  those fixes. Cyberpunk is no longer installed, so it could not be repeated.
+- `scx_lavd --balanced --no-core-compaction` (the Nov 8 recipe) is rejected outright by scx_lavd
+  1.1.4 as conflicting options. The bench now uses plain `--balanced`.
+
 Status: **parked for a later date**. This is the measurement plan for the CPU side of the
 RecompLauncher low-FPS investigation. The Mesa/ANV cooperative-matrix work is tracked separately.
 

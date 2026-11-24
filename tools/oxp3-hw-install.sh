@@ -803,23 +803,23 @@ comp_audio_install() {
 }
 
 comp_sched_install() {
-    say "gaming CPU scheduler (scx_cosmos, sched_ext)"
-    if ! command -v scx_cosmos >/dev/null 2>&1; then
-        warn "scx_cosmos is not installed; layer it with: sudo rpm-ostree install scx-scheds (then reboot)"
-        return 0
-    fi
-    run install -D -m0644 "$repo/files/oxp3-gaming-sched.service" \
-        "$PREFIX/etc/systemd/system/oxp3-gaming-sched.service"
-    if (( DRY_RUN )); then
-        printf '  [dry-run] systemctl daemon-reload ; systemctl enable --now oxp3-gaming-sched\n'
-        return 0
-    fi
-    systemctl daemon-reload
-    systemctl enable --now oxp3-gaming-sched.service
-    if systemctl is-active --quiet oxp3-gaming-sched.service; then
-        printf '  oxp3-gaming-sched is active (scx_cosmos)\n'
+    # The kernel's EEVDF, not scx_cosmos: on kernel 7.3.4 only EEVDF keeps the frame-limiting thread
+    # on a P-core (tools/sched-bench.py, 2026-11-24; see use_kernel_scheduler in
+    # tools/lib/install-common.sh). tools/oxp3-scx-profile.sh switches by hand.
+    say "CPU scheduler: kernel EEVDF"
+    local unit=oxp3-gaming-sched.service
+    if [[ -e $PREFIX/etc/systemd/system/$unit || -d $PREFIX/etc/systemd/system/$unit.d ]]; then
+        if (( DRY_RUN )); then
+            printf '  [dry-run] systemctl disable --now %s ; remove it and its drop-ins\n' "$unit"
+            return 0
+        fi
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        rm -f "$PREFIX/etc/systemd/system/$unit"
+        rm -rf "$PREFIX/etc/systemd/system/$unit.d"
+        systemctl daemon-reload
+        printf '  scx_cosmos retired; the kernel scheduler runs\n'
     else
-        warn "the unit is installed but not active; check: systemctl status oxp3-gaming-sched"
+        printf '  already on the kernel scheduler\n'
     fi
 }
 

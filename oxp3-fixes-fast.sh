@@ -29,7 +29,7 @@
 #
 # Options (after the command): --skip-kernel --skip-gamescope --skip-mangohud --skip-firmware
 #                              --skip-mesa --skip-xess --skip-extras --skip-sched --stock-dmc
-#                              (--skip-sched leaves the gaming CPU scheduler alone; --stock-dmc keeps
+#                              (--skip-sched leaves the CPU scheduler as it is; --stock-dmc keeps
 #                               Anatase's display DMC firmware; --skip-hw leaves the hardware fixes
 #                               (home button/LEDs, power units) from tools/oxp3-hw-install.sh alone)
 #                              --skip-flatpak-gl (Flathub apps keep Flathub's Mesa instead of the
@@ -316,23 +316,7 @@ FW_NAME=oxp3-firmware
 EXTRA_UNITS=(oxp3-tdp-sync.service oxp3-xpad-sleep.service oxp3-rapl-pp1.service)
 EXTRA_STATE=/etc/oxp3-fixes
 
-# Local to this variant: oxp3-fixes.sh has no sched_ext step (see docs/hw/battery-tdp.md and the
-# CPU scheduler measurements in docs/QA.md's follow-ups).
-install_sched() {
-    # scx_cosmos -c 0 -p 0 (official gaming profile) measured +4.8% Cyberpunk average and +5.7% FPS/W over EEVDF,
-    # with GravityMark unchanged and no power cost. Forcing per-cluster EPP on top was 3 FPS/1 W worse, so EPP is
-    # left at balance_power.
-    if ! command -v scx_cosmos >/dev/null 2>&1; then
-        echo "  scx_cosmos not installed - skipping the sched_ext scheduler"
-        return 0
-    fi
-    sudo install -m 0644 "$here/files/oxp3-gaming-sched.service" /etc/systemd/system/oxp3-gaming-sched.service
-    sudo systemctl daemon-reload
-    sudo systemctl enable oxp3-gaming-sched.service >/dev/null 2>&1
-    sudo systemctl restart oxp3-gaming-sched.service
-    sleep 1
-    echo "  sched_ext: scx_cosmos gaming profile loaded (state=$(cat /sys/kernel/sched_ext/state 2>/dev/null)), EEVDF fallback if it unloads"
-}
+# The CPU scheduler step is use_kernel_scheduler in tools/lib/install-common.sh (EEVDF).
 
 # Kept local: this variant leaves the suspend units to tools/oxp3-hw-install.sh, while
 # oxp3-fixes.sh installs them here, so the two bodies genuinely differ.
@@ -585,8 +569,8 @@ do_install() {
             fi
         fi
         if (( !SKIP_SCHED )); then
-            say "Gaming CPU scheduler (scx_cosmos gaming profile)"
-            install_sched
+            say "CPU scheduler: the kernel's EEVDF"
+            use_kernel_scheduler
         fi
         if (( !SKIP_EXTRAS )); then
             say "hhd patches: OneXPlayer 3 power limits, volume rocker (sudo)"
