@@ -1,8 +1,9 @@
 # Power envelope and fan control on the OneXPlayer 3 (PL1/PL2/PL4/τ and the fan)
 
-Target: the vendor's three power presets (Quiet / Balanced / Performance, i.e. PL1 10/25/35 W with
-PL2 25/45/80 W and PL4 90/160/239 W) and manual/curve fan control, **entirely from userspace, with no
-kernel patch**. This file records what the machine actually exposes, what the vendor does, how to use
+Target: OneXPlayer's own power model for this device (TDP 3-35 W, default 25 W, PL2 = TDP + 1 W,
+PL4 160 W; section 2.0) and manual/curve fan control, **entirely from userspace, with no kernel
+patch**. *Correction 2026-11-21:* the presets used to be PL2 25/45/80 W and PL4 90/160/239 W, taken
+from Intel's generic `perf_conf.ini` (2.1), which is not the OneXPlayer 3 entry. This file records what the machine actually exposes, what the vendor does, how to use
 [`tools/oxp3-powerctl.py`](../../tools/oxp3-powerctl.py), how to validate it and how to roll back.
 
 Measured on 2026-11-09 on kernel `7.2.7-an28.fc45.x86_64` (Anatase, 14 threads) with hhd 4.1.12
@@ -83,7 +84,28 @@ Other read-only facts that matter:
 
 ## 2. Vendor evidence (what the Windows stack writes)
 
-### 2.1 The preset table is a plain config file
+### 2.0 The OneXPlayer 3 entry (the values to use)
+
+OneXConsole 0.10.4 picks its power settings per device in `resources/app.asar` → `background.js`.
+This unit matches two branches: the CPU branch `"arc" && "g3"` (DMI CPU `Intel(R) Arc(TM) G3 Extreme`)
+and the board branch `"ONEXPLAYER 3" == Product` (also `ONEXPLAYER 3 EVA-01`):
+
+| setting | value | source |
+|---|---|---|
+| TDP (PL1) range | 3-35 W (`minTdp` 3 from the G3 branch, `maxTdp` 35 from the board) | `q.minTdp=3`, `q.maxTdp=35` |
+| default TDP | 25 W | `X.tdp=25` |
+| "unlock" (opt-in) | 40 W / PL2 41 W | `presetUnlockMaxTdp=40`, `unlockMaxBoostTdp=41` |
+| PL2 | TDP + 1 W, 36 W at the maximum | `pl2MappingFunc`, `maxBoostTdp=36` |
+| PL4 | 160 W on battery and 100/140 W supplies, 120 W on 65 W supplies; always applied | `changePl4Func`, `adjustAlwaysSetPl4` |
+| power-supply mode | EC address 1251 = `0x400 + 0xE3`, i.e. ACPI EC offset `0xE3` | default `D=1251`, `initPowerSupplyModeEC` |
+
+The EC agrees on the ceiling: it writes PL1 35 W on power events. The CPU's own base power
+(`constraint_0_max_power_uw`) is 25 W. hhd applies this model through `patches/hhd/0003`, which is
+re-applied at boot by `oxp3-hhd-keep.service`. Without it, Anatase's hhd runs this board at the
+unlocked tier (40/42 W) with a PL4 scaled from whatever it found at startup. Linux does not read EC
+`0xE3` yet, so PL4 is always 160 W, the value for battery and 100/140 W supplies.
+
+### 2.1 Intel's generic PerfMode config (not the OneXPlayer 3 values)
 
 `resources/resources/tools/intel/perf_conf.ini` inside OneXConsole 0.10.4
 (`$PLUGINSDIR/app-64.7z`, 540 bytes; extracted to a scratch dir under `~/.cache`, **not** committed):
@@ -208,9 +230,9 @@ address space really is `0x400 + <ACPI-EC offset>`.
 
 | profile | PL1 | PL2 | PL4 | vendor τ | vendor `fanSpeed` | platform_profile | intended use |
 |---|---:|---:|---:|---:|---:|---|---|
-| `quiet` | 10 W | 25 W | 90 W | 56 | 0 (leave EC) | `low-power` | battery / silent |
-| `balanced` | 25 W | 45 W | 160 W | 56 | 0 (leave EC) | `balanced` | default |
-| `performance` | 35 W | 80 W | 239 W | 56 | 200 (opt-in) | `performance` | docked / demanding games |
+| `quiet` | 15 W | 16 W | 160 W | 56 | 0 (leave EC) | `low-power` | battery / silent (our choice: the vendor has only the 3-35 W slider) |
+| `balanced` | 25 W | 26 W | 160 W | 56 | 0 (leave EC) | `balanced` | default (vendor default TDP) |
+| `performance` | 35 W | 36 W | 160 W | 56 | 200 (opt-in) | `performance` | demanding games (vendor maximum TDP) |
 
 - Both zones are always written (MSR first, then MMIO), because either one can be the one the firmware
   honours and the lower of the two wins on this machine (that is also why `oxp3-tdp-sync` exists).
@@ -425,7 +447,7 @@ order without touching anything.
 ```bash
 sudo /usr/local/libexec/oxp3-powerctl snapshot --save     # rollback baseline first
 sudo /usr/local/libexec/oxp3-powerctl status              # record what it says now
-sudo /usr/local/libexec/oxp3-powerctl profile balanced    # PL1 25 / PL2 45 / PL4 160, both zones
+sudo /usr/local/libexec/oxp3-powerctl profile balanced    # PL1 25 / PL2 26 / PL4 160, both zones
 for d in intel-rapl:0 intel-rapl-mmio:0; do
   for c in 0 1 2; do printf '%s c%s = %s\n' "$d" "$c" \
     "$(cat /sys/class/powercap/$d/constraint_${c}_power_limit_uw 2>&1)"; done; done
@@ -452,9 +474,8 @@ for i in $(seq 60); do
     "$(cat /sys/class/hwmon/hwmon6/fan1_input)"; sleep 1; done
 ```
 
-Expected, with `stress-ng` + `vkcube`: `quiet` ≈ 10 W package sustained, `balanced` ≈ 25 W,
-`performance` ≈ 35 W sustained with a PL2 excursion at the start (up to 80/160/239 W briefly depending
-on the profile). Temperatures should stay under the ~100 °C package limit; if the package pins at Tjmax
+Expected, with `stress-ng` + `vkcube`: `quiet` ≈ 15 W package sustained, `balanced` ≈ 25 W,
+`performance` ≈ 35 W, each with at most a 1 W PL2 excursion (PL2 = PL1 + 1 W, as OneXConsole sets it). Temperatures should stay under the ~100 °C package limit; if the package pins at Tjmax
 with `performance`, the EC/firmware is already limiting and the profile is not the bottleneck.
 `/run/rapl-power/package-0` needs the `rapl-power` service (it is installed and active here); without it
 use `sudo cat /sys/class/powercap/intel-rapl:0/energy_uj` deltas.

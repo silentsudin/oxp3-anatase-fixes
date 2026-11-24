@@ -394,7 +394,7 @@ class AdaptiveTdpTest(unittest.TestCase):
         daemon.applied = "performance"
         daemon.restore()
         self.assertEqual(self.fake.calls[-1], ("limits", {
-            "pl1": 25.0, "pl2": 45.0, "pl4": 160.0}, False))
+            "pl1": 25.0, "pl2": 26.0, "pl4": 160.0}, False))
         self.assertEqual(self.records()[-1]["event"], "restore")
 
     def test_restore_is_skipped_for_dry_run_and_no_restore(self):

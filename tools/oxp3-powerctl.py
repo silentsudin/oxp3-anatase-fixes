@@ -11,10 +11,10 @@ live in EC RAM (see docs/hw/power-fan.md).
 
 Why these files
 ---------------
-The vendor's OneXConsole (0.10.4) ships
-``resources/resources/tools/intel/perf_conf.ini`` with the exact per-profile
-values, which PerfMode.exe then writes through MSR + MMIO (its
-``CCHWAPIExt.sys`` only exists because Windows has no powercap):
+The OneXPlayer 3 values come from OneXConsole's own device table (see PROFILES
+below).  OneXConsole (0.10.4) also ships Intel's generic PerfMode config,
+``resources/resources/tools/intel/perf_conf.ini``, which is NOT the OXP3 entry
+and was wrongly used here before.  For reference, it reads:
 
     [Quiet]      pl1msr=10  pl1mmio=10  pl2msr=25  pl2mmio=25  pl1taumsr/mmio=56  pl4=90   fanSpeed=0
     [Balanced]   pl1msr=25  pl1mmio=25  pl2msr=45  pl2mmio=45  pl1taumsr/mmio=56  pl4=160  fanSpeed=0
@@ -51,7 +51,7 @@ Examples
     tools/oxp3-powerctl.py status --json
     sudo tools/oxp3-powerctl.py profile performance --save
     sudo tools/oxp3-powerctl.py setpl1 25 --tau 56ms
-    sudo tools/oxp3-powerctl.py setpl4 160
+    sudo tools/oxp3-powerctl.py setpl4 120
     sudo tools/oxp3-powerctl.py fan speed 180
     sudo tools/oxp3-powerctl.py fan curve --file /etc/oxp3/fan-curve
     sudo tools/oxp3-powerctl.py snapshot --save       # rollback baseline
@@ -87,23 +87,33 @@ CURVE_FILE = os.path.join(STATE_DIR, "fan-curve")
 # peak_power; Intel calls the same things PL1 / PL2 / PL4.
 LEVELS = (("pl1", "long_term"), ("pl2", "short_term"), ("pl4", "peak_power"))
 
-# Vendor presets (perf_conf.ini, OneXConsole 0.10.4).  tau_s is the vendor's
-# ``pl1taumsr/pl1taummio=56`` read as seconds: the ini does not state a unit,
-# and only a multi-second window leaves the vendor's PL2=80/160/239 W any room
-# to burst above PL1 (see docs/hw/power-fan.md section 2.4).  Profiles leave
-# the window alone unless --tau/--with-tau is given because of that ambiguity.
-# fan is the vendor fanSpeed on a 0-255 scale (0 = "leave the EC alone").
+# OneXPlayer 3 power model, from OneXConsole 0.10.4's device table (background.js,
+# board "ONEXPLAYER 3", CPU "Intel Arc G3 Extreme"):
+#   TDP (PL1) 3-35 W, default 25 W (40 W only behind its opt-in "unlock");
+#   PL2 = TDP + 1 W (pl2MappingFunc: 36 W at the 35 W maximum);
+#   PL4 fixed 160 W on battery and 100/140 W supplies, 120 W on 65 W supplies
+#   (changePl4Func; the supply mode lives in EC RAM Linux does not expose).
+# hhd applies the same model when it owns the TDP (patches/hhd/0003); these
+# presets are for boot and for running without hhd's TDP control.
+# "balanced" and "performance" are the vendor default and maximum TDP; the vendor
+# has no named low preset for this device, so "quiet" (15 W) is our choice.
+# The earlier presets here (PL2 25/45/80 W, PL4 90/160/239 W) came from
+# tools/intel/perf_conf.ini, Intel's generic PerfMode config bundled with
+# OneXConsole, not from the OneXPlayer 3 entry.
+# tau_s stays the window the profiles may write with --tau/--with-tau only.
+# fan is a fanSpeed on a 0-255 scale (0 = "leave the EC alone").
+OXP3_PL4_W = 160.0
 PROFILES = {
     "quiet": {
-        "pl1": 10.0, "pl2": 25.0, "pl4": 90.0, "tau_s": 56,
+        "pl1": 15.0, "pl2": 16.0, "pl4": OXP3_PL4_W, "tau_s": 56,
         "fan": 0, "sagv": 3, "platform_profile": "low-power",
     },
     "balanced": {
-        "pl1": 25.0, "pl2": 45.0, "pl4": 160.0, "tau_s": 56,
+        "pl1": 25.0, "pl2": 26.0, "pl4": OXP3_PL4_W, "tau_s": 56,
         "fan": 0, "sagv": 0, "platform_profile": "balanced",
     },
     "performance": {
-        "pl1": 35.0, "pl2": 80.0, "pl4": 239.0, "tau_s": 56,
+        "pl1": 35.0, "pl2": 36.0, "pl4": OXP3_PL4_W, "tau_s": 56,
         "fan": 200, "sagv": 4, "platform_profile": "performance",
     },
 }

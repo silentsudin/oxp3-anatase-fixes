@@ -451,7 +451,7 @@ class ExitCodeTest(PowercapCase):
         self.assertEqual(rc, 0)
         data = json.loads(out)
         self.assertEqual(data["profile"], "performance")
-        self.assertEqual(data["values"], {"pl1": 35.0, "pl2": 80.0, "pl4": 239.0})
+        self.assertEqual(data["values"], {"pl1": 35.0, "pl2": 36.0, "pl4": 160.0})
         written = [w["level"] for w in data["domain_reports"][0]["written"]]
         self.assertEqual(written, ["pl4", "pl2", "pl1"])
 
@@ -603,17 +603,17 @@ class CurrentProfileTest(unittest.TestCase):
         return {"domains": domains}
 
     def test_exact_and_near_match(self):
-        self.assertEqual(pc.current_profile(self.status((35.0, 80.0, 239.0)))["name"],
+        self.assertEqual(pc.current_profile(self.status((35.0, 36.0, 160.0)))["name"],
                          "performance")
-        self.assertEqual(pc.current_profile(self.status((10.1, 25.1, 90.1)))["name"],
+        self.assertEqual(pc.current_profile(self.status((15.1, 16.1, 160.1)))["name"],
                          "quiet")
 
     def test_out_of_tolerance_is_custom(self):
-        self.assertEqual(pc.current_profile(self.status((35.5, 80.0, 239.0)))["name"],
+        self.assertEqual(pc.current_profile(self.status((35.5, 36.0, 160.0)))["name"],
                          "custom")
 
     def test_unreadable_limit_is_custom(self):
-        st = self.status((35.0, 80.0, 239.0))
+        st = self.status((35.0, 36.0, 160.0))
         st["domains"][0]["constraints"]["pl2"]["limit_uw"] = None
         self.assertEqual(pc.current_profile(st)["name"], "custom")
 

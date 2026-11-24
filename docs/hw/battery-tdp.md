@@ -500,9 +500,9 @@ grep -c . /var/log/oxp3-adaptivetdp.jsonl
 
 ## 6. Risks
 
-**Thermal.** The daemon's highest step is the vendor `performance` preset
-(PL1 35 W / PL2 80 W / PL4 239 W), which is the vendor's own ceiling, so it
-cannot push past what OneXConsole allows. What is new is that it does this
+**Thermal.** The daemon's highest step is the `performance` preset
+(PL1 35 W / PL2 36 W / PL4 160 W), OneXConsole's own maximum for the OneXPlayer 3
+(docs/hw/power-fan.md section 2.0), so it cannot push past what the vendor allows. What is new is that it does this
 *without a human watching the game*. The mitigations are the two temperature
 clamps (85 °C soft, 92 °C hard, package sensor) and the fact that the EC fan
 curve is never touched — auto mode stays in charge. If the EC curve is lazy
