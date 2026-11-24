@@ -1,6 +1,6 @@
-From 1c0fe5af91ee893703de7e1d4b3b9de85559ec24 Mon Sep 17 00:00:00 2001
+From 3d61821c5d5bf5cdcf6750b1f9ce20c2b8121c22 Mon Sep 17 00:00:00 2001
 From: oxp3-fixes <oxp3-fixes@localhost>
-Date: Sun, 22 Nov 2026 13:31:55 +0000
+Date: Tue, 24 Nov 2026 09:09:19 +0000
 Subject: [PATCH] drm/i915/vrr: VRR over a DP-to-HDMI 2.1 PCON
 
 Implement the TODOs in intel_vrr_is_capable() and intel_dp_needs_as_sdp()
@@ -55,13 +55,13 @@ ignore supported; DPCD 0x2214 = 0x01: AS SDP, no FAVT), LG TV
 "LG TV SSCR2" (HF-VSDB VRR 40-120 Hz).
 ---
  drivers/gpu/drm/i915/display/intel_ddi.c      |   3 +
- .../drm/i915/display/intel_display_types.h    |   7 +-
- drivers/gpu/drm/i915/display/intel_dp.c       | 248 ++++++++++++++++--
+ .../drm/i915/display/intel_display_types.h    |   6 +
+ drivers/gpu/drm/i915/display/intel_dp.c       | 240 +++++++++++++++++-
  drivers/gpu/drm/i915/display/intel_dp.h       |   3 +
  .../drm/i915/display/intel_dp_link_training.c |   4 +-
  drivers/gpu/drm/i915/display/intel_hdmi.c     |  10 +
- drivers/gpu/drm/i915/display/intel_vrr.c      | 116 +++++++-
- 7 files changed, 361 insertions(+), 30 deletions(-)
+ drivers/gpu/drm/i915/display/intel_vrr.c      | 110 +++++++-
+ 7 files changed, 363 insertions(+), 13 deletions(-)
 
 diff --git a/drivers/gpu/drm/i915/display/intel_ddi.c b/drivers/gpu/drm/i915/display/intel_ddi.c
 index 50378f25e..572851327 100644
@@ -78,7 +78,7 @@ index 50378f25e..572851327 100644
  
  static intel_reg_t
 diff --git a/drivers/gpu/drm/i915/display/intel_display_types.h b/drivers/gpu/drm/i915/display/intel_display_types.h
-index 79f99f168..9bdbebe74 100644
+index 6dfad1157..9bdbebe74 100644
 --- a/drivers/gpu/drm/i915/display/intel_display_types.h
 +++ b/drivers/gpu/drm/i915/display/intel_display_types.h
 @@ -1403,6 +1403,8 @@ struct intel_crtc_state {
@@ -90,11 +90,9 @@ index 79f99f168..9bdbebe74 100644
  		u8 pipeline_full;
  		u16 flipline, vmin, vmax, guardband;
  		u32 vsync_end, vsync_start;
-@@ -1879,8 +1881,11 @@ struct intel_dp {
- 	/* connector directly attached - won't be use for modeset in mst world */
+@@ -1880,6 +1882,10 @@ struct intel_dp {
  	struct intel_connector *attached_connector;
  	bool as_sdp_supported;
--	bool as_sdp_v1_supported;
  	bool as_sdp_v2_supported;
 +	/* DP-to-HDMI PCON forwarding the header-only Adaptive-Sync SDP v1 */
 +	bool as_sdp_v1_supported;
@@ -104,7 +102,7 @@ index 79f99f168..9bdbebe74 100644
  	struct drm_dp_tunnel *tunnel;
  	bool tunnel_suspended:1;
 diff --git a/drivers/gpu/drm/i915/display/intel_dp.c b/drivers/gpu/drm/i915/display/intel_dp.c
-index 9ca7e7543..06ae6f28c 100644
+index 69b3606d5..15f3a9ccb 100644
 --- a/drivers/gpu/drm/i915/display/intel_dp.c
 +++ b/drivers/gpu/drm/i915/display/intel_dp.c
 @@ -1066,6 +1066,17 @@ intel_dp_output_format(struct intel_connector *connector,
@@ -125,42 +123,44 @@ index 9ca7e7543..06ae6f28c 100644
  	if (sink_format == INTEL_OUTPUT_FORMAT_RGB ||
  	    dfp_can_convert_from_rgb(intel_dp, sink_format))
  		output_format = INTEL_OUTPUT_FORMAT_RGB;
-@@ -3103,11 +3114,16 @@ static void intel_dp_compute_vsc_colorimetry(const struct intel_crtc_state *crtc
+@@ -3103,13 +3114,16 @@ static void intel_dp_compute_vsc_colorimetry(const struct intel_crtc_state *crtc
  static bool intel_dp_needs_as_sdp(struct intel_dp *intel_dp,
  				  struct intel_crtc_state *crtc_state)
  {
--	if (!intel_dp->as_sdp_v2_supported && !intel_dp->as_sdp_v1_supported)
+-	if (!intel_dp->as_sdp_v2_supported)
 -		return false;
-+	/*
+-
+ 	/*
+-	 * #TODO: Add AS SDP v1 support for PCONs (DP branch devices).
 +	 * PCON: send the header-only v1 packet whenever the mode is in the VRR
 +	 * range, at fixed and at variable refresh alike (as amdgpu does). The
 +	 * packet, and the guardband it needs, then stay the same when VRR is
 +	 * switched, so the switch is a fastset on the trained link.
-+	 */
-+	if (drm_dp_is_branch(intel_dp->dpcd))
+ 	 */
+ 	if (drm_dp_is_branch(intel_dp->dpcd))
 +		return intel_dp->as_sdp_v1_supported && crtc_state->vrr.in_range;
- 
--	if (drm_dp_is_branch(intel_dp->dpcd) &&
--	    !intel_dp->as_sdp_v1_supported)
++
 +	if (!intel_dp->as_sdp_v2_supported)
  		return false;
  
  	if (intel_psr_needs_alpm_aux_less(intel_dp, crtc_state) &&
-@@ -3134,11 +3150,8 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
+@@ -3136,6 +3150,15 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
  
  	crtc_state->infoframes.enable |= intel_hdmi_infoframe_enable(DP_SDP_ADAPTIVE_SYNC);
  
--	/*
--	 * The PCON path uses the legacy header-only AS SDP v1.  The DP 2.1
--	 * v2 payload is not parsed by a DP-to-HDMI 2.1 protocol converter.
--	 */
--	if (intel_dp->as_sdp_v1_supported && !intel_dp->as_sdp_v2_supported) {
 +	/* PCON: header-only v1 packet, see intel_dp_needs_as_sdp() */
 +	if (drm_dp_is_branch(intel_dp->dpcd)) {
- 		as_sdp->sdp_type = DP_SDP_ADAPTIVE_SYNC;
- 		as_sdp->revision = 0x1;
- 		as_sdp->length = 0;
-@@ -3178,6 +3191,67 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
++		as_sdp->sdp_type = DP_SDP_ADAPTIVE_SYNC;
++		as_sdp->revision = 0x1;
++		as_sdp->length = 0;
++		as_sdp->duration_incr_ms = 0;
++		return;
++	}
++
+ 	as_sdp->sdp_type = DP_SDP_ADAPTIVE_SYNC;
+ 	as_sdp->length = 0x9;
+ 	as_sdp->duration_incr_ms = 0;
+@@ -3169,6 +3192,67 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
  		as_sdp->coasting_vtotal = crtc_state->vrr.vmax;
  }
  
@@ -228,7 +228,7 @@ index 9ca7e7543..06ae6f28c 100644
  static void intel_dp_compute_vsc_sdp(struct intel_dp *intel_dp,
  				     struct intel_crtc_state *crtc_state,
  				     const struct drm_connector_state *conn_state)
-@@ -3660,6 +3734,7 @@ intel_dp_compute_config(struct intel_atomic_state *state,
+@@ -3651,6 +3735,7 @@ intel_dp_compute_config(struct intel_atomic_state *state,
  	intel_vrr_compute_config(pipe_config, conn_state);
  	intel_psr_compute_config(intel_dp, pipe_config, conn_state);
  	intel_dp_compute_as_sdp(intel_dp, pipe_config);
@@ -236,7 +236,7 @@ index 9ca7e7543..06ae6f28c 100644
  	intel_alpm_lobf_compute_config(intel_dp, pipe_config, conn_state);
  	intel_dp_drrs_compute_config(connector, pipe_config, link_bpp_x16);
  	intel_dp_compute_vsc_sdp(intel_dp, pipe_config, conn_state);
-@@ -5422,6 +5497,7 @@ void intel_dp_set_infoframes(struct intel_encoder *encoder,
+@@ -5413,6 +5498,7 @@ void intel_dp_set_infoframes(struct intel_encoder *encoder,
  
  	intel_write_dp_sdp(encoder, crtc_state, DP_SDP_VSC);
  	intel_write_dp_sdp(encoder, crtc_state, DP_SDP_ADAPTIVE_SYNC);
@@ -244,7 +244,7 @@ index 9ca7e7543..06ae6f28c 100644
  
  	intel_write_dp_sdp(encoder, crtc_state, HDMI_PACKET_TYPE_GAMUT_METADATA);
  }
-@@ -5443,7 +5519,9 @@ int intel_dp_as_sdp_unpack(struct drm_dp_as_sdp *as_sdp,
+@@ -5434,7 +5520,9 @@ int intel_dp_as_sdp_unpack(struct drm_dp_as_sdp *as_sdp,
  	if (sdp->sdp_header.HB1 != DP_SDP_ADAPTIVE_SYNC)
  		return -EINVAL;
  
@@ -255,7 +255,7 @@ index 9ca7e7543..06ae6f28c 100644
  		return -EINVAL;
  
  	as_sdp->sdp_type = sdp->sdp_header.HB1;
-@@ -6221,6 +6299,131 @@ intel_dp_update_420(struct intel_dp *intel_dp)
+@@ -6212,6 +6300,131 @@ intel_dp_update_420(struct intel_dp *intel_dp)
  		    str_yes_no(intel_dp->dfp.ycbcr_444_to_420));
  }
  
@@ -387,7 +387,7 @@ index 9ca7e7543..06ae6f28c 100644
  static void
  intel_dp_set_edid(struct intel_dp *intel_dp)
  {
-@@ -6235,6 +6438,8 @@ intel_dp_set_edid(struct intel_dp *intel_dp)
+@@ -6226,6 +6439,8 @@ intel_dp_set_edid(struct intel_dp *intel_dp)
  
  	/* Below we depend on display info having been updated */
  	drm_edid_connector_update(&connector->base, drm_edid);
@@ -396,7 +396,7 @@ index 9ca7e7543..06ae6f28c 100644
  
  	vrr_capable = intel_vrr_is_capable(connector);
  	drm_dbg_kms(display->drm, "[CONNECTOR:%d:%s] VRR capable: %s\n",
-@@ -6263,6 +6468,7 @@ intel_dp_unset_edid(struct intel_dp *intel_dp)
+@@ -6254,6 +6469,7 @@ intel_dp_unset_edid(struct intel_dp *intel_dp)
  	intel_dp->dfp.max_tmds_clock = 0;
  
  	intel_dp->dfp.pcon_max_frl_bw = 0;
@@ -404,7 +404,7 @@ index 9ca7e7543..06ae6f28c 100644
  
  	intel_dp->dfp.ycbcr_444_to_420 = false;
  	connector->base.ycbcr_420_allowed = false;
-@@ -6316,25 +6522,31 @@ intel_dp_detect_sdp_caps(struct intel_dp *intel_dp)
+@@ -6307,12 +6523,26 @@ intel_dp_detect_sdp_caps(struct intel_dp *intel_dp)
  {
  	struct intel_display *display = to_intel_display(intel_dp);
  
@@ -431,19 +431,6 @@ index 9ca7e7543..06ae6f28c 100644
  	/* eDP Adaptive-Sync SDP always uses AS SDP v2 */
  	if (intel_dp_is_edp(intel_dp))
  		intel_dp->as_sdp_v2_supported =  true;
- 	else
- 		intel_dp->as_sdp_v2_supported = intel_dp_sink_supports_as_sdp_v2(intel_dp);
--
--	/*
--	 * A DP-to-HDMI 2.1 PCON forwards the legacy AS SDP v1 packet.  The
--	 * downstream HDMI sink still advertises its VRR range through the
--	 * HDMI Forum VSDB, which is parsed into display_info.monitor_range.
--	 */
--	if (drm_dp_is_branch(intel_dp->dpcd))
--		intel_dp->as_sdp_v1_supported = true;
- }
- 
- static bool intel_dp_needs_dpcd_probe(struct intel_dp *intel_dp, bool force_on_external)
 diff --git a/drivers/gpu/drm/i915/display/intel_dp.h b/drivers/gpu/drm/i915/display/intel_dp.h
 index 04fae203b..df31f7c4b 100644
 --- a/drivers/gpu/drm/i915/display/intel_dp.h
@@ -497,7 +484,7 @@ index 7831fd229..9a6dad862 100644
  	memmove(&buffer[1], &buffer[0], 3);
  
 diff --git a/drivers/gpu/drm/i915/display/intel_vrr.c b/drivers/gpu/drm/i915/display/intel_vrr.c
-index 87b3c8059..131f5c5a4 100644
+index cfc0cfbff..131f5c5a4 100644
 --- a/drivers/gpu/drm/i915/display/intel_vrr.c
 +++ b/drivers/gpu/drm/i915/display/intel_vrr.c
 @@ -34,6 +34,19 @@
@@ -520,34 +507,27 @@ index 87b3c8059..131f5c5a4 100644
  bool intel_vrr_is_capable(struct intel_connector *connector)
  {
  	struct intel_display *display = to_intel_display(connector);
-@@ -59,18 +72,17 @@ bool intel_vrr_is_capable(struct intel_connector *connector)
+@@ -59,14 +72,13 @@ bool intel_vrr_is_capable(struct intel_connector *connector)
  			return false;
  		intel_dp = intel_attached_dp(connector);
  		/*
--		 * A non-MST DP branch device (PCON) can expose an HDMI 2.1 sink.
--		 * Such a sink needs the Adaptive-Sync SDP v1 forwarding path; only
--		 * enable VRR when the branch reports AS SDP support and the EDID is
--		 * an HDMI sink.
+-		 * Among non-MST DP branch devices, only an HDMI 2.1 sink connected
+-		 * via a PCON could support VRR. However, supporting VRR through a
+-		 * PCON requires non-trivial changes that are not implemented yet.
+-		 * Until that support exists, avoid VRR on all DP branch devices.
+-		 *
+-		 * TODO: Add support for VRR for DP->HDMI 2.1 PCON.
 +		 * Among non-MST DP branch devices, only an HDMI sink connected via
 +		 * a PCON that forwards the Adaptive-Sync SDP can do VRR; the PCON
 +		 * converts the variable DP timing to HDMI VRR.
  		 */
--		if (drm_dp_is_branch(intel_dp->dpcd)) {
--			if (!intel_dp->as_sdp_v1_supported ||
--			    !intel_dp_has_hdmi_sink(intel_dp))
--				return false;
--		} else if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd)) {
+-		if (drm_dp_is_branch(intel_dp->dpcd))
 +		if (drm_dp_is_branch(intel_dp->dpcd) &&
 +		    (!pcon_vrr || !intel_dp->as_sdp_v1_supported ||
 +		     !info->is_hdmi))
-+			return false;
-+
-+		if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd))
  			return false;
--		}
  
- 		break;
- 	default:
+ 		if (!drm_dp_sink_can_do_video_without_timing_msa(intel_dp->dpcd))
 @@ -479,6 +491,22 @@ intel_vrr_compute_config(struct intel_crtc_state *crtc_state,
  	}
  
@@ -667,6 +647,3 @@ index 87b3c8059..131f5c5a4 100644
  		crtc_state->vrr.vmin = intel_de_read(display,
  						     TRANS_VRR_VMIN(display, cpu_transcoder)) + 1;
  
--- 
-2.56.0
-
