@@ -201,7 +201,7 @@ if ! has_kernel_stack || ! has_firmware; then
         die "no build artifacts in $out and --skip-build was given; run ./oxp3-fixes.sh build"
     fi
     say "first install: stage kernel modules + firmware"
-    run sudo "$here/oxp3-fixes.sh" install || die "install failed"
+    run sudo OXP3_USER="$(id -un)" "$here/oxp3-fixes.sh" install || die "install failed"
     say "reboot required to boot the patched kernel/firmware"
     if (( MOK_NEEDED )); then
         info "in the blue MOK manager choose 'Enroll MOK' -> the oxp3 key, then continue booting"
@@ -231,7 +231,7 @@ elif ! have_artifacts; then
     die "no build artifacts in $out and --skip-build was given; run ./oxp3-install.sh without --skip-build"
 fi
 say "second install: overlay Mesa/gamescope/MangoHud/XMX/extras"
-run sudo "$here/oxp3-fixes.sh" install || die "install failed"
+run sudo OXP3_USER="$(id -un)" "$here/oxp3-fixes.sh" install || die "install failed"
 # A rebuilt kernel module or firmware package is staged as a new deployment by that install,
 # which then stops before the overlay step: finish after the reboot, like the first run.
 if (( ! DRY )) && [[ $(staged_deployment) == yes ]]; then

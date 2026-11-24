@@ -714,9 +714,19 @@ do_install() {
     # The volume rocker keeps the hhd patch path above; use tools/oxp3-hw-install.sh --volume
     # for the oxp3-voltap daemon instead (the two are alternatives, see docs/INSTALL-HW.md).
     if (( !SKIP_HW )) && [[ -x $here/tools/oxp3-hw-install.sh ]]; then
-        say "hardware fixes: home button/LEDs + power units (sudo)"
-        sudo "$here/tools/oxp3-hw-install.sh" --leds --power ||
-            echo "WARNING: hardware fixes (leds/power units) failed - see above" >&2
+        # The user-scope parts belong to the person who started the install, not to root. This
+        # script is already running under sudo, so calling `sudo oxp3-hw-install.sh` a second time
+        # makes the inner sudo set SUDO_USER=root and the helper refuses ("refusing to install the
+        # user-scope parts as root"). Pass the outer invoking user explicitly instead.
+        local hwuser=${OXP3_USER:-${SUDO_USER:-}}
+        if [[ -n $hwuser && $hwuser != root ]]; then
+            say "hardware fixes: home button/LEDs + power units (sudo, user $hwuser)"
+            sudo "$here/tools/oxp3-hw-install.sh" --leds --power --user "$hwuser" ||
+                echo "WARNING: hardware fixes (leds/power units) failed - see above" >&2
+        else
+            echo "  hardware fixes (user-scope parts) skipped: no unprivileged user to wire them for"
+            echo "  run ./oxp3-install.sh from your desktop session, or pass --user NAME"
+        fi
     fi
 
     # Flathub apps: our Mesa as a Flatpak GL driver extension. It lives in /var/lib/flatpak and
