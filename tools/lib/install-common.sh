@@ -1589,11 +1589,16 @@ status_flatpak_gl() {
 # State of the deployments: is one staged, and which layered local packages does the booted
 # one have?
 deploy_info() {
+    # The local packages must come from the deployment rpm-ostree will compose ON, not from the
+    # booted one: with a deployment already staged, the next transaction starts from that staged
+    # base, whose requested-local-packages no longer match the booted ones. Reporting the booted
+    # list then asks rpm-ostree to uninstall a package the pending base does not request, and the
+    # whole install dies with "Package/capability ... is not currently requested".
     rpm-ostree status --json | python3 -c 'import json,sys
-ds=json.load(sys.stdin)["deployments"]
-b=[x for x in ds if x.get("booted")][0]
+ds = json.load(sys.stdin)["deployments"]
+base = ([x for x in ds if x.get("staged")] or [x for x in ds if x.get("booted")])[0]
 print("staged" if any(x.get("staged") for x in ds) else "none")
-print(" ".join(b.get("requested-local-packages",[])))'
+print(" ".join(base.get("requested-local-packages", [])))'
 }
 
 hotfix_active() { rpm-ostree status --booted | grep -q 'Unlocked: hotfix'; }

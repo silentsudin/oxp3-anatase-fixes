@@ -206,6 +206,21 @@ class PureHelperTest(ShellCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(res.stdout.splitlines()[0], "staged")
 
+    def test_deploy_info_reports_the_staged_base_not_the_booted_one(self):
+        """A staged deployment is the base rpm-ostree composes on, so the package list must
+        come from it: with the booted list, install asked rpm-ostree to uninstall a local
+        package the pending base no longer requests and died with
+        'Package/capability ... is not currently requested'."""
+        json = ('{"deployments": ['
+                '{"booted": false, "staged": true, '
+                '"requested-local-packages": ["kmod-new", "firmware-new"]}, '
+                '{"booted": true, "staged": false, '
+                '"requested-local-packages": ["kmod-old", "firmware-old"]}]}')
+        bindir = self.stub("rpm-ostree", f"cat <<'EOF'\n{json}\nEOF\n")
+        res = self.bash("deploy_info", path_prefix=bindir)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.splitlines(), ["staged", "kmod-new firmware-new"])
+
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl is needed to build test certs")
 class MokTest(ShellCase):
