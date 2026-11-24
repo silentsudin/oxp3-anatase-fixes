@@ -689,6 +689,15 @@ build_xess() {
     [[ -s $src ]] || curl -sfL --retry 3 -o "$src" "$XESS_SRC_URL" || die "download failed: $XESS_SRC_URL"
     rm -rf "$stage"; mkdir -p "$stage"
     tar -xzf "$src" --strip-components=1 -C "$stage"
+    # system mode: the host's Mesa carries the CM kernel injection, so the package must not insist on its own
+    # driver (one Intel ANV in the session is the point of the consolidation). files/xess-system-mode adds
+    # tools/system-anv.sh and transforms install.sh; it fails loudly if upstream's script changed shape.
+    if [[ -d $here/files/xess-system-mode ]]; then
+        install -D -m0755 "$here/files/xess-system-mode/tools/system-anv.sh" "$stage/tools/system-anv.sh"
+        python3 "$here/files/xess-system-mode/apply.py" "$stage" >/dev/null ||
+            die "xess: system-mode port failed - upstream install.sh changed (see files/xess-system-mode/apply.py)"
+        echo "  system mode ported into install.sh"
+    fi
     for entry in $XESS_DLLS; do
         name=${entry%%|*}; sha=${entry#*|}
         unzip -p "$zip" "*/$name" > "$stage/$name"

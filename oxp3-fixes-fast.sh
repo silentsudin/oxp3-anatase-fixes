@@ -291,12 +291,12 @@ install_xess() {
 # patches/mesa (0101-0105). The XESS_* pins below feed build_xess/install_xess/status_xess,
 # which live in tools/lib/install-common.sh.
 # ---------------------------------------------------------------------------------------------
-XESS_COMMIT=9532c79cebd55b8e3bac6f6498a49575a63d249b      # silentsudin/xess-xmx-linux, branch anatase
-XESS_SRC_URL=https://codeload.github.com/silentsudin/xess-xmx-linux/tar.gz/$XESS_COMMIT
+XESS_COMMIT=f06dc397375332d1b34e35b19227b86eceeddaab   # HHHHanasak1/xess-xmx-linux, release 20261120
+XESS_SRC_URL=https://codeload.github.com/HHHHanasak1/xess-xmx-linux/tar.gz/$XESS_COMMIT
 # the Windows DLLs from upstream's release (built there with MSVC)
-XESS_ZIP_URL=https://github.com/HHHHanasak1/xess-xmx-linux/releases/download/20261029/xess-xmx-linux-20261029.zip
-XESS_ZIP_SHA=b195b7a9247e429ae2583528110b033de26f97e99d561b6a8b586b50497843d2
-XESS_DLLS="igdext64.dll|580ddcce0929fb8942062cd2a7413d9c6ec44ebfb2eacd40ff2f2a3ab16b39ec ControlLib.dll|b57c70cf7cbfc38d2f929a552dab69195c9ca04d249f1201960a752c5c53598c"
+XESS_ZIP_URL=https://github.com/HHHHanasak1/xess-xmx-linux/releases/download/20261120/xess-xmx-linux-20261120.zip
+XESS_ZIP_SHA=2c0daa358a7b5d9a55aff35a3e65cbd6a6c32ebe59bd3e2d0021b020598cac51
+XESS_DLLS="igdext64.dll|ce289bc46f737c25540ff553114c8f99f8335e82cc79a9521a0d02fcf2084e5d ControlLib.dll|80faffd2a0e5e6fc8da74147068026713c1491a9a1bdba977cc40e980ec8e50e"
 # under home: the Steam Flatpak and the game's container both see it
 XESS_PKG=${OXP3_XESS_DIR:-$HOME/.local/share/xess-xmx}
 
