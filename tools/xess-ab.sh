@@ -37,10 +37,24 @@ backup() {
     echo "xess-ab: backed up env and shim as *.$stamp"
 }
 
+KEYS="ANV_CM_HELPER ANV_CM_KERNEL_DIR XMX_IGC_DIR INTC_ALT_DRIVER_EXTENSIONS_PATH CM_MAX_GRF"
+
 write_env() { # <body>
     mkdir -p "$(dirname "$envf")"
     { echo "# XeSS XMX session environment, written by tools/xess-ab.sh ($stamp)"; cat; } > "$envf"
+    # environment.d is read at login only. The running user manager keeps its own copy
+    # (systemctl --user set-environment, done by an install or xmx-session.sh) and that copy is what
+    # games inherit - so without this, a switch changes nothing until the next login and every
+    # measurement comes out identical. Set the live values too, and unset what the new state drops.
+    local kv=() k
+    while IFS= read -r k; do
+        [[ -n $k ]] && kv+=( "$k" )
+    done < <(grep -E '^[A-Z_]+=' "$envf")
+    # shellcheck disable=SC2086
+    systemctl --user unset-environment $KEYS 2>/dev/null || true
+    if (( ${#kv[@]} )); then systemctl --user set-environment "${kv[@]}" 2>/dev/null || true; fi
     grep -vE '^\s*#' "$envf" | sed 's/^/  /'
+    echo "  live user manager: $(systemctl --user show-environment 2>/dev/null | grep -cE '^(ANV_CM|CM_MAX_GRF|XMX_IGC|INTC_ALT)=') key(s) set"
 }
 
 cmd_status() {
@@ -51,6 +65,8 @@ cmd_status() {
     echo "env:      $envf"
     [ -r "$envf" ] && grep -vE '^\s*#' "$envf" | sed 's/^/  /' || echo "  (none)"
     if [ -d "$kdir" ]; then echo "kernels:  $(ls "$kdir" | wc -l) cached .cmk"; else echo "kernels:  no kernel directory (run-time compile)"; fi
+    echo "live env: (what games inherit; environment.d is only read at login)"
+    systemctl --user show-environment 2>/dev/null | grep -E '^(ANV_CM|CM_MAX_GRF|XMX_IGC|INTC_ALT|VKD3D)' | sed 's/^/  /' || echo "  (none)"
     echo "backups:  $(ls "$bkp" 2>/dev/null | wc -l) file(s) in $bkp"
 }
 
@@ -108,6 +124,7 @@ ANV_CM_KERNEL_DIR=$kdir
 ANV_CM_HELPER=$(cd "$(dirname "$0")/.." && pwd)/tools/xmx-cm-compile-nodgrf.sh
 XMX_IGC_DIR=$pkg/igc
 INTC_ALT_DRIVER_EXTENSIONS_PATH=$pkg
+VKD3D_DISABLE_EXTENSIONS=VK_EXT_descriptor_buffer
 EOF
             ;;
         *) die "usage: xess-ab.sh env pkg|pkg-kernels|pkg-nodgrf|nodgrf-kernels" ;;
