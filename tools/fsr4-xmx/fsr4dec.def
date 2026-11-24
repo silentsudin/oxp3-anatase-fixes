@@ -1,0 +1,16 @@
+; SPDX-License-Identifier: MIT
+; Same names and ordinals as the bundle's fsr4dec.dll: the patched upscaler imports by ordinal
+; (40 CreateDecompressor, 43 Decompress, 45 ResetDecompressor).
+LIBRARY fsr4dec.dll
+EXPORTS
+    CreateCompressor             @39
+    CreateDecompressor           @40
+    CloseCompressor              @41
+    SetCompressorInformation     @42
+    Decompress                   @43
+    Compress                     @44
+    ResetDecompressor            @45
+    CloseDecompressor            @46
+    QueryCompressorInformation   @47
+    SetDecompressorInformation   @48
+    QueryDecompressorInformation @49

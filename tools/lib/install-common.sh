@@ -1037,6 +1037,13 @@ install_xess() {
         xess_user_run bash -c "$(declare -f xess_stale_launch_options); xess_stale_launch_options fix"
     fi
     xess_verify_shim
+    # OptiScaler's FSR 4 XMX upscaler, in every game that has the bundle: our fsr4dec.dll serves its
+    # kernel packs (the bundle's misses the first one, so the XMX variants never appear) and its
+    # shim copies match the package (tools/fsr4-xmx/apply.sh)
+    if [[ -x $here/tools/fsr4-xmx/apply.sh ]]; then
+        xess_user_run env OXP3_XESS_DIR="$XESS_PKG" bash "$here/tools/fsr4-xmx/apply.sh" --scan |
+            sed 's/^/  /' || echo "  WARNING: the FSR 4 XMX step failed (tools/fsr4-xmx/apply.sh --scan)"
+    fi
     # The shim and the package's tools/cm-compile.sh are one unit: a shim from one release with a
     # helper from another builds kernels with the wrong register-file flags (ghosting in XeSS).
     local envf=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/50-xess-xmx.conf
