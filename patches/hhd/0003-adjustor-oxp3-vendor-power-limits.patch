@@ -1,0 +1,103 @@
+From 068ecf9439c7459703e9af1a31e2b4c99dcfbb37 Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 15:00:09 +0000
+Subject: [PATCH] adjustor: OneXPlayer 3 power limits from OneXConsole
+
+hhd ran the OneXPlayer 3 at PL1 40 W / PL2 42 W, which is OneXConsole's opt-in
+"unlock" tier, and scaled PL4 from whatever value it found at startup (160 W if a
+previous tool wrote it, 100 W at TDP 25, 40 W at TDP 10).
+
+OneXConsole (0.10.4) configures this device, board "ONEXPLAYER 3" with the
+Intel Arc G3 Extreme, as:
+  - TDP 3-35 W, default 25 W (40 W only behind its "unlock" option);
+  - PL2 = TDP + 1 (pl2MappingFunc), i.e. 36 W at the 35 W maximum;
+  - PL4 fixed per power-supply mode (adjustAlwaysSetPl4, changePl4Func): 160 W on
+    battery and 100/140 W supplies, 120 W on 65 W supplies. The supply mode is
+    read from EC RAM that Linux does not expose, so the 160 W case is used.
+The EC agrees: it writes PL1 35 W on power events.
+
+Add two optional preset keys, pl2Offset (PL2 = TDP + pl2Offset, default 2) and
+pl4 (a fixed PL4 instead of the scaled one), and use them for the OneXPlayer 3.
+Presets without them behave exactly as before.
+---
+ adjustor/core/const.py | 11 ++++++++++-
+ adjustor/core/rapl.py  | 13 +++++++++++--
+ 2 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/adjustor/core/const.py b/adjustor/core/const.py
+index 0e01f7d..87f0457 100644
+--- a/adjustor/core/const.py
++++ b/adjustor/core/const.py
+@@ -13,6 +13,10 @@ class IntelTdpPreset(TypedDict):
+     pl2: int
+     minTdp: NotRequired[int]
+     defaultTdp: NotRequired[int]
++    # PL2 = TDP + pl2Offset while boosting (default 2), capped at pl2.
++    pl2Offset: NotRequired[int]
++    # Fixed PL4 while boosting, instead of scaling the startup PL4 with the TDP.
++    pl4: NotRequired[int]
+ 
+ 
+ # Keyed by DMI board name.
+@@ -21,7 +25,12 @@ INTEL_TDP_PRESETS: dict[str, IntelTdpPreset] = {
+     "ONEXPLAYER X1Air": {"pl1": 30, "pl2": 32},
+     "ONEXPLAYER G1 i": {"pl1": 30, "pl2": 32},
+     "ONEXPLAYER X1Pro EVA-02": {"pl1": 30, "pl2": 32},
+-    "ONEXPLAYER 3": {"minTdp": 3, "defaultTdp": 25, "pl1": 40, "pl2": 42},
++    # OneXConsole's OXP3 / Arc G3 entries: TDP 3-35 W (40 W only behind its opt-in
++    # "unlock"), default 25 W, PL2 = TDP + 1 (36 W at 35 W), PL4 160 W on battery and
++    # 100/140 W supplies (120 W on 65 W supplies, which Linux cannot detect).
++    "ONEXPLAYER 3": {
++        "minTdp": 3, "defaultTdp": 25, "pl1": 35, "pl2": 36, "pl2Offset": 1, "pl4": 160,
++    },
+ }
+ 
+ 
+diff --git a/adjustor/core/rapl.py b/adjustor/core/rapl.py
+index 376db28..d4b1995 100644
+--- a/adjustor/core/rapl.py
++++ b/adjustor/core/rapl.py
+@@ -23,6 +23,8 @@ class RaplData(NamedTuple):
+     max_tdp: int
+     pl2: tuple[RaplLimit, ...] = ()
+     pl4: tuple[RaplLimit, ...] = ()
++    pl2_offset: int = 2
++    pl4_fixed: int = 0
+ 
+ 
+ def get_rapl(board: str = "") -> RaplData | None:
+@@ -66,6 +68,8 @@ def get_rapl(board: str = "") -> RaplData | None:
+                             maximum = preset["pl1"]
+                         elif kind == "short_term":
+                             maximum = preset["pl2"]
++                        elif "pl4" in preset:
++                            maximum = preset["pl4"]
+                         else:
+                             maximum = max(preset["pl2"], maximum)
+                     if maximum > 0:
+@@ -98,6 +102,8 @@ def get_rapl(board: str = "") -> RaplData | None:
+     return RaplData(
+         tuple(limits), minimum, default, maximum,
+         tuple(boost_limits["short_term"]), tuple(boost_limits["peak_power"]),
++        preset.get("pl2Offset", 2) if preset else 2,
++        preset.get("pl4", 0) if preset else 0,
+     )
+ 
+ 
+@@ -107,11 +113,14 @@ def set_rapl(data: RaplData, watts: int, boost: bool = True) -> bool:
+     targets = [(path, watts) for path in data.limits]
+     power_limits = {"PL1": [watts], "PL2": [], "PL4": []}
+     for limit in data.pl2:
+-        value = min(watts + 2 if boost else watts, limit.max_tdp)
++        value = min(watts + data.pl2_offset if boost else watts, limit.max_tdp)
+         targets.append((limit.path, value))
+         power_limits["PL2"].append(value)
+     for limit in data.pl4:
+-        value = watts * limit.max_tdp // data.max_tdp if boost else watts
++        if data.pl4_fixed:
++            value = data.pl4_fixed if boost else watts
++        else:
++            value = watts * limit.max_tdp // data.max_tdp if boost else watts
+         value = min(value, limit.max_tdp)
+         targets.append((limit.path, value))
+         power_limits["PL4"].append(value)
