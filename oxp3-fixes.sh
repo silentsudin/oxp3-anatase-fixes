@@ -351,10 +351,12 @@ record_rpm_state() {
     local comp rpm
     sudo mkdir -p "$MESA_STATE_DIR/rpms"
     for comp in gamescope mangohud kmod-oxp3-xe; do
+        # if/then rather than `(( SKIP )) && continue`: a false arithmetic test returns 1, and under
+        # `set -e` that ended the whole install silently right after the Mesa state was recorded
         case $comp in
-            gamescope)    (( SKIP_GAMESCOPE )) && continue ;;
-            mangohud)     (( SKIP_MANGOHUD )) && continue ;;
-            kmod-oxp3-xe) (( SKIP_KERNEL )) && continue ;;
+            gamescope)    if (( SKIP_GAMESCOPE )); then continue; fi ;;
+            mangohud)     if (( SKIP_MANGOHUD )); then continue; fi ;;
+            kmod-oxp3-xe) if (( SKIP_KERNEL )); then continue; fi ;;
         esac
         sudo rm -f "$MESA_STATE_DIR"/rpms/"$comp"-*.rpm
         for rpm in "$OUT"/"$comp"-*.rpm; do
@@ -645,8 +647,12 @@ install_flatpak_mesa() {
     # The list comes from the RPMs this run installed, not from `rpm -q`: an install into the
     # /usr overlay can leave the rpmdb reporting the base image's Mesa while the overlay holds
     # ours, and then this step would copy the wrong tree (or miss files) in the runtime.
-    local src; src=$(first_glob "$OUT"/mesa-*.x86_64.rpm "$MESA_STATE_DIR"/rpms/mesa-*.x86_64.rpm || true)
-    list=$(rpm -qlp "${src:-"$OUT"/mesa-*.x86_64.rpm}" 2>/dev/null | grep '^/usr/' |
+    # Every Mesa RPM, not just the alphabetically first one: mesa-dri-drivers alone has no
+    # libvulkan_intel.so, and a list from it left the runtime overrides without the Vulkan driver
+    local -a src=()
+    src=( "$OUT"/mesa-*.x86_64.rpm )
+    [[ -f ${src[0]} ]] || src=( "$MESA_STATE_DIR"/rpms/mesa-*.x86_64.rpm )
+    list=$(rpm -qlp "${src[@]}" 2>/dev/null | grep '^/usr/' |
            grep -vE "$FLATPAK_MESA_SKIP" | sort -u)
     if [[ -z $list ]]; then
         pkgs=$(mesa_installed_pkgs | awk '{ print $1 "." $2 }')
