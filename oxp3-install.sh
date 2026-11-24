@@ -111,6 +111,13 @@ show_status() {
     info "Secure Boot: $(secure_boot && echo enabled || echo disabled); MOK enrolled: $(mok_enrolled && echo yes || echo no)"
     info "build artifacts: $(have_artifacts && echo present || echo missing) ($out)"
     info "Steam library: $(steam_present && echo present || echo missing)"
+    local fgl g
+    if fgl=$(flatpak info --system --show-location runtime/org.freedesktop.Platform.GL.oxp3/x86_64/26.08 2>/dev/null); then
+        g=$(ls "$fgl"/files/lib/libgallium-*.so 2>/dev/null | head -1); g=${g##*/libgallium-}
+        info "Flatpak GL driver 26.08 (Flathub apps): Mesa ${g%.so}; this session FLATPAK_GL_DRIVERS=${FLATPAK_GL_DRIVERS:-<unset>}"
+    else
+        info "Flatpak GL driver 26.08 (Flathub apps): not installed"
+    fi
     [[ -x $here/tools/check-working.sh ]] && { $here/tools/check-working.sh 2>/dev/null | tail -n +1 | head -12; }
 }
 
@@ -214,12 +221,25 @@ if [[ $(staged_deployment) == yes ]]; then
     say "a deployment is staged: reboot, then run ./oxp3-install.sh again"
     exit 0
 fi
-if (( ! SKIP_BUILD )) && ! have_artifacts; then
-    say "build (artifacts missing)"
+# Always run the build: every component is cached by a hash of its inputs, so an unchanged one
+# takes seconds, while a changed patch, a Mesa pin or a new component (e.g. the Flatpak GL driver)
+# gets built. Building only when artifacts were missing left such changes silently uninstalled.
+if (( ! SKIP_BUILD )); then
+    say "build (cached components are reused)"
     run "$here/oxp3-fixes.sh" build || die "build failed"
+elif ! have_artifacts; then
+    die "no build artifacts in $out and --skip-build was given; run ./oxp3-install.sh without --skip-build"
 fi
 say "second install: overlay Mesa/gamescope/MangoHud/XMX/extras"
 run sudo "$here/oxp3-fixes.sh" install || die "install failed"
+# A rebuilt kernel module or firmware package is staged as a new deployment by that install,
+# which then stops before the overlay step: finish after the reboot, like the first run.
+if (( ! DRY )) && [[ $(staged_deployment) == yes ]]; then
+    say "updated kernel modules/firmware were staged: reboot required"
+    info "systemctl reboot"
+    info "then run ./oxp3-install.sh again (it will finish automatically)"
+    exit 0
+fi
 
 if (( ! SKIP_HW )); then
     say "hardware fixes (volume, LEDs/RGB, suspend, Bluetooth, power, IMU, audio, XMX, Decky)"

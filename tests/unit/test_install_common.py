@@ -8,6 +8,7 @@ package manager, network, root or host path is touched.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -36,6 +37,9 @@ SCALARS = {
     "SKIP_DMC": "0",
     "SKIP_MESA": "0",
     "SKIP_XESS": "0",
+    "SKIP_FLATPAK_GL": "0",
+    "MESA_COMMIT": "0123456789abcdef",
+    "MESA_URL": "https://example.invalid/mesa.tar.gz",
     "XESS_COMMIT": "deadbeef",
     "XESS_SRC_URL": "https://example.invalid/xess.zip",
     "XESS_ZIP_URL": "https://example.invalid/xess-bin.zip",
@@ -243,6 +247,146 @@ class MokTest(ShellCase):
                   "mok_usage_ok && echo ACCEPTED || echo REJECTED")
         res = self.bash(script)
         self.assertEqual(res.stdout.strip(), "REJECTED", res.stderr)
+
+
+class SpecPatchTest(ShellCase):
+    """spec_add_patches: where our Patch lines go and which specs it refuses."""
+
+    def run_on(self, spec, *names):
+        path = self.tree.path("x.spec")
+        path.write_text(spec)
+        res = self.bash(f'spec_add_patches "{path}" ' + " ".join(names))
+        return res, path.read_text()
+
+    def test_after_unnumbered_patches_with_autopatch(self):
+        # gamescope an0.8: unnumbered Patch lines, %autosetup -N + %autopatch
+        spec = ("Source0: a.tar.gz\nPatch: one.patch\nPatch: two.patch\n\n%prep\n"
+                "%autosetup -n x -p1 -N\n%autopatch -p1\n")
+        res, out = self.run_on(spec, "ours1.patch", "ours2.patch")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("Patch: two.patch\nPatch2000: ours1.patch\nPatch2001: ours2.patch\n", out)
+
+    def test_numbers_above_an_existing_high_patch(self):
+        spec = "Patch2500: theirs.patch\n%prep\n%autosetup -p1\n"
+        res, out = self.run_on(spec, "ours.patch")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("Patch2500: theirs.patch\nPatch2501: ours.patch\n", out)
+
+    def test_after_last_patch_not_first(self):
+        # mesa: Patch10/Patch99 - ours must follow the last one (overrides.patch)
+        spec = "Patch10: a.patch\nPatch99: overrides.patch\nBuildRequires: x\n%prep\n%autosetup -p1\n"
+        res, out = self.run_on(spec, "ours.patch")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("Patch99: overrides.patch\nPatch2000: ours.patch\nBuildRequires", out)
+
+    def test_source_fallback_without_patch_lines(self):
+        spec = "Source0: a.tar.gz\nSource1: b.pc\nBuildRequires: x\n%prep\n%autosetup -p1\n"
+        res, out = self.run_on(spec, "ours.patch")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("Source1: b.pc\nPatch2000: ours.patch\n", out)
+
+    def test_refuses_autosetup_N_without_autopatch(self):
+        spec = "Patch: a.patch\n%prep\n%autosetup -n x -p1 -N\n%patch -P0 -p1\n"
+        res, out = self.run_on(spec, "ours.patch")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("applies no patches", res.stderr)
+        self.assertNotIn("ours.patch", out)
+
+    def test_refuses_plain_setup(self):
+        res, _ = self.run_on("Patch0: a.patch\n%prep\n%setup -q\n%patch0 -p1\n", "ours.patch")
+        self.assertNotEqual(res.returncode, 0)
+
+
+class AnatasePackagingTest(ShellCase):
+    """Building against the packaging that matches the booted image."""
+
+    def rpm_ostree_stub(self, labels):
+        manifest = json.dumps({"annotations": labels})
+        status = json.dumps({"deployments": [
+            {"booted": False, "base-commit-meta": {"ostree.manifest": json.dumps(
+                {"annotations": {"org.opencontainers.image.revision": "f" * 40}})}},
+            {"booted": True, "base-commit-meta": {"ostree.manifest": manifest}},
+        ]})
+        return self.stub("rpm-ostree", f"cat <<'EOF'\n{status}\nEOF\n")
+
+    def test_image_revision_from_the_booted_deployment(self):
+        rev = "1adb102dacabbca1da9dd632f526a2e20f0c2682"
+        bindir = self.rpm_ostree_stub({"org.opencontainers.image.revision": rev})
+        res = self.bash("anatase_image_revision", path_prefix=str(bindir))
+        self.assertEqual(res.stdout.strip(), rev, res.stderr)
+
+    def test_image_revision_empty_without_label_or_when_malformed(self):
+        for labels in ({}, {"org.opencontainers.image.revision": "main"}):
+            bindir = self.rpm_ostree_stub(labels)
+            res = self.bash("anatase_image_revision", path_prefix=str(bindir))
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(res.stdout.strip(), "")
+
+    def card(self, version, subdirs=(), flat=()):
+        cache = self.tree.mkdir("cache")
+        cards = cache / "anatase" / "cards" / "gaming" / "foo"
+        cards.mkdir(parents=True)
+        (cards / "foo.spec").write_text(f"Name: foo\nVersion:        {version}\n")
+        pdir = self.tree.mkdir("patches")
+        for d in subdirs:
+            (pdir / d).mkdir()
+            (pdir / d / "0001-x.patch").write_text("x\n")
+        for f in flat:
+            (pdir / f).write_text("x\n")
+        return cache, pdir
+
+    def test_refuses_a_version_without_a_patch_set(self):
+        cache, pdir = self.card("an0.9", subdirs=("3.16.23.3", "an0.8"))
+        res = self.bash(f'CACHE="{cache}" OUT="{cache}/out" here=/nonexistent; build_card foo "{pdir}"')
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("foo an0.9", res.stderr)
+        self.assertIn("3.16.23.3 an0.8", res.stderr)
+        self.assertIn("Rebase them to an0.9", res.stderr)
+
+
+class FlatpakGlTest(ShellCase):
+    """The Flatpak GL extension helpers that need no flatpak, network or root."""
+
+    def test_source_pins_are_well_formed(self):
+        res = self.bash("flatpak_gl_sources")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rows = [line.split("|") for line in res.stdout.splitlines()]
+        self.assertEqual(len(rows), 5)
+        for name, url, sha in rows:
+            self.assertTrue(name.endswith(".tar.gz"), name)
+            self.assertTrue(url.startswith("https://"), url)
+            self.assertRegex(sha, r"^[0-9a-f]{64}$")
+        names = [r[0] for r in rows]
+        # build-in-sdk.sh globs these prefixes; each must be unambiguous
+        self.assertEqual(sum(n.startswith("SPIRV-Tools-") for n in names), 1)
+        self.assertEqual(sum(n.startswith("SPIRV-LLVM-Translator-") for n in names), 1)
+        self.assertEqual(sum(n.startswith("pyyaml-") for n in names), 1)
+
+    def test_header_revisions_have_pinned_tarballs(self):
+        # fetch_flatpak_gl_sources writes these revisions for build-in-sdk.sh; each must have a pin
+        res = self.bash("flatpak_gl_sources | cut -d'|' -f1")
+        names = res.stdout.split()
+        src = LIB.read_text()
+        for rev, rev_file in (("496543121ce6419f23d6fa5d7194ba66c36212d2", "spirv-tools-headers.rev"),
+                              ("cb42dec3830d3ac67fa449ecdc0c0f73d5e74498", "translator-headers.rev")):
+            self.assertIn(f"SPIRV-Headers-{rev}.tar.gz", names)
+            self.assertIn(f'echo {rev} > "$dl/{rev_file}"', src)
+
+    def test_checksum_mismatch_is_fatal_and_leaves_no_file(self):
+        dl = self.tree.mkdir("dl")
+        bindir = self.stub("curl", 'while [ $# -gt 0 ]; do [ "$1" = -o ] && { echo tampered > "$2"; }; shift; done\n')
+        res = self.bash(f'fetch_flatpak_gl_sources "{dl}"', path_prefix=str(bindir))
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("checksum mismatch", res.stderr)
+        self.assertEqual(list(dl.iterdir()), [])
+
+    def test_ref_and_defaults(self):
+        res = self.bash('flatpak_gl_ref 26.08; flatpak_gl_branches; '
+                        'OXP3_FLATPAK_GL_BRANCHES="26.08 25.08" flatpak_gl_branches')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.splitlines(),
+                         ["runtime/org.freedesktop.Platform.GL.oxp3/x86_64/26.08",
+                          "26.08", "26.08 25.08"])
 
 
 if __name__ == "__main__":

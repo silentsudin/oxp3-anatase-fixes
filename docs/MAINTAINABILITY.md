@@ -32,13 +32,19 @@ and 26 + 11 = 37. Both numbers describe the same code; this table is the complet
 `build_card`, `build_xess`, `seed_xess_compiler`, `install_xess`, `uninstall_xess`, `status_xess`,
 `xmx_override_file`, `apply_kernel_patches`, `build_kmods`, `ucode_rev`, `sys_fw`, `sys_fw_sha`,
 `build_firmware`, `do_build`, `mok_cn`, `mok_usage_ok`, `mok_trusted`, `do_mok_setup`,
-`install_rapl_power`, `remove_rapl_udev_rules`, `hhd_site`, `install_volume_fix`,
+`install_rapl_power`, `remove_rapl_udev_rules`, `hhd_site`, `install_hhd_patches`,
 `hhd_volume_unpatch`, `host_mesa`, `flatpak_mesa`, `refresh_flatpak_runtime`,
 `remove_flatpak_mesa`, `deploy_info`, `hotfix_active`, `do_status`.
 
 The extracted bodies are byte-identical to the two originals (verified programmatically against
 `git show HEAD:oxp3-fixes.sh` and `git show HEAD:oxp3-fixes-fast.sh`: 37/37), so this round cannot change their behaviour.
 Their comments moved with them and each group has a section banner in the library.
+
+Added later (2026-11-21), shared from the start because both variants ship the same Flatpak
+GL extension: `flatpak_gl_*` helpers, `fetch_flatpak_gl_sources`, `prepare_mesa_src`,
+`build_flatpak_gl` (called by `do_build`), `install_flatpak_gl`, `uninstall_flatpak_gl`,
+`status_flatpak_gl` (docs/FLATPAK-GL.md). The guard now also requires `SKIP_FLATPAK_GL`,
+`MESA_COMMIT` and `MESA_URL`.
 
 ## 2. What stayed local, and why
 
@@ -223,9 +229,9 @@ command. The new functions are `oxp3_sha`, `oxp3_state_dir`, `oxp3_state_init`,
 `oxp3_manifest_path`, `oxp3_stamp`, `oxp3_key`, `oxp3_backup_image`, `oxp3_adopt_image`,
 `oxp3_manifest_record`, `oxp3_rows_for_key`, `oxp3_manifest_keys`, `oxp3_record_restored`,
 `oxp3_restore_file`, `oxp3_restore_all`, `oxp3_logical_to_real` (15), plus
-`hhd_backup_patch_files` (16), which `install_volume_fix` uses for the pre-patch copies.
+`hhd_backup_patch_files` (16), which `install_hhd_patches` uses for the pre-patch copies.
 
-They are used by `install_volume_fix` (pre-patch copies of the hhd files), `install_extras` in both
+They are used by `install_hhd_patches` (pre-patch copies of the hhd files), `install_extras` in both
 installers (the BMI260 blacklist), `tools/oxp3-bt-firmware.sh` (the dracut drop-in) and
 `tools/oxp3-rollback.sh` (the user-facing undo). `tools/oxp3-rollback.sh` is the only other
 sourcer of the library; it uses the undo section only and needs no caller configuration, so it
