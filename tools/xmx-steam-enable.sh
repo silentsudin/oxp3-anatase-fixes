@@ -80,6 +80,15 @@ PY
     return 0
 }
 
+# System mode: the host ANV carries the CM injection, so the session environment, the shim in
+# Proton and its launch hook cover every XeSS game. The per-game options this tool used to write
+# select the retired split driver (VK_DRIVER_FILES=icd-xmx.json): the game gets no Vulkan driver.
+if grep -aq ANV_CM_HELPER /usr/lib64/libvulkan_intel.so 2>/dev/null; then
+    echo "XeSS XMX runs session-wide here (the host Mesa carries the CM injection): no launch options needed."
+    echo "./oxp3-install.sh clears launch options an older version of this tool wrote."
+    exit 0
+fi
+
 rc=0
 if (( all )); then
     seen=0

@@ -102,6 +102,28 @@ XMX is +3.5 % over DP4a and +32 % over no upscaling. First run compiles the game
 `~/.cache/xess-xmx`), afterwards they load from cache. Kernel list: `~/.local/share/xess-xmx/kernels`; compile log
 `~/.cache/xess-xmx/compile.log` (no failures observed). New kernels compile with `-doubleGRF` on this hardware.
 
+## Current rule: XeSS kernels at 128 GRF on Xe3 (2026-11-24)
+
+The session sets `CM_MAX_GRF=128` (written by `files/xess-system-mode/apply.py`), so the package's
+`tools/cm-compile.sh` builds every XeSS kernel for 128 GRF: it drops `-doubleGRF` and
+`-ze-opt-large-register-file`. Never ship it unset on Xe3:
+
+- **Correctness.** XeSS asks for 256-GRF kernels. IGC 2.10.10, the only compiler that builds XeSS's kernels
+  (newer IGC, e.g. 2.41.5, fails on them, see the package's `tools/get-igc.sh`), generates wrong 256-GRF code
+  on Xe3: the white speckles traced in "ROOT CAUSE FOUND" below. It is not the driver. With VRT on (the
+  default; nothing sets `ANV_DISABLE_VRT`) anv programs `RegistersPerThread` from the kernel's own count, and
+  upstream's unpatched release driver showed the same residual. The compiler can't be replaced, so the fix is
+  to never build 256-GRF kernels.
+- **Speed.** Ours: Cyberpunk, XeSS Auto, 74.2 → 76.5 fps average, 58.1 → 62.1 minimum. Upstream (release
+  20261119, same Arc B390): XeSS's SR kernels 9–21 % faster, XeSS SR + FG 3.94 → 3.72 ms per frame.
+- **The "75 vs 85 fps" against it is void.** Commit e2792e9 removed `CM_MAX_GRF` because of that Trails
+  result, but XeSS was on DP4a during the whole measurement: the shim was missing from Proton and a
+  `compile_failed.txt` was pinning the prefix.
+
+The driver's kernel cache doesn't key on `CM_MAX_GRF`, so the install moves the cache aside whenever the
+policy or the helper changes (`xess_reset_kernel_cache`). `./oxp3-install.sh --status` warns when the live
+session's `CM_MAX_GRF` isn't 128.
+
 ## Artifacts: white dots on the trees in the final scene
 
 Observed with XeSS on. Not observed with upscaling off. Root cause of the reproduction we chased: the game kept the

@@ -73,8 +73,7 @@ def main() -> int:
             '  # system mode: every Vulkan program already runs the patched host ANV; an earlier non-system\n'
             '  # install\'s VK_DRIVER_FILES / layer variables would point at a driver this package no longer ships\n'
             '  rm -f "$ENVD/50-xess-xmx.conf"\n'
-            '  # CM_MAX_GRF / VK_ICD_FILENAMES: left by an earlier port or an A/B test; CM_MAX_GRF=128 makes\n'
-            '  # the helper drop XeSS\'s own register-file flags\n'
+            '  # VK_ICD_FILENAMES: left by a split-driver install; CM_MAX_GRF is set again below\n'
             '  systemctl --user unset-environment VK_DRIVER_FILES VK_ICD_FILENAMES VK_ADD_LAYER_PATH \\\n'
             '    VK_LOADER_LAYERS_ENABLE MESA XMX_LAYER_HELPER XMX_IGC_DIR ANV_CM_KERNEL_DIR CM_MAX_GRF 2>/dev/null\n'
             '  mkdir -p "$ENVD"\n'
@@ -86,17 +85,20 @@ def main() -> int:
             '    echo "force_vk_vendor=0"\n'
             '    echo "# Protons without Intel\'s driver store never load the shim from the prefix; XeSS looks here first"\n'
             '    echo "INTC_ALT_DRIVER_EXTENSIONS_PATH=\'$XMX_ALT_EXT\'"\n'
-            # No CM_MAX_GRF here. In upstream's stock mode its *layer* sets that variable because the
-            # unpatched driver gives every thread 128 GRF; on the driver-injection path this repo uses,
-            # the driver sizes the register file per shader, and forcing 128 made the package's helper
-            # drop XeSS's own -ze-opt-large-register-file / -ze-exp-register-file-size flags, which
-            # measured 10 fps slower (Trails, 2026-11-24: 75 vs 85 fps) with no visual gain.
+            # CM_MAX_GRF=128: the package's helper then compiles every kernel for 128 GRF (drops -doubleGRF
+            # and -ze-opt-large-register-file), as upstream's layer does on Xe3 since 20261119. The patched
+            # driver takes each kernel's GRF count from its .cmk, so the same kernels run here. 256-GRF
+            # kernels are slower on Xe3 (upstream, Arc B390: SR kernels 9-21 %; ours, Cyberpunk XeSS Auto
+            # 74.2 -> 76.5 avg, 58.1 -> 62.1 min) and gave white speckles (docs/xess-xmx.md). The
+            # 2026-11-24 "75 vs 85 fps" against it was measured while XeSS was on DP4a.
+            '    echo "# 128-GRF XeSS kernels: faster on Xe3 than the 256 XeSS asks for, and free of its speckles"\n'
+            '    echo "CM_MAX_GRF=128"\n'
             '  } > "$ENVD/50-xess-xmx.conf"\n'
             '  systemctl --user set-environment "ANV_CM_HELPER=$PKG/tools/cm-compile.sh" \\\n'
             '    "VKD3D_DISABLE_EXTENSIONS=$XMX_VKD3D_OFF" "force_vk_vendor=0" \\\n'
-            '    "INTC_ALT_DRIVER_EXTENSIONS_PATH=$XMX_ALT_EXT" 2>/dev/null\n'
+            '    "INTC_ALT_DRIVER_EXTENSIONS_PATH=$XMX_ALT_EXT" "CM_MAX_GRF=128" 2>/dev/null\n'
             '  echo "== environment: $ENVD/50-xess-xmx.conf (system mode, applies to Steam after a reboot / re-login)"\n'
-            '  echo "   driver: the host\'s patched ANV ($SYSTEM_ANV), kernels compiled with XeSS\'s own register-file flags"\n'
+            '  echo "   driver: the host\'s patched ANV ($SYSTEM_ANV), XeSS kernels at 128 GRF (CM_MAX_GRF)"\n'
             'elif [ "${XMX_NO_ENV:-0}" != 1 ]; then\n'
             '  # VK_DRIVER_FILES replaces')
 

@@ -459,6 +459,93 @@ class XessRepairTest(ShellCase):
         res = self.bash(f'XESS_PKG="{pkg}"; xess_reset_kernel_cache')
         self.assertIn("kernels.stale", res.stdout)
 
+    def test_kernel_cache_reset_when_the_grf_policy_changes(self):
+        # the driver's cache key ignores CM_MAX_GRF: 256-GRF kernels would survive the switch to 128
+        home, pkg, _ = self.steam()
+        envd = home / ".config/environment.d"
+        envd.mkdir(parents=True)
+        kernels = home / ".cache/xess-xmx/kernels"
+        kernels.mkdir(parents=True)
+        res = self.bash(f'XESS_PKG="{pkg}"; xess_reset_kernel_cache')
+        self.assertEqual(res.returncode, 0, res.stderr)
+        (envd / "50-xess-xmx.conf").write_text("ANV_CM_HELPER=x\nCM_MAX_GRF=128\n")
+        kernels.mkdir()
+        (kernels / "k_b080_1.cmk").write_text("256-GRF kernel")
+        res = self.bash(f'XESS_PKG="{pkg}"; xess_reset_kernel_cache')
+        self.assertIn("kernels.stale", res.stdout)
+        self.assertIn("CM_MAX_GRF=128", (home / ".cache/xess-xmx/kernels.policy").read_text())
+
+    def test_old_wiring_is_retired_and_env_file_follows_the_session(self):
+        home = self.tree.path("home")
+        hook = home / ".config/plasma-workspace/env/50-xess-xmx.sh"
+        hook.parent.mkdir(parents=True)
+        hook.write_text('. "$HOME/.config/xess-xmx/oxp3-env.sh"\n')
+        envd = home / ".config/environment.d"
+        envd.mkdir(parents=True)
+        (envd / "50-xess-xmx.conf").write_text(
+            "# comment\nANV_CM_HELPER=/pkg/tools/cm-compile.sh\n"
+            "INTC_ALT_DRIVER_EXTENSIONS_PATH='C:\\windows\\x'\nCM_MAX_GRF=128\n")
+        old = home / ".config/xess-xmx/oxp3-env.sh"
+        old.parent.mkdir(parents=True)
+        old.write_text("export ANV_CM_HELPER=/repo/tools/xmx-cm-compile-nodgrf.sh\n")
+        res = self.bash("xess_retire_old_wiring")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertFalse(hook.exists())
+        self.assertTrue(list((home / ".local/state/oxp3-fixes/backups").glob("plasma-env-*")))
+        text = old.read_text()
+        self.assertIn("export ANV_CM_HELPER='/pkg/tools/cm-compile.sh'", text)
+        self.assertIn("export INTC_ALT_DRIVER_EXTENSIONS_PATH='C:\\windows\\x'", text)
+        self.assertIn("export CM_MAX_GRF='128'", text)
+        self.assertNotIn("nodgrf", text)
+
+    def test_stale_split_driver_launch_options_are_cleared(self):
+        home = self.tree.path("home")
+        cfg = home / ".local/share/Steam/userdata/1/config/localconfig.vdf"
+        cfg.parent.mkdir(parents=True)
+        stale = ('env VK_DRIVER_FILES=%s/.config/xess-xmx/icd-xmx.json ANV_CM_HELPER=/x %%command%% -dx12'
+                 % home)
+        cfg.write_text('"UserLocalConfigStore"\n{\n\t"apps"\n\t{\n\t\t"990080"\n\t\t{\n'
+                       '\t\t\t"LaunchOptions"\t\t"%s"\n\t\t}\n\t\t"4225980"\n\t\t{\n'
+                       '\t\t\t"LaunchOptions"\t\t"MANGOHUD=1 %%command%%"\n\t\t}\n\t}\n}\n' % stale)
+        res = self.bash("xess_stale_launch_options")
+        self.assertIn("990080", res.stdout)
+        self.assertIn("icd-xmx.json", cfg.read_text())      # report only
+        res = self.bash("xess_stale_launch_options fix")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        text = cfg.read_text()
+        self.assertNotIn("icd-xmx.json", text)
+        self.assertIn('"LaunchOptions"\t\t"%command% -dx12"', text)
+        self.assertIn('"MANGOHUD=1 %command%"', text)
+        self.assertTrue(list((home / ".local/state/oxp3-fixes").glob("localconfig.vdf.bak-*")))
+
+    def test_gamemode_dropin_pins_the_package_env_and_never_unsets_it(self):
+        text = (support.REPO / "files/anatase-gamemode-xess.conf").read_text()
+        self.assertIn("EnvironmentFile=-%h/.config/environment.d/50-xess-xmx.conf", text)
+        unset = next(l for l in text.splitlines() if l.startswith("UnsetEnvironment=")).split("=", 1)[1].split()
+        port = (support.REPO / "files/xess-system-mode/apply.py").read_text()
+        for key in ("ANV_CM_HELPER", "VKD3D_DISABLE_EXTENSIONS", "force_vk_vendor",
+                    "INTC_ALT_DRIVER_EXTENSIONS_PATH", "CM_MAX_GRF"):
+            self.assertIn('echo "%s=' % key, port)       # the package's file sets it ...
+            self.assertNotIn(key, unset)                   # ... and Gamemode must keep it
+        self.assertIn("VK_DRIVER_FILES", unset)
+
+    def test_flatpak_override_follows_the_package_env(self):
+        home = self.tree.path("home")
+        envd = home / ".config/environment.d"
+        envd.mkdir(parents=True)
+        (envd / "50-xess-xmx.conf").write_text(
+            "# c\nANV_CM_HELPER=/pkg/tools/cm-compile.sh\nINTC_ALT_DRIVER_EXTENSIONS_PATH='C:\\w\\x'\nCM_MAX_GRF=128\n")
+        log = self.tree.path("flatpak.log")
+        bindir = self.stub("flatpak", 'case "$1" in info) exit 0 ;; override) printf "%%s\\n" "$@" > "%s" ;; esac\n' % log)
+        res = self.bash("xess_sync_flatpak_override", path_prefix=str(bindir))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        argv = log.read_text().splitlines()
+        self.assertIn("--env=ANV_CM_HELPER=/pkg/tools/cm-compile.sh", argv)
+        self.assertIn("--env=INTC_ALT_DRIVER_EXTENSIONS_PATH=C:\\w\\x", argv)
+        self.assertIn("--env=CM_MAX_GRF=128", argv)
+        self.assertIn("--unset-env=ANV_CM_KERNEL_DIR", argv)
+        self.assertEqual(argv[-1], "org.anatase.Steam")
+
     def test_entry_scripts_do_not_override_install_xess(self):
         # an override in oxp3-fixes.sh silently replaced this library's install_xess for two weeks
         for name in ("oxp3-fixes.sh", "oxp3-fixes-fast.sh"):
