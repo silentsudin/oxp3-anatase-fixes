@@ -839,7 +839,11 @@ apply_kernel_patches() {
         # here: these are our own, uniquely named commits.
         local subj
         subj=$(sed -n 's/^Subject: \(\[PATCH[^]]*\] \)\{0,1\}//p' "$p" | head -1)
-        if git -C "$src" log --all --format=%s 2>/dev/null | grep -Fqx -- "$subj"; then
+        # Check the base that is actually checked out, not --all: refs contain commits from
+        # earlier build runs that are NOT in this tag, and treating those as "already there"
+        # silently dropped the VBT-57/VS-PE-O series (0001-0006) - after which 0008 applied
+        # without its base and 0009 (the C10 cap) could not apply at all.
+        if git -C "$src" log HEAD --format=%s 2>/dev/null | grep -Fqx -- "$subj"; then
             skipped+=( "$(basename "$p")" )
             continue
         fi
