@@ -692,7 +692,9 @@ build_xess() {
     # system mode: the host's Mesa carries the CM kernel injection, so the package must not insist on its own
     # driver (one Intel ANV in the session is the point of the consolidation). files/xess-system-mode adds
     # tools/system-anv.sh and transforms install.sh; it fails loudly if upstream's script changed shape.
-    if [[ -d $here/files/xess-system-mode ]]; then
+    # Upstream's install.sh needs the port; the fork we came from is system mode already and its
+    # install.sh has no XMX_DRIVER selection, so apply.py's anchors do not exist there.
+    if [[ -d $here/files/xess-system-mode ]] && grep -q 'XMX_DRIVER' "$stage/install.sh" 2>/dev/null; then
         install -D -m0755 "$here/files/xess-system-mode/tools/system-anv.sh" "$stage/tools/system-anv.sh"
         python3 "$here/files/xess-system-mode/apply.py" "$stage" >/dev/null ||
             die "xess: system-mode port failed - upstream install.sh changed (see files/xess-system-mode/apply.py)"
