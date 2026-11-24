@@ -1,0 +1,61 @@
+From: oxp3-fixes <oxp3-fixes@localhost>
+Subject: [PATCH] Prime the dock AC-3 encoder before HDMI playback starts
+
+Set the IEC 61937 non-audio bit on HDMI1. Allow the a52 encoder two
+complete AC-3 frames before PipeWire starts the HDMI slave, including at
+small graph quanta. Unmute HDMI1 when the service sees a valid ELD.
+
+--- a/.asoundrc
++++ b/.asoundrc
+@@ -15,7 +15,7 @@
+     # DEV=0 is the HDMI1 PCM (hw:0,3), where the TV's ELD shows up
+     # (aplay -l: "HDMI1 [LG TV SSCR2]"). DEV=2 was HDMI3/hw:0,5, which has
+     # nothing connected.
+-    slavepcm "hdmi:CARD=sofhdadsp,DEV=0"
++    slavepcm "hdmi:CARD=sofhdadsp,DEV=0,AES0=0x06"
+     rate 48000
+     channels 6
+     bitrate 640
+@@ -29,3 +29,9 @@
+     type plug
+     slave.pcm "a52hdmi"
+ }
++
++# PipeWire uses an a52-prefixed PCM name to enable its codec-specific running delay target.
++pcm.a52_oxp3 {
++    type plug
++    slave.pcm "a52hdmi"
++}
+--- a/.local/libexec/oxp3-tv-audio
++++ b/.local/libexec/oxp3-tv-audio
+@@ -4,7 +4,7 @@
+ While the display's ELD is present the sink exists; when it goes away the sink
+ is removed and WirePlumber falls back to the speakers. If the ELD lists AC-3,
+ the sink sends 5.1 as a Dolby Digital bitstream through the a52 encoder in
+-~/.asoundrc ("lgac3"): the LG TV takes only stereo LPCM but passes AC-3 to the
++~/.asoundrc ("a52_oxp3"): the LG TV takes only stereo LPCM but passes AC-3 to the
+ soundbar over eARC. Otherwise it is plain stereo LPCM. PipeWire's own HDMI1
+ sink is disabled (51-oxp3-tv-audio.conf) so the two never compete for the port.
+ """
+@@ -57,12 +57,19 @@
+     common = ("factory.name=api.alsa.pcm.sink node.name=%s media.class=Audio/Sink object.linger=true "
+               "priority.session=1000 priority.driver=1000 audio.rate=48000 oxp3.mode=%s " % (NAME, mode))
+     if mode == "ac3":
+-        props = common + ('node.description="%s 5.1 (Dolby Digital)" api.alsa.path=lgac3 '
+-                          'api.alsa.disable-mmap=true api.alsa.period-size=1536 audio.channels=6 '
++        props = common + ('node.description="%s 5.1 (Dolby Digital)" api.alsa.path=a52_oxp3 '
++                          'api.alsa.disable-mmap=true api.alsa.period-size=1536 api.alsa.headroom=3072 audio.channels=6 '
+                           'audio.position=[ FL FR RL RR FC LFE ] session.suspend-timeout-seconds=30' % name)
+     else:
+         props = common + ('node.description="%s" api.alsa.path=hdmi:CARD=sofhdadsp,DEV=0 '
+                           'audio.channels=2 audio.position=[ FL FR ]' % name)
++    # The user session may acquire the sound device after systemd starts.
++    unmute = subprocess.run(
++        ["amixer", "-c", "sofhdadsp", "sset", "IEC958,0", "on"],
++        capture_output=True, timeout=5,
++    )
++    if unmute.returncode:
++        return
+     subprocess.run(["pw-cli", "create-node", "adapter", "{ %s }" % props],
+                    capture_output=True, timeout=10)
+ 
