@@ -547,3 +547,55 @@ while several threads create instances. Anatase installs eight ICD manifests (in
 radeon, nvidia, asahi, dzn, plus i686), so a game creating instances from several threads at
 once would hit it. Upstream report candidate for Vulkan-Loader. When comparing against the
 installed driver in CTS, pass `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json`.
+
+## 8. Next candidates, ranked (2026-11-26)
+
+Grounded in the counters of 6.1: real games run at the 2.3 GHz clock ceiling with memory
+bandwidth far from its limit, EUs active ~33 %, threads resident ~80 %, and most stalls waiting on
+send results (SBID ~42 %: sampler, load/store cache, memory). So the per-clock work is **latency**:
+make each send return sooner, issue fewer of them, or have more independent work in flight.
+Every item below is testable with the Wukong harness (`wk-variant.sh <name> K=V…`), checked with
+OA counters (`oa-capture.sh`), and gated by the CTS runner (section 7).
+
+**Step 0 - make the harness precise enough.** Wukong reports integer fps (1 fps ≈ 1.8 %). Add
+MangoHud frame-time logging through `wk-env` (`MANGOHUD=1`,
+`MANGOHUD_CONFIG=no_display,autostart_log=1,log_duration=…,output_folder=…`) so 0.5 % effects show.
+
+| # | lever | why (evidence) | test | cost |
+|---|---|---|---|---|
+| 1 | **Sampler route to LSC** (`intel_sampler_route_to_lsc=true`) | Xe2+ can send unfiltered 2D texel loads through the load/store cache instead of the sampler (lower latency). ANV clears the bit everywhere unless an app profile sets it (`isl_surface_state.c` `EnableSamplerRoutetoLSC &= dev->sampler_route_to_lsc`). Sampler L1 misses are 24 % and SBID waits dominate | env A/B in Wukong; then CTS `texture.*`, `image.*` | env only |
+| 2 | **Write-through storage cache policy** (`intel_storage_cache_policy_wt=true`) | ANV already enables it for UE titles (A Plague Tale: Requiem, Hogwarts Legacy, Space Engineers 2); Wukong is UE5 and 35 % of its load/store-cache accesses are partial writes | env A/B in Wukong; if it wins, add an engine-wide UE drirc entry | env only |
+| 3 | **Jay scheduler latency model** | `jay_performance.c` assumes L3 *hits* (sampler 214, LSC 200 cycles). With SBID the top stall, sends are not hoisted far enough from their uses. Raise the send latencies toward a miss (sampler ~500, LSC ~400) behind an env switch; trade registers for overlap | rebuild, Wukong A/B, fossilize stats (GRF/VRT), CTS shader groups | small patch |
+| 4 | **VRT threshold** (`vrt_threshold = 96` in `jay_from_nir.c`) | 64 % of the heavy title's fragment shaders lose their SIMD32 variant; SIMD32 halves instruction issue per pixel and halves send count per pixel. Make it an env value, sweep 96/128/160 | rebuild + Wukong | small patch |
+| 5 | **Divergent atomic fusion** (`anv_enable_opt_divergent_atomics`, `…_compute_only`, `anv_enable_opt_atomic_branch_compute_only`) | Wukong issues 7.5 G L3 atomics / 20 s; the fusion passes exist and are off by default | env A/B in Wukong | env only |
+| 6 | **SAGV / memory latency** (T7) | the stalls are latency, and a low SAGV point raises DRAM latency even when bandwidth is idle | the two-reboot karg A/B with the harness | user reboots |
+| 7 | **Gamescope composition cost in game mode** | our gamescope 0004 keeps an external HDR output in HDR, so SDR games on the dock always get a per-frame tone-map/composite on the shared GPU; headless GravityMark showed ~8-10 % between composited and direct paths | in game mode: OA capture of the gamescope process share, then HDR on/off A/B | measurement |
+| 8 | **Code motion** (`intel_code_motion=1/2`: LICM / global code motion) | changes register pressure and the latency available between sends and uses | env A/B in Wukong | env only |
+| 9 | **D3D11 event-query spin** | 25 % of the DXVK main thread polls `vkGetEventStatus` through Wine's unix-call thunk; on a package-limited device the spinning core takes GPU watts | prototype a back-off in DXVK's `GetData` path; measure GT MHz + fps in D3D11 | DXVK patch (upstream) |
+| 10 | **Buffer surface-state caching in ANV** | `isl_gfx30_buffer_fill_state_s` + `anv_fill_buffer_surface_state` ~5 % of native-Vulkan CPU | cache packed states per (address, range, format) | Mesa patch |
+| 11 | **Windows KMD tuning registers** (4.6) | ~30 registers Windows programs that `xe` never touches; decode which apply to Xe3 | RE + `register-save-restore` diff (root) | research |
+| 12 | **Tile64 for large render targets** (4.7) | Windows' default per its app-profile knobs | ISL change + CTS + Wukong | medium patch |
+| 13 | **Vulkan-Loader multi-ICD race** (7) | crash, not speed; report upstream | - | report |
+
+Order: 1, 2, 5, 8 are environment-only and cost one Wukong relaunch each (~8 min). 3 and 4 are
+the compiler levers the counters point at. 6 needs reboots, 7 needs game mode.
+
+### 8.1 Results of the environment-only candidates (Wukong, MangoHud frame times)
+
+Harness: `tools/gpu-bench/wukong/` (README there). Each variant is a Steam relaunch, a warm run,
+then two measured runs of 120 s of per-frame times (about 6,700 frames each). Baseline, five runs
+over three launches: **55.49 / 55.60 / 55.74 / 55.65 / 56.02 fps, mean 55.70** (spread ≈ 1 %;
+two runs per variant resolve ≈ 0.5 %). 1 % lows rose from ~30-38 to ~43 over the session in the
+baseline too, so lows are session warm-up here, not a per-variant effect.
+
+| variant | runs (fps) | vs 55.70 | verdict |
+|---|---|---:|---|
+| `intel_sampler_route_to_lsc=true` | 56.11, 55.92 | +0.6 % | at the noise edge; needs an interleaved A B A B re-test before any decision |
+| `intel_code_motion=1` (LICM) | 55.84, 56.17 | +0.6 % | at the noise edge, same |
+| `intel_code_motion=2` (GCM) | 55.86, 55.96 | +0.4 % | noise |
+| `intel_storage_cache_policy_wt=true` | 48.67, 48.65 | **−12.6 %** | harmful in Wukong, although ANV enables it for some other UE titles: do not generalise it |
+| `anv_enable_opt_divergent_atomics=3` | - | - | **the game's GameThread segfaults** right after launch (reproduced); unsafe with Jay |
+
+None of the environment switches is a clear win. The remaining levers in the table above are the
+compiler ones (3 and 4: scheduling latency model, VRT threshold), SAGV (6) and the game-mode
+composition cost (7).
