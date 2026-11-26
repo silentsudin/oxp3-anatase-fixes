@@ -1,0 +1,80 @@
+From f8dae79e7111e13d2937c974916fcd2aca99a86f Mon Sep 17 00:00:00 2001
+From: oxp3-fixes <oxp3-fixes@localhost>
+Date: Wed, 25 Nov 2026 21:32:32 +0000
+Subject: [PATCH] drm/i915/dp: keep the sink's DSC caps across a disconnect
+
+When the JSAUX HB1201B dock (VMM6210 DP-to-HDMI 2.1 PCON) resets under
+a 4K120 stream, HPD drops while the pipe is still on the TypeC port.
+intel_tc_port_link_reset_work() then modesets the pipe off the dead
+link, but intel_dp_detect() has already cleared the sink's DSC caps on
+the disconnect. 4K120 over two HBR3 lanes needs DSC, so the reset
+commit fails state computation:
+
+  WARNING: intel_tc.c:1837 at intel_tc_port_link_reset_work+0xfc/0x110
+
+The pipe keeps driving the dead link. The next suspend after the second
+such reset never came back (2026-11-25 21:02), and the machine needed
+a hard reset. The FIXME at the memset described exactly this ("cause
+state computation fail if the connector need to be modeset after sink
+disconnect").
+
+Keep the DSC caps on disconnect. intel_dp_detect_dsc_caps() clears and
+reads them again whenever a sink connects, so a different sink never
+sees stale caps.
+
+Also log the reset at info level and print its error code on failure.
+Both were silent (debug level, a bare WARN_ON), so a failed reset could
+not be told apart from a slow one in the journal.
+---
+ drivers/gpu/drm/i915/display/intel_dp.c | 12 +++++++-----
+ drivers/gpu/drm/i915/display/intel_tc.c |  9 +++++----
+ 2 files changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/display/intel_dp.c b/drivers/gpu/drm/i915/display/intel_dp.c
+index 15f3a9ccb..7431c1aa6 100644
+--- a/drivers/gpu/drm/i915/display/intel_dp.c
++++ b/drivers/gpu/drm/i915/display/intel_dp.c
+@@ -6623,12 +6623,14 @@ intel_dp_detect(struct drm_connector *_connector,
+ 	if (status == connector_status_disconnected) {
+ 		intel_dp_test_reset(intel_dp);
+ 		/*
+-		 * FIXME: Resetting these caps here cause
+-		 * state computation fail if the connector need to be
+-		 * modeset after sink disconnect. Move resetting them
+-		 * to where new sink is connected.
++		 * The DSC caps stay: the pipe can still be on this port, and the
++		 * TypeC link reset (intel_tc_port_link_reset_work()) modesets it
++		 * after the sink is gone. A mode that needs DSC (4K120 over two
++		 * HBR3 lanes through a DP-to-HDMI PCON) then fails state
++		 * computation without them, the reset commit fails, and the pipe
++		 * keeps driving a dead link. intel_dp_detect_dsc_caps() reads the
++		 * caps again, after clearing them, whenever a sink connects.
+ 		 */
+-		memset(connector->dp.dsc_dpcd, 0, sizeof(connector->dp.dsc_dpcd));
+ 		memset(connector->dp.panel_replay_caps.dpcd, 0,
+ 		       sizeof(connector->dp.panel_replay_caps.dpcd));
+ 		intel_dp->psr.sink_panel_replay_support = false;
+diff --git a/drivers/gpu/drm/i915/display/intel_tc.c b/drivers/gpu/drm/i915/display/intel_tc.c
+index f2d86b29c..43daa9c28 100644
+--- a/drivers/gpu/drm/i915/display/intel_tc.c
++++ b/drivers/gpu/drm/i915/display/intel_tc.c
+@@ -1830,11 +1830,12 @@ static void intel_tc_port_link_reset_work(struct work_struct *work)
+ 
+ 	mutex_lock(&display->drm->mode_config.mutex);
+ 
+-	drm_dbg_kms(display->drm,
+-		    "Port %s: TypeC DP-alt sink disconnected, resetting link\n",
+-		    tc->port_name);
++	drm_info(display->drm,
++		 "Port %s: TypeC DP-alt sink disconnected, resetting link\n",
++		 tc->port_name);
+ 	ret = reset_link(tc);
+-	drm_WARN_ON(display->drm, ret);
++	drm_WARN(display->drm, ret,
++		 "Port %s: TypeC link reset failed (%d)\n", tc->port_name, ret);
+ 
+ 	mutex_unlock(&display->drm->mode_config.mutex);
+ }
+-- 
+2.56.0
+
