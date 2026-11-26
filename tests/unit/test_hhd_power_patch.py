@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""patches/hhd/0003: hhd must apply OneXConsole's OneXPlayer 3 power model.
+"""patches/hhd/0003: hhd must apply OneXConsole's OneXPlayer 3 power model (with its 40 W unlock).
 
 Applies the patch to a copy of the installed hhd adjustor package and drives
 get_rapl/set_rapl against a fake powercap tree shaped like the OneXPlayer 3
@@ -79,19 +79,21 @@ class HhdOxp3PowerPatchTest(unittest.TestCase):
 
     def test_oxp3_range_and_default(self):
         data = self.rapl.get_rapl("ONEXPLAYER 3")
-        self.assertEqual((data.min_tdp, data.default_tdp, data.max_tdp), (3, 25, 35))
+        self.assertEqual((data.min_tdp, data.default_tdp, data.max_tdp), (3, 25, 40))
 
     def test_oxp3_limits_follow_onexconsole(self):
         data = self.rapl.get_rapl("ONEXPLAYER 3")
-        for tdp, expect in ((35, (35, 36, 160)), (25, (25, 26, 160)), (10, (10, 11, 160))):
+        for tdp, expect in ((40, (40, 41, 160)), (35, (35, 36, 160)), (25, (25, 26, 160)),
+                            (10, (10, 11, 160))):
             self.assertTrue(self.rapl.set_rapl(data, tdp, True))
             for zone in ("intel-rapl:0", "intel-rapl-mmio:0"):
                 self.assertEqual(self.limits(zone), expect, f"TDP {tdp} on {zone}")
 
-    def test_oxp3_rejects_the_old_unlocked_40w(self):
+    def test_oxp3_allows_the_vendor_unlock_but_not_above(self):
         data = self.rapl.get_rapl("ONEXPLAYER 3")
+        self.assertTrue(self.rapl.set_rapl(data, 40, True))
         with self.assertRaises(ValueError):
-            self.rapl.set_rapl(data, 40, True)
+            self.rapl.set_rapl(data, 41, True)
 
     def test_boost_off_is_unchanged(self):
         data = self.rapl.get_rapl("ONEXPLAYER 3")

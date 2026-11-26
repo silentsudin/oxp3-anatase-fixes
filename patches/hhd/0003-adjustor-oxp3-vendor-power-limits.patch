@@ -3,14 +3,17 @@ From: silentsudin <25103587+silentsudin@users.noreply.github.com>
 Date: Sat, 21 Nov 2026 15:00:09 +0000
 Subject: [PATCH] adjustor: OneXPlayer 3 power limits from OneXConsole
 
-hhd ran the OneXPlayer 3 at PL1 40 W / PL2 42 W, which is OneXConsole's opt-in
-"unlock" tier, and scaled PL4 from whatever value it found at startup (160 W if a
+hhd ran the OneXPlayer 3 at PL1 40 W / PL2 42 W (PL2 = TDP + 2, not OneXConsole's
+TDP + 1), and scaled PL4 from whatever value it found at startup (160 W if a
 previous tool wrote it, 100 W at TDP 25, 40 W at TDP 10).
 
 OneXConsole (0.10.4) configures this device, board "ONEXPLAYER 3" with the
 Intel Arc G3 Extreme, as:
-  - TDP 3-35 W, default 25 W (40 W only behind its "unlock" option);
-  - PL2 = TDP + 1 (pl2MappingFunc), i.e. 36 W at the 35 W maximum;
+  - TDP 3-35 W, default 25 W, and 40 W behind its "unlock" option
+    (presetUnlockMaxTdp 40, unlockMaxBoostTdp 41), which this preset allows:
+    GravityMark D3D11 at the package limit gains 2.6 % (GT 2180 -> 2295 MHz,
+    package 35 -> 37 W, same 89 C peak);
+  - PL2 = TDP + 1 (pl2MappingFunc), i.e. 41 W at the 40 W maximum;
   - PL4 fixed per power-supply mode (adjustAlwaysSetPl4, changePl4Func): 160 W on
     battery and 100/140 W supplies, 120 W on 65 W supplies. The supply mode is
     read from EC RAM that Linux does not expose, so the 160 W case is used.
@@ -44,11 +47,11 @@ index 0e01f7d..87f0457 100644
      "ONEXPLAYER G1 i": {"pl1": 30, "pl2": 32},
      "ONEXPLAYER X1Pro EVA-02": {"pl1": 30, "pl2": 32},
 -    "ONEXPLAYER 3": {"minTdp": 3, "defaultTdp": 25, "pl1": 40, "pl2": 42},
-+    # OneXConsole's OXP3 / Arc G3 entries: TDP 3-35 W (40 W only behind its opt-in
-+    # "unlock"), default 25 W, PL2 = TDP + 1 (36 W at 35 W), PL4 160 W on battery and
-+    # 100/140 W supplies (120 W on 65 W supplies, which Linux cannot detect).
++    # OneXConsole's OXP3 / Arc G3 model with its "unlock" tier allowed: TDP 3-40 W
++    # (+2.6 % measured at the package limit), default 25 W, PL2 = TDP + 1 (41 W at
++    # 40 W), PL4 160 W on battery and 100/140 W supplies (120 W on 65 W supplies).
 +    "ONEXPLAYER 3": {
-+        "minTdp": 3, "defaultTdp": 25, "pl1": 35, "pl2": 36, "pl2Offset": 1, "pl4": 160,
++        "minTdp": 3, "defaultTdp": 25, "pl1": 40, "pl2": 41, "pl2Offset": 1, "pl4": 160,
 +    },
  }
  
