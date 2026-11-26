@@ -1,0 +1,48 @@
+From: oxp3-fixes <oxp3-fixes@localhost>
+Subject: [PATCH] steamcompmgr: keep HDR output on for external displays
+
+Every HDR on/off is a colorimetry change, and gamescope commits that as a full modeset
+that retrains the link. Through the JSAUX HB1201B dock (Synaptics VMM6210 DP-to-HDMI 2.1
+converter) some of those restarts leave the converter's HDMI output dead (its TX output
+measurement reads 0 from the switch on), and the dock resets itself 12-14 s later, HDMI
+output and USB hub together. Captured 2026-11-25: Pokopia's HDR switch at 22:56:48 kept
+the output (1920) and ran; the one at 22:58:22 left it at 0 and the dock reset at 22:58:36.
+
+Windows keeps an HDR display in HDR while HDR is on, so the converter sees one switch per
+session. hdr_output_always_external (default on) does the same: when HDR is supported and
+enabled on an external display, the output stays PQ/BT.2020 and SDR content is mapped into
+it, as hdr_output_always_internal already does for internal panels. Starting or leaving an
+HDR game then needs no modeset.
+---
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index b3d4bbb..cd397ec 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -1374,6 +1374,14 @@ static bool g_bAppliedAllowVRR = false;
+ gamescope::ConVar<bool> cv_hdr_output_always_internal{ "hdr_output_always_internal", false,
+ 	"Keep HDR output enabled on internal displays whenever HDR is supported, instead of switching it on and off with content "
+ 	"(like Windows does with HDR on). SDR content is mapped into HDR. Avoids the panel mode switches entirely." };
++// Every HDR on/off is a colorimetry change, and with it a full modeset that retrains the link.
++// Through a DP-to-HDMI 2.1 converter (JSAUX HB1201B, Synaptics VMM6210) some of those restarts
++// leave the converter's HDMI output dead, and the dock resets itself 12-14 s later (HDMI output
++// and USB hub). Windows keeps an HDR display in HDR, so the converter sees one switch per session.
++gamescope::ConVar<bool> cv_hdr_output_always_external{ "hdr_output_always_external", true,
++	"Keep HDR output enabled on external displays whenever HDR is supported and enabled, instead of switching it on and "
++	"off with content (like Windows does with HDR on). SDR content is mapped into HDR. Starting or leaving an HDR game "
++	"then needs no modeset." };
+ static bool		useXRes = true;
+ 
+ namespace gamescope
+@@ -9309,8 +9317,10 @@ steamcompmgr_main(int argc, char **argv)
+ 			g_ulLastHDROutputSwitch = get_time_in_nanos(); // startup modeset counts
+ 			s_bStartupCounted = true;
+ 		}
+-		const bool bAlwaysHDROutput = cv_hdr_output_always_internal &&
+-			GetBackend()->GetScreenType() == gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL;
++		const gamescope::GamescopeScreenType eScreenType = GetBackend()->GetScreenType();
++		const bool bAlwaysHDROutput =
++			( cv_hdr_output_always_internal && eScreenType == gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL ) ||
++			( cv_hdr_output_always_external && eScreenType == gamescope::GAMESCOPE_SCREEN_TYPE_EXTERNAL );
+ 		const bool bWantHDROutput = hdr_supported && ( hdr_requested || bAlwaysHDROutput );
+ 		const bool bInternalHDR = hdr_supported && PanelHDRRequiresVRR();
+ 		if ( !bWantHDROutput || g_bOutputHDREnabled )
