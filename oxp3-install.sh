@@ -9,6 +9,9 @@
 # It is idempotent and decides the phase from the live system:
 #   - booted deployment lacks kmod-oxp3/oxp3-firmware -> build + first install, then asks for a reboot;
 #   - booted deployment has them (after the reboot)   -> overlay Mesa/gamescope/XMX + hardware + verify.
+# A later run that rebuilds the kernel modules installs the hardware fixes before asking for the
+# reboot, so the reboot finishes it; it asks for one more run only when it also built new overlay
+# RPMs (gamescope, MangoHud, Mesa), which can only go in once the new deployment is booted.
 # Secure Boot: if the MOK key is not enrolled it queues it (once), asks for the firmware-screen
 # enrolment + reboot, and the next run continues.
 #
@@ -211,6 +214,47 @@ if ! has_kernel_stack || ! has_firmware; then
     exit 0
 fi
 
+# Hardware fixes: services and config in /etc and /usr/local. They do not depend on the kernel
+# modules or the /usr overlay, so they also go in on a run that stages new modules - a reboot
+# then finishes the install instead of needing another run (2026-11-25: the dock recorder
+# waited for a second run the user had no reason to make).
+hardware_step() {
+    (( SKIP_HW )) && return 0
+    local hw_args import_args
+    say "hardware fixes (volume, LEDs/RGB, suspend, Bluetooth, power, IMU, audio, XMX, Decky)"
+    ask_harman
+    hw_args=(--all --audio-activate --restart-plugin-loader)
+    if [ -n "$HARMAN_PATH" ] && [ -e "$HARMAN_PATH" ]; then
+        if (( DRY )); then
+            info "[dry-run] import Harman APO: $HARMAN_PATH"
+        else
+            import_args=(--path "$HARMAN_PATH" --profile loud)
+            (( HARMAN_FORCE )) && import_args+=(--force)
+            "$here/tools/audio/harman-import.sh" "${import_args[@]}" ||
+                die "the Harman APO import failed (hash or format); fix the path, add --harman-force for another vendor revision, or use --no-harman"
+        fi
+        hw_args+=(--harman "$HARMAN_PATH")
+        (( HARMAN_FORCE )) && hw_args+=(--harman-force)
+    else
+        hw_args+=(--no-harman)
+    fi
+    run sudo "$here/tools/oxp3-hw-install.sh" "${hw_args[@]}" \
+        || warn "hardware installer reported a problem; see the lines above"
+}
+
+# Overlay RPMs (gamescope, MangoHud, Mesa) built by this run but not installed yet. They go into
+# the /usr overlay, which oxp3-fixes.sh install leaves alone while a deployment is staged.
+overlay_pending() {
+    local f nevra
+    for f in "$out"/gamescope-*.x86_64.rpm "$out"/mangohud-*.x86_64.rpm \
+             "$out"/mesa-vulkan-drivers-*.x86_64.rpm; do
+        [[ -e $f ]] || continue
+        nevra=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "$f" 2>/dev/null) || continue
+        rpm -q "$nevra" >/dev/null 2>&1 || { printf '%s\n' "${f##*/}"; return 0; }
+    done
+    return 1
+}
+
 # ---- phase 3: overlay stack + hardware + verification ------------------------------
 if (( MOK_NEEDED )); then
     say "the MOK key is queued but not enrolled yet"
@@ -235,33 +279,19 @@ run sudo OXP3_USER="$(id -un)" "$here/oxp3-fixes.sh" install || die "install fai
 # A rebuilt kernel module or firmware package is staged as a new deployment by that install,
 # which then stops before the overlay step: finish after the reboot, like the first run.
 if (( ! DRY )) && [[ $(staged_deployment) == yes ]]; then
+    hardware_step
     say "updated kernel modules/firmware were staged: reboot required"
     info "systemctl reboot"
-    info "then run ./oxp3-install.sh again (it will finish automatically)"
+    if pending=$(overlay_pending); then
+        info "after the reboot run ./oxp3-install.sh once more: $pending (and the rest of the"
+        info "/usr overlay) can only go in once the new deployment is booted"
+    else
+        info "that finishes the install; the hardware fixes above are already in place"
+    fi
     exit 0
 fi
 
-if (( ! SKIP_HW )); then
-    say "hardware fixes (volume, LEDs/RGB, suspend, Bluetooth, power, IMU, audio, XMX, Decky)"
-    ask_harman
-    hw_args=(--all --audio-activate --restart-plugin-loader)
-    if [ -n "$HARMAN_PATH" ] && [ -e "$HARMAN_PATH" ]; then
-        if (( DRY )); then
-            info "[dry-run] import Harman APO: $HARMAN_PATH"
-        else
-            import_args=(--path "$HARMAN_PATH" --profile loud)
-            (( HARMAN_FORCE )) && import_args+=(--force)
-            "$here/tools/audio/harman-import.sh" "${import_args[@]}" ||
-                die "the Harman APO import failed (hash or format); fix the path, add --harman-force for another vendor revision, or use --no-harman"
-        fi
-        hw_args+=(--harman "$HARMAN_PATH")
-        (( HARMAN_FORCE )) && hw_args+=(--harman-force)
-    else
-        hw_args+=(--no-harman)
-    fi
-    run sudo "$here/tools/oxp3-hw-install.sh" "${hw_args[@]}" \
-        || warn "hardware installer reported a problem; see the lines above"
-fi
+hardware_step
 
 if (( ! SKIP_VERIFY )); then
     say "verification"

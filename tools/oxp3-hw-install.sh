@@ -703,7 +703,13 @@ comp_bluetooth_install() {
         skip_prefixed "tools/oxp3-bt-firmware.sh ${BT_ARGS[*]} (writes to /)"
         return
     fi
-    run "$repo/tools/oxp3-bt-firmware.sh" "${BT_ARGS[@]}"
+    # Re-downloading needs upstream to still serve the pinned blobs; when the installed set
+    # already verifies and the radio is up there is nothing to fetch.
+    if (( !DRY_RUN )) && "$repo/tools/oxp3-bt-firmware.sh" --check >/dev/null 2>&1; then
+        printf '  firmware already installed and verified, radio healthy: no download\n'
+    else
+        run "$repo/tools/oxp3-bt-firmware.sh" "${BT_ARGS[@]}"
+    fi
 
     # The probe runs before switch_root and btintel_pcie has no MODULE_FIRMWARE()
     # entries, so dracut cannot carry the blobs: reload after the real root is up.
@@ -1314,12 +1320,29 @@ component_selected() {
     return 1
 }
 
+# Each component runs in its own errexit subshell: a failure stops that component, not the ones
+# after it. (2026-11-25: upstream linux-firmware changed a Bluetooth blob, its pinned hash failed,
+# and set -e took power, LEDs, RGB, audio, sched, gfx, gamescope, hdr, XMX, MangoHud and Decky
+# down with it.) The failed ones are named at the end and the exit status is non-zero.
+# It must not be called from an `if`/`||`/`&&` context: bash then ignores set -e in everything
+# below, the component subshells included, and a failing step would carry on. It reports through
+# RUN_SELECTED_FAILED instead of its return status for the same reason.
+RUN_SELECTED_FAILED=0
 run_selected() {
-    local action=$1 c
+    local action=$1 c rc failed=()
     for c in "${ALL_COMPONENTS[@]}"; do
         component_selected "$c" || continue
-        "comp_${c}_${action}"
+        set +e
+        ( set -e; "comp_${c}_${action}" )
+        rc=$?
+        set -e
+        (( rc == 0 )) || { failed+=("$c"); warn "component '$c' failed (exit $rc); continuing with the rest"; }
     done
+    if (( ${#failed[@]} )); then
+        warn "failed component(s): ${failed[*]} - everything else was ${action}ed; see the messages above"
+        RUN_SELECTED_FAILED=1
+    fi
+    return 0
 }
 
 print_verify_hints() {
@@ -1398,6 +1421,7 @@ do_install_or_uninstall() {
             fi
         fi
     fi
+    return "$RUN_SELECTED_FAILED"
 }
 
 # ---------------------------------------------------------------------------------------------
