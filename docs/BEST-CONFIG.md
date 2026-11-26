@@ -147,3 +147,86 @@ Evidence (2026-11-08, Wukong benchmark tool, DX11/DXVK path):
 
 So: after any driver install, launch each title once and let it warm, then benchmark. Judge performance only on a
 warm run, and quote state-snapshot.sh with the number. Do not re-bisect patches for a cold first run.
+
+## Ray tracing on 26.3.1: the two "not portable" patches are a 12.7% win (2026-11-26)
+
+Measured with the automated harness, no install needed: the RT-patched build was extracted from its RPMs into a
+side tree with a private ICD (`tools/gpu-bench/driver-ab.sh`), so the two drivers could be interleaved in one
+session. GravityMark 1.89, native Vulkan, 1280x720, headless, warm shader cache, order A B B A.
+
+| workload | installed 26.3.1 (no RT patches) | 26.3.1 + `0205`/`0211` | delta |
+|---|---:|---:|---:|
+| **ray tracing** (20k asteroids) | 173.1 / 172.7 fps | **194.7 / 195.1 fps** | **+12.7%** |
+| raster (50k asteroids) | 219.1 / 219.1 fps | 218.7 / 218.9 fps | −0.14% |
+
+The groups do not overlap and each variant's spread is 0.4 fps. The patches only touch TLAS builds, which is why
+raster is unchanged. They now live in `patches/mesa-26.3/` as `0010`/`0011`, globbed by both the host and the
+Flatpak GL build, so `./oxp3-install.sh` ships them.
+
+This corrects the earlier claim that `0205`/`0211` were "not portable to 26.3": both apply to `fec8830e` and both
+pay off. `0212` (which folded them together with main-only refactors) stays out.
+
+### Two traps this measurement paid for
+
+- **An exported `VK_DRIVER_FILES` outlives the segment that set it.** The first attempt kept it for the whole
+  shell, so the "installed" repeat ran the patched driver and the two looked identical (+0.3%). Every variant now
+  runs in its own scope, and the installed one runs under `env -u VK_DRIVER_FILES -u LD_LIBRARY_PATH`.
+- **The first harness run of a session is a cold run** (shader cache plus thermal state): 176.6 fps RT versus
+  194.3 later with no change. Warm both variants, then interleave, then trust the delta, not the absolute.
+
+## Shader compiler: Jay is load-bearing, `INTEL_DEBUG=no-jay` is not a lever
+
+GravityMark RT, same method, both variants warmed:
+
+| backend | runs | mean |
+|---|---|---:|
+| Jay (default on Xe2/Xe3) | 172.9 | **172.9 fps** |
+| brw (`INTEL_DEBUG=no-jay`) | 114.5 / 114.4 | 114.5 fps |
+
+**−33.8% for brw.** There is nothing to choose here; the 7.7% raster gap against Windows is not the compiler
+backend.
+
+## `VKD3D_DISABLE_EXTENSIONS` costs nothing on D3D12
+
+XeSS's kernel injection needs the classic descriptor heap, so `VK_EXT_descriptor_buffer`/`VK_EXT_descriptor_heap`
+are disabled for every Proton game. Measured, GravityMark D3D12, 1280x720, A B B A:
+
+| setting | runs | mean |
+|---|---|---:|
+| both disabled (what games get today) | 87.70 / 87.88 | 87.79 fps |
+| both allowed | 87.02 / 86.91 | 86.97 fps |
+
+The global setting is **not** costing performance here (it is marginally ahead, inside noise), so there is no
+reason to scope it per game or to change the CM injection for descriptor buffers.
+
+## GPU clock floor: a real control, and no performance (2026-11-26, root session)
+
+`tools/gpu-bench/gpu-clock-floor.sh` raised GT0's `min_freq` (450/1200/1800/2300 MHz) and sampled
+`act_freq`, `throttle/reasons` and RAPL at 10 Hz during a GravityMark D3D11 run at 1280x720.
+
+| floor | fps | mean MHz (active) | p10 | p90 | gated | throttled | pl2 | pkg W | core W |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 450 (default) | 83.11 | 1845 | 1700 | 2050 | 11% | 87% | 87% | 30.3 | 13.5 |
+| 1200 | 83.52 | 1922 | 1750 | 2100 | 11% | 87% | 87% | 30.2 | 13.4 |
+| 1800 | 83.56 | 1936 | 1750 | 2100 | 11% | 85% | 85% | 30.2 | 13.4 |
+| 2300 | 83.52 | 1968 | 1800 | 2150 | 11% | 83% | 83% | 30.2 | 13.3 |
+| `power_saving` | 84.02 | 2053 | 2000 | 2100 | 11% | 81% | 81% | 30.1 | 13.4 |
+
+Three conclusions:
+
+- **`min_freq` is a working control**: the active clock rises 1845 → 1968 MHz with the floor, so the
+  write takes effect and SLPC honours it.
+- **It buys no frames**: 83.1-84.0 fps across all five runs, a 0.9% spread that includes the noise
+  floor. Nothing to ship from a clock floor, and no MangoHud/gamescope work needed here.
+- **The limit is power, not clock**: `throttle/reasons` is `pl2` in 81-87% of samples at a constant
+  30.1-30.3 W package draw. The device is at its burst-power ceiling, so shifting the clock floor
+  only redistributes the same watts.
+- `act_freq` reads 0 in ~11% of samples under every floor: that is the GT parking between frames,
+  not a low clock, and it explains the earlier "p10 = 0" artefact (the table now separates gated
+  samples from active ones).
+
+Consequence: the 1% lows at about half the mean are **not** a clock-ramp problem and cannot be fixed
+by a frequency floor. The remaining headroom is power-per-frame efficiency, not more MHz — which is
+what the RT TLAS patches delivered (+12.7%) and what a GPU-aware CPU boost would target (~13.4 W of
+the 30 W package goes to the CPU while the GPU is `pl2`-throttled; that test is the next candidate
+and needs hhd's boost level changed, not another frequency knob).

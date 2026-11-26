@@ -30,21 +30,25 @@ much faster and you normally run the script only after an Anatase update.</small
 - Correct behaviour when toggling HDR while VRR is active.
 
 ### Performance
-- **Mesa main + performance patches**, rebuilt for the exact kernel/driver stack: faster mesh
-  shading, ray tracing close to Windows, fewer driver ioctls per frame.
+- **Mesa 26.3.1 + performance patches**, rebuilt for the exact kernel/driver stack: faster mesh
+  shading, the ray-tracing TLAS builder patches (+12.7 % RT, measured), fewer driver ioctls per
+  frame, and Intel's Jay shader compiler (33.8 % faster than the older brw backend on RT).
 - **The same Mesa in Flathub apps** (Horizon, Heroic, emulators on `org.freedesktop.Platform//26.08`):
   built in the Flatpak SDK as the GL driver extension `org.freedesktop.Platform.GL.oxp3`, with
   Flathub's driver kept as the fallback. Details: [docs/FLATPAK-GL.md](docs/FLATPAK-GL.md).
-- **Gaming CPU scheduler** (`scx_cosmos`) where available, with EEVDF fallback.
-- GravityMark 1.89 (50k asteroids, 1280×720): stock Anatase ≈223 FPS raster / ≈124 FPS RT;
-  after this stack ≈268 / ≈180, with mesh shading slightly **above** the Windows reference.
-  Details and caveats: [docs/BEST-CONFIG.md](docs/BEST-CONFIG.md).
+- **The kernel's own EEVDF scheduler.** `scx_cosmos` is retired: it won on kernel 7.2.7, but on
+  7.3.4 only EEVDF keeps the thread that limits the frame rate on a P-core (GravityMark D3D11
+  640x360: EEVDF 96.4 fps / 1 % low 51.7, cosmos 94.7 / 49.8). Details: [docs/cpu-sched.md](docs/cpu-sched.md).
+- GravityMark 1.89, native Vulkan, 1280×720, measured 2026-11-26 (warm shader cache, two runs
+  each, A B B A): **219 fps raster**, **173 fps ray tracing**, and **195 fps RT** with the TLAS
+  builder patches that now ship (+12.7 %). Raster is unchanged by them. Details and caveats:
+  [docs/BEST-CONFIG.md](docs/BEST-CONFIG.md).
 
 ### XeSS XMX (Arc matrix units)
 - Real **XeSS super resolution and frame generation on the XMX units** instead of the slow DP4a
   fallback, per game, in native Steam and Heroic.
-- Dedicated Mesa 26.3.0 XMX driver built with the upstream CM series plus our performance patches;
-  the desktop/Gamescope stay on Mesa main so HDR keeps working.
+- The shipping Mesa 26.3.1 carries the CM kernel injection itself (upstream's `patches/mesa-26.3`
+  series), so XMX runs on the one driver: no second Mesa, no separate ICD.
 - Proton shim, compiler and kernel cache handled automatically; first launch compiles kernels once.
 
 ### Controls, lighting, audio
@@ -302,7 +306,7 @@ backed up and restored by `tools/oxp3-rollback.sh restore`. Details: [docs/ROLLB
 | Kernel modules | working | xe (VBT VS/PE-O backport, 7.3 VRR/DSB flip timing, resume out-of-memory fix, 7.2.8-7.2.13 stable fixes, IBC v3 on PTL, eDP HDR switches) plus iwlwifi/iwlmld and btintel/btintel_pcie fixes, built for the installed kernel and layered as kmod-oxp3. | built for the installed kernel, signed with your MOK, layered as kmod-oxp3 with a regenerated initramfs (`./oxp3-install.sh`) |
 | Firmware | working | Display DMC v2.20 (v2.36 caps VRR near 74 fps), Bluetooth 24.80 and CPU microcode 0x11c, layered in /usr/lib/firmware/updates. | layered as oxp3-firmware together with the modules, in /usr/lib/firmware/updates (`./oxp3-install.sh`) |
 | rapl-power | working | CPU/GPU power for the overlay without opening the RAPL counters to users; also publishes dram and psys so the SAGV/memory-frequency effect is measurable without root. | /usr/local/libexec plus a system unit, installed by the driver installer (`./oxp3-install.sh`) |
-| sched_ext (scx_cosmos) | working | scx_cosmos measured +4.8% Cyberpunk average and +5.7% FPS/W over EEVDF with GravityMark unchanged; the gaming-scheduler unit is installed by the fast installer. | installed and enabled by the fast installer when scx_cosmos is present, with an EEVDF fallback (`./oxp3-install.sh`) |
+| CPU scheduler (EEVDF; scx_cosmos retired) | not-a-gap | scx_cosmos is retired: on kernel 7.3.4 only the kernel's own EEVDF keeps the thread that limits the frame rate on a P-core (GravityMark D3D11 640x360 with the main thread at 98 % of one core: EEVDF 96.4 fps / 1 % low 51.7, cosmos 94.7 / 49.8, the other sched_ext schedulers 0.2-22 % worse; tools/sched-bench.py, docs/cpu-sched-results.csv). | nothing to install: the installer disables any left-over scx unit and the kernel's EEVDF runs; tools/oxp3-scx-profile.sh switches a scheduler by hand (`./oxp3-install.sh`) |
 | SAGV / memory frequency | blocked | No Linux control exists: Windows pins the SAGV/QCLK-GV point through an MCHBAR register pair, while Linux only has the boot-time xe.enable_sagv switch, which can only disable. | nothing is installed; the probe is read-only and needs no root |
 | Decky status plugin | working | A Decky Loader plugin and a headless CLI over one backend, showing live Mesa, XMX, sched_ext and hardware-fix status in the Steam Quick Access Menu. | a deterministic plugin zip (built offline, or an existing one verified against the recorded sha256) installed into the root-owned Decky plugins directory, with the previous copy backed up (`sudo tools/oxp3-hw-install.sh --decky`) |
 <!-- END GENERATED: readme-summary -->

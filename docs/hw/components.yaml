@@ -254,11 +254,11 @@ components:
       evidence: "docs/state/oxp3-status-2026-11-09.json rapl indicator ok (docs/QA.md rows 29 and 33)"
 
   - id: sched-ext
-    title: sched_ext (scx_cosmos)
-    state: working
+    title: CPU scheduler (EEVDF; scx_cosmos retired)
+    state: not-a-gap
     group: driver-stack
     headline: true
-    summary: "scx_cosmos measured +4.8% Cyberpunk average and +5.7% FPS/W over EEVDF with GravityMark unchanged; the gaming-scheduler unit is installed by the fast installer."
+    summary: "scx_cosmos is retired: on kernel 7.3.4 only the kernel's own EEVDF keeps the thread that limits the frame rate on a P-core (GravityMark D3D11 640x360 with the main thread at 98 % of one core: EEVDF 96.4 fps / 1 % low 51.7, cosmos 94.7 / 49.8, the other sched_ext schedulers 0.2-22 % worse; tools/sched-bench.py, docs/cpu-sched-results.csv)."
     implementation:
       - files/oxp3-gaming-sched.service
       - oxp3-fixes-fast.sh
@@ -267,7 +267,7 @@ components:
     doc: docs/cpu-sched.md
     root_required: "yes"
     install:
-      summary: "installed and enabled by the fast installer when scx_cosmos is present, with an EEVDF fallback"
+      summary: "nothing to install: the installer disables any left-over scx unit and the kernel's EEVDF runs; tools/oxp3-scx-profile.sh switches a scheduler by hand"
       entrypoint: "./oxp3-install.sh"
     verify:
       - id: sched.state
