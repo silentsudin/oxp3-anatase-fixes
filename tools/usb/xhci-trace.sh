@@ -4,6 +4,9 @@
 # command the controller rejects. Runs for 40 s, then restores everything it touched.
 # Usage: sudo bash tools/usb/xhci-trace.sh <output file>
 set -u
+case ${1:-} in
+    -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
 out=${1:?output file}
 T=/sys/kernel/tracing
 DD=/sys/kernel/debug/dynamic_debug/control

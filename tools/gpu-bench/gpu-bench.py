@@ -360,8 +360,22 @@ def bench_opencl(outdir):
     (outdir / "clpeak-opencl-run.json").write_text(json.dumps(res, indent=2))
     return res
 
+def gravity_home():
+    """The GravityMark tree: the harness's own copy, or the one settle/setup extracted.
+
+    Two layouts exist on this machine - tools/GravityMark (what this script expects) and
+    dl/gm-linux (what tools/gpu-bench/gravitymark.py extracts) - and a missing binary here made
+    every raster/RT run report "missing" without a word in the log.
+    """
+    for home in (TOOLS / "GravityMark", CACHE / "dl" / "gm-linux"):
+        if (home / "bin" / "GravityMark.x64").exists() and (home / "data.zip").exists():
+            return home
+    return TOOLS / "GravityMark"
+
+
 def bench_gravity(outdir, rt=False, asteroids=50000):
-    exe = TOOLS / "GravityMark" / "bin" / "GravityMark.x64"
+    home = gravity_home()
+    exe = home / "bin" / "GravityMark.x64"
     if not exe.exists():
         return {"status": "missing", "path": str(exe)}
     tag = "rt" if rt else "raster"
