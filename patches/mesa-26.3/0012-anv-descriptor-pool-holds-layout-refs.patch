@@ -1,0 +1,162 @@
+From f8ef73246df8300adb86797a694118ae0e84dc3e Mon Sep 17 00:00:00 2001
+From: silentsudin <25103587+silentsudin@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 18:48:53 +0000
+Subject: [PATCH] anv: descriptor pools hold one layout reference instead of
+ one per set
+
+anv_descriptor_set_create() took an atomic reference on the shared
+vk_descriptor_set_layout for every set, and freeing/resetting dropped it
+again. With several threads allocating sets of the same layouts the
+layout's cache line bounces between cores: perf on GravityMark (native
+Vulkan, Arc B390) put 78 % of anv_AllocateDescriptorSets' samples on the
+instruction after that `lock add`.
+
+Pools are externally synchronized, so a pool can hold the reference on
+behalf of all its sets: a 64-slot open-addressed table of held layouts
+(kept at most 3/4 full), filled on first use and released on reset and
+destroy, after the pool's sets are gone. A set only takes its own
+reference when the table is full, and records that in owns_layout_ref so
+free/reset/destroy release exactly what was taken. Layouts referenced by
+a pool live until the pool is reset or destroyed, which is allowed: the
+layout may be destroyed by the application while sets still use it.
+
+GravityMark 1.89 native Vulkan 1280x720: anv_AllocateDescriptorSets +
+anv_ResetDescriptorPool 0.084 -> 0.060 Mcycles/frame (-29 %); fps
+unchanged (GPU-bound). D3D11 (DXVK) and D3D12 (vkd3d) runs clean.
+---
+ src/intel/vulkan/anv_descriptor_set.c | 58 +++++++++++++++++++++++++--
+ src/intel/vulkan/anv_private.h        | 12 ++++++
+ 2 files changed, 67 insertions(+), 3 deletions(-)
+
+diff --git a/src/intel/vulkan/anv_descriptor_set.c b/src/intel/vulkan/anv_descriptor_set.c
+index 6041453..b046afa 100644
+--- a/src/intel/vulkan/anv_descriptor_set.c
++++ b/src/intel/vulkan/anv_descriptor_set.c
+@@ -1227,6 +1227,52 @@ anv_descriptor_pool_heap_free(struct anv_device *device,
+                       state.alloc_size);
+ }
+ 
++/* Take (once per pool) the layout reference sets from this pool rely on. Returns
++ * false when the pool's small table is full; the set then holds its own.
++ */
++static bool
++anv_descriptor_pool_hold_layout(struct anv_descriptor_pool *pool,
++                                struct anv_descriptor_set_layout *layout)
++{
++   const uint32_t n = ARRAY_SIZE(pool->held_layouts);
++   uint32_t h = (uint32_t)(((uintptr_t)layout >> 6) * 0x9e3779b1u) & (n - 1);
++
++   for (uint32_t probe = 0; probe < n; probe++, h = (h + 1) & (n - 1)) {
++      if (pool->held_layouts[h] == layout)
++         return true;
++      if (pool->held_layouts[h] == NULL) {
++         /* Keep the table at most 3/4 full so misses stay short. */
++         if (pool->held_layout_count >= n * 3 / 4)
++            return false;
++         vk_descriptor_set_layout_ref(&layout->vk);
++         pool->held_layouts[h] = layout;
++         pool->held_layout_count++;
++         return true;
++      }
++   }
++   return false;
++}
++
++static void
++anv_descriptor_pool_release_layouts(struct anv_device *device,
++                                    struct anv_descriptor_pool *pool)
++{
++   if (pool->held_layout_count == 0)
++      return;
++   for (uint32_t i = 0; i < ARRAY_SIZE(pool->held_layouts); i++) {
++      if (pool->held_layouts[i]) {
++         vk_descriptor_set_layout_unref(&device->vk, &pool->held_layouts[i]->vk);
++         pool->held_layouts[i] = NULL;
++      }
++   }
++   pool->held_layout_count = 0;
++}
++
++static void
++anv_descriptor_set_destroy(struct anv_device *device,
++                           struct anv_descriptor_pool *pool,
++                           struct anv_descriptor_set *set);
++
+ VkResult anv_CreateDescriptorPool(
+     VkDevice                                    _device,
+     const VkDescriptorPoolCreateInfo*           pCreateInfo,
+@@ -1427,6 +1473,7 @@ void anv_DestroyDescriptorPool(
+                             &pool->desc_sets, pool_link) {
+       anv_descriptor_set_destroy(device, pool, set);
+    }
++   anv_descriptor_pool_release_layouts(device, pool);
+ 
+    util_vma_heap_finish(&pool->host_heap);
+ 
+@@ -1448,9 +1495,11 @@ VkResult anv_ResetDescriptorPool(
+ 
+    list_for_each_entry_safe(struct anv_descriptor_set, set,
+                             &pool->desc_sets, pool_link) {
+-      vk_descriptor_set_layout_unref(&device->vk, &set->layout->vk);
++      if (set->owns_layout_ref)
++         vk_descriptor_set_layout_unref(&device->vk, &set->layout->vk);
+    }
+    list_inithead(&pool->desc_sets);
++   anv_descriptor_pool_release_layouts(device, pool);
+ 
+    util_vma_heap_finish(&pool->host_heap);
+    util_vma_heap_init(&pool->host_heap, POOL_HEAP_OFFSET, pool->host_mem_size);
+@@ -1640,7 +1689,9 @@ anv_descriptor_set_create(struct anv_device *device,
+ 
+    set->pool = pool;
+    set->layout = layout;
+-   vk_descriptor_set_layout_ref(&layout->vk);
++   set->owns_layout_ref = !anv_descriptor_pool_hold_layout(pool, layout);
++   if (set->owns_layout_ref)
++      vk_descriptor_set_layout_ref(&layout->vk);
+ 
+    set->buffer_view_count =
+       set_layout_buffer_view_count(layout, var_desc_count);
+@@ -1713,7 +1764,8 @@ anv_descriptor_set_destroy(struct anv_device *device,
+                            struct anv_descriptor_pool *pool,
+                            struct anv_descriptor_set *set)
+ {
+-   vk_descriptor_set_layout_unref(&device->vk, &set->layout->vk);
++   if (set->owns_layout_ref)
++      vk_descriptor_set_layout_unref(&device->vk, &set->layout->vk);
+ 
+    if (set->desc_surface_mem.alloc_size) {
+       anv_descriptor_pool_heap_free(device, pool, &pool->surfaces, set, set->desc_surface_mem);
+diff --git a/src/intel/vulkan/anv_private.h b/src/intel/vulkan/anv_private.h
+index 36b8dcc..df43104 100644
+--- a/src/intel/vulkan/anv_private.h
++++ b/src/intel/vulkan/anv_private.h
+@@ -3782,6 +3782,9 @@ struct anv_descriptor_set {
+    /* Is this descriptor set a push descriptor */
+    bool is_push;
+ 
++   /* This set holds its own layout reference (its pool's held_layouts was full) */
++   bool owns_layout_ref;
++
+    /* Bitfield of descriptors for which we need to generate surface states.
+     * Only valid for push descriptors
+     */
+@@ -3920,6 +3923,15 @@ struct anv_descriptor_pool {
+    /** Allocated size of host_mem */
+    uint32_t host_mem_size;
+ 
++   /**
++    * Layouts this pool holds one reference to on behalf of every set allocated
++    * from it, released on reset/destroy. The pool is externally synchronized,
++    * so this replaces an atomic increment on the shared layout per set (a
++    * cache line bounced between recording threads).
++    */
++   struct anv_descriptor_set_layout *held_layouts[64]; /* open addressing */
++   uint32_t held_layout_count;
++
+    /**
+     * VK_DESCRIPTOR_POOL_CREATE_HOST_ONLY_BIT_EXT. If set, then
+     * surface_state_stream is unused.
+-- 
+2.56.0
+
