@@ -1,0 +1,399 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: MIT
+"""oxp3-dock-watch - flight recorder for the dock's VMM6210 DP-to-HDMI converter.
+
+The JSAUX HB1201B dock resets itself (HDMI output and USB hub) 8-26 s after an HDR game
+starts with VRR at 4K120 (docs/HDMI-VRR-PCON.md). Its firmware (VMM6210 fw 6.05.106,
+docs/VMM6210-FIRMWARE-RE.md) has two checks that can do that, and this records which
+one fires, read-only, over the DP AUX channel while the external display is on:
+
+- the output check in the video-running state: TX output measurement (0x20330004 low
+  16 bits) below the RX DSC picture width (0x2022084c) minus a TX margin (0x20330040
+  bits 16-23) is a strike, counted in 0x90003df7. Strikes do not decay; the tenth
+  re-initialises the converter. The pass counter is 0x90003dfa (checks start after
+  0x95 passes); both are zeroed when the converter re-initialises.
+- the HDR-only VSC check in the MSA watchdog: the live VSC bpc/format (0x20220a40) against
+  the copy saved at stream start (0x90000f33, 0x90000f3a).
+
+It also tails the firmware's own text log, a 32 KB RAM ring at *0x90000448 written at
+0x90003df0. That ring is where "Something is wrong. If it persists, will have to reset
+in 10" goes.
+
+Access is the Synaptics "remote control" (RC) DPCD interface the way fwupd's
+synaptics-mst plugin uses it: ENABLE_RC ("PRIUS"), READ_FROM_MEMORY, DISABLE_RC. Nothing
+is written to the converter's memory or flash. AUX is only touched while the connector
+reports connected *and* enabled (a pipe drives it), so an idle USB-C port is never woken.
+
+Journal: one line per strike, per firmware log line and per dock loss/attach.
+/var/log/oxp3-dock-watch/: the last 60 s of samples before each event, and the firmware
+log ring as it reads on each attach.
+"""
+import collections, glob, os, signal, struct, sys, time
+
+RC_CMD, RC_RESULT, RC_LEN, RC_OFFSET, RC_DATA = 0x4B2, 0x4B3, 0x4B8, 0x4BC, 0x4C0
+ENABLE_RC, DISABLE_RC, READ_FROM_MEMORY = 0x01, 0x02, 0x31
+SYNAPTICS_OUI = bytes.fromhex("90cc24")
+CHIP_VMM6210 = b"\x62\x10"
+
+STATE_BLOCK = 0x90003DE0      # 32 bytes, layout below
+LOG_RING_PTR = 0x90000448     # u32 heap pointer to the 32 KB ring
+LOG_RING_SIZE = 0x8000
+LOG_ENABLED = 0x90000445      # u8, plus a non-zero format buffer at 0x9000044c
+
+# (label, address, length) sampled every period, besides the state block
+REGS = [
+    ("tx0_out", 0x20330004, 4), ("tx0_margin", 0x20330040, 4),
+    ("tx1_out", 0x20340004, 4), ("tx1_margin", 0x20340040, 4),
+    ("rx0_pic", 0x2022084C, 4), ("rx1_pic", 0x20220C4C, 4),
+    ("rx0_vsc", 0x20220A40, 4), ("rx1_vsc", 0x20220E40, 4),
+    ("flags_p0", 0x90000B28, 4), ("flags_p1", 0x90000B28 + 0x43C, 4),
+    ("saved_vsc", 0x90000F30, 16),
+    ("msa_live_p0", 0x20220830, 20),
+]
+
+PERIOD = 0.5                  # s; strikes come seconds apart, ten of them before a reset
+HISTORY = int(60 / PERIOD)    # samples kept for an event dump
+LOGDIR = os.environ.get("LOGS_DIRECTORY", "/var/log/oxp3-dock-watch")
+KEEP_FILES = 60
+HEARTBEAT = 30                # s between decoded journal lines while the display is on
+LOSS_WAIT = 3.0               # s to wait for the kernel to report a disconnect
+
+running = True
+dumped_w = None               # firmware log write index at the last ring dump
+
+
+def say(msg):
+    print(msg, flush=True)
+
+
+def u16(b, o):
+    return struct.unpack_from("<H", b, o)[0]
+
+
+def u32(b, o=0):
+    return struct.unpack_from("<I", b, o)[0]
+
+
+class Aux:
+    def __init__(self, path):
+        self.fd = os.open(path, os.O_RDWR)
+        self.rc = False
+
+    def close(self):
+        if self.rc:
+            try:
+                self.cmd(DISABLE_RC)
+            except Exception:
+                pass
+        os.close(self.fd)
+
+    def rd(self, addr, n):
+        b = os.pread(self.fd, n, addr)
+        if len(b) != n:
+            raise OSError(f"short AUX read at {addr:#x}")
+        return b
+
+    def wr(self, addr, data):
+        os.pwrite(self.fd, bytes(data), addr)
+
+    def cmd(self, c):
+        self.wr(RC_CMD, [c | 0x80])
+        for _ in range(50):
+            b = self.rd(RC_CMD, 2)
+            if not b[0] & 0x80:
+                return b[1]
+            time.sleep(0.02)
+        raise TimeoutError(f"RC command {c:#x} did not complete")
+
+    def enable_rc(self):
+        self.cmd(DISABLE_RC)  # fwupd disables first; a "disabled" result is fine
+        self.wr(RC_DATA, b"PRIUS")
+        self.wr(RC_OFFSET, struct.pack("<I", 0))
+        self.wr(RC_LEN, struct.pack("<I", 5))
+        rc = self.cmd(ENABLE_RC)
+        if rc != 0:
+            raise RuntimeError(f"ENABLE_RC failed, result {rc}")
+        self.rc = True
+
+    def mem(self, addr, n):
+        out = b""
+        while n > 0:
+            k = min(n, 32)
+            self.wr(RC_OFFSET, struct.pack("<I", addr))
+            self.wr(RC_LEN, struct.pack("<I", k))
+            rc = self.cmd(READ_FROM_MEMORY)
+            if rc != 0:
+                raise RuntimeError(f"READ_FROM_MEMORY {addr:#x} failed, result {rc}")
+            out += self.rd(RC_DATA, k)
+            addr += k
+            n -= k
+        return out
+
+
+def read_sysfs(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def active_dock():
+    """(aux path, connector) of a USB-C connector that is connected and driven."""
+    for d in sorted(glob.glob("/sys/class/drm_dp_aux_dev/drm_dp_aux*")):
+        name = read_sysfs(f"{d}/name")
+        if "USBC" not in name and "TC" not in name:
+            continue
+        conn = os.path.realpath(f"{d}/device")
+        if read_sysfs(f"{conn}/status") != "connected":
+            continue
+        if read_sysfs(f"{conn}/enabled") != "enabled":
+            continue
+        return "/dev/" + os.path.basename(d), os.path.basename(conn)
+    return None, None
+
+
+def connector_live(conn):
+    base = glob.glob(f"/sys/class/drm/{conn}")
+    if not base:
+        return False
+    return (read_sysfs(f"{base[0]}/status") == "connected" and
+            read_sysfs(f"{base[0]}/enabled") == "enabled")
+
+
+def prune():
+    files = sorted(glob.glob(os.path.join(LOGDIR, "*.txt")))
+    for f in files[:-KEEP_FILES]:
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
+
+
+def write_file(tag, lines):
+    os.makedirs(LOGDIR, exist_ok=True)
+    path = os.path.join(LOGDIR, time.strftime(f"%Y%m%d-%H%M%S-{tag}.txt"))
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    prune()
+    return path
+
+
+def power_state():
+    """AC adapter + battery as the kernel sees them now. There is no UCSI/typec class on this
+    machine, so ACPI's AC notification is the fastest view of the dock's USB-C power contract:
+    which goes first, power or the video link, tells a PD reset from the dock resetting itself."""
+    ac = "?"
+    for d in sorted(glob.glob("/sys/class/power_supply/*")):
+        if read_sysfs(f"{d}/type") == "Mains":
+            ac = read_sysfs(f"{d}/online") or "?"
+            break
+    bat = ""
+    for d in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+        uw = read_sysfs(f"{d}/power_now")
+        st = read_sysfs(f"{d}/status")
+        try:
+            bat = f"{int(uw) / 1e6:.1f}W {st}"
+        except ValueError:
+            bat = st
+        break
+    return f"ac {ac} bat {bat}"
+
+
+def decode_state(b):
+    return {
+        "vendor": b[0x08],
+        "log_w": u16(b, 0x10),
+        "log_r": u16(b, 0x12),
+        "strikes": b[0x17],
+        "passes": u16(b, 0x1A),
+    }
+
+
+def ring_text(aux, base, start, end):
+    """Bytes [start, end) of the log ring, following the wrap."""
+    out = b""
+    if end < start:
+        out += aux.mem(base + start, LOG_RING_SIZE - start)
+        start = 0
+    if end > start:
+        out += aux.mem(base + start, end - start)
+    return out
+
+
+def printable(b):
+    return b.decode("latin-1").replace("\r", "")
+
+
+class Session:
+    def __init__(self, aux, path, conn):
+        self.aux, self.path, self.conn = aux, path, conn
+        self.history = collections.deque(maxlen=HISTORY)
+        self.last = {}
+        self.state = None
+        self.ring = 0
+        self.log_on = False
+        self.pending = ""
+        self.t0 = time.monotonic()
+        self.last_beat = None
+
+    def attach(self):
+        aux = self.aux
+        oui, chip = aux.rd(0x500, 3), aux.rd(0x507, 2)
+        if oui != SYNAPTICS_OUI or chip != CHIP_VMM6210:
+            say(f"{self.conn}: branch OUI {oui.hex(':')} chip {chip.hex()}: not a VMM6210, not watching")
+            return False
+        aux.enable_rc()
+        st = decode_state(aux.mem(STATE_BLOCK, 32))
+        self.ring = u32(aux.mem(LOG_RING_PTR, 4))
+        self.log_on = aux.mem(LOG_ENABLED, 1)[0] != 0 and u32(aux.mem(LOG_RING_PTR + 4, 4)) != 0
+        say(f"{self.conn}: VMM6210 attached ({self.path}); strikes {st['strikes']}, passes {st['passes']}, "
+            f"fw log {'on' if self.log_on else 'off'} at {self.ring:#x} (w {st['log_w']:#x} r {st['log_r']:#x})")
+        global dumped_w
+        if self.log_on and self.ring and st["log_w"] != dumped_w:
+            dumped_w = st["log_w"]
+            # The whole ring as it reads now: after a dock reset it still holds what the
+            # converter logged on the way down (its RAM is not cleared by re-initialisation).
+            raw = aux.mem(self.ring, LOG_RING_SIZE)
+            w = st["log_w"]
+            text = printable(raw[w:] + raw[:w]).replace("\0", "")
+            p = write_file("fwlog", [f"# firmware log ring {self.ring:#x}, write index {w:#x}, "
+                                     f"read index {st['log_r']:#x}, oldest first", text])
+            tail = [l for l in text.split("\n") if l.strip()][-15:]
+            for l in tail:
+                say(f"fw (ring): {l.strip()}")
+            say(f"firmware log ring saved to {p}")
+        self.state = st
+        self.sample()
+        say(f"{self.conn}: state block {self.last['state']}")
+        return True
+
+    def sample(self):
+        aux = self.aux
+        t = time.monotonic() - self.t0
+        raw = aux.mem(STATE_BLOCK, 32)
+        st = decode_state(raw)
+        vals = {"state": raw.hex(" ")}
+        for label, addr, n in REGS:
+            vals[label] = aux.mem(addr, n).hex(" ")
+        changed = {k: v for k, v in vals.items() if self.last.get(k) != v}
+        self.last = vals
+        stamp = time.strftime("%H:%M:%S") + f" +{t:8.2f}s"
+        line = (f"{stamp} {power_state()} | strikes {st['strikes']:2d} passes {st['passes']:5d} log_w {st['log_w']:#06x} | " +
+                " ".join(f"{k}={v}" for k, v in changed.items()))
+        self.history.append(line)
+        prev = self.state
+        self.state = st
+        if prev and st["strikes"] > prev["strikes"]:
+            self.on_strike(st, vals)
+        elif prev and st["strikes"] < prev["strikes"]:
+            say(f"{self.conn}: strike counter back to {st['strikes']} (converter re-initialised the stream)")
+        if self.log_on and self.ring and prev and st["log_w"] != prev["log_w"]:
+            self.tail_log(prev["log_w"], st["log_w"])
+        # A decoded line on attach and every 30 s: shows the reads are live data (rx pic = the
+        # stream width) and what the counters do between events.
+        if self.last_beat is None or t - self.last_beat >= HEARTBEAT:
+            self.last_beat = t
+            say(f"{self.conn}: {self.summary(st, vals)}")
+
+    def summary(self, st, vals):
+        def low16(label):
+            return u32(bytes.fromhex(vals[label])) & 0xFFFF
+
+        def margin(label):
+            return (u32(bytes.fromhex(vals[label])) >> 16) & 0xFF
+
+        return (f"strikes {st['strikes']} passes {st['passes']} log w/r {st['log_w']:#x}/{st['log_r']:#x}; "
+                f"tx0 out {low16('tx0_out')} margin {margin('tx0_margin')}, "
+                f"tx1 out {low16('tx1_out')} margin {margin('tx1_margin')}, "
+                f"rx0 pic {low16('rx0_pic')}, rx1 pic {low16('rx1_pic')}; "
+                f"vsc {vals['rx0_vsc']}/{vals['rx1_vsc']} saved {vals['saved_vsc']}; "
+                f"flags {vals['flags_p0']}/{vals['flags_p1']}; msa {vals['msa_live_p0']}")
+
+    def on_strike(self, st, vals):
+        say(f"{self.conn}: OUTPUT CHECK STRIKE {st['strikes']}/10: {self.summary(st, vals)}")
+        if st["strikes"] in (1, 9):
+            p = write_file(f"strike{st['strikes']}", list(self.history))
+            say(f"{self.conn}: last {len(self.history)} samples saved to {p}")
+
+    def tail_log(self, old, new):
+        span = (new - old) % LOG_RING_SIZE
+        if span > 4096:  # a burst larger than this is in the ring dump on the next attach
+            old = (new - 4096) % LOG_RING_SIZE
+        text = self.pending + printable(ring_text(self.aux, self.ring, old, new)).replace("\0", "")
+        *lines, self.pending = text.split("\n")
+        for l in lines:
+            if l.strip():
+                say(f"fw: {l.strip()}")
+                self.history.append(f"{time.strftime('%H:%M:%S')} fw: {l.strip()}")
+
+    def lost(self, why):
+        # A modeset (HDR on/off, a mode change) also switches the connector off for a moment or
+        # fails AUX while the link re-trains. The kernel needs a moment to see a dock reset as
+        # a disconnect (2026-11-25 22:28: AUX failed while sysfs still said connected, and the
+        # first version dropped the history), so wait for it, and save the history either way.
+        self.history.append(f"{time.strftime('%H:%M:%S')} at failure: {power_state()}")
+        conn = glob.glob(f"/sys/class/drm/{self.conn}")
+        gone = False
+        for _ in range(int(LOSS_WAIT / 0.25)):
+            if not conn or read_sysfs(f"{conn[0]}/status") != "connected":
+                gone = True
+                break
+            time.sleep(0.25)
+        self.history.append(f"{time.strftime('%H:%M:%S')} after the wait: {power_state()}")
+        tag = "lost" if gone else "interrupted"
+        say(f"{self.conn}: {'DOCK LOST' if gone else 'link interrupted, connector still connected'} ({why})")
+        p = write_file(tag, list(self.history) + [f"{tag}: {why}"])
+        say(f"{self.conn}: last {len(self.history)} samples saved to {p}")
+
+
+def stop(*_):
+    global running
+    running = False
+
+
+def main():
+    if os.geteuid() != 0:
+        sys.exit("oxp3-dock-watch: needs root (the DP AUX character devices are root-only)")
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    say("oxp3-dock-watch: waiting for a driven USB-C display (read-only VMM6210 recorder)")
+    while running:
+        path, conn = active_dock()
+        if not path:
+            time.sleep(3)
+            continue
+        try:
+            aux = Aux(path)
+        except OSError as e:
+            say(f"{conn}: cannot open {path}: {e}")
+            time.sleep(10)
+            continue
+        s = Session(aux, path, conn)
+        try:
+            if not s.attach():
+                aux.close()
+                # not our converter: look again only after the display goes away
+                while running and connector_live(conn):
+                    time.sleep(10)
+                continue
+            while running:
+                time.sleep(PERIOD)
+                if not connector_live(conn):
+                    s.lost("connector disconnected or switched off")
+                    break
+                s.sample()
+        except Exception as e:  # AUX errors: the converter dropped or the link re-trains
+            if running:
+                s.lost(f"{type(e).__name__}: {e}")
+        finally:
+            try:
+                aux.close()
+            except OSError:
+                pass
+        time.sleep(2)
+    say("oxp3-dock-watch: stopped")
+
+
+if __name__ == "__main__":
+    main()

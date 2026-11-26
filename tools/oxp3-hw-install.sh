@@ -972,12 +972,43 @@ comp_gamescope_install() {
 comp_hdr_install() {
     say "Gamemode HDR/PQ output (launcher flags, persistent)"
     local tool=$repo/tools/display/gamemode-hdr.sh
+    install_dock_watch
     [[ -x $tool ]] || { warn "missing $tool"; return 0; }
     if (( DRY_RUN )); then
         printf '  [dry-run] %s status ; %s install\n' "$tool" "$tool"
         return 0
     fi
     "$tool" install
+}
+
+# Read-only recorder for the dock's VMM6210 converter: which of its checks resets the dock
+# when HDR and VRR run together (docs/HDMI-VRR-PCON.md). Journal: journalctl -u oxp3-dock-watch;
+# event dumps: /var/log/oxp3-dock-watch/.
+install_dock_watch() {
+    say "dock converter recorder (oxp3-dock-watch, read-only)"
+    install_file 0755 "$repo/files/oxp3-dock-watch" "$(p /usr/local/libexec/oxp3-dock-watch)"
+    install_file 0644 "$repo/files/oxp3-dock-watch.service" \
+        "$(p /etc/systemd/system/oxp3-dock-watch.service)"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "systemctl enable --now oxp3-dock-watch.service"
+        return 0
+    fi
+    run systemctl daemon-reload
+    run systemctl enable oxp3-dock-watch.service
+    # restart, not just start: a reinstall must run the new script
+    run systemctl restart oxp3-dock-watch.service
+}
+
+comp_hdr_uninstall() {
+    say "dock converter recorder"
+    if [[ -n $PREFIX ]]; then
+        skip_prefixed "systemctl disable --now oxp3-dock-watch.service"
+    else
+        run systemctl disable --now oxp3-dock-watch.service || true
+    fi
+    run rm -f "$(p /etc/systemd/system/oxp3-dock-watch.service)" \
+        "$(p /usr/local/libexec/oxp3-dock-watch)"
+    [[ -n $PREFIX ]] || run systemctl daemon-reload
 }
 
 comp_decky_install() {

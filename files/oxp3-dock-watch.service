@@ -1,0 +1,32 @@
+[Unit]
+Description=OneXPlayer 3: read-only recorder for the dock's VMM6210 converter (HDR+VRR drops)
+Documentation=https://github.com/silentsudin/oxp3-anatase-fixes/blob/main/docs/HDMI-VRR-PCON.md
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/oxp3-dock-watch
+User=root
+Nice=10
+Restart=on-failure
+RestartSec=10
+LogsDirectory=oxp3-dock-watch
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @swap @reboot
+
+[Install]
+WantedBy=multi-user.target
