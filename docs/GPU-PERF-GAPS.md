@@ -368,3 +368,158 @@ with reason `performance`). An override that disables something means the defaul
 3. **CPU power in DXVK/vkd3d games** (4.2 + T6): measure a P-core cap / EPP sweep in one D3D11 game
    at the package limit and watch GT MHz and fps. This is the biggest lever for translated games.
 4. Tile64 for render targets (4.7), KMD register decode (4.6).
+
+## 5. Round 3 (2026-11-26 evening): driver overhead and GPU work per clock
+
+Goal set by the user: the hardware's limit, not Windows, is the target. A lever that beats Windows
+counts. Scripts and raw data: `~/.cache/oxp3-winre/runs/round3/`.
+
+### 5.1 How to profile here without root (this took a while to find)
+
+- perf/strace are not on the host. `~/.cache/oxp3-winre/perfhost/{perf,strace}.sh` run Fedora 45's
+  binaries on the host with their libraries copied out (from the `oxp3-prof` container). Profiling
+  from inside a container does not work: SELinux denies access to host processes.
+- Yama `ptrace_scope=1` blocks attaching to non-children. `LD_PRELOAD` of
+  `round3/src/ptracer.c` (built as `/tmp/claude-1000/prof/libptracer.so`; rebuild with gcc if /tmp was
+  cleared) calls `prctl(PR_SET_PTRACER, ANY)` in every process, Wine's included. Then
+  `perf record -e cpu_core/cycles/u -e cpu_atom/cycles/u -p <pid>` works (paranoid=2 allows user
+  space). The CPU is hybrid: always record both PMUs and read both report sections.
+- Use the side-built ANV (`~/.cache/oxp3-winre/anv-tbimr/icd.json`, `intel_tbimr=false` = the
+  shipped code) for symbols. `round3/prof.sh <vk|d3d11|d3d12> <label>` does all of this.
+- GPU side: `INTEL_MEASURE=draw,file=…,start=3000,count=10` (per-event GPU time; it adds a stall per
+  event, so gaps are inflated) and `INTEL_DEBUG=pc` (every PIPE_CONTROL / RESOURCE_BARRIER with its
+  reason). OA hardware counters need `observation_paranoid=0` (root): see 5.6.
+- Shader quality of real games without running them: `fossilize_replay` (Steam's,
+  `~/.local/share/Steam/ubuntu12_64/`) over `steamapps/shadercache/*/fozpipelinesv6/*.foz` with
+  `--enable-pipeline-stats out.csv` and `VK_DRIVER_FILES=<side icd>`; `round3/foz-agg.py`
+  summarises it.
+- A real game in headless gamescope can be seen and driven: the X property
+  `GAMESCOPECTRL_REQUEST_SCREENSHOT` on gamescope's Xwayland root writes `/tmp/gamescope.png`, and
+  `xdotool` (in the container, `DISPLAY=:N` from the gamescope log) sends input. Steam games need
+  the Steam client running (the Wukong benchmark stops at "Unable to initialize SteamAPI").
+
+### 5.2 CPU: where the driver stack spends its time
+
+| path (GravityMark 1280x720) | finding |
+|---|---|
+| native Vulkan | **ANV is 57 % of the process's user CPU** (the engine 27 %). Top: `anv_AllocateDescriptorSets` 6.4 %, buffer surface-state fill 3.4 % + 1.5 %, `emit_binding_table` 2.9 %, descriptor writes 2.5 %, compute walker 2.5 %. In `anv_AllocateDescriptorSets`, 78 % of its samples sit on `lock addl $1,0x70(layout)`, the shared `vk_descriptor_set_layout` refcount taken per set, a cache line bounced between recording threads |
+| D3D11 (DXVK) | ANV ~1 %. The main thread pins a P-core (87e9 cycles in 20 s): DXVK's front-end 73 %, and **~25 % spinning on `vkGetEventStatus`** through Wine's unix-call thunk (an app event-query spin). `dxvk-cs` runs on E-cores and is mostly idle |
+| D3D12 (vkd3d) | not CPU-bound: the main thread is mostly asleep on E-cores |
+
+Levers (beyond Windows, pure Mesa/stack work):
+1. **One layout reference per (pool, layout), not per set** (ANV): drop the per-set atomic in
+   `anv_descriptor_set_create` / free path; the pool keeps a small set of referenced layouts and
+   unrefs them on reset/destroy. Measure with `prof.sh vk` (the self time of
+   `anv_AllocateDescriptorSets`) and a CPU-bound native title.
+2. Cheaper buffer descriptors: `isl_gfx30_buffer_fill_state_s` + `anv_fill_buffer_surface_state`
+   are ~5 %; cache the packed state for repeated (address, range, format) or write templates.
+3. The D3D11 spin: a spinning P-core costs GPU watts at the package limit (4.2). Worth an upstream
+   DXVK/Wine look (back off in `GetData` polling after N misses), not an ANV change.
+
+### 5.3 GPU: what a GravityMark frame is made of
+
+- `INTEL_MEASURE` per frame: three `draw indexed indirect count` (the asteroids) = 57 % of GPU busy
+  time; GravityMark's own 74 small `vkCmdDispatchIndirect` (2 µs each) with large gaps before them.
+- `INTEL_DEBUG=pc`: **~154 `RESOURCE_BARRIER`s per frame** (929k over ~6k frames), almost all
+  `Signal=GPGPU,Geometry Wait=Top` with L1-DC/texture/constant invalidation, from the app's
+  compute→ALL_COMMANDS barriers. Each drains the compute pipe and leaves caches cold.
+  `resource_barrier_signal_stage()` maps a src stage of TOP_OF_PIPE/HOST to GEOM, which Vulkan
+  defines as no execution dependency. Dropping that when another stage is present is spec-correct
+  and saves a geometry drain whenever draws are in flight. Barrier batching (merge back-to-back
+  barriers with no work between) is the bigger idea. Both need CTS sync tests.
+- Shader quality is not the limit in GravityMark: 62 shaders, no spills, 8-10 threads/EU.
+  Forcing SIMD32 or SIMD16 fragment shaders: 277.2-278.5 vs base 276.7-278.3, neutral.
+
+### 5.4 Real games' shaders (Fossilize replay, 4 titles, ~25k executables)
+
+- **No spills in any title.** Jay plus Xe3's variable register file handle pressure.
+- Heaviest title (`shadercache/3758894876`, 2,843 fragment pipelines, median 1,697 instructions):
+  only **36 % keep a SIMD32 variant**. Jay discards SIMD32 when it needs more than 96 GRF and SIMD16
+  needs fewer (`jay_from_nir.c`, `vrt_threshold = 96`). The SIMD16 variants then run at 128-192 GRF
+  (5-8 threads). Whether SIMD32 at 4-5 threads beats SIMD16 at 8 is the per-clock question, and
+  GravityMark cannot answer it. Test with `INTEL_DEBUG=fs32` (forces SIMD32 only) or a
+  `vrt_threshold` env override in a real game.
+- Another title (`3198397224`): vertex shaders mostly at 160-256 GRF, i.e. **4-6 threads/EU** for the
+  geometry stage. Candidate: a VS-specific occupancy target (recompile at a lower GRF budget with
+  more scheduling pressure), measured in that title.
+
+### 5.5 Platform levers beyond Windows' defaults
+
+- **Power**: OneXConsole has a 40 W / PL2 41 W "unlock" (`docs/hw/power-fan.md` §2). We stop at 35
+  W, and translated games sit at the package limit with the GT pl2-throttled. Offer it as an opt-in
+  profile and measure GT MHz and fps in one D3D11 title.
+- **Memory**: SAGV pinned high (T7), never measured in a game.
+- **CPU share**: cap P-core clocks while GT is power-throttled (T6); the 25 % spin above makes this
+  sharper in DXVK titles.
+
+### 5.6 What is needed to go further (decisions for the user)
+
+1. **A real-game harness needs Steam running.** The Wukong benchmark (UE5, D3D12) can be launched
+   headless, screenshotted and clicked (5.1), but only with the Steam client up. With that, every
+   GPU-side candidate (TBIMR, SIMD32 threshold, VS occupancy, barrier trimming) gets a real
+   bandwidth-heavy A/B instead of GravityMark, which is geometry-bound and insensitive to all of them.
+2. **One root session** for OA counters (EU active/stall, sampler, L3/memory bandwidth per frame):
+   build IGT's `xe_perf_recorder` in the container, `sysctl dev.xe.observation_paranoid=0`, record
+   GravityMark and one game, restore. Batch the 40 W and SAGV tests into the same session.
+
+## 6. Round 4 (2026-11-26, root window): hardware counters, power, a real-game harness
+
+Tools (all in `~/.cache/oxp3-winre/`, scripts and data in `runs/round4/`):
+- `tools/gpu-bench/perf-window.sh` (repo, needs sudo once): opens OA counters/perf for N minutes;
+  measurement scripts switch `pl35`/`pl40`/`stop` through `/run/oxp3-perf-window/cmd`; thermal guard;
+  restores everything on exit.
+- `xeperf/xe-perf-{recorder,reader}`: IGT's xe OA tools built in the container and patched to run
+  without debugfs and to read signal-stopped recordings (`lib/xe/xe_wa.c`, `lib/igt_debugfs.c`,
+  `lib/xe/xe_oa_data_reader.c`). Metric sets on PTL: RenderBasic, RenderPipeProfile,
+  VectorEngineProfile/Stalls, MemoryProfile, DeviceCacheProfile, RTProfile, …
+  `oa-capture.sh`, `oa-agg.py` (sum counts, GPU-time-weight percentages).
+- Unattended Wukong benchmark: Steam launch option `wk-wrap.sh %command%` (set by the user) runs it in
+  headless gamescope; Steam's launcher re-applies Steam's environment, so the wrapper injects
+  gamescope's DISPLAY right before `proton`. `wk-shot.sh` (screenshot via
+  `GAMESCOPECTRL_REQUEST_SCREENSHOT`, read from the gamescope process's private `/tmp`),
+  `wk-key.sh` (xdotool), `wk-bench.sh` (run/rerun, wait for results), `wk-variant.sh <name> K=V…`
+  (relaunch with env, warm + measured run). The launcher has Steam DRM: it must be launched by Steam;
+  `steam_appid.txt` does not help. Results are integer fps (1 fps ≈ 1.8 %).
+
+### 6.1 Where the GPU's clocks go (OA counters)
+
+| | GravityMark raster 1280x720 | Wukong 1280x720 Medium (UE5 D3D12) |
+|---|---:|---:|
+| GPU busy / clock | 99.96 % / 2279 MHz | 99.7 % / 2271 MHz |
+| **EU (XVE) active** | **24.5 %** | **33 %** |
+| EU thread occupancy | 65 % | 77-81 % |
+| EU stall (of active) | 48 %: SBID 44, ALU-WR 22, barrier 13 | 43 %: SBID 42, ALU-WR 17, barrier 13 |
+| compute threadgroup dispatch resource stall | 30 % | 18-19 % |
+| memory read + write | 22.8 + 14.5 GB/s, queue-full 0 % | 22.2 + 9.5 GB/s, queue-full 0 % |
+| sampler L1 miss / sampler busy | 25 % / 7 % | 24 % / 15 % |
+| compression (256 B writes in → out) | 2.02 G → 1.09 G | 2.20 G → 1.08 G |
+
+GravityMark timeline at ~213 µs resolution: compute-only phases 56 % of GPU time at 25 % EU-active with
+72 % occupancy (its N-body compute is SLM/latency-bound: 1.6 TB SLM reads in 20 s, 11 G bank
+conflicts), mixed 37 %, raster-only 7 %.
+
+Reading: the GPU runs at its maximum clock, memory bandwidth is nowhere near a limit, and the
+EUs are idle two-thirds of the time while threads sit resident **waiting on send results** (SBID). The
+remaining per-clock headroom is latency hiding (more resident threads at lower GRF, fewer waits),
+not bandwidth features. Wukong also shows ~35 % of load/store-cache accesses as partial writes
+(36 G in 20 s): read-modify-write traffic from how its shaders store.
+
+### 6.2 Measured levers
+
+| lever | GravityMark | Wukong | D3D11 GravityMark |
+|---|---:|---:|---:|
+| **40 W / 41 W unlock** (OneXConsole preset) | - | 57 → 57 (package 30.4 W, GT at max clock, never throttled) | **84.5 → 86.6 (+2.6 %)**: GT 2180 → 2295 MHz, package 35 → 37 W, max temp 89 °C both |
+| TBIMR on Xe3 (`patches/experimental/0300`) | neutral | 57 → 57 (no hang) | - |
+| SIMD32-only fragment (`INTEL_DEBUG=fs32`) | neutral | 57 → 57 | - |
+| compute SIMD16 / SIMD32 forced | 277.7-278.0 / 277.9-278.3 vs 277.1-278.7 | - | - |
+| brw for compute, Jay elsewhere | **−6 %** (258-262) | - | - |
+
+Conclusions:
+1. **Ship the 40 W profile as an opt-in "performance" TDP** (vendor's own unlock): +2.6 % where the
+   package is the limit (translated, CPU-heavy titles); nothing to gain where the GPU is already at
+   its 2.3 GHz clock ceiling. Keep the thermal guard.
+2. GPU-bound native D3D12 is **clock-bound with idle EUs**. The next real gains are compiler work on
+   latency hiding: lower-GRF compilation for occupancy (the VRT threshold, 5.4) measured with the
+   Wukong harness at finer resolution (add MangoHud frame-time logging through `wk-env`), and
+   scheduling of sends (SBID waits). TBIMR/SIMD32 toggles do not move it.
+3. GravityMark is a poor proxy for games: its compute phase dominates. Use the Wukong harness.
