@@ -5,6 +5,10 @@ Arc B390 iGPU, Xe3, `xe` kernel driver, Mesa ANV). Each task below says what to 
 measure it, what counts as success, and whether it needs root. Work top to bottom unless the user
 picks something else.
 
+**Read section 4 first.** It is the later round (2026-11-26 afternoon: Windows driver comparison,
+measurement corrections). Where it contradicts a number in sections 1-2, section 4 is right: the
+native-Vulkan "1280x720" figures before it were rendered at 1600x900.
+
 ## 0. Rules you must follow
 
 1. **End users run only `./oxp3-install.sh`.** Anything you ship must be built and installed by
@@ -222,3 +226,145 @@ the ms per frame spent in gamescope.
 - **Docs.** Record results in `docs/BEST-CONFIG.md`. Facts per component live in
   `docs/hw/components.yaml`; regenerate the tables with `tools/gen-docs.py --write`. End a round
   with `tools/gen-docs.py --check && tools/repo-test.sh --fast`.
+
+## 4. Round 2 (2026-11-26 afternoon): Windows driver comparison and measurement corrections
+
+Sources: the Windows driver `gfx_win_101.9175.exe` (Arc B390 / PTL, `PCI\VEN_8086&DEV_B080`),
+unpacked with `unrar` in a container (it is a RAR5 SFX; 7-Zip and bsdtar on the host cannot open it)
+to `~/.cache/oxp3-winre/x/Graphics/`. The Vulkan driver is `igvk64.dll`, D3D12 on Xe3 is
+`igd12um64xe3.dll`, D3D11 is `igd10umt64xe.dll`, the kernel driver is `igdkmdnd64.sys`. objdump
+(`objdump -d -M intel --start-address=… --stop-address=…`) reads these PE files directly and is
+enough for targeted questions; a full Ghidra analysis of a 30-80 MB binary is not needed.
+
+All measurements: GravityMark 1.89, gamescope headless, native Vulkan unless stated, **no harness
+sampler and no `-times`**, A B B A or better, warm shader cache. Scripts and raw logs:
+`~/.cache/oxp3-winre/runs/` (`knob-sweep.sh`, `pipeline*.sh`, `sweep720/summary.txt`); copy the
+scripts into `tools/gpu-bench/` if you keep using them.
+
+### 4.1 Measurement corrections (read before quoting any number)
+
+| finding | evidence | consequence |
+|---|---|---|
+| `gpu-bench.py` rendered at **1600x900**, labelled 1280x720 | GravityMark log: `Starting 1600x900 Vulkan Benchmark` / `Resolution: 1600x900`; gamescope `-W/-H` only size the output | fixed: `bench_gravity` now passes `-width 1280 -height 720`. The 219 raster / 173 / 195 RT in README and BEST-CONFIG are 1600x900 numbers. `gravitymark.py` (D3D11/D3D12) was always right |
+| `-times` (per-frame time file) costs **~8 %** | same driver, 1600x900: raster 237.4/236.1 bare vs 219 harness; RT 188.1 bare vs 173.1 harness | relative A/B inside the harness stays valid; never compare a harness number with Windows |
+| the `nvtop -s` sampler costs nothing | 238.2 with a 4 Hz `nvtop -s` loop vs 238.7/238.6 without | keep it |
+| **true 1280x720 raster today: 278.1 / 277.6 fps** (installed 24 Nov build) | `-width 1280 -height 720`, headless | Windows leaderboard 290.4 → **-4.3 %**, and that still includes gamescope's own composite of every frame. There is no 26.3.1 regression; the old 268.2 (Mesa main, fullscreen) is consistent |
+| the installed Mesa is the **24 Nov** build | `rpm -q mesa-vulkan-drivers` → `…202611241043`; the TLAS build `…202611260945` sits in `~/.cache/oxp3-fixes/out/` | the +12.7 % RT patches are built but **not installed**: the user needs one `./oxp3-install.sh` run |
+| direct windows on KWin are too noisy to benchmark | 257.6 / 271.5 / 218.8 fps for three identical runs; the desktop is 1097x686 logical, so a 1280x720 window is scaled and composited | measure headless |
+| two GravityMark processes from the morning session were still alive (2 h 20 min) | 0 GPU cycles in 2 s (`drm-cycles-rcs` in fdinfo), blocked in `drm_syncobj_array_wait` | they did not pollute results, but check `pgrep -a GravityMark` before every session |
+
+To do (small, no root): re-measure the README/BEST-CONFIG raster and RT rows with the fixed
+`gpu-bench.py`, label them 1280x720 headless, and say that `-times` is on in the harness.
+
+### 4.2 Power: in D3D11 the CPU takes the GPU's watts (measured, morning floor session)
+
+From the raw 10 Hz samples of `gpu-clock-floor.sh` (`/tmp/oxp3-clock.dr6qzp/floor-450.log`, columns
+time, act_freq, reasons, package, core, uncore(=GT), dram; samples with package > 20 W):
+
+| | package | CPU cores | GT (RAPL uncore) | DRAM | GT throttle reason |
+|---|---:|---:|---:|---:|---|
+| GravityMark D3D11 (DXVK) 1280x720 | 33.4 W | **14.7 W** | **13.0 W** | 1.9 W | `pl2` in 98 % of samples |
+
+The package sits at its limit. More CPU power in a DXVK/vkd3d game means fewer GPU clocks (1845 MHz
+mean here, against 2280 MHz in native Vulkan, where the GPU is not throttled). This is where
+"Linux is lighter" can actually win or lose. The levers are on the CPU side: P-core clock caps or
+EPP while a game is GPU-bound, Smart CPU boost backing off when GT reports `pl2`/`pl1` (task T6),
+DXVK/Wine CPU overhead. Nothing in Mesa recovers it.
+
+### 4.3 Driver knobs, measured (no rebuild; driconf options can be set as environment variables)
+
+An environment variable with the option name beats both the default and the per-engine entries in
+`00-anv-defaults.conf` (`xmlconfig.c`: "option value … ignored" when `os_get_option(name)` is set).
+
+| knob | default | result | verdict |
+|---|---|---|---|
+| `anv_state_cache_perf_fix=true` (BTP+BTI RCC keying, no flush on RT change) | **on for every `vkd3d` engine**, off otherwise | native Vulkan 1280x720: **226.4 / 226.8 vs 278.1 / 277.6 (−18.5 %)**, warm (it is in the shader cache key); D3D12 and D3D11: no effect (4.4) | keep Mesa's defaults; never force it on for native Vulkan |
+| `intel_force_sampler_prefetch=true` | off | 238.5 vs 238.7 (1600x900) | neutral |
+| `anv_dynamic_stack_id_control=true` (Xe3 dynamic StackID) | off | RT 188.3 vs 188.1/188.0 | neutral |
+| `anv_stack_ids=1024` | 512 | RT 188.2 | neutral |
+| `INTEL_DEBUG=no-jay` | Jay | RT −33.8 % (morning) | keep Jay |
+
+### 4.4 D3D12/D3D11 and the state-cache fix
+
+The −18.5 % above made the per-engine default suspicious, because Mesa turns the option on for
+every vkd3d game. Measured through Proton with `gravitymark.py` (env var beats the engine entry):
+
+| API, resolution | option on | option off |
+|---|---:|---:|
+| D3D12 (vkd3d) 1280x720 | 95.23 / 95.10 | 95.10 / 95.17 |
+| D3D12 (vkd3d) 1920x1200 | 80.25 / 80.45 | 80.47 / 80.56 |
+| D3D11 (DXVK) 1280x720 | 84.26 / 84.92 | 84.90 / 85.07 |
+
+No effect in either translation layer. Plausible reason: vkd3d already reaches its descriptors
+through the bindless heap, so "binding table only for render targets" changes nothing there, while
+native GravityMark loses its binding-table access path. Nothing to ship. Do not reopen this
+without a GPU-bound native-Vulkan game that sets the option.
+
+### 4.5 TBIMR (tile-based immediate-mode rendering): Windows uses it on Xe3, Mesa does not
+
+- Mesa computes TBIMR tiling only for `GFX_VERx10 == 125` (DG2/MTL) in 26.3.1 and in main
+  (`genX_gfx_state.c` `update_tbimr_info`). The commands and the 3DPRIMITIVE enable bit exist on
+  Xe2/Xe3 (`xe2.xml` imports `gen125.xml` without excluding them).
+- The Windows **Xe3** D3D12 driver emits it: `igd12um64xe3.dll` VA `0x1800c6338`
+  `mov dword [rax], 0x786e0002` (3DSTATE_TBIMR_TILE_PASS_INFO), then DW1/DW2 tile size and count, and
+  DW3 `0x2c`, i.e. TileBoxCheck=1 and TBIMR batch size field **5** (Mesa's 12.5 formula gives 3 for
+  one slice). `igvk64.dll` and `igd10umt64xe.dll` contain the same header (4 and 5 sites), plus an
+  app-profile knob `DisableTbimrForMeshShading`, so TBIMR is on for mesh draws too by default.
+- `patches/experimental/0300-anv-tbimr-xe2-xe3.patch` (not globbed, not shipped) ports it. The
+  naive port crashed on the first draw: Xe2+ has no L3 partition table (`empty_l3_list`), so
+  `device->l3_config` is NULL. The patch sizes the tile cache from `ANV_TBIMR_TC_KB` (default 4096)
+  instead, and `ANV_TBIMR_BATCH` overrides the batch field. Toggle with `intel_tbimr=false|true`.
+- Result, GravityMark raster 1280x720, side driver: off 277.6 / 278.3 / 278.4, on 278.2 / 278.5,
+  batch 5: 278.1, 1 MB: 278.2, 8 MB: 277.9. RT (20k asteroids, one run each): off 262.2, on 258.9
+  (−1.3 %, repeat before reading anything into it). **Neutral in GravityMark**, which is geometry-bound
+  (50k asteroids, little overdraw). TBIMR pays in bandwidth-bound passes: G-buffers, heavy overdraw,
+  MSAA, high resolution.
+- Next (no root): A/B one deferred-renderer game at 1080p+ with `tools/game-limit-capture.py`,
+  `intel_tbimr=false` vs `true`, on the side driver (`VK_DRIVER_FILES=…/icd.json`; build with
+  `~/.cache/oxp3-winre/anv-tbimr/build.sh`, about 2 min incremental). Then run the VK-CTS
+  renderpass, draw and dynamic_rendering groups (there is no CTS binary on the machine yet). Ship
+  only after both, and leave the Xe3 `CHICKEN_RASTER_2` programming alone: bit 5 means "Disable Any
+  MCTR response fix" on Xe3 (it was TBIMR fast clip on 12.5), and the Windows KMD skips that write
+  for Xe3.
+
+### 4.6 Windows kernel driver: register programming (partial, next steps listed)
+
+- `igdkmdnd64.sys` function `0x1403d7930` (size 0x475) is a render-context init that issues masked
+  register writes through helper `0x1403cac20` (`r8d` = MMIO offset, `r9d` = mask|value), each guarded
+  by a platform field. `[rbx+0x740]` is a GFX core family compared as a range
+  (`sub 0xc09; cmp 0x11f6`). The CHICKEN_RASTER_2 bit-5 write is excluded at ≥ 0x1e00, which matches
+  Xe3 redefining that bit.
+- The 0x1403c0000-0x140400000 region holds 131 such writes over 90 registers
+  (`~/.cache/oxp3-winre/ghidra/kmd-writes.txt`). About 30 offsets are not in `xe`'s register headers at
+  all (`0x7014`, `0x7000`, `0x7038`, `0x6200`, `0x5584`, `0x20c0`, `0x20d4`, `0x20e4`, `0x20ec`,
+  `0xb194-0xb1ac`, `0xe100`, `0xe184`, `0xe7cc`, …). Others are in the headers but never programmed
+  (`HALF_SLICE_CHICKEN5`, `UNSLCGCTL9430/9440/9444`, `XEHP_L3NODEARBCFG`, `XEHP_MERT_MOD_CTRL`).
+- Not done: which writes apply to PTL. Next step: decode the platform fields (the family values come
+  from Intel's open-source gmmlib `igfxfmid.h`, `GFXCORE_FAMILY`/`PRODUCT_FAMILY`), list the writes
+  that apply to Xe3, then diff them against `xe`'s `register-save-restore` debugfs output on this
+  device (root, read-only). Anything Windows sets and Linux does not is a kernel `xe_tuning.c`
+  candidate. Expect mostly workarounds, few performance settings.
+
+### 4.7 Windows Vulkan app-profile table: hints about what Windows does by default
+
+`igvk64.dll` carries plain-text app overrides (`AIL info: name / value / reason`; 186 entries, 105
+with reason `performance`). An override that disables something means the default has it on:
+
+- `ForceTile64OptimizationDisabled`: Windows uses Tile64 for some surfaces by default. ISL picks
+  Tile4 for everything except sparse (`isl.c` `CHOOSE(ISL_TILING_64*)` only under `SPARSE_BIT`).
+  Candidate experiment: Tile64 for large colour/depth render targets on Xe2+.
+- `DisableTbimrForMeshShading`: TBIMR on for mesh draws (4.5).
+- `HiZInAllLayouts`, `ForceDepthWriteThru*`, `ForceNonMSAADepthE2ECompressionEnabled`,
+  `ForceRHWOOptimization`, `DisableBlendToFillDiscardOptimization`, `EnableD3DVertexFetchGeometryOpt`,
+  `DisableVertexReordering`, `ForceUboToCrOptimizationDisabled` (UBO→push promotion on by default:
+  Mesa already promotes for `vkd3d|DXVK` via `anv_promote_cbv_to_push_buffers`).
+
+### 4.8 Ranked next tasks
+
+1. **Install the built TLAS driver** (user: one `./oxp3-install.sh`), then re-baseline with the fixed
+   `gpu-bench.py` and correct README/BEST-CONFIG (4.1).
+2. **TBIMR in a real bandwidth-heavy game** (4.5). It is the one hardware feature Windows uses on
+   Xe3 that Mesa leaves off.
+3. **CPU power in DXVK/vkd3d games** (4.2 + T6): measure a P-core cap / EPP sweep in one D3D11 game
+   at the package limit and watch GT MHz and fps. This is the biggest lever for translated games.
+4. Tile64 for render targets (4.7), KMD register decode (4.6).

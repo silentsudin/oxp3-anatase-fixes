@@ -379,8 +379,11 @@ def bench_gravity(outdir, rt=False, asteroids=50000):
     if not exe.exists():
         return {"status": "missing", "path": str(exe)}
     tag = "rt" if rt else "raster"
+    # gamescope's -W/-H only size its output: without -width/-height GravityMark renders at its
+    # own 1600x900 default, which every result before 2026-11-26 afternoon did while being
+    # labelled 1280x720 (1.56x the pixels of the Windows 1280x720 reference).
     cmd = ["gamescope", "--backend", "headless", "-W", "1280", "-H", "720", "--",
-           str(exe), "-vulkan"]
+           str(exe), "-vulkan", "-width", "1280", "-height", "720"]
     if rt:
         cmd.append("-raytracing")
         cmd.append("1")

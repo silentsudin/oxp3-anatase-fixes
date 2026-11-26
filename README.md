@@ -39,10 +39,12 @@ much faster and you normally run the script only after an Anatase update.</small
 - **The kernel's own EEVDF scheduler.** `scx_cosmos` is retired: it won on kernel 7.2.7, but on
   7.3.4 only EEVDF keeps the thread that limits the frame rate on a P-core (GravityMark D3D11
   640x360: EEVDF 96.4 fps / 1 % low 51.7, cosmos 94.7 / 49.8). Details: [docs/cpu-sched.md](docs/cpu-sched.md).
-- GravityMark 1.89, native Vulkan, 1280×720, measured 2026-11-26 (warm shader cache, two runs
-  each, A B B A): **219 fps raster**, **173 fps ray tracing**, and **195 fps RT** with the TLAS
-  builder patches that now ship (+12.7 %). Raster is unchanged by them. Details and caveats:
-  [docs/BEST-CONFIG.md](docs/BEST-CONFIG.md).
+- GravityMark 1.89, native Vulkan, **1280×720**, gamescope headless, measured 2026-11-26 (warm
+  shader cache, A B B A): **278 fps raster**, against 290.4 on Windows (−4 %, and the Linux figure
+  still pays for gamescope compositing every frame). Ray tracing gains **+12.7 %** from the TLAS
+  builder patches that now ship (173 → 195 fps in the harness, which renders at 1600×900 with
+  per-frame timing on; 262 fps RT at 1280×720 without it). Details and caveats:
+  [docs/BEST-CONFIG.md](docs/BEST-CONFIG.md), [docs/GPU-PERF-GAPS.md](docs/GPU-PERF-GAPS.md) §4.
 
 ### XeSS XMX (Arc matrix units)
 - Real **XeSS super resolution and frame generation on the XMX units** instead of the slow DP4a

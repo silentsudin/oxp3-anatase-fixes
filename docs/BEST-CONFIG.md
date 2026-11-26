@@ -152,7 +152,10 @@ warm run, and quote state-snapshot.sh with the number. Do not re-bisect patches 
 
 Measured with the automated harness, no install needed: the RT-patched build was extracted from its RPMs into a
 side tree with a private ICD (`tools/gpu-bench/driver-ab.sh`), so the two drivers could be interleaved in one
-session. GravityMark 1.89, native Vulkan, 1280x720, headless, warm shader cache, order A B B A.
+session. GravityMark 1.89, native Vulkan, headless, warm shader cache, order A B B A. **Resolution correction
+(2026-11-26 afternoon):** the harness passed only gamescope's `-W 1280 -H 720`, so GravityMark rendered at its
+1600x900 default, with `-times` on (about −8 %). The deltas below are valid; the absolute numbers are 1600x900.
+At a true 1280x720 without `-times`, raster is 278 fps (`docs/GPU-PERF-GAPS.md` §4.1).
 
 | workload | installed 26.3.1 (no RT patches) | 26.3.1 + `0205`/`0211` | delta |
 |---|---:|---:|---:|
