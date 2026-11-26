@@ -523,3 +523,27 @@ Conclusions:
    Wukong harness at finer resolution (add MangoHud frame-time logging through `wk-env`), and
    scheduling of sends (SBID waits). TBIMR/SIMD32 toggles do not move it.
 3. GravityMark is a poor proxy for games: its compute phase dominates. Use the Wukong harness.
+
+## 7. Vulkan conformance (VK-GL-CTS 1.4.7.1, 2026-11-26)
+
+`deqp-vk` built from `vulkan-cts-1.4.7.1` in a Fedora 45 container (`~/.cache/oxp3-winre/cts/`:
+`build.sh`, `run.sh <label> <icd.json|installed> <patterns…>` writes per-case results,
+`results/<label>/`). It runs on the host against a side-built ANV through `VK_DRIVER_FILES`.
+
+| change | groups | cases | result |
+|---|---|---:|---|
+| `patches/mesa-26.3/0012` (pool-held layout refs) | api.descriptor_pool, api.descriptor_set, api.object_management, binding_model.descriptor_copy/descriptor_update/mutable_descriptor/descriptorset_random, descriptor_indexing | 50,438 | **0 failures, 0 differences** against the installed driver (47,990 pass, 2,450 not supported, the same 4 `alloc_callback_fail.{descriptor_set,pipeline}_layout_*` QualityWarnings on both) |
+| `patches/experimental/0300` (TBIMR on Xe3), `intel_tbimr=true` | pipeline.monolithic.render_to_image, rasterization.primitives, draw.renderpass, renderpasses.renderpass1, renderpasses.dynamic_rendering | 63,017 | **0 failures** (51,939 pass, 11,078 not supported), no GPU hang or reset in the kernel log; `INTEL_DEBUG=bat` confirms `3DSTATE_TBIMR_TILE_PASS_INFO` and `TBIMR Enable: 1` draws inside these tests |
+
+TBIMR is therefore correct on Xe3 as far as these groups reach, but it stays experimental: it
+measured neutral in GravityMark and the Wukong benchmark (6.2), so there is nothing to ship it for.
+
+**Found on the way: a Vulkan loader crash, not a driver bug.**
+`dEQP-VK.api.object_management.multithreaded_per_thread_resources.instance` segfaults every time
+whenever two or more ICDs are installed (any pair: intel+lvp, intel+radeon, nvidia+lvp, …) and
+passes with any single ICD, including the installed ANV. The stack is
+`terminator_EnumerateInstanceExtensionProperties` (libvulkan.so 1.4.350) calling a NULL pointer
+while several threads create instances. Anatase installs eight ICD manifests (intel, hasvk, lvp,
+radeon, nvidia, asahi, dzn, plus i686), so a game creating instances from several threads at
+once would hit it. Upstream report candidate for Vulkan-Loader. When comparing against the
+installed driver in CTS, pass `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json`.
