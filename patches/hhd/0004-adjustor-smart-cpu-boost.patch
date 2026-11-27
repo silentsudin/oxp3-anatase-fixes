@@ -1,6 +1,6 @@
-From 83e94497b3172889914f6db40e3d028dfb6966bb Mon Sep 17 00:00:00 2001
+From 867fc317f12029b28ba12150ee866d1a8fc827c3 Mon Sep 17 00:00:00 2001
 From: silentsudin <25103587+silentsudin@users.noreply.github.com>
-Date: Tue, 24 Nov 2026 14:13:55 +0000
+Date: Fri, 27 Nov 2026 09:36:33 +0000
 Subject: [PATCH] adjustor: Smart CPU boost - core clock caps that follow the
  load
 
@@ -41,11 +41,20 @@ The caps are applied after set_frequency_scaling(), which resets every
 core's maximum, so Enabled, Disabled and the auto mode lift them again;
 a wake-up re-applies the current level. The boost value is read as the
 string it is (it was cast to bool and compared with "enabled").
+
+The busiest thread steps down under a stricter bar than a core: its
+predicted load at the lower caps must stay below 45 %, not 70 %. A
+frame-capped main thread averages well below saturation while its heavy
+frames do not. After the 2026-11-26 install made Elden Ring's main thread
+cheaper (40-49 % of a core at 4.7 GHz, down from 56 % or more), the 70 %
+bar let Smart step down to 3.0 GHz at every lull and start each heavy
+scene capped. With 45 % the game holds level 2 as before, and light
+GPU-bound titles (a 20-30 % main thread) still step down.
 ---
  adjustor/drivers/gpu/__init__.py  |  27 +++-
  adjustor/drivers/gpu/settings.yml |   6 +
- adjustor/fuse/gpu.py              | 249 ++++++++++++++++++++++++++++++
- 3 files changed, 280 insertions(+), 2 deletions(-)
+ adjustor/fuse/gpu.py              | 255 ++++++++++++++++++++++++++++++
+ 3 files changed, 286 insertions(+), 2 deletions(-)
 
 diff --git a/adjustor/drivers/gpu/__init__.py b/adjustor/drivers/gpu/__init__.py
 index 03b5fcb..a7c322a 100644
@@ -145,10 +154,10 @@ index 4c6f5a0..5563092 100644
              lpmd:
                type: multiple
 diff --git a/adjustor/fuse/gpu.py b/adjustor/fuse/gpu.py
-index d8b736a..b915792 100644
+index d8b736a..ed8da9e 100644
 --- a/adjustor/fuse/gpu.py
 +++ b/adjustor/fuse/gpu.py
-@@ -39,6 +39,34 @@ CPU_FREQ_DRIVER_MAX_FN = "cpufreq/cpuinfo_max_freq"
+@@ -39,6 +39,39 @@ CPU_FREQ_DRIVER_MAX_FN = "cpufreq/cpuinfo_max_freq"
  CPU_FREQ_NONLINEAR_MIN_FN = "cpufreq/amd_pstate_lowest_nonlinear_freq"
  CPU_FREQ_MAX_FN = "cpufreq/scaling_max_freq"
  CPU_FREQ_MIN_FN = "cpufreq/scaling_min_freq"
@@ -170,6 +179,11 @@ index d8b736a..b915792 100644
 +SMART_BOOST_CAPS_KHZ = SMART_BOOST_LEVELS_KHZ[0]
 +SMART_UP_BUSY = 85.0  # % busy at the current cap: that core is the bottleneck
 +SMART_DOWN_BUSY = 70.0  # % busy predicted at the lower cap: comfortably below saturation
++# The busiest thread needs more room than a core: a frame-capped game's main thread averages well
++# below saturation but its heavy frames do not, so a step down that leaves it near 50-60 % busy
++# makes those frames late (Elden Ring at 40-49 % stepped down to 3.0 GHz every lull). Below 45 %
++# at the lower cap a spike can still double without saturating the core.
++SMART_DOWN_THREAD_BUSY = 45.0
 +SMART_DOWN_CHECKS = 3  # consecutive checks (hhd polls every 2 s) before stepping down
 +SMART_CHECK_S = 2.0
 +# Only the P- and E-cores decide: games run there, and background work on the LP E-cores (Steam's
@@ -183,7 +197,7 @@ index d8b736a..b915792 100644
  
  EPP_MODES = ("performance", "balance_performance", "balance_power", "power")
  EppStatus = Literal["performance", "balance_performance", "balance_power", "power"]
-@@ -328,6 +356,227 @@ def set_cpu_boost(enable: bool):
+@@ -328,6 +361,228 @@ def set_cpu_boost(enable: bool):
          set_per_cpu(BOOST_FN, "1" if enable else "0")
  
  
@@ -321,9 +335,10 @@ index d8b736a..b915792 100644
 +        for cls, num in deciding
 +    }
 +    predicted = max(busy[num] * ratio[num] for _, num in deciding)
-+    # the busiest thread may run on any of them: assume the largest slowdown
-+    predicted = max(predicted, hot_thread * max(ratio.values()))
-+    if predicted < SMART_DOWN_BUSY:
++    # the busiest thread may run on any of them: assume the largest slowdown, and keep it the
++    # extra headroom a frame-capped main thread needs (SMART_DOWN_THREAD_BUSY)
++    thread_predicted = hot_thread * max(ratio.values())
++    if predicted < SMART_DOWN_BUSY and thread_predicted < SMART_DOWN_THREAD_BUSY:
 +        down_streak += 1
 +        if down_streak >= SMART_DOWN_CHECKS:
 +            return level - 1, 0

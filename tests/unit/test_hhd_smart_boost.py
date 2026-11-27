@@ -204,6 +204,31 @@ class HhdSmartBoostPatchTest(unittest.TestCase):
         self.assertEqual(self.gpu.smart_next_level(1, self.busy(p=40, e=15), classes, tops, 2,
                                                    hot_thread=75), (1, 0))
 
+    def test_frame_capped_game_thread_holds_its_clock(self):
+        # Elden Ring, 2026-11-27: main thread 40-49 % of a core at level 2 with every core quiet.
+        # At 3.8 GHz that is 50-61 %: below the core bar, but its heavy frames would be late.
+        classes, tops = self.classes_tops()
+        nxt, quiet = self.gpu.smart_next_level, self.busy(p=30, e=20)
+        for thread in (40, 46, 49):
+            level, streak = 2, 0
+            for _ in range(5):
+                level, streak = nxt(level, quiet, classes, tops, streak, hot_thread=thread)
+            self.assertEqual(level, 2, f"thread {thread} %")
+        # at level 1 a 40 % thread is 51 % at 3.0 GHz: hold level 1 too
+        self.assertEqual(nxt(1, quiet, classes, tops, 2, hot_thread=40), (1, 0))
+
+    def test_light_game_thread_still_steps_down(self):
+        # a GPU-bound title whose main thread uses a quarter of a core gives the power back
+        classes, tops = self.classes_tops()
+        nxt, quiet = self.gpu.smart_next_level, self.busy(p=30, e=20)
+        level, streak = 2, 0
+        for _ in range(3):
+            level, streak = nxt(level, quiet, classes, tops, streak, hot_thread=25)
+        self.assertEqual(level, 1)
+        for _ in range(3):
+            level, streak = nxt(level, quiet, classes, tops, streak, hot_thread=25)
+        self.assertEqual(level, 0)
+
     def test_busiest_thread_reads_only_hot_processes(self):
         proc = self.root / "proc"
 
