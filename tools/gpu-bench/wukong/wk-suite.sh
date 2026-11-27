@@ -14,4 +14,5 @@ run atom anv_enable_opt_divergent_atomics=3
 run cm1 intel_code_motion=1
 run cm2 intel_code_motion=2
 run base
+$S/wk-stop.sh
 echo "suite done" >> $O/summary.txt

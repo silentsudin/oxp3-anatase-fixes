@@ -599,3 +599,28 @@ baseline too, so lows are session warm-up here, not a per-variant effect.
 None of the environment switches is a clear win. The remaining levers in the table above are the
 compiler ones (3 and 4: scheduling latency model, VRT threshold), SAGV (6) and the game-mode
 composition cost (7).
+
+### 8.2 Interleaved retest and the two compiler patches (2026-11-26 night)
+
+Interleaved B L C B L C B (installed driver, 2 measured runs per launch):
+baseline 56.12 ± 0.23 (n 6), `intel_sampler_route_to_lsc` 56.06 (−0.09 %), `intel_code_motion=1`
+56.20 (+0.14 %): both neutral; the earlier +0.6 % was launch-to-launch drift.
+
+Compiler patches (side-built ANV, branch `jay-tune` in `~/.cache/oxp3-winre/anv-tbimr/src`:
+`JAY_VRT_THRESHOLD`, `JAY_LAT_SAMPLER/LSC/TGM`, both mixed into the build id so every variant gets
+its own pipeline and disk caches), interleaved S V T S V T S:
+
+| variant | runs | mean | vs side baseline |
+|---|---|---:|---:|
+| side baseline | 56.06 55.95 56.00 55.81 55.94 55.94 | 55.95 ± 0.08 | - |
+| **`JAY_VRT_THRESHOLD=160`** | 56.60 56.84 56.59 56.27 | **56.58** | **+1.12 % (Welch t 5.1)** |
+| send latencies 500/400/400 | 55.88 56.14 56.12 56.30 | 56.11 | +0.29 % (noise) |
+
+VRT 160 is the first measured per-clock compiler win in a real game. GravityMark gate
+(2026-11-27, same side driver, warm, interleaved): raster 278.0 / 278.0 vs **279.1 / 278.7**
+(+0.3 %), RT 258.8 / 258.8 vs 259.1 / 258.8 (neutral): no regression. (The first attempt on the
+26th was invalid: a Wukong instance left at its results screen kept rendering; `wukong/wk-stop.sh`
+now closes it.) Still open before shipping: a 128/192/256 sweep in Wukong and a CTS pass of the
+shader groups with the new default. Wukong's own Fossilize cache holds 14
+distinct compute shaders; 2 of them show 380 spills at every register budget (scratch arrays,
+not register pressure), so the threshold does not touch them.
